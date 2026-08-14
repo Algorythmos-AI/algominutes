@@ -1,0 +1,28 @@
+{
+  "name": "@algominutes/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes HTTP edge: the single Cloud Run API service for web, iOS, and Android. Consolidates the source's Express server.ts and the five Firebase Functions handlers behind one /v1 prefix, one auth path, one CORS config, and a client-version gate (BUILD-PLAN §3.1).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "tsx src/index.js",
+    "dev": "tsx watch src/index.js"
+  },
+  "dependencies": {
+    "@algominutes/ai": "*",
+    "@algominutes/db": "*",
+    "@google/genai": "^1.29.0",
+    "cors": "^2.8.6",
+    "docx": "^9.7.1",
+    "express": "^4.21.2",
+    "firebase-admin": "^13.8.0",
+    "google-auth-library": "^9.15.0",
+    "helmet": "^8.1.0",
+    "tsx": "^4.21.0"
+  }
+}
