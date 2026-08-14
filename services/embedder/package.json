@@ -1,0 +1,19 @@
+{
+  "name": "@algominutes/embedder",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "google-auth-library": "^9.15.0",
+    "pg": "^8.20.0",
+    "@algominutes/ai": "*",
+    "@algominutes/db": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
