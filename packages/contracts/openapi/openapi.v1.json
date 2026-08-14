@@ -1,0 +1,824 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AlgoMinutes API",
+    "version": "1.0.0-v1",
+    "description": "The AlgoMinutes API contract, generated from the zod schemas in @algominutes/contracts. Do not hand-edit the emitted JSON — edit the schemas and regenerate with `npm run openapi`."
+  },
+  "servers": [
+    {
+      "url": "{origin}",
+      "variables": { "origin": { "default": "https://api.algominutes.app" } }
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "summary": "Liveness probe.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "ok": { "type": "boolean" } },
+                  "required": ["ok"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/note": {
+      "post": {
+        "summary": "Full note + paginated transcript from Postgres.",
+        "tags": ["notes"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/NoteReadRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Note read (first page) or transcript page.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/NoteReadResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "426": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" },
+          "504": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/update-note": {
+      "post": {
+        "summary": "Persist a manual note edit (title + summary) to Postgres.",
+        "tags": ["notes"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/UpdateNoteRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Edit applied.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/UpdateNoteResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "500": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/export-note": {
+      "post": {
+        "summary": "Server-rendered DOCX export. Returns raw bytes on success.",
+        "tags": ["notes"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ExportNoteRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "DOCX document bytes.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "413": {
+            "description": "Transcript too large for DOCX.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ExportTooLargeError" } }
+            }
+          },
+          "503": { "$ref": "#/components/responses/Error" },
+          "504": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/search": {
+      "post": {
+        "summary": "Hybrid (vector + trigram) retrieval across a member's notes.",
+        "tags": ["search"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SearchRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ranked hits.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "500": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/chat": {
+      "post": {
+        "summary": "Grounded chat over meetings. Streams Server-Sent Events.",
+        "description": "Response is text/event-stream: an `event: citations` frame ({ hits }), then `data: { text }` frames, then `event: done` ({}). Failures emit `event: error` ({ error }). See ChatCitationsEvent / ChatTextEvent / ChatErrorEvent.",
+        "tags": ["search"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ChatRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream. See ChatCitationsEvent / ChatTextEvent / ChatErrorEvent for frame payloads.",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/share-create": {
+      "post": {
+        "summary": "Mint a public read link. The raw token is returned here and nowhere else.",
+        "tags": ["share"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ShareCreateRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Link minted.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ShareCreateResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/share-revoke": {
+      "post": {
+        "summary": "Revoke a link (idempotent).",
+        "tags": ["share"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ShareRevokeRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoke result.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ShareRevokeResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/shared-note": {
+      "post": {
+        "summary": "PUBLIC read of a shared note. No bearer token — the link token is the credential.",
+        "tags": ["share"],
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SharedNoteRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redacted share view.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SharedNoteResponse" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Error" },
+          "429": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/delete-account": {
+      "post": {
+        "summary": "Delete the caller's account and all owned data (App Store + GDPR).",
+        "tags": ["account"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
+        "responses": {
+          "200": {
+            "description": "Deletion summary.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DeleteAccountResponse" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" },
+          "405": { "$ref": "#/components/responses/Error" },
+          "500": {
+            "description": "Partial failure with progress summary.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DeleteAccountError" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Firebase ID token",
+        "description": "Firebase Auth ID token. Absent only on POST /v1/shared-note."
+      }
+    },
+    "parameters": {
+      "ClientVersion": {
+        "name": "X-AlgoMinutes-Client",
+        "in": "header",
+        "required": true,
+        "description": "Client build identifier, \"<platform>/<semver>\" e.g. ios/1.4.0. The server refuses unsupported builds with 426.",
+        "schema": { "type": "string", "example": "ios/1.4.0" }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error envelope.",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } }
+        }
+      }
+    },
+    "schemas": {
+      "Id": { "type": "string", "minLength": 1, "example": "note_abc123" },
+      "IsoDateTime": {
+        "type": "string",
+        "format": "date-time",
+        "example": "2026-08-15T09:41:07.123Z"
+      },
+      "DateOnly": { "type": "string", "format": "date", "example": "2026-08-20" },
+      "RedactionMeta": {
+        "type": "object",
+        "properties": {
+          "applied": { "type": "boolean" },
+          "scheme": { "type": "string" }
+        },
+        "required": ["applied", "scheme"],
+        "example": { "applied": true, "scheme": "shared/redaction.cjs" }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"],
+        "example": { "error": "Note not found" }
+      },
+      "NoteStatus": {
+        "type": "string",
+        "enum": [
+          "recording",
+          "processing",
+          "queued",
+          "chunking",
+          "transcribing",
+          "summarizing",
+          "ready",
+          "error"
+        ]
+      },
+      "NoteType": {
+        "type": "string",
+        "enum": ["recording", "import_audio", "import_pdf", "youtube", "scan_text", "online_meeting"]
+      },
+      "Summary": {
+        "type": "object",
+        "properties": {
+          "gist": { "type": "string" },
+          "actionItems": { "type": "array", "items": { "type": "string" } },
+          "keyDecisions": { "type": "array", "items": { "type": "string" } },
+          "keyPoints": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["gist", "actionItems", "keyDecisions"]
+      },
+      "FirestoreTranscriptLine": {
+        "type": "object",
+        "properties": {
+          "speaker": { "type": "string" },
+          "text": { "type": "string" },
+          "time": { "type": "string" }
+        },
+        "required": ["speaker", "text", "time"]
+      },
+      "NoteProgress": {
+        "type": "object",
+        "properties": {
+          "done": { "type": "integer" },
+          "total": { "type": "integer" }
+        },
+        "required": ["done", "total"]
+      },
+      "Note": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "authorId": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/NoteStatus" },
+          "type": { "$ref": "#/components/schemas/NoteType" },
+          "audioUrl": { "type": "string" },
+          "fileUrl": { "type": "string" },
+          "sourceUrl": { "type": "string" },
+          "duration": { "type": "number" },
+          "language": { "type": "string" },
+          "wordCount": { "type": "number" },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" },
+          "summary": { "$ref": "#/components/schemas/Summary" },
+          "transcript": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/FirestoreTranscriptLine" }
+          },
+          "transcriptTruncated": { "type": "boolean" },
+          "rawText": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "errorMessage": { "type": "string" },
+          "diagnosticCode": { "type": "string" },
+          "storagePath": { "type": "string" },
+          "mimeType": { "type": "string" },
+          "jobId": { "type": "string" },
+          "progress": { "$ref": "#/components/schemas/NoteProgress" },
+          "retryAttempt": { "type": "integer" },
+          "lastProgressAt": { "type": "string" }
+        },
+        "required": [
+          "id",
+          "title",
+          "workspaceId",
+          "authorId",
+          "status",
+          "type",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "TranscriptLine": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "speaker": { "type": "string", "nullable": true },
+          "speakerTag": { "type": "integer", "nullable": true },
+          "startMs": { "type": "number" },
+          "endMs": { "type": "number" },
+          "text": { "type": "string" },
+          "confidence": { "type": "number", "nullable": true }
+        },
+        "required": ["id", "speaker", "speakerTag", "startMs", "endMs", "text", "confidence"]
+      },
+      "TranscriptPage": {
+        "type": "object",
+        "properties": {
+          "lines": { "type": "array", "items": { "$ref": "#/components/schemas/TranscriptLine" } },
+          "totalLines": { "type": "integer" },
+          "nextCursor": { "type": "string", "nullable": true },
+          "truncated": { "type": "boolean" }
+        },
+        "required": ["lines", "nextCursor", "truncated"]
+      },
+      "SharedTranscriptLine": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "speakerTag": { "type": "integer", "nullable": true },
+          "speakerName": { "type": "string", "nullable": true },
+          "startMs": { "type": "number", "nullable": true },
+          "text": { "type": "string" }
+        },
+        "required": ["id", "speakerTag", "speakerName", "startMs", "text"]
+      },
+      "SummaryTemplateId": {
+        "type": "string",
+        "enum": ["general", "clinical", "actions_only"]
+      },
+      "SummaryTemplate": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "#/components/schemas/SummaryTemplateId" },
+          "label": { "type": "string" },
+          "blurb": { "type": "string" },
+          "icon": { "type": "string" },
+          "version": { "type": "integer" }
+        },
+        "required": ["id", "label", "blurb", "icon", "version"]
+      },
+      "NoteReadRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "cursor": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 2000 }
+        },
+        "required": ["noteId", "workspaceId"]
+      },
+      "NoteReadMeta": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/NoteStatus" },
+          "sourceType": { "$ref": "#/components/schemas/NoteType" },
+          "sourceUrl": { "type": "string", "nullable": true },
+          "storagePath": { "type": "string", "nullable": true },
+          "mimeType": { "type": "string", "nullable": true },
+          "durationSec": { "type": "number", "nullable": true },
+          "language": { "type": "string", "nullable": true },
+          "wordCount": { "type": "number", "nullable": true },
+          "participants": { "type": "string", "nullable": true },
+          "meetingAt": { "type": "string", "format": "date-time", "nullable": true },
+          "errorMessage": { "type": "string", "nullable": true },
+          "chunksDone": { "type": "integer", "nullable": true },
+          "chunksTotal": { "type": "integer", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time", "nullable": true },
+          "updatedAt": { "type": "string", "format": "date-time", "nullable": true }
+        },
+        "required": [
+          "id",
+          "workspaceId",
+          "title",
+          "status",
+          "sourceType",
+          "sourceUrl",
+          "storagePath",
+          "mimeType",
+          "durationSec",
+          "language",
+          "wordCount",
+          "participants",
+          "meetingAt",
+          "errorMessage",
+          "chunksDone",
+          "chunksTotal",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ActionItem": {
+        "type": "object",
+        "properties": {
+          "id": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+          "text": { "type": "string" },
+          "status": { "type": "string" },
+          "assigneeName": { "type": "string", "nullable": true },
+          "dueDate": { "type": "string", "format": "date", "nullable": true }
+        },
+        "required": ["id", "text", "status", "assigneeName", "dueDate"]
+      },
+      "KeyDecision": {
+        "type": "object",
+        "properties": {
+          "id": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+          "text": { "type": "string" }
+        },
+        "required": ["id", "text"]
+      },
+      "NoteReadSummary": {
+        "type": "object",
+        "properties": {
+          "gist": { "type": "string" },
+          "model": { "type": "string", "nullable": true },
+          "generatedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "actionItems": { "type": "array", "items": { "$ref": "#/components/schemas/ActionItem" } },
+          "keyDecisions": { "type": "array", "items": { "$ref": "#/components/schemas/KeyDecision" } }
+        },
+        "required": ["gist", "model", "generatedAt", "actionItems", "keyDecisions"]
+      },
+      "NoteReadResponse": {
+        "type": "object",
+        "properties": {
+          "note": { "$ref": "#/components/schemas/NoteReadMeta" },
+          "summary": {
+            "nullable": true,
+            "allOf": [{ "$ref": "#/components/schemas/NoteReadSummary" }]
+          },
+          "transcript": { "$ref": "#/components/schemas/TranscriptPage" },
+          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+        },
+        "required": ["note", "summary", "transcript", "redaction"]
+      },
+      "NoteReadPageResponse": {
+        "type": "object",
+        "properties": {
+          "transcript": {
+            "type": "object",
+            "properties": {
+              "lines": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/TranscriptLine" }
+              },
+              "nextCursor": { "type": "string", "nullable": true },
+              "truncated": { "type": "boolean" }
+            },
+            "required": ["lines", "nextCursor", "truncated"]
+          },
+          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+        },
+        "required": ["transcript", "redaction"]
+      },
+      "SearchRequest": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "minLength": 1 },
+          "k": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "noteId": { "type": "string" }
+        },
+        "required": ["query"]
+      },
+      "SearchHit": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "noteTitle": { "type": "string", "nullable": true },
+          "chunkText": { "type": "string" },
+          "startMs": { "type": "number" },
+          "endMs": { "type": "number" },
+          "score": { "type": "number" },
+          "source": { "type": "string", "enum": ["vector", "keyword", "fused"] }
+        },
+        "required": ["noteId", "noteTitle", "chunkText", "startMs", "endMs"]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "hits": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } }
+        },
+        "required": ["hits"]
+      },
+      "ChatRequest": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "minLength": 1 },
+          "noteId": { "type": "string" }
+        },
+        "required": ["query"]
+      },
+      "ChatCitationsEvent": {
+        "type": "object",
+        "properties": {
+          "hits": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } }
+        },
+        "required": ["hits"]
+      },
+      "ChatTextEvent": {
+        "type": "object",
+        "properties": { "text": { "type": "string" } },
+        "required": ["text"]
+      },
+      "ChatErrorEvent": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"]
+      },
+      "ExportScope": {
+        "type": "string",
+        "enum": ["summary", "transcript", "both"]
+      },
+      "ExportNoteRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "scope": { "$ref": "#/components/schemas/ExportScope" },
+          "format": { "type": "string", "enum": ["docx"] }
+        },
+        "required": ["noteId", "workspaceId"]
+      },
+      "ExportTooLargeError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string", "enum": ["transcript_too_large_for_docx"] },
+          "totalLines": { "type": "integer" }
+        },
+        "required": ["error", "totalLines"]
+      },
+      "ShareCreateRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "scope": { "$ref": "#/components/schemas/ExportScope" },
+          "expiresInHours": { "type": "integer", "minimum": 1, "maximum": 720 }
+        },
+        "required": ["noteId", "workspaceId"]
+      },
+      "ShareCreateResponse": {
+        "type": "object",
+        "properties": {
+          "shareId": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+          "token": { "type": "string" },
+          "url": { "type": "string" },
+          "scope": { "$ref": "#/components/schemas/ExportScope" },
+          "expiresAt": { "$ref": "#/components/schemas/IsoDateTime" }
+        },
+        "required": ["shareId", "token", "url", "scope", "expiresAt"]
+      },
+      "ShareRevokeRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "shareId": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
+        },
+        "required": ["noteId", "workspaceId", "shareId"]
+      },
+      "ShareRevokeResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "enum": [true] },
+          "revoked": { "type": "boolean" }
+        },
+        "required": ["ok", "revoked"]
+      },
+      "SharedNoteRequest": {
+        "type": "object",
+        "properties": { "token": { "type": "string" } },
+        "required": ["token"]
+      },
+      "SharedSummary": {
+        "type": "object",
+        "properties": {
+          "gist": { "type": "string", "nullable": true },
+          "actionItems": { "type": "array", "items": { "type": "string" } },
+          "keyDecisions": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["gist", "actionItems", "keyDecisions"]
+      },
+      "SharedNoteResponse": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string", "nullable": true },
+              "createdAt": { "$ref": "#/components/schemas/IsoDateTime" },
+              "scope": { "type": "string" }
+            },
+            "required": ["title", "createdAt", "scope"]
+          },
+          "summary": {
+            "nullable": true,
+            "allOf": [{ "$ref": "#/components/schemas/SharedSummary" }]
+          },
+          "transcript": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "lines": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/SharedTranscriptLine" }
+              },
+              "truncated": { "type": "boolean" }
+            },
+            "required": ["lines", "truncated"]
+          },
+          "expiresAt": { "$ref": "#/components/schemas/IsoDateTime" },
+          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+        },
+        "required": ["note", "summary", "transcript", "expiresAt", "redaction"]
+      },
+      "NoteEditSummary": {
+        "type": "object",
+        "properties": {
+          "gist": { "type": "string", "maxLength": 20000 },
+          "actionItems": {
+            "type": "array",
+            "maxItems": 200,
+            "items": { "type": "string", "maxLength": 2000 }
+          },
+          "keyDecisions": {
+            "type": "array",
+            "maxItems": 200,
+            "items": { "type": "string", "maxLength": 2000 }
+          },
+          "keyPoints": { "type": "array", "maxItems": 200, "items": { "type": "string" } }
+        }
+      },
+      "UpdateNoteRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "title": { "type": "string", "maxLength": 300 },
+          "summary": { "$ref": "#/components/schemas/NoteEditSummary" }
+        },
+        "required": ["noteId", "workspaceId"]
+      },
+      "UpdateNoteResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "enum": [true] },
+          "noteId": { "type": "string" },
+          "pgWritten": { "type": "boolean" }
+        },
+        "required": ["ok", "noteId", "pgWritten"]
+      },
+      "DeleteAccountSummary": {
+        "type": "object",
+        "properties": {
+          "workspacesAffected": { "type": "integer" },
+          "notesDeleted": { "type": "integer" },
+          "notesNotFound": { "type": "integer" },
+          "pgMembershipsDeleted": { "type": "integer" },
+          "firestoreErrors": { "type": "integer" },
+          "pgErrors": { "type": "integer" },
+          "authDeleted": { "type": "boolean" }
+        },
+        "required": [
+          "workspacesAffected",
+          "notesDeleted",
+          "notesNotFound",
+          "pgMembershipsDeleted",
+          "firestoreErrors",
+          "pgErrors",
+          "authDeleted"
+        ]
+      },
+      "DeleteAccountResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "enum": [true] },
+          "summary": { "$ref": "#/components/schemas/DeleteAccountSummary" }
+        },
+        "required": ["ok", "summary"]
+      },
+      "DeleteAccountError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "summary": { "$ref": "#/components/schemas/DeleteAccountSummary" }
+        },
+        "required": ["error"]
+      }
+    }
+  },
+  "tags": [
+    { "name": "system" },
+    { "name": "notes" },
+    { "name": "search" },
+    { "name": "share" },
+    { "name": "account" }
+  ]
+}
