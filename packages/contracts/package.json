@@ -1,0 +1,36 @@
+{
+  "name": "@algominutes/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The AlgoMinutes API contract, authored once: zod schemas → OpenAPI v3 → generated Swift + Kotlin models. Versioned under /v1 from day one.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./version": "./src/version.ts",
+    "./openapi": "./src/openapi.ts",
+    "./schemas": "./src/schemas/index.ts"
+  },
+  "files": [
+    "src",
+    "openapi",
+    "generated"
+  ],
+  "scripts": {
+    "openapi": "tsx scripts/generate-openapi.ts",
+    "models": "npm run models:swift && npm run models:kotlin",
+    "models:swift": "openapi-generator-cli generate -i openapi/openapi.v1.json -g swift5 -o generated/swift --global-property=models,modelDocs=false --additional-properties=projectName=AlgoMinutesAPI,useSPMFileStructure=true",
+    "models:kotlin": "openapi-generator-cli generate -i openapi/openapi.v1.json -g kotlin -o generated/kotlin --global-property=models,modelDocs=false --additional-properties=packageName=app.algominutes.api,serializationLibrary=kotlinx_serialization",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^8.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@openapitools/openapi-generator-cli": "^2.15.3",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
