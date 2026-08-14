@@ -1,0 +1,21 @@
+# gitleaks config for AlgoMinutes — blocks committed secrets in CI.
+#
+# useDefault pulls in gitleaks' built-in ruleset (AWS, GCP/AIza, private keys,
+# JWTs, Stripe, etc.).
+#
+# ALLOWLIST IS DELIBERATELY EMPTY (per BUILD-PLAN §4.2 / A2). We do NOT allowlist
+# any path or regex. Firebase per-project configs are regenerated per environment
+# and are git-ignored (see .gitignore), never committed. Test fixtures that must
+# contain realistic-but-fake secrets use a targeted inline `# gitleaks:allow`
+# comment on the specific line instead of a blanket path allowlist — an
+# auditable, per-line exemption rather than a hiding place for a real secret.
+title = "algominutes"
+
+[extend]
+useDefault = true
+
+# No [allowlist] block: the allowlist is intentionally empty (BUILD-PLAN §4.2).
+# gitleaks requires any [allowlist] it sees to contain at least one check, so we
+# omit the block entirely rather than declare an empty one. Known synthetic
+# fixtures (e.g. redaction tests) use a targeted inline `# gitleaks:allow` on the
+# specific line — an auditable per-line exemption, never a blanket path rule.

@@ -1,0 +1,65 @@
+# ── Secrets & credentials (NEVER commit — see docs/EXTRACTION-AUDIT.md §5) ──
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*.keystore
+*.jks
+*.mobileprovision
+*.provisionprofile
+**/serviceAccount*.json
+**/service-account*.json
+# Firebase per-project configs are regenerated per environment (A4), never committed
+google-services.json
+GoogleService-Info.plist
+.firebaserc
+firebase-applet-config.json
+.firebase/
+
+# ── Node / JS ──
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# ── Web (Vite) ──
+apps/web/dist/
+apps/web/.vite/
+
+# ── iOS / Xcode ──
+apps/ios/**/build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+apps/ios/**/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+Pods/
+# xcodegen output is generated from project.yml
+apps/ios/**/*.xcodeproj/
+
+# ── Android / Gradle ──
+.gradle/
+apps/android/**/build/
+apps/android/.idea/
+local.properties
+captures/
+*.apk
+*.aab
+
+# ── Cloud Run / build artifacts ──
+*.log
+tmp/
+.DS_Store
+
+# ── Tooling ──
+.claude/settings.local.json
+.vscode/
+*.swp
