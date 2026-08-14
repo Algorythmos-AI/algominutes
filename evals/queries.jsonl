@@ -1,0 +1,3 @@
+{"id":"q-synth-1","query":"what did we decide about the launch date","note_kind":"standup","note_id":"SYNTH","expected_chunk_ids":[],"note":"TODO(evals P1): label against synthetic corpus"}
+{"id":"q-synth-2","query":"who owns the follow-up on pricing","note_kind":"sales_call","note_id":"SYNTH","expected_chunk_ids":[],"note":"TODO(evals P1): label against synthetic corpus"}
+{"id":"q-synth-3","query":"summarise the action items from the one on one","note_kind":"one_on_one","note_id":"SYNTH","expected_chunk_ids":[],"note":"TODO(evals P1): label against synthetic corpus"}
