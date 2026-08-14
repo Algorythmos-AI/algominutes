@@ -1,0 +1,23 @@
+{
+  "name": "@algominutes/extractor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Document text extraction service (Cloud Run, async): PDF, DOCX, images/OCR, YouTube. Replaces the JS-only client pipeline (pdfjs-dist, mammoth, tesseract.js) so iOS, Android and web share ONE server implementation.",
+  "license": "UNLICENSED",
+  "author": "Algorythmos Pty Ltd",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@algominutes/ai": "*",
+    "@google-cloud/storage": "^7.16.0",
+    "express": "^4.21.2",
+    "mammoth": "^1.9.1",
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
