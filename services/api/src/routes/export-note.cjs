@@ -24,7 +24,7 @@
  * from @algominutes/db, the intelligence helpers from @algominutes/ai.
  */
 
-const { withQueryTimeout, isQueryTimeout, postgresEnabled } = require('@algominutes/db/pg-query.cjs');
+const { withQueryTimeout, isQueryTimeout, postgresEnabled } = require('@algominutes/ai/pg-query.cjs');
 const { isValidId } = require('@algominutes/ai/intelligence.cjs');
 
 const TIMEOUT_MS = 10000;

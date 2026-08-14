@@ -25,7 +25,7 @@ const { redactPII } = require('@algominutes/ai/redaction.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
 // so note-read and the other read-path handlers share one pool and one timeout
 // discipline. Moved verbatim; behaviour unchanged.
-const { withQueryTimeout, postgresEnabled } = require('@algominutes/db/pg-query.cjs');
+const { withQueryTimeout, postgresEnabled } = require('@algominutes/ai/pg-query.cjs');
 
 // Vertex AI client. Single auth instance (caches tokens across calls).
 // search-and-chat used to call generativelanguage.googleapis.com (the

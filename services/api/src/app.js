@@ -19,11 +19,14 @@ import { buildRouter } from './routes/index.js';
 const API_PREFIX = '/v1';
 
 // The version gate does not apply to the health probe (infra calls it without
-// an app identity) or to the public share read (the stranger surface, kept
-// maximally reachable). Everything else must present X-AlgoMinutes-Client.
+// an app identity), the public share read (the stranger surface, kept
+// maximally reachable), or the crash beacon (a crashing client must be able to
+// report even if it never sent the version header). Everything else must
+// present X-AlgoMinutes-Client.
 const VERSION_EXEMPT_PATHS = new Set([
   `${API_PREFIX}/health`,
   `${API_PREFIX}/shares/read`,
+  `${API_PREFIX}/client-error`,
 ]);
 
 export function buildApp() {

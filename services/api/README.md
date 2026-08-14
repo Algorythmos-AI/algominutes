@@ -28,13 +28,22 @@ send them.
 |---|---|---|---|
 | `GET`  | `/v1/health`         | none | `server.ts` `/api/health` |
 | `POST` | `/v1/process-audio`  | ID token | `server.ts` `/api/process-audio` (sync transcribe+summarize) |
+| `POST` | `/v1/process`        | ID token | `functions/index.js` `processIntelligence` (async kickoff) |
 | `POST` | `/v1/notes/read`     | ID token | `functions/note-read.cjs` `handleNoteRead` (= `server.ts` `/api/note`) |
 | `POST` | `/v1/notes/update`   | ID token | `server.ts` `/api/update-note` (updateNote twin, `applyNoteEdit`) |
+| `POST` | `/v1/notes/regenerate-summary` | ID token | `functions/index.js` `regenerateSummary` |
+| `POST` | `/v1/notes/feedback` | ID token | `functions/index.js` `noteFeedback` |
 | `POST` | `/v1/export`         | ID token | `functions/export-note.cjs` `handleExportNote` (binary DOCX) |
 | `POST` | `/v1/search`         | ID token | `functions/search-and-chat.cjs` `handleSearch` |
 | `POST` | `/v1/chat`           | ID token | `functions/search-and-chat.cjs` `handleChatStream` (SSE) |
+| `POST` | `/v1/shares/create`  | ID token | `functions/index.js` `shareCreate` |
+| `POST` | `/v1/shares/revoke`  | ID token | `functions/index.js` `shareRevoke` |
 | `POST` | `/v1/shares/read`    | **public** (token is the credential) | `functions/shared-note.cjs` `handleSharedNote` |
+| `POST` | `/v1/client-error`   | **public** (crash beacon; version-gate exempt) | `functions/index.js` `clientError` |
 | `POST` `DELETE` | `/v1/account/delete` | ID token (self-verified) | `functions/delete-account.cjs` `handleDeleteAccount` |
+
+Every endpoint that was an HTTP `onRequest` handler in `functions/index.js` now
+lives here. `functions/` retains only genuine triggers (see below).
 
 ### One auth path
 
@@ -43,8 +52,10 @@ A single Firebase ID-token verification middleware
 hands the handler a verified `req.uid`. The source verified tokens in eleven
 places; there is now one.
 
-- `/v1/shares/read` is the **only** unauthenticated endpoint — the share token
-  *is* the credential, so it is deliberately not behind the middleware.
+- `/v1/shares/read` and `/v1/client-error` are the only unauthenticated
+  endpoints — a share token *is* its own credential, and the crash beacon is
+  deliberately anonymous (the crash before sign-in is the one worth hearing).
+  Both are also exempt from the client-version gate.
 - `/v1/account/delete` self-authenticates with the **same** `verifyIdToken`
   primitive because its ported handler owns its whole method/OPTIONS envelope.
 
@@ -83,8 +94,8 @@ X-AlgoMinutes-Client: <platform>/<semver>     e.g.  ios/1.0.0, web/1.0.0, androi
 
 Minimums live in a constant map (`MIN_SUPPORTED_CLIENTS`) with **generous
 defaults** (`1.0.0` everywhere), so no currently-shipping client is gated;
-raising a floor is a one-line edit. The health check and the public share read
-are exempt from the gate.
+raising a floor is a one-line edit. The health check, the public share read,
+and the crash beacon (`/v1/client-error`) are exempt from the gate.
 
 ## Structured logging invariant
 
@@ -96,22 +107,41 @@ the CLAUDE.md §2 invariant, preserved.
 
 ## What stays a Firebase Function
 
-None of the five ported HTTP handlers is trigger-bound, so all five moved.
-What must **not** move:
+**Every** HTTP `onRequest` handler that was in `functions/index.js` has moved
+here — the async kickoff (`processIntelligence`), `regenerateSummary`,
+`shareCreate`, `shareRevoke`, `noteFeedback`, and the `clientError` beacon
+included. No Firebase Function serves an HTTP endpoint `services/api` also
+serves.
 
-- **`onNoteDeleted`** (`functions/index.js`) — a genuine Firestore
-  `onDocumentDeleted` trigger on `workspaces/{wsId}/notes/{noteId}`. It is the
-  GDPR/App-Store storage+Postgres cascade that `/v1/account/delete` relies on
-  (account deletion deletes the note docs, which fire this trigger). It stays a
-  Function.
+The only handler that must **not** move is the genuine trigger:
 
-Still living as **HTTP** `onRequest` handlers in `functions/index.js` and *not*
-part of §3.1's named five — flagged for a follow-up consolidation pass, not
-ported here: `processIntelligence` (async kickoff), `regenerateSummary`,
-`shareCreate`, `shareRevoke`, `noteFeedback`, `clientError`. Their logic is
-tightly bound to index.js-local infrastructure (the pg pool factory,
-`upsertNoteQueued`, the regenerate claim SQL, Firebase deploy params), so
-porting them faithfully is a deliberate second step.
+- **`onNoteDeleted`** (`functions/index.js`) — a Firestore `onDocumentDeleted`
+  trigger on `workspaces/{wsId}/notes/{noteId}`. It is the GDPR/App-Store
+  storage+Postgres cascade that `/v1/account/delete` relies on (account deletion
+  deletes the note docs, which fire this trigger). It is event-bound to
+  Firestore and cannot be expressed as an HTTP route, so it stays a Function.
+
+### How the ported handlers' infra was repointed
+
+The index.js-local infrastructure was routed through the workspace packages
+rather than re-created:
+
+- **pg pool factory** (`functions/index.js` `pgPool()`, `max: 4`) → the shared
+  `@algominutes/db` `pg-query.cjs` `pool()` — one pool for the whole service.
+  `hydratePgEnv()` (Firebase-param → `process.env`) is dropped; on Cloud Run the
+  `PG*` / `WRITE_POSTGRES` vars are set directly in the environment `pool()`
+  reads.
+- **`upsertNoteQueued`** and the **regenerate claim / probe / unclaim SQL** have
+  no repo function, so the SQL stays inside the ported route files but executes
+  on the **shared** `pool()`, never a local one.
+- **Cloud Tasks enqueue** → `@algominutes/ai` `cloud-tasks.cjs` `enqueueTask`.
+- **`validateStoragePath`** → `@algominutes/db` `storage-paths.cjs`.
+- **feedback / share-link / summary-template / redaction helpers** →
+  `@algominutes/ai` (`note-feedback.cjs`, `share-links.cjs`,
+  `summary-templates.cjs`, `redaction.cjs`).
+- **Firebase `defineString` deploy params** (`TRANSCODER_URL`, `SUMMARIZER_URL`,
+  `JOBS_SA_EMAIL`, `TASKS_PROJECT`, `TASKS_LOCATION`, `TASKS_QUEUE`) become plain
+  Cloud Run env vars with the source's defaults.
 
 ## Running
 
@@ -136,4 +166,10 @@ TypeScript source directly and there is no build step yet. `PORT` defaults to
 | `WRITE_POSTGRES` | `true` enables the Postgres-backed paths; otherwise those routes 503. |
 | `PGHOST` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `DATABASE_URL` | Postgres connection (via `@algominutes/db`). |
 | `AIPLATFORM_LOCATION` | Vertex region for search/chat (default `us-central1`). |
+| `TRANSCODER_URL` | Cloud Run URL the `/v1/process` kickoff enqueues to. |
+| `SUMMARIZER_URL` | Cloud Run URL `/v1/notes/regenerate-summary` enqueues to. |
+| `JOBS_SA_EMAIL` | Service account minted into the Cloud Tasks OIDC token. |
+| `TASKS_PROJECT` | Cloud Tasks project (required for `/v1/process` + regenerate). |
+| `TASKS_LOCATION` | Cloud Tasks location (default `us-central1`). |
+| `TASKS_QUEUE` | Cloud Tasks queue (default `audio-jobs`). |
 | `LOG_CHAT_PROMPT_DEBUG` | `true` logs a redaction-tag count for the chat prompt (off in prod). |

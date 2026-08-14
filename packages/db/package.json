@@ -7,6 +7,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./db": "./src/db.ts",
+    "./notes-repo": "./src/notes-repo.ts",
+    "./search-repo": "./src/search-repo.ts",
+    "./embeddings": "./src/embeddings.ts",
     "./*": "./src/*"
   },
   "scripts": {
