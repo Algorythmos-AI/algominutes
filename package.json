@@ -1,0 +1,24 @@
+{
+  "name": "algominutes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes — AI meeting recorder. Native iOS, native Android, and a React web app. © 2026 Algorythmos Pty Ltd.",
+  "license": "UNLICENSED",
+  "author": "Algorythmos Pty Ltd",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "gitleaks": "gitleaks detect --source . --config .gitleaks.toml --no-banner",
+    "invariants": "bash scripts/check-no-silent-catch.sh && bash scripts/check-no-console.sh && bash scripts/check-no-genai-import.sh",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc -b --noEmit || true",
+    "contracts:openapi": "npm run openapi --workspace @algominutes/contracts --if-present",
+    "contracts:models": "npm run models --workspace @algominutes/contracts --if-present"
+  }
+}
