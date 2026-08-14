@@ -1,0 +1,24 @@
+{
+  "name": "@algominutes/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes single-Postgres schema, migrations, and repo layer. All note mutations go through here.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db.ts",
+    "./notes-repo": "./src/notes-repo.ts",
+    "./search-repo": "./src/search-repo.ts",
+    "./embeddings": "./src/embeddings.ts",
+    "./pg-query.cjs": "./src/pg-query.cjs",
+    "./storage-paths.cjs": "./src/storage-paths.cjs"
+  },
+  "scripts": {
+    "migrate": "node ./scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@algominutes/ai": "*",
+    "pg": "^8.13.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@algominutes/ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes AI + shared runtime libs: schema-constrained Gemini calls with retry ladder, PII pre-scrub, prompt/summary templates, embeddings, cloud-tasks, structured logger.",
+  "license": "UNLICENSED",
+  "exports": {
+    "./gemini-call.cjs": "./src/gemini-call.cjs",
+    "./redaction.cjs": "./src/redaction.cjs",
+    "./embeddings.cjs": "./src/embeddings.cjs",
+    "./intelligence.cjs": "./src/intelligence.cjs",
+    "./summary-templates.cjs": "./src/summary-templates.cjs",
+    "./note-edit.cjs": "./src/note-edit.cjs",
+    "./note-feedback.cjs": "./src/note-feedback.cjs",
+    "./note-terminal.cjs": "./src/note-terminal.cjs",
+    "./share-links.cjs": "./src/share-links.cjs",
+    "./logger.cjs": "./src/logger.cjs",
+    "./cloud-tasks.cjs": "./src/cloud-tasks.cjs"
+  },
+  "dependencies": {
+    "@google-cloud/aiplatform": "^3.34.0",
+    "@google-cloud/tasks": "^5.5.0"
+  }
+}
