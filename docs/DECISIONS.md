@@ -31,6 +31,33 @@ choices made during the automated A2/A3 run so they are auditable from the git l
 - **Android Capacitor plugin bridges replaced by a direct Kotlin interface** (`RecorderInterface`). The
   MediaProjection/ForegroundService cores (`RecordingService`, `BroadcastRecordingService`) were ported
   unchanged (§5 protected); only the `*Plugin.kt` Capacitor glue was replaced.
+- **Android A3 scope = audio layer + interface only.** The full native Compose app (auth, UI, upload,
+  paywall) is Track B / B2. A3 ports the recorder cores + a Capacitor-free interface so B2 starts from
+  the hard part. `apps/android` is intentionally not a buildable app yet.
+- **All of source `shared/` consolidated into `@algominutes/ai`** (incl. `pg-query`, `storage-paths`,
+  `logger`, `cloud-tasks`), not split across db/ai. Reason: services resolve `shared/` at runtime via a
+  flat `sharedRequire(name)`; one resolution root (`@algominutes/ai/<name>`) preserves that with a
+  minimal edit instead of a per-name package map. `packages/db` = repo layer + migrations only.
+- **Service Dockerfiles vendor the workspace packages** (`COPY packages/ai|db → node_modules/@algominutes/*`)
+  replacing `COPY shared ./shared`. Full npm-workspaces build wiring is a TODO(build) for A11.
+- **`services/api` runs under `tsx`** (no build step) because it imports `@algominutes/db` TypeScript
+  source; mirrors the source's own `tsx server.ts`. A compiled build is an A11 concern.
+- **API surface uses clean `/v1/...` names with the body contract preserved** (noteId/workspaceId in the
+  JSON body), NOT `/v1/notes/:id` path params — path params would change what clients send.
+- **Web keeps client-side extraction (pdfjs/mammoth/tesseract) for now**; switching the web to call
+  `services/extractor` is a follow-up. A3's P0 was that the shared service exists.
+- **Web Capacitor calls resolved via web-safe shims** (`apps/web/src/lib/native-shim/*`) rather than
+  deleting App.tsx's native branches now — full web de-Capacitor + generalisation is A8. This keeps the
+  repo free of any `@capacitor` dependency while being honest that A8 work remains.
+- **Web Firebase config reads Vite env vars** (`apps/web/.env.example`) instead of importing the
+  committed per-project JSON (which is git-ignored / regenerated at A4).
+- **Branding + design tokens deferred to A6.5, i18n strings to A6.7.** iOS/Android brand assets and the
+  web `@theme` block are kept as neutral placeholders with `TODO(brand)` so the apps still render; real
+  values come from `@algominutes/tokens`.
+- **Firestore `onNoteDeleted` stays a Firebase trigger** (genuine `onDocumentDeleted`); everything else
+  HTTP moves to `services/api`. The six extra HTTP handlers in `functions/index.js`
+  (processIntelligence, regenerateSummary, shareCreate, shareRevoke, noteFeedback, clientError) are being
+  ported into `services/api` to complete the one-surface goal (§3.1).
 
 ## A2 — Repository foundation
 
