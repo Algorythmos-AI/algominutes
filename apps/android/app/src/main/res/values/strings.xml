@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal strings for the audio-layer module (A3). Full app strings arrive with
+  the Compose client in Track B2.
+-->
+<resources>
+    <string name="app_name">Wassup Meeting</string>
+</resources>
