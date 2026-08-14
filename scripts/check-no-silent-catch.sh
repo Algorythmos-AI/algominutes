@@ -15,6 +15,7 @@ PATTERNS=(
   'catch\s*\{\s*\}'
 )
 TARGETS=(
+  "$ROOT/functions"
   "$ROOT/services/api"
   "$ROOT/packages/ai"
   "$ROOT/packages/db"

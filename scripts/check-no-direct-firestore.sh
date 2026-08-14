@@ -18,6 +18,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGETS=(
+  "$ROOT/functions"
   "$ROOT/services/api"
   "$ROOT/services"
   "$ROOT/packages/db"
