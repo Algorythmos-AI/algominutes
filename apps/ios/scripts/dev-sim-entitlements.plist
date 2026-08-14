@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Simulator-only dev entitlements. Concrete values (no $(AppIdentifierPrefix))
+	     so ad-hoc `codesign` can embed them without a provisioning profile.
+	     The Simulator does not enforce the team-prefix on keychain groups, so this
+	     satisfies FirebaseAuth's keychain access. NOT used for device/Release builds,
+	     which carry Wassup/Wassup.entitlements + a real signing team instead. -->
+	<key>get-task-allow</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.wassup.meeting</string>
+	</array>
+</dict>
+</plist>

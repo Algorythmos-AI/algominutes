@@ -1,0 +1,16 @@
+# Firebase iOS config contains an API key; the repo's gitleaks policy blocks
+# all AIza matches except firebase-applet-config.json. Fetch it locally with:
+#   npx firebase-tools apps:sdkconfig ios 1:909388484461:ios:187a96b94c319f3a5e1464 \
+#     > Wassup/Resources/GoogleService-Info.plist
+Wassup/Resources/GoogleService-Info.plist
+
+# XcodeGen output — regenerate with `xcodegen generate`
+Wassup.xcodeproj/
+
+# Xcode noise
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+test-results.txt
+clean-test.txt
