@@ -1,0 +1,12 @@
+# Shared notes are private links, not public pages. They carry clinical
+# meeting content and are meant for one recipient, so they must never appear
+# in a search index.
+#
+# This is defence in depth, not the control: the /s/** headers block in
+# firebase.json sends X-Robots-Tag: noindex, and /api/shared-note sets
+# Cache-Control: no-store. A crawler that ignores robots.txt still gets those.
+User-agent: *
+Disallow: /s/
+Disallow: /api/
+
+Allow: /
