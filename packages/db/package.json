@@ -7,12 +7,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./db": "./src/db.ts",
-    "./notes-repo": "./src/notes-repo.ts",
-    "./search-repo": "./src/search-repo.ts",
-    "./embeddings": "./src/embeddings.ts",
-    "./pg-query.cjs": "./src/pg-query.cjs",
-    "./storage-paths.cjs": "./src/storage-paths.cjs"
+    "./*": "./src/*"
   },
   "scripts": {
     "migrate": "node ./scripts/migrate.mjs"

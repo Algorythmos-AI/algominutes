@@ -1,0 +1,21 @@
+{
+  "name": "@algominutes/summarizer",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "express": "^4.21.2",
+    "firebase-admin": "^13.8.0",
+    "google-auth-library": "^9.15.0",
+    "pg": "^8.20.0",
+    "@algominutes/ai": "*",
+    "@algominutes/db": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

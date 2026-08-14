@@ -1,0 +1,89 @@
+'use strict';
+
+// Entry point. Cloud Tasks pushes a JSON body to POST /; we ack 2xx
+// after the work is done (or after a self-reschedule for stt-poll).
+// IAM is enforced by Cloud Run via --no-allow-unauthenticated; this
+// process trusts that the request reached it.
+
+const express = require('express');
+
+function loadShared(name) {
+  try { return require(`@algominutes/ai/${name}`); }
+  catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
+    throw err;
+  }
+}
+
+const sharedLogger = loadShared('logger.cjs');
+const noteTerminal = loadShared('note-terminal.cjs');
+const handler = require('./handler');
+const db = require('./db');
+const storage = require('./storage');
+const ffmpeg = require('./ffmpeg');
+const youtube = require('./youtube');
+const stt = require('./stt');
+const mirror = require('./firestore-mirror');
+const fastPath = require('./fast-path');
+const tasksClient = require('./tasks-client');
+
+const app = express();
+app.use(express.json({ limit: '256kb' }));
+
+const env = {
+  GCS_BUCKET: process.env.GCS_BUCKET || '',
+  STT_RECOGNIZER: process.env.STT_RECOGNIZER || '',
+  TASKS_PROJECT: process.env.TASKS_PROJECT || '',
+  TASKS_LOCATION: process.env.TASKS_LOCATION || 'us-central1',
+  TASKS_QUEUE: process.env.TASKS_QUEUE || 'audio-jobs',
+  JOBS_SA_EMAIL: process.env.JOBS_SA_EMAIL || '',
+  TRANSCODER_URL: process.env.TRANSCODER_URL || '',
+  SUMMARIZER_URL: process.env.SUMMARIZER_URL || '',
+  EMBEDDER_URL: process.env.EMBEDDER_URL || '',
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+  LANGUAGE_CODES: process.env.LANGUAGE_CODES || 'en-US,en-GB,en-AU',
+};
+
+const rootLog = sharedLogger.logger.child({ svc: 'transcoder' });
+
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+
+app.post('/', async (req, res) => {
+  const traceId = sharedLogger.traceIdFrom(req.headers);
+  const log = rootLog.child({ traceId, kind: req.body && req.body.kind, jobId: req.body && req.body.jobId });
+  const tasks = tasksClient.makeClient({ env, log });
+  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env };
+
+  try {
+    await handler.handle(req.body || {}, deps);
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    log.error({ err }, 'transcoder_task_failed');
+    // Surface 500 so Cloud Tasks retries per the queue's backoff policy.
+    //
+    // On the LAST attempt, write a terminal state to Postgres as well as
+    // Firestore. Without this the note sat at 'queued'/'chunking'/'transcribing'
+    // forever: mirrorError writes Firestore only, /api/note serves the Postgres
+    // status, and the iOS app therefore showed a spinner that could never
+    // resolve. There is no server-side sweeper to catch it, and the queue has
+    // no dead-letter sink, so this log line is the only trace a human gets.
+    const { noteId, workspaceId } = req.body || {};
+    if (noteTerminal.isFinalAttempt(req.headers)) {
+      await noteTerminal.markNoteFailed({
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        message: 'We could not process this recording.',
+        log,
+        event: 'transcoder_mark_failed',
+      });
+    }
+    return res.status(500).json({ error: 'task_failed' });
+  }
+});
+
+const port = Number(process.env.PORT || 8080);
+app.listen(port, () => {
+  rootLog.info({ port }, 'transcoder_started');
+});
