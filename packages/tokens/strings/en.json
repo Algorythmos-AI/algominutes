@@ -1,0 +1,4 @@
+{
+  "$comment": "TODO(i18n A6.7): externalise every user-facing string here (English v1.0, French next). Retrofitting i18n across three clients is miserable; strings land here as A6.4/A6.6 audit each surface.",
+  "app": { "name": "AlgoMinutes" }
+}

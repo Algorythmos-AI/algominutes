@@ -1,0 +1,12 @@
+{
+  "name": "@algominutes/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes design tokens + i18n strings. Single source for web (Tailwind theme), SwiftUI Theme, and the Compose theme. Real palette/type scale land in A6.5; strings externalised in A6.7.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    "./tokens.json": "./tokens.json",
+    "./strings/en.json": "./strings/en.json"
+  }
+}
