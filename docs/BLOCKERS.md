@@ -16,13 +16,44 @@ run; each item has a safe reversible default already applied. Grouped by type.
 
 See the dedicated section at the bottom: **"A4 identifiers needed from you."**
 
-## 3. Business decisions deferred (safe default applied, revisit before launch)
+## 3. Business/engineering decisions deferred (safe default applied)
 
-_(populated as encountered during the run)_
+Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to revisit:
 
-## 4. Verification gaps
+- **db-job → scheduled Cloud Run job** (not folded into `api`). Reversible.
+- **Web keeps client-side extraction** (pdfjs/mammoth/tesseract) for now; switching the web to call
+  `services/extractor` is a follow-up.
+- **All `shared/` lives in `@algominutes/ai`** (incl. pg-query/storage-paths). If you'd prefer pg-query in
+  `@algominutes/db`, it's a small move (the service `sharedRequire` ai→db fallback already tolerates it).
+- **`main` not pushed / not protected during this run** (see §1). 
 
-_(populated as encountered — things I could not verify without deps/credentials/devices)_
+## 4. Verification gaps (could NOT verify without deps / credentials / devices)
+
+Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all
+invariant checkers pass, gitleaks clean) but **nothing was installed, built, or deployed** — that needs
+A4 credentials + A11 build wiring.
+
+- **No `npm install` / build / deploy** anywhere: services, web, contracts codegen, iOS, Android are
+  unbuilt. Full compilation + runtime import resolution (`@algominutes/*` workspace links, `@algominutes/db`
+  TS via `tsx`, exports maps) is unverified until deps are installed.
+- **Service Dockerfiles** vendor workspace packages via `COPY packages/* …`; full npm-workspaces build is
+  `TODO(build A11)`. **`functions/`** Firebase deploy must vendor `@algominutes/ai` — `TODO(build A11)`.
+- **iOS:** `xcodegen generate` succeeds, but a clean **build** needs A4 signing + SPM resolution (network).
+  The re-homed **broadcast extension** is declared + embedded but its full runtime wiring
+  (`RPSystemBroadcastPickerView`, App-Group handoff) needs a real App Group (A4) + a device (A11).
+- **Android:** no gradle build run; A3 delivered only the audio layer + interface (the full Compose app,
+  permission/consent flow, launcher Activity are **B2**).
+- **Web:** no `vite build`; `App.tsx` still has native branches behind web-safe shims — full de-Capacitor +
+  generalisation is **A8**.
+- **contracts:** `openapi/openapi.v1.json` is hand-written to match the zod schemas; `npm run openapi`
+  (regenerate) and `npm run models` (Swift/Kotlin codegen, needs a JVM) were not run. Verify
+  `@asteasolutions/zod-to-openapi@8` + `zod@4` resolve together at A4.
+- **extractor:** Docker image needs `poppler-utils` + `yt-dlp`; OCR image pre-processing (`sharp`) dropped
+  for P0; captionless YouTube returns a permanent 422 (STT is the transcoder's job).
+- **`check-migrations.sh`** compares against `origin/main`; only meaningful in CI after the first push.
+- **Client identifiers + `wassup`/`clinical` naming still present throughout** — by design. The global
+  rename is **A5**; identifier replacement is **A4/A5**. So the BUILD-PLAN "Verify" grep for
+  `wassup|clinical` will NOT be clean until A5 — expected at this stage.
 
 ---
 
