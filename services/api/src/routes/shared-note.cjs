@@ -23,7 +23,7 @@
 // 3. Cost is unbounded by design. A leaked or crawled link is a billable loop,
 //    so the caller pairs this with an IP-keyed limiter and maxInstances.
 
-const { withQueryTimeout, pool } = require('@algominutes/db/pg-query.cjs');
+const { withQueryTimeout, pool } = require('@algominutes/ai/pg-query.cjs');
 const shareLinks = require('@algominutes/ai/share-links.cjs');
 const redaction = require('@algominutes/ai/redaction.cjs');
 

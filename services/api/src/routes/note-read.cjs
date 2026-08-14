@@ -25,7 +25,7 @@
  * than surprising the user with it in a forwarded document.
  */
 
-const { withQueryTimeout, isQueryTimeout, postgresEnabled } = require('@algominutes/db/pg-query.cjs');
+const { withQueryTimeout, isQueryTimeout, postgresEnabled } = require('@algominutes/ai/pg-query.cjs');
 const { isValidId } = require('@algominutes/ai/intelligence.cjs');
 
 // A 2-hour chunked meeting is roughly 3-6k transcript lines. 1000 lines is

@@ -16,13 +16,20 @@ import { authMiddleware } from '../middleware/auth.js';
 import { processAudioRoute } from './process-audio.js';
 import { updateNoteRoute } from './update-note.js';
 
+// functions/index.js HTTP handlers, ported to services/api (ESM).
+import { processIntelligenceRoute } from './process-intelligence.js';
+import { regenerateSummaryRoute } from './regenerate-summary.js';
+import { shareCreateRoute, shareRevokeRoute } from './shares.js';
+import { noteFeedbackRoute } from './note-feedback.js';
+import { clientErrorRoute } from './client-error.js';
+
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
 import noteReadModule from './note-read.cjs';
 import exportNoteModule from './export-note.cjs';
 import searchAndChatModule from './search-and-chat.cjs';
 import sharedNoteModule from './shared-note.cjs';
 import deleteAccountModule from './delete-account.cjs';
-import pgQueryModule from '@algominutes/db/pg-query.cjs';
+import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 
 const { handleNoteRead } = noteReadModule;
 const { handleExportNote } = exportNoteModule;
@@ -52,6 +59,9 @@ export function buildRouter() {
   // ── POST /v1/process-audio ── server.ts /api/process-audio ─────────────
   router.post('/process-audio', authMiddleware, wrap(processAudioRoute));
 
+  // ── POST /v1/process ── functions/index.js processIntelligence (async) ──
+  router.post('/process', authMiddleware, wrap(processIntelligenceRoute));
+
   // ── POST /v1/notes/read ── functions/note-read.cjs (also server.ts /api/note)
   router.post('/notes/read', authMiddleware, wrap(async (req, res) => {
     const result = await handleNoteRead({ uid: req.uid, body: req.body, log: req.log });
@@ -60,6 +70,12 @@ export function buildRouter() {
 
   // ── POST /v1/notes/update ── server.ts /api/update-note (updateNote twin) ─
   router.post('/notes/update', authMiddleware, wrap(updateNoteRoute));
+
+  // ── POST /v1/notes/regenerate-summary ── functions/index.js regenerateSummary
+  router.post('/notes/regenerate-summary', authMiddleware, wrap(regenerateSummaryRoute));
+
+  // ── POST /v1/notes/feedback ── functions/index.js noteFeedback ─────────
+  router.post('/notes/feedback', authMiddleware, wrap(noteFeedbackRoute));
 
   // ── POST /v1/export ── functions/export-note.cjs (binary DOCX) ─────────
   router.post('/export', authMiddleware, wrap(async (req, res) => {
@@ -95,6 +111,12 @@ export function buildRouter() {
       res,
     });
   }));
+
+  // ── POST /v1/shares/create ── functions/index.js shareCreate ───────────
+  router.post('/shares/create', authMiddleware, wrap(shareCreateRoute));
+
+  // ── POST /v1/shares/revoke ── functions/index.js shareRevoke ───────────
+  router.post('/shares/revoke', authMiddleware, wrap(shareRevokeRoute));
 
   // ── POST /v1/shares/read ── functions/shared-note.cjs (PUBLIC, no auth) ─
   //
@@ -144,6 +166,13 @@ export function buildRouter() {
   });
   router.post('/account/delete', deleteAccountHandler);
   router.delete('/account/delete', deleteAccountHandler);
+
+  // ── POST /v1/client-error ── functions/index.js clientError ────────────
+  //
+  // PUBLIC crash beacon: no auth, and exempt from the client-version gate
+  // (see app.js) so a crashing client can always report. Nothing touches
+  // Postgres; every field is length-capped before it reaches the log.
+  router.post('/client-error', wrap(async (req, res) => clientErrorRoute(req, res)));
 
   return router;
 }

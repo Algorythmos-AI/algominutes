@@ -10,8 +10,8 @@
 # known repo/mirror sites.
 #
 # ALLOWLIST (legitimate repo + mirror writers):
-#   - lib/notes-repo.ts                         (the repo layer)
-#   - functions/index.js                        (Functions error/mirror writes)
+#   - packages/db/src/notes-repo.ts             (the repo layer)
+#   - services/api/src/routes/process-intelligence.js (ported error-state Firestore mirror)
 #   - services/transcoder/src/firestore-mirror.js
 #   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
 set -euo pipefail
@@ -27,7 +27,7 @@ PATTERNS=(
   'noteRef\.(set|update|delete)\('
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/api/src/index\.js|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/api/src/routes/process-intelligence\.js|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do
