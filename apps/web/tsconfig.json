@@ -1,0 +1,57 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+
+    // Type checking. Measured on 2026-08-14 rather than guessed, because the
+    // flags cost wildly different amounts here:
+    //
+    //   strictNullChecks          4 errors   (all in tests) — ON
+    //   strictFunctionTypes       0 errors               — ON
+    //   noUncheckedIndexedAccess 91 errors               — deferred
+    //   noImplicitAny          1181 errors               — deferred
+    //   (full "strict")        1171 errors
+    //
+    // strictNullChecks is the one that matters most and turned out to be nearly
+    // free. It is the flag that catches the class of bug behind the crash-screen
+    // work: server data used in render without a null check, where the throw
+    // happens inside React and takes the whole app down.
+    //
+    // The two deferred flags are worth doing — noUncheckedIndexedAccess in
+    // particular, given the unguarded array indexing in this codebase — but 91
+    // and 1181 are their own pieces of work, not a side effect of turning on a
+    // safety net. The numbers are here so whoever picks them up can size it.
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "exclude": [
+    "scratch",
+    "reports",
+    "recordings",
+    "node_modules",
+    "dist",
+    "functions/node_modules",
+    "services/*/node_modules",
+    "services/*/shared"
+  ]
+}

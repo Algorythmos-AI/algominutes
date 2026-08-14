@@ -1,0 +1,463 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────
+   TODO(brand A6.5): AlgoMinutes design tokens.
+   Client design tokens (the "INTEGRANT" system) and the Rajdhani/Titillium web
+   font import were removed here. The real AlgoMinutes palette, type scale, and
+   fonts are defined once in @algominutes/tokens (packages/tokens) and applied to
+   web, SwiftUI Theme, and the Compose theme. The neutral placeholder values
+   below keep the app rendering until A6.5 replaces them.
+───────────────────────────────────────────── */
+
+@theme {
+  --color-accent:        #0A84FF;
+  --color-accent-glow:   rgba(10, 132, 255, 0.32);
+  --color-accent-hover:  #0A6CE0;
+
+  --color-bg:            #000000;
+  --color-bg-2:          #0A0A0A;
+  --color-surface:       #111111;
+  --color-card:          #0A0A0A;
+  --color-card-hover:    #161616;
+
+  --color-border:        #333333;
+  --color-border-soft:   rgba(255, 255, 255, 0.10);
+  --color-border-accent: rgba(10, 132, 255, 0.45);
+
+  --color-heading:       #FFFFFF;
+  --color-body:          #D9D9D9;
+  --color-muted:         #8A8A8A;
+  --color-placeholder:   #5A5A5A;
+
+  --color-success:       #22C55E;
+  --color-warning:       #FACC15;
+  --color-danger:        #EF4444;
+
+  --radius-card:         1.25rem;
+  --shadow-card:         0 8px 32px rgba(0,0,0,0.65), 0 1px 0 rgba(255,255,255,0.04) inset;
+  --shadow-card-hover:   0 16px 48px rgba(0,0,0,0.8), 0 0 0 1px rgba(10,132,255,0.35), 0 1px 0 rgba(255,255,255,0.06) inset;
+  --shadow-btn:          0 6px 22px rgba(10,132,255,0.40);
+  --shadow-btn-hover:    0 10px 30px rgba(10,132,255,0.55), 0 0 0 1px rgba(10,132,255,0.40);
+}
+
+/* ── Reset & Base ───────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-body);
+  font-family: 'Titillium Web', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Rajdhani', sans-serif;
+  color: var(--color-heading);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+
+p, span, li { color: var(--color-body); }
+
+/* ── Background mesh ────────────────────────── */
+.owll-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 5%,   rgba(10,132,255,0.12) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 35% at 90% 38%,  rgba(10,132,255,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 10% 92%,  rgba(10,132,255,0.07) 0%, transparent 55%),
+    linear-gradient(180deg, #050505 0%, #000000 50%, #050505 100%);
+  pointer-events: none;
+}
+
+/* Dot-grid texture — faint monochrome engineering grid, masked so it's
+   strongest at the top and fades toward the bottom for depth (clinical,
+   not busy). Sits above the mesh, below content. */
+.owll-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(10,132,255,0.13) 1.2px, transparent 1.6px);
+  background-size: 22px 22px;
+  background-position: -11px -11px;
+  -webkit-mask-image: radial-gradient(ellipse 130% 100% at 50% -10%, #000 45%, transparent 95%);
+          mask-image: radial-gradient(ellipse 130% 100% at 50% -10%, #000 45%, transparent 95%);
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Subtle grain — adds tactile depth without visual noise overload */
+.owll-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.12 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 200px 200px;
+  opacity: 0.9;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/* ── Header ─────────────────────────────────── */
+.owll-header {
+  background: linear-gradient(175deg, #141414 0%, #000000 100%);
+  border-bottom-left-radius:  2rem;
+  border-bottom-right-radius: 2rem;
+  padding-bottom: 3rem;
+  border-bottom: 1px solid var(--color-border-soft);
+  position: relative;
+  overflow: hidden;
+}
+
+.owll-header::before {
+  content: '';
+  position: absolute;
+  top: -90px; right: -90px;
+  width: 340px; height: 340px;
+  background: radial-gradient(circle, rgba(10,132,255,0.20) 0%, rgba(10,132,255,0.05) 40%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(2px);
+}
+
+/* Mirror glow on the lower-left for balance */
+.owll-header::after {
+  content: '';
+  position: absolute;
+  bottom: -120px; left: -60px;
+  width: 220px; height: 220px;
+  background: radial-gradient(circle, rgba(10,132,255,0.10) 0%, transparent 60%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* Gradient wordmark — only inside the header */
+.owll-header .owll-wordmark {
+  background: linear-gradient(115deg, #FFFFFF 0%, #FFFFFF 55%, #0A84FF 125%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ── Cards ──────────────────────────────────── */
+.owll-card {
+  background:
+    radial-gradient(ellipse 70% 80% at 100% 50%, rgba(255,255,255,0.03) 0%, transparent 65%),
+    linear-gradient(135deg, rgba(22,22,22,0.92) 0%, rgba(10,10,10,0.92) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+  transition:
+    transform      0.22s cubic-bezier(0.34,1.56,0.64,1),
+    box-shadow     0.22s ease,
+    border-color   0.22s ease,
+    background     0.22s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Top-edge shimmer */
+.owll-card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.12) 40%, rgba(10,132,255,0.45) 70%, transparent 100%);
+}
+
+.owll-card:hover {
+  transform: translateY(-3px) scale(1.005);
+  box-shadow:
+    var(--shadow-card-hover),
+    0 18px 50px -10px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  border-color: var(--color-border-accent);
+  background:
+    radial-gradient(ellipse 70% 80% at 100% 50%, rgba(255,255,255,0.05) 0%, transparent 65%),
+    linear-gradient(135deg, rgba(28,28,28,0.95) 0%, rgba(14,14,14,0.95) 100%);
+}
+
+/* ── Tags ───────────────────────────────────── */
+.owll-tag {
+  background: linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 100%);
+  color: #FFFFFF;
+  font-family: 'Titillium Web', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.22rem 0.65rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(255,255,255,0.24);
+  letter-spacing: 0.03em;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.owll-card:hover .owll-tag {
+  background: linear-gradient(135deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.10) 100%);
+  border-color: rgba(255,255,255,0.38);
+}
+
+/* ── Icon action buttons ────────────────────────
+   White tile, MUTED steel-blue glyph. These are the record-type tiles
+   (Meeting / Lecture / Forum / …) — deliberately "less blue" than the
+   primary action; they brighten to full accent blue on card hover. */
+.owll-icon-btn {
+  background: linear-gradient(135deg, #F2F7FF 0%, #DCEAFF 100%);
+  color: #0A84FF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 1.1rem;
+  box-shadow:
+    0 10px 28px rgba(0,0,0,0.5),
+    0 3px 8px rgba(0,0,0,0.4),
+    inset 0 1px 0 rgba(255,255,255,0.7),
+    inset 0 -1px 0 rgba(0,0,0,0.12);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, color 0.2s ease;
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* Outer aura — faint blue halo, subtle so the tile stays calm */
+.owll-icon-btn::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(10,132,255,0.18) 0%, transparent 65%);
+  filter: blur(10px);
+  z-index: -1;
+  opacity: 0.45;
+  transition: opacity 0.22s ease;
+}
+
+.owll-card:hover .owll-icon-btn {
+  box-shadow:
+    0 14px 40px rgba(0,0,0,0.55),
+    0 4px 10px rgba(0,0,0,0.5),
+    inset 0 1px 0 rgba(255,255,255,0.8),
+    inset 0 -1px 0 rgba(0,0,0,0.12);
+  color: #0A84FF;
+  transform: scale(1.06);
+}
+
+.owll-card:hover .owll-icon-btn::before {
+  opacity: 0.75;
+}
+
+/* ── Primary button — white surface, vivid blue label/glyph ── */
+.owll-btn-primary {
+  background: linear-gradient(135deg, #F2F7FF 0%, #DCEAFF 100%);
+  color: #0A84FF;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-btn);
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+}
+
+.owll-btn-primary:hover {
+  box-shadow: var(--shadow-btn-hover);
+  transform: translateY(-1px);
+}
+
+.owll-btn-primary:active {
+  transform: scale(0.97);
+}
+
+/* ── Ghost button ───────────────────────────── */
+.owll-btn-ghost {
+  background: rgba(255,255,255,0.05);
+  color: var(--color-body);
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 600;
+  border-radius: 1rem;
+  border: 1px solid var(--color-border-soft);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.owll-btn-ghost:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: var(--color-border);
+}
+
+/* ── Bottom nav ─────────────────────────────── */
+.owll-nav {
+  background: rgba(0,0,0,0.90);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-top: 1px solid var(--color-border-soft);
+  box-shadow: 0 -12px 40px rgba(0,0,0,0.6);
+}
+
+/* ── Bottom sheet ───────────────────────────── */
+.owll-sheet {
+  background: #0A0A0A;
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  border-top-left-radius:  2rem;
+  border-top-right-radius: 2rem;
+  box-shadow: 0 -24px 80px rgba(0,0,0,0.85);
+}
+
+.owll-sheet-row {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--color-border-soft);
+  border-radius: 0.85rem;
+}
+
+/* ── Note list row ──────────────────────────── */
+.owll-note-row {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  transition: all 0.18s ease;
+  cursor: pointer;
+}
+
+.owll-note-row:hover {
+  border-color: var(--color-border-accent);
+  background: var(--color-card-hover);
+}
+
+/* ── Recording screen ───────────────────────── */
+.owll-recording-bg { background: #000000; }
+
+/* ── Equalizer backdrop (home) ──────────────────
+   Full-width segmented bars rising from the bottom, blue→white, animated
+   on independent rhythms. Decorative background element only. */
+.owll-eq {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46vh;
+  max-height: 400px;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0 3px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  /* Fade out toward the top so bars dissolve into the background, and ease
+     off at the very bottom so they sit softly behind the nav. */
+  -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,0.35) 0%, #000 12%, #000 42%, rgba(0,0,0,0) 100%);
+          mask-image: linear-gradient(to top, rgba(0,0,0,0.35) 0%, #000 12%, #000 42%, rgba(0,0,0,0) 100%);
+}
+
+.owll-eq__bar {
+  flex: 1 1 0;
+  min-width: 4px;
+  height: 100%;
+  border-radius: 5px 5px 0 0;
+  background-image:
+    repeating-linear-gradient(to top, rgba(0,0,0,0) 0 6px, rgba(0,0,0,0.7) 6px 8px),
+    linear-gradient(to top, #0A84FF 0%, #4DA6FF 55%, #FFFFFF 100%);
+  /* Level is set by clipping from the top; segments stay crisp (no squash). */
+  clip-path: inset(60% 0 0 0);
+  /* step-end → the level snaps instantly at each keyframe and holds, like a
+     real spectrum/VU meter, instead of smoothly compressing. */
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+  will-change: clip-path;
+}
+
+/* Several jagged level sequences so neighbouring bars don't march in step.
+   Each value is the % clipped off the TOP (lower % = taller bar). */
+@keyframes owll-eq-j1 {
+  0%{clip-path:inset(62% 0 0 0)} 10%{clip-path:inset(18% 0 0 0)} 20%{clip-path:inset(74% 0 0 0)}
+  30%{clip-path:inset(40% 0 0 0)} 40%{clip-path:inset(8% 0 0 0)} 50%{clip-path:inset(55% 0 0 0)}
+  60%{clip-path:inset(28% 0 0 0)} 70%{clip-path:inset(80% 0 0 0)} 80%{clip-path:inset(34% 0 0 0)}
+  90%{clip-path:inset(12% 0 0 0)} 100%{clip-path:inset(62% 0 0 0)}
+}
+@keyframes owll-eq-j2 {
+  0%{clip-path:inset(30% 0 0 0)} 12%{clip-path:inset(72% 0 0 0)} 24%{clip-path:inset(10% 0 0 0)}
+  36%{clip-path:inset(50% 0 0 0)} 48%{clip-path:inset(84% 0 0 0)} 60%{clip-path:inset(22% 0 0 0)}
+  72%{clip-path:inset(60% 0 0 0)} 84%{clip-path:inset(16% 0 0 0)} 100%{clip-path:inset(30% 0 0 0)}
+}
+@keyframes owll-eq-j3 {
+  0%{clip-path:inset(78% 0 0 0)} 9%{clip-path:inset(24% 0 0 0)} 18%{clip-path:inset(58% 0 0 0)}
+  27%{clip-path:inset(6% 0 0 0)} 36%{clip-path:inset(46% 0 0 0)} 45%{clip-path:inset(82% 0 0 0)}
+  54%{clip-path:inset(20% 0 0 0)} 63%{clip-path:inset(66% 0 0 0)} 72%{clip-path:inset(14% 0 0 0)}
+  81%{clip-path:inset(52% 0 0 0)} 90%{clip-path:inset(36% 0 0 0)} 100%{clip-path:inset(78% 0 0 0)}
+}
+@keyframes owll-eq-j4 {
+  0%{clip-path:inset(20% 0 0 0)} 14%{clip-path:inset(64% 0 0 0)} 28%{clip-path:inset(4% 0 0 0)}
+  42%{clip-path:inset(48% 0 0 0)} 56%{clip-path:inset(88% 0 0 0)} 70%{clip-path:inset(32% 0 0 0)}
+  84%{clip-path:inset(70% 0 0 0)} 100%{clip-path:inset(20% 0 0 0)}
+}
+@keyframes owll-eq-j5 {
+  0%{clip-path:inset(50% 0 0 0)} 11%{clip-path:inset(14% 0 0 0)} 22%{clip-path:inset(76% 0 0 0)}
+  33%{clip-path:inset(30% 0 0 0)} 44%{clip-path:inset(60% 0 0 0)} 55%{clip-path:inset(10% 0 0 0)}
+  66%{clip-path:inset(44% 0 0 0)} 77%{clip-path:inset(84% 0 0 0)} 88%{clip-path:inset(26% 0 0 0)}
+  100%{clip-path:inset(50% 0 0 0)}
+}
+@keyframes owll-eq-j6 {
+  0%{clip-path:inset(8% 0 0 0)} 13%{clip-path:inset(56% 0 0 0)} 26%{clip-path:inset(22% 0 0 0)}
+  39%{clip-path:inset(80% 0 0 0)} 52%{clip-path:inset(38% 0 0 0)} 65%{clip-path:inset(66% 0 0 0)}
+  78%{clip-path:inset(16% 0 0 0)} 91%{clip-path:inset(48% 0 0 0)} 100%{clip-path:inset(8% 0 0 0)}
+}
+@keyframes owll-eq-j7 {
+  0%{clip-path:inset(68% 0 0 0)} 10%{clip-path:inset(28% 0 0 0)} 20%{clip-path:inset(86% 0 0 0)}
+  30%{clip-path:inset(12% 0 0 0)} 40%{clip-path:inset(52% 0 0 0)} 50%{clip-path:inset(20% 0 0 0)}
+  60%{clip-path:inset(72% 0 0 0)} 70%{clip-path:inset(6% 0 0 0)} 80%{clip-path:inset(42% 0 0 0)}
+  90%{clip-path:inset(60% 0 0 0)} 100%{clip-path:inset(68% 0 0 0)}
+}
+@keyframes owll-eq-j8 {
+  0%{clip-path:inset(40% 0 0 0)} 15%{clip-path:inset(82% 0 0 0)} 30%{clip-path:inset(18% 0 0 0)}
+  45%{clip-path:inset(58% 0 0 0)} 60%{clip-path:inset(4% 0 0 0)} 75%{clip-path:inset(46% 0 0 0)}
+  90%{clip-path:inset(74% 0 0 0)} 100%{clip-path:inset(40% 0 0 0)}
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owll-eq__bar { animation: none; clip-path: inset(45% 0 0 0); }
+}
+
+/* ── Pulse animation ────────────────────────── */
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(10,132,255,0.55); }
+  50%       { box-shadow: 0 0 0 20px rgba(10,132,255,0); }
+}
+.owll-mic-pulse { animation: mic-pulse 2.2s ease-in-out infinite; }
+
+/* ── Login screen ───────────────────────────── */
+.owll-login-bg {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% -10%, rgba(10,132,255,0.16) 0%, transparent 55%),
+    #000000;
+}
+
+/* ── Utility ────────────────────────────────── */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* iOS safe-area top padding for headers under the status bar / Dynamic Island.
+   Fallback 0px keeps web/non-notched behaviour unchanged. */
+.owll-safe-top    { padding-top: calc(env(safe-area-inset-top, 0px) + 1.25rem); }
+.owll-safe-top-lg { padding-top: calc(env(safe-area-inset-top, 0px) + 3rem); }
+
+/* ── Focus visibility for keyboard users ─────── */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
