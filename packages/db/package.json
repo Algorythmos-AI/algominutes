@@ -10,7 +10,7 @@
     "./*": "./src/*"
   },
   "scripts": {
-    "migrate": "node ./scripts/migrate.mjs"
+    "migrate": "tsx ../../scripts/migrate.ts"
   },
   "dependencies": {
     "@algominutes/ai": "*",

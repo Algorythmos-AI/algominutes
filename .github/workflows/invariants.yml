@@ -1,0 +1,38 @@
+name: invariants
+
+# Grep-based invariant gates enforcing the non-negotiables in CLAUDE.md §1-§2.
+# Cheap backstops; the .claude/agents/* sub-agents do the deeper checks during dev.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: No silent catch handlers
+        run: bash scripts/check-no-silent-catch.sh
+
+      - name: No public @google/generative-ai imports in services
+        run: bash scripts/check-no-genai-import.sh
+
+      - name: "No wildcard 'cors: true'"
+        run: bash scripts/check-no-cors-true.sh
+
+      - name: No stray console.* in server dirs
+        run: bash scripts/check-no-console.sh
+
+      - name: No direct Firestore note mutations outside the repo/mirror layer
+        run: bash scripts/check-no-direct-firestore.sh
+
+      - name: Migration integrity (never edit a committed migration)
+        run: bash scripts/check-migrations.sh

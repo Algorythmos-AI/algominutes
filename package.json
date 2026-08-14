@@ -16,6 +16,7 @@
   "scripts": {
     "gitleaks": "gitleaks detect --source . --config .gitleaks.toml --no-banner",
     "invariants": "bash scripts/check-no-silent-catch.sh && bash scripts/check-no-console.sh && bash scripts/check-no-genai-import.sh",
+    "migrate": "tsx scripts/migrate.ts",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "tsc -b --noEmit || true",
     "contracts:openapi": "npm run openapi --workspace @algominutes/contracts --if-present",
