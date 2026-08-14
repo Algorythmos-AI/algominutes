@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      De-Capacitored manifest (BUILD-PLAN A3). Keeps the two recording services,
+      their foreground-service permissions, and the FileProvider. The Capacitor
+      Capacitor bridge Activity / MainActivity launcher config was dropped —
+      the native Compose launcher Activity is supplied by Track B2.
+    -->
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true">
+
+        <!--
+          TODO(android B2): the launcher <activity> (Compose) is added here by
+          Track B2. In this audio-only module there is no Activity; the recording
+          notifications resolve their tap-target via the package launch intent at
+          runtime, so B2's launcher Activity becomes the target with no change to
+          the service code.
+        -->
+
+        <!-- Background microphone recording service (foreground type: microphone) -->
+        <service
+            android:name=".RecordingService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- MediaProjection meeting recording service (app audio + mic) -->
+        <service
+            android:name=".BroadcastRecordingService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- Shares recorded files with other apps (upload, share sheet, …). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

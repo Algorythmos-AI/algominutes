@@ -1,0 +1,60 @@
+// AlgoMinutes — Android audio-layer module (BUILD-PLAN A3).
+//
+// TODO(android B2): this is a deliberately minimal, Capacitor-free module that
+// builds ONLY the ported audio recording layer + its direct Kotlin interface.
+// The full native client stack — Jetpack Compose, Media3 playback, WorkManager
+// upload, Retrofit/OkHttp networking, DataStore, auth, DI — is added in Track B2
+// together with the launcher Activity. Do not grow this file beyond what the
+// two recording services + the AudioRecorder interface actually need.
+//
+// NOTE: package identifiers stay `com.wassup.meeting` this phase; the
+// wassup -> algominutes rename is a later phase (A5).
+
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace = "com.wassup.meeting"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.wassup.meeting"
+        minSdkVersion 24
+        targetSdkVersion 36
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // --- What the recording services + AudioRecorder interface actually use ---
+    // AppCompat: NotificationCompat (foreground-service notifications).
+    implementation "androidx.appcompat:appcompat:1.7.1"
+    // core-ktx: ContextCompat.startForegroundService / checkSelfPermission.
+    implementation "androidx.core:core-ktx:1.17.0"
+    // annotation: @RequiresApi used by the services.
+    implementation "androidx.annotation:annotation:1.9.1"
+    // coroutines: suspend stop() + StateFlow state exposed by the recorders.
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+
+    // The actual audio capture uses only android.media.* framework APIs
+    // (MediaRecorder / AudioRecord / MediaCodec / MediaMuxer / MediaProjection) —
+    // no androidx.media3 dependency is required by this layer. Media3 (playback)
+    // is a B2 concern, added there.
+}
