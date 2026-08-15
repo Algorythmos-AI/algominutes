@@ -84,6 +84,14 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
      `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
      can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
      support. Consider a server pre-purchase entitlement check.
+  5. **Client billing endpoint wiring (TODO(A9-infra)).** The iOS client uses provisional paths
+     (`api/verify-purchase`, `api/entitlement`) that must be reconciled with the deployed routes: verify
+     lives on **services/billing** `POST /v1/purchases/verify` (a separate service base URL, not the api),
+     entitlement is **api** `GET /v1/entitlement`, events is api `POST /v1/events`. The web client already
+     uses the correct paths. Reconcile the iOS APIClient base URLs/paths when the services deploy (A11).
+  6. **Android Play Billing CLIENT is B2.** The Play *server* side (verify + RTDN webhook) is built in
+     services/billing; the Android in-app Play Billing Library flow (products, purchase, restore) ships in
+     Track B, calling `POST /v1/purchases/verify` with `{purchaseToken, productId}`.
   4. **Trial vs monthly-quota window mismatch (minor).** The trial is an absolute 7-day window; metered
      quota resets on the calendar month (UTC). A trial crossing a month boundary gets a fresh monthly
      bucket — bounded and low-risk, noted for awareness.
