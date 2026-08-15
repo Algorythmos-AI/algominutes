@@ -35,6 +35,16 @@ variable "db_tier" {
   type        = string
 }
 
+variable "db_edition" {
+  description = "Cloud SQL edition. ENTERPRISE allows shared-core tiers (db-f1-micro); ENTERPRISE_PLUS (Google's new default) rejects them. Set per env in tfvars, not hardcoded."
+  type        = string
+  default     = "ENTERPRISE"
+  validation {
+    condition     = contains(["ENTERPRISE", "ENTERPRISE_PLUS"], var.db_edition)
+    error_message = "db_edition must be ENTERPRISE or ENTERPRISE_PLUS."
+  }
+}
+
 variable "db_disk_size_gb" {
   description = "Cloud SQL data disk size in GB (PD_SSD, autoresizes upward)."
   type        = number

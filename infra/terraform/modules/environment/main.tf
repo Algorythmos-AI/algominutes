@@ -146,7 +146,11 @@ resource "google_sql_database_instance" "pg" {
   ]
 
   settings {
-    tier                        = var.db_tier
+    tier = var.db_tier
+    # Google now defaults new Postgres instances to ENTERPRISE_PLUS, which
+    # rejects shared-core tiers (db-f1-micro / db-g1-small). Pin the edition
+    # explicitly so the chosen tier is valid. See docs/DECISIONS.md (A4).
+    edition                     = var.db_edition
     availability_type           = "ZONAL"
     disk_type                   = "PD_SSD"
     disk_size                   = var.db_disk_size_gb

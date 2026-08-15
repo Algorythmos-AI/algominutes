@@ -28,6 +28,14 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   conflict. The prod-budget re-scope stays a manual open item.
 - **Firebase configs regenerated per env via the CLI** (runbook step 4), never copied from the client
   project, and never committed (git-ignored).
+- **Cloud SQL `edition` pinned to `ENTERPRISE` (both envs), set in tfvars.** The first staging apply failed
+  — Google now defaults new Postgres instances to `ENTERPRISE_PLUS`, which rejects shared-core tiers
+  (`db-f1-micro`). Added a `db_edition` module variable (default `ENTERPRISE`, validated to the two allowed
+  values), wired into `google_sql_database_instance.pg.settings.edition`, exposed as a root var in each env
+  and set to `ENTERPRISE` in both tfvars (not hardcoded in the module). Prod's `db-custom-1-3840` is valid
+  on either edition; `ENTERPRISE` is chosen to keep both envs consistent and avoid the pricier
+  ENTERPRISE_PLUS default. Everything else in the first apply succeeded; re-apply creates only the SQL
+  instance/DB/user.
 
 ## A6 — Generalise the product (credential-free parts)
 
