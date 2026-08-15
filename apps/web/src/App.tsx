@@ -21,6 +21,8 @@ import {
   Check,
   Trash2,
   AlertCircle,
+  LifeBuoy,
+  Flag,
 } from 'lucide-react';
 import SearchTab from './components/SearchTab';
 import ChatTab from './components/ChatTab';
@@ -47,12 +49,17 @@ import InstantRecorderConsent from './components/InstantRecorderConsent';
 import DeleteAccountConfirmation from './components/DeleteAccountConfirmation';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
+import DeleteAccount from './pages/DeleteAccount';
 import SharedNote from './pages/SharedNote';
 import Paywall, { TrialBanner, type PaywallContext } from './components/Paywall';
 import AccountPrompt from './components/AccountPrompt';
+import HelpSupportSheet from './components/HelpSupportSheet';
+import RetentionSetting from './components/RetentionSetting';
 import { signInErrorMessage } from './lib/authErrors';
 import { reportCrash } from './lib/crashReport';
 import { fetchEntitlement, track } from './lib/billing';
+import { acceptTerms, type SupportKind } from './lib/compliance';
+import { TERMS_VERSION, PRIVACY_VERSION } from '@algominutes/contracts';
 import { upgradeGuestWithGoogle, upgradeGuestWithApple } from './lib/guestAuth';
 import type { EntitlementResponse } from '@algominutes/contracts';
 import AdminCostsCard from './components/AdminCostsCard';
@@ -135,9 +142,15 @@ function deriveTitleFromSummary(summary: Summary | undefined): string | null {
 // ─── helpers ──────────────────────────────────────────────────
 const workspaceId = (uid: string) => `workspace_${uid}`;
 
-type StaticPage = 'privacy' | 'terms' | null;
+type StaticPage = 'privacy' | 'terms' | 'delete-account' | null;
 const pathnameToStaticPage = (path: string): StaticPage =>
-  path === '/privacy' ? 'privacy' : path === '/terms' ? 'terms' : null;
+  path === '/privacy'
+    ? 'privacy'
+    : path === '/terms'
+    ? 'terms'
+    : path === '/delete-account'
+    ? 'delete-account'
+    : null;
 
 // A share link is /s/<token>. Read straight from the URL rather than held in
 // state: unlike Privacy and Terms there is no in-app navigation to it — the
@@ -206,6 +219,12 @@ export default function App() {
   const [showPreferences, setShowPreferences] = useState(false);
   const [showInstantConsent, setShowInstantConsent] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // A10 #4 support / feedback sheet. `supportKind` pre-selects the intent when
+  // opened from the note view's "report an issue" control; `supportNoteId`
+  // attaches the note as a reference (never its content).
+  const [showSupport, setShowSupport] = useState(false);
+  const [supportKind, setSupportKind] = useState<SupportKind>('contact');
+  const [supportNoteId, setSupportNoteId] = useState<string | undefined>(undefined);
   const [recordingTime, setRecordingTime]   = useState(0);
   const [selectedNote, setSelectedNote]     = useState<Note | null>(null);
   const [isEditingNote, setIsEditingNote]   = useState(false);
@@ -604,6 +623,22 @@ export default function App() {
       // A permanent (non-anonymous) user means either a direct sign-in or a
       // successful guest upgrade — close the guest prompt if it was open.
       if (!u.isAnonymous) setShowAccountPrompt(false);
+
+      // A10 #3 — capture timestamped Terms + Privacy acceptance at account
+      // creation. Fires for a permanent account only (a guest has not "signed
+      // up" yet), and once per uid + document version: a version bump requires
+      // re-acceptance, an ordinary reload does not re-post. The server records
+      // its own authoritative timestamp; a failure here is reported, not fatal.
+      if (!u.isAnonymous) {
+        const acceptKey = `terms_accepted:${u.uid}:${TERMS_VERSION}:${PRIVACY_VERSION}`;
+        let alreadyAccepted = false;
+        try { alreadyAccepted = localStorage.getItem(acceptKey) === '1'; } catch { /* ignore */ }
+        if (!alreadyAccepted) {
+          void acceptTerms()
+            .then(() => { try { localStorage.setItem(acceptKey, '1'); } catch { /* ignore */ } })
+            .catch((err) => reportCrash('accept_terms_on_signin_failed', err));
+        }
+      }
 
       if (u) {
         // Uncaught, this rejected into nothing — and it is the first Firestore
@@ -1671,6 +1706,22 @@ export default function App() {
   if (staticPage === 'terms') {
     return <TermsOfService onBack={closeStaticPage} />;
   }
+  // A10 #3 — public account-deletion request page (Google Play requirement).
+  // Placed with the legal pages, before the auth gate, so it is reachable at a
+  // stable /delete-account URL without signing in or navigating into the app.
+  // A guest counts as "signed out" here: only a permanent account deletes in
+  // place; everyone else sees the request-by-email/in-app instructions.
+  if (staticPage === 'delete-account') {
+    return (
+      <DeleteAccount
+        authResolved={authResolved}
+        isSignedIn={!!user && !user.isAnonymous}
+        email={user?.email}
+        onBack={closeStaticPage}
+        onDeleted={async () => { await signOut(auth).catch((err) => reportCrash('delete_account_signout_failed', err)); }}
+      />
+    );
+  }
 
   // ─────────────────────────────────────────────────────────────
   // LOGIN
@@ -1791,6 +1842,15 @@ export default function App() {
               Privacy Policy
             </button>
             .
+          </p>
+          <p style={{ color: '#5C5856', fontSize: '0.72rem', marginTop: '0.75rem', fontFamily: 'Titillium Web, sans-serif' }}>
+            <button
+              type="button"
+              onClick={() => showStaticPage('delete-account')}
+              style={{ color: '#8C8684', textDecoration: 'underline', background: 'transparent', border: 'none', padding: 0, font: 'inherit', cursor: 'pointer' }}
+            >
+              Request account deletion
+            </button>
           </p>
         </motion.div>
       </div>
@@ -1961,6 +2021,23 @@ export default function App() {
                   >
                     <Download size={20} color="#FFFFFF" />
                   </button>
+                  {/* A10 #4 — report a bad summary/transcript. The kind follows
+                      the tab the user is looking at; only the note id travels
+                      with it, never the summary/transcript content itself. */}
+                  {selectedNote.status === 'ready' && (
+                    <button
+                      onClick={() => {
+                        setSupportKind(noteView === 'transcript' ? 'bad_transcript' : 'bad_summary');
+                        setSupportNoteId(selectedNote.id);
+                        setShowSupport(true);
+                      }}
+                      aria-label={noteView === 'transcript' ? 'Report a bad transcript' : 'Report a bad summary'}
+                      className="p-2 rounded-xl hover:bg-white/10 transition-colors"
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(78,78,78,0.4)' }}
+                    >
+                      <Flag size={20} color="#FFFFFF" />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -2529,6 +2606,22 @@ export default function App() {
                </div>
              </div>
 
+             {/* A10 #5 — note-retention picker. */}
+             <RetentionSetting />
+
+             {/* A10 #4 — Help & support + report a problem. */}
+             <div className="owll-card p-5 space-y-3 mt-4">
+               <button
+                 type="button"
+                 onClick={() => { setSupportKind('contact'); setSupportNoteId(undefined); setShowSupport(true); }}
+                 className="w-full flex justify-between items-center cursor-pointer"
+                 style={{ color: '#E5E0DF', fontFamily: 'Titillium Web, sans-serif', textDecoration: 'none', background: 'transparent', border: 'none', padding: 0, textAlign: 'left' }}
+               >
+                 <span className="flex items-center gap-2"><LifeBuoy size={16} color="#8C8684" /> Help &amp; support</span>
+                 <ChevronRight size={16} color="#8C8684" />
+               </button>
+             </div>
+
              <div className="owll-card p-5 space-y-3 mt-4">
                <button
                  type="button"
@@ -2652,6 +2745,14 @@ export default function App() {
           // signOut will trigger onAuthStateChanged → user=null → routes back to login.
           await signOut(auth);
         }}
+      />
+
+      {/* ── A10 #4 Help / support / feedback sheet ── */}
+      <HelpSupportSheet
+        open={showSupport}
+        onClose={() => setShowSupport(false)}
+        initialKind={supportKind}
+        noteId={supportNoteId}
       />
 
       {/* ── Scan sheet (OCR + document text + image PDF) ── */}

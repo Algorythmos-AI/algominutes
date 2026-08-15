@@ -100,6 +100,21 @@ export default function AccountPrompt({
               Create a free account to keep this summary and sync it across your devices. Your current notes come with you — nothing is lost.
             </p>
 
+            {/* A10 #7 — the web reverse-trial only starts once an account email
+                is on file (server-enforced). Continuing with Google or Apple
+                below attaches your email, which unlocks the free trial; we keep
+                the UX honest rather than implying a card-free trial with no
+                account. */}
+            <div
+              className="flex items-start gap-2 p-3 rounded-2xl"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(78,78,78,0.45)' }}
+            >
+              <span style={{ fontSize: '1rem', lineHeight: 1.2 }} aria-hidden="true">✨</span>
+              <p style={{ color: '#E5E0DF', fontFamily: 'Titillium Web, sans-serif', fontSize: '0.82rem', lineHeight: 1.5, margin: 0 }}>
+                Adding your email unlocks your free trial — no card required. Continue with Apple or Google below and we&rsquo;ll use that account&rsquo;s email.
+              </p>
+            </div>
+
             <div className="w-full flex flex-col gap-3">
               {showApple && (
                 <button
