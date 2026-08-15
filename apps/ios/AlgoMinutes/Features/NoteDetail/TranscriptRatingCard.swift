@@ -11,6 +11,10 @@ struct TranscriptRatingCard: View {
     let rating: Int?
     let isSaving: Bool
     let onRate: (Int) -> Void
+    /// A10 #4: "report bad transcript" — routes to support so a low rating is
+    /// not a dead end. Tapped explicitly, or surfaced automatically after a
+    /// low star rating.
+    var onReport: (() -> Void)?
 
     var body: some View {
         OwllCard {
@@ -39,6 +43,16 @@ struct TranscriptRatingCard: View {
                     }
                 }
                 .opacity(isSaving ? 0.5 : 1)
+
+                if let onReport {
+                    Button(action: onReport) {
+                        Label("Report a problem with this transcript", systemImage: "exclamationmark.bubble")
+                            .font(Typography.body(13))
+                            .foregroundStyle(Theme.body)
+                    }
+                    .buttonStyle(CardButtonStyle())
+                    .accessibilityHint("Sends a note reference to support. Never your audio or transcript.")
+                }
             }
             .frame(maxWidth: .infinity)
         }

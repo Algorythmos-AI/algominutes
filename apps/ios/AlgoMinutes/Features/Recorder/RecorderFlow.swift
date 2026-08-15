@@ -58,6 +58,10 @@ struct RecorderConsentFlow: View {
                 VStack(spacing: 10) {
                     Button(permissionChecked ? "Start recording" : "Tick the box to start") {
                         consentShownBefore = true
+                        // A10 §5 seam: record the per-session acknowledgement on
+                        // the shared gate the recorder evaluates in start(). The
+                        // §4 layer replaces what "satisfied" means, not this call.
+                        env.consentGate.acknowledge()
                         dismiss()
                         flow.isRecordingScreenPresented = true
                     }
