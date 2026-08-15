@@ -21,8 +21,15 @@ import java.io.File
  * plugin used to be.
  *
  * @param context any Context; the application context is retained.
+ * @param consentGate the recording-consent SEAM (A10 #2 · `docs/CONSENT.md`
+ *   §5.2), consulted before capture starts. Defaults to the v1.0 conservative
+ *   [AllowWithNoticeConsentGate]; TODO(android B2) pass a gate wired to the
+ *   per-session consent checkbox.
  */
-class BackgroundAudioRecorder(context: Context) : AudioRecorder {
+class BackgroundAudioRecorder(
+    context: Context,
+    private val consentGate: ConsentGate = AllowWithNoticeConsentGate(),
+) : AudioRecorder {
 
     private val appContext: Context = context.applicationContext
 
@@ -61,11 +68,23 @@ class BackgroundAudioRecorder(context: Context) : AudioRecorder {
      * TODO(android B2): the launcher Activity requests RECORD_AUDIO (+ 13+
      * POST_NOTIFICATIONS) before invoking this.
      *
-     * @return true if a start was dispatched; false if already recording.
+     * `suspend` because it consults the consent SEAM ([consentGate]) before
+     * capture starts (A10 #2 · `docs/CONSENT.md` §5.2). This is the single
+     * enforcement point for the mic path — capture never dispatches to the
+     * §5-protected [RecordingService] until the gate is satisfied.
+     *
+     * @return true if a start was dispatched; false if already recording or if
+     *   the consent gate was not satisfied.
      */
-    fun start(): Boolean {
+    suspend fun start(): Boolean {
         if (RecordingService.isRecording) {
             Log.w(TAG, "A recording is already in progress")
+            return false
+        }
+        // SEAM (A10 #2 / CONSENT.md §5.2): consent gate — one gate, all paths.
+        // v1.0 default = allow-with-notice; the §4 legal layer slots in here.
+        if (!consentGate.satisfied(CaptureKind.MICROPHONE)) {
+            Log.w(TAG, "Consent gate not satisfied — microphone capture blocked")
             return false
         }
         val intent = Intent(appContext, RecordingService::class.java).apply {
