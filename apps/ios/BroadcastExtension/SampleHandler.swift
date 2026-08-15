@@ -9,7 +9,7 @@ import os
 /// to the App Group container, where the main app reads it after the user
 /// stops the broadcast.
 ///
-/// The state machine surface (UserDefaults keys, suite `group.com.wassup.meeting`):
+/// The state machine surface (UserDefaults keys, suite `group.com.algorythmos.algominutes`):
 ///   state                  : "starting" | "recording" | "finished" | "error"
 ///   isBroadcasting         : Bool   (true while extension is alive)
 ///   startedAt              : Double (UNIX seconds, set in broadcastStarted)
@@ -20,8 +20,8 @@ import os
 ///   errorMessage           : String? (only on error)
 class SampleHandler: RPBroadcastSampleHandler {
 
-    private static let logger = Logger(subsystem: "com.wassup.meeting", category: "broadcast.extension")
-    private let appGroupID = "group.com.wassup.meeting"
+    private static let logger = Logger(subsystem: "com.algorythmos.algominutes", category: "broadcast.extension")
+    private let appGroupID = "group.com.algorythmos.algominutes"
 
     private var writer: AVAssetWriter?
     private var appAudioInput: AVAssetWriterInput?
