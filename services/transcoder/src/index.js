@@ -27,6 +27,7 @@ const stt = require('./stt');
 const mirror = require('./firestore-mirror');
 const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
+const terminalHooks = require('./terminal-hooks');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -69,7 +70,10 @@ app.post('/', async (req, res) => {
   }
 
   const tasks = tasksClient.makeClient({ env, log });
-  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env };
+  // traceId is threaded into deps so the in-handler terminal paths (STT
+  // exhaustion / errors, YouTube permanent failures) can propagate it across
+  // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
+  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env, traceId, terminalHooks };
 
   try {
     await handler.handle(req.body || {}, deps);
@@ -94,6 +98,22 @@ app.post('/', async (req, res) => {
         message: 'We could not process this recording.',
         log,
         event: 'transcoder_mark_failed',
+      });
+      // A7.4 tail: dead-letter the exhausted job, refund the note's metered
+      // minutes, and notify the author. Best-effort — never masks the original
+      // failure. Transcoder SUCCESS is not terminal (the pipeline continues to
+      // summarize), so there is no note_ready here.
+      const attempts = Number((req.headers && req.headers['x-cloudtasks-taskretrycount']) || 0) + 1;
+      const b = req.body || {};
+      await terminalHooks.onTranscodeTerminalFailure({
+        pool: db.pool(),
+        noteId,
+        workspaceId,
+        err,
+        attempts,
+        traceId,
+        payload: { kind: b.kind, type: b.type, noteId, workspaceId, storagePath: b.storagePath, sourceUrl: b.sourceUrl, mimeType: b.mimeType },
+        log,
       });
     }
     return res.status(500).json({ error: 'task_failed' });
