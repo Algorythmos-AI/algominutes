@@ -167,7 +167,21 @@ expensive AI pipeline while leaving the API serving.
 same region, same IAM shape — at the **smallest viable tier** of each. It is not a capacity test of
 production. Record tier differences in `docs/DECISIONS.md`.
 
-### 4.5 Services to be provisioned (A4)
+### 4.5 Services (A4) — ✍️ authored as apply-ready Terraform, ⏳ not yet applied
+
+**Status (15 Aug 2026):** the non-Apple infrastructure is authored as **Terraform** in
+`infra/terraform/` (modules/environment + envs/{staging,prod}); `terraform validate` passes both envs.
+**Nothing is live yet** — the provisioning session's gcloud identity lacked access to the org projects, so
+the apply must run from a `gcp-admin@algorythmos.com` shell. Steps: `docs/runbooks/gcp-provisioning.md`.
+The §4.6 **daily-spend circuit breaker is implemented in code** (`packages/ai/src/spend-guard.cjs`, caps
+staging A$20 / prod A$200), wired into the transcoder + summarizer; its spend reader is stubbed until A9.
+
+What `terraform apply` creates per env (all `australia-southeast1`): 23 enabled APIs · a VPC + subnet +
+private services access + Serverless VPC connector · Cloud SQL Postgres 16 (private IP) + `algominutes` DB
++ Secret-Manager password · the 3 buckets (staging recordings 7-day lifecycle) · 5 Cloud Tasks queues ·
+Firestore (native) · Artifact Registry · the 7 `run-*` service accounts + least-privilege IAM.
+**Not** created by Terraform: Cloud Run service deploys (A11), Firebase apps/configs (CLI, runbook §4),
+budgets (already exist). Staging/prod tier differences are recorded in `docs/DECISIONS.md` (A4).
 
 Per environment, region `australia-southeast1`:
 
