@@ -1,3 +1,8 @@
+// TODO(brand A6.5): provisional palette — final hue/typeface pending brand sign-off.
+// Values below mirror packages/tokens/tokens.json (single source of truth):
+// color.dark.* ramp + brand.* indigo accent. The prior client greyscale/Rajdhani
+// theme has been replaced. See apps/web/src/index.css and the Compose theme for parity.
+
 import SwiftUI
 
 extension Color {
@@ -10,31 +15,44 @@ extension Color {
     }
 }
 
-/// Pure monochrome greyscale tokens (brand palette, no accent hue).
-/// Status is communicated through shape, motion, and iconography — never color.
-/// Contrast rules: `muted` (#929393) is the floor for meaningful text;
-/// `tertiary` (#6A6B6B) is decorative/disabled only (fails AA on charcoal).
+/// AlgoMinutes dark palette (tokens.json `color.dark.*`) plus the brand indigo
+/// accent (`brand.*`). Contrast rules: `body`/`heading` are AA on the dark
+/// surfaces; `muted` (#8A8D9C) is the floor for meaningful text; `placeholder`/
+/// `tertiary` (#5A5D6E) is decorative/disabled only.
 enum Theme {
-    static let background = Color(hex: 0x000000)
-    static let recordingBackground = Color(hex: 0x000000)
-    static let surface = Color(hex: 0x232425)
-    static let surfaceElevated = Color(hex: 0x4B4C4B)
-    static let card = Color(hex: 0x232425)
+    static let background = Color(hex: 0x0B0B10)          // color.dark.bg
+    static let recordingBackground = Color(hex: 0x0B0B10) // color.dark.bg
+    static let surface = Color(hex: 0x16161F)             // color.dark.surface
+    static let surfaceElevated = Color(hex: 0x1C1C27)     // color.dark.cardHover
+    static let card = Color(hex: 0x14141C)                // color.dark.card
 
-    /// Filled controls invert: white fill, black content.
+    /// Brand accent (tokens.json `brand.*`). Available for on-brand controls;
+    /// filled accent controls put `onAccent` content on `accent`.
+    static let accent = Color(hex: 0x5B67F0)
+    static let accentHover = Color(hex: 0x454FD6)
+    static let accentActive = Color(hex: 0x3A43BE)
+    static let onAccent = Color(hex: 0xFFFFFF)
+
+    /// Filled controls invert: white fill, dark content.
     static let inverse = Color(hex: 0xFFFFFF)
-    static let onInverse = Color(hex: 0x000000)
+    static let onInverse = Color(hex: 0x0B0B10)
 
-    static let border = Color(hex: 0x4B4C4B)
-    static let borderSoft = Color.white.opacity(0.10)
+    static let border = Color(hex: 0x2A2A38)             // color.dark.border
+    static let borderSoft = Color.white.opacity(0.08)    // color.dark.borderSoft
 
-    static let heading = Color.white
-    static let body = Color(hex: 0xDEDDDE)
-    static let muted = Color(hex: 0x929393)
-    static let tertiary = Color(hex: 0x6A6B6B)
+    static let heading = Color(hex: 0xF5F6FA)            // color.dark.heading
+    static let body = Color(hex: 0xC8CAD6)               // color.dark.body
+    static let muted = Color(hex: 0x8A8D9C)              // color.dark.muted
+    static let tertiary = Color(hex: 0x5A5D6E)           // color.dark.placeholder
+
+    /// Status colours (tokens.json `color.status.*`).
+    static let success = Color(hex: 0x22C55E)
+    static let warning = Color(hex: 0xF5B841)
+    static let danger = Color(hex: 0xEF4444)
+    static let info = Color(hex: 0x5B67F0)
 
     /// Chip outlines, waveform bars, idle secondary strokes.
-    static let outline = Color(hex: 0xBCBCBC)
+    static let outline = Color(hex: 0x8A8D9C)
 
     /// 4pt spacing grid. Use these instead of literals so rhythm stays consistent.
     enum Spacing {
@@ -59,53 +77,55 @@ enum Theme {
     }
 
     #if DEBUG
-    /// Brand fonts fail SILENTLY into the system fallback if unregistered —
-    /// exactly how the original Saira config shipped rendering nothing.
-    static func assertBrandFontsLoaded() {
-        for name in ["Rajdhani-Medium", "Rajdhani-SemiBold", "Rajdhani-Bold"] {
-            assert(UIFont(name: name, size: 12) != nil,
-                   "Brand font \(name) not registered — check UIAppFonts + Resources/Fonts")
-        }
-    }
+    /// TODO(brand A6.5): provisional typeface. The client brand fonts (Rajdhani)
+    /// were dropped; Typography now uses the system font (tokens.json
+    /// `typography.fontFamily` system stack). No custom-font registration to
+    /// assert until the final AlgoMinutes typeface is chosen. Kept as a no-op so
+    /// existing call sites (AlgoMinutesApp) still compile.
+    static func assertBrandFontsLoaded() {}
     #endif
 }
 
-/// Rajdhani for brand voice (headings/labels), SF for reading (body) and
-/// numerals (timer — Rajdhani's digits aren't tabular and would jitter).
-/// TTFs are committed under Resources/Fonts; scripts/fetch-fonts.sh regenerates.
+/// Type scale from tokens.json `typography.scale`. Sizes/weights match the
+/// shared tokens (also applied on web and Compose).
 ///
-/// Every token scales with Dynamic Type: custom fonts use `relativeTo:`, and
-/// the system fallback scales the design size through `UIFontMetrics`. The
-/// numeric sizes stay as the design baseline at the default text size.
+/// TODO(brand A6.5): provisional typeface. The client brand font (Rajdhani) was
+/// dropped; every face now uses the system font (tokens.json
+/// `typography.fontFamily` system stack). Every token still scales with Dynamic
+/// Type: the design size is scaled through `UIFontMetrics` relative to the
+/// matching text style.
 enum Typography {
-    // MARK: Semantic scale
+    // MARK: Semantic scale (tokens.json typography.scale)
 
-    /// Greeting name, screen titles.
-    static func display() -> Font { heading(30) }
+    /// Greeting name, screen titles. scale.display — 34 / 700.
+    static func display() -> Font { heading(34, weight: .bold) }
 
-    /// Hero card title.
-    static func title() -> Font { heading(18) }
+    /// Hero card title. scale.title2 — 22 / 600.
+    static func title() -> Font { heading(22, weight: .semibold) }
 
-    /// Row / card titles.
-    static func headline() -> Font { heading(15) }
+    /// Row / card titles. scale.headline — 16 / 600.
+    static func headline() -> Font { label(16) }
 
     /// Uppercase section labels. Apply `.tracking(1.4)` + uppercase at call site.
+    /// scale.caption — 12 / 500.
     static func eyebrow(_ size: CGFloat = 12) -> Font {
-        scaled("Rajdhani-Medium", size: size, weight: .medium, relativeTo: .caption)
+        scaled(size: size, weight: .medium, relativeTo: .caption)
     }
 
     // MARK: Base faces
 
+    /// Bold headings. Weight defaults to .bold (scale.display/title1 = 700);
+    /// pass .semibold for scale.title2/title3 (= 600).
     static func heading(_ size: CGFloat, weight: Font.Weight = .bold) -> Font {
-        scaled("Rajdhani-Bold", size: size, weight: weight, relativeTo: .title2)
+        scaled(size: size, weight: weight, relativeTo: .title2)
     }
 
+    /// Semibold labels. scale.title3/headline weight (= 600).
     static func label(_ size: CGFloat) -> Font {
-        scaled("Rajdhani-SemiBold", size: size, weight: .semibold, relativeTo: .subheadline)
+        scaled(size: size, weight: .semibold, relativeTo: .subheadline)
     }
 
-    /// Running text stays on SF — tuned for iOS at small sizes; the web's body
-    /// face is Titillium (not Rajdhani), so there is no parity to chase.
+    /// Running text. scale.body — 15 / 400.
     static func body(_ size: CGFloat = 15) -> Font {
         let scaledSize = UIFontMetrics(forTextStyle: .body).scaledValue(for: size)
         return .system(size: scaledSize, weight: .regular)
@@ -118,14 +138,11 @@ enum Typography {
     }
 
     private static func scaled(
-        _ name: String, size: CGFloat, weight: Font.Weight,
+        size: CGFloat, weight: Font.Weight,
         relativeTo textStyle: Font.TextStyle, design: Font.Design = .default
     ) -> Font {
-        if UIFont(name: name, size: size) != nil {
-            return .custom(name, size: size, relativeTo: textStyle)
-        }
-        // System fallback: scale the design size to the user's text-size setting
-        // so it still honors Dynamic Type.
+        // System font, scaled to the user's text-size setting so it honors
+        // Dynamic Type. (No custom brand font until A6.5 final typeface.)
         let scaledSize = UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledValue(for: size)
         return .system(size: scaledSize, weight: weight, design: design)
     }
