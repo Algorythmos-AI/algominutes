@@ -7,18 +7,17 @@
 // together with the launcher Activity. Do not grow this file beyond what the
 // two recording services + the AudioRecorder interface actually need.
 //
-// NOTE: package identifiers stay `com.wassup.meeting` this phase; the
-// wassup -> algominutes rename is a later phase (A5).
+// NOTE: package identifiers are `com.algorythmos.algominutes` (renamed in A5).
 
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
 android {
-    namespace = "com.wassup.meeting"
+    namespace = "com.algorythmos.algominutes"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.wassup.meeting"
+        applicationId = "com.algorythmos.algominutes"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode 1

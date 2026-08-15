@@ -1,4 +1,4 @@
-package com.wassup.meeting
+package com.algorythmos.algominutes
 
 import android.Manifest
 import android.app.Notification
@@ -53,10 +53,10 @@ class BroadcastRecordingService : Service() {
 
     companion object {
         const val TAG = "BroadcastRecordingService"
-        const val CHANNEL_ID = "wassup_broadcast_recording_channel"
+        const val CHANNEL_ID = "algominutes_broadcast_recording_channel"
         const val NOTIFICATION_ID = 1002
-        const val ACTION_START = "com.wassup.meeting.ACTION_START_BROADCAST_RECORDING"
-        const val ACTION_STOP = "com.wassup.meeting.ACTION_STOP_BROADCAST_RECORDING"
+        const val ACTION_START = "com.algorythmos.algominutes.ACTION_START_BROADCAST_RECORDING"
+        const val ACTION_STOP = "com.algorythmos.algominutes.ACTION_STOP_BROADCAST_RECORDING"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 
@@ -261,7 +261,7 @@ class BroadcastRecordingService : Service() {
             }, Handler(Looper.getMainLooper()))
             mediaProjection = projection
 
-            recordingThread = thread(name = "WassupBroadcastEncoder") {
+            recordingThread = thread(name = "AlgoMinutesBroadcastEncoder") {
                 runEncoder(outputFile)
             }
         } catch (err: Exception) {
@@ -519,7 +519,7 @@ class BroadcastRecordingService : Service() {
             "Meeting recording",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Shows while Wassup records an online meeting"
+            description = "Shows while AlgoMinutes records an online meeting"
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
@@ -554,9 +554,9 @@ class BroadcastRecordingService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Wassup Meeting")
+            .setContentTitle("AlgoMinutes")
             .setContentText("Recording online meeting audio")
-            .setSmallIcon(R.drawable.ic_stat_wassup)
+            .setSmallIcon(R.drawable.ic_stat_algominutes)
             .setOngoing(true)
             .apply { openPendingIntent?.let { setContentIntent(it) } }
             .addAction(0, "Stop", stopPendingIntent)

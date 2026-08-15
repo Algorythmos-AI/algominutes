@@ -1,4 +1,4 @@
-package com.wassup.meeting
+package com.algorythmos.algominutes
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -34,10 +34,10 @@ class RecordingService : Service() {
 
     companion object {
         const val TAG = "RecordingService"
-        const val CHANNEL_ID = "wassup_recording_channel"
+        const val CHANNEL_ID = "algominutes_recording_channel"
         const val NOTIFICATION_ID = 1001
-        const val ACTION_START = "com.wassup.meeting.ACTION_START_RECORDING"
-        const val ACTION_STOP = "com.wassup.meeting.ACTION_STOP_RECORDING"
+        const val ACTION_START = "com.algorythmos.algominutes.ACTION_START_RECORDING"
+        const val ACTION_STOP = "com.algorythmos.algominutes.ACTION_STOP_RECORDING"
 
         /** Absolute path to the current recording file, or null if not recording. */
         @Volatile
@@ -176,7 +176,7 @@ class RecordingService : Service() {
             "Recording",
             NotificationManager.IMPORTANCE_LOW     // Low = no sound, just persistent icon
         ).apply {
-            description = "Shows while Wassup is recording audio"
+            description = "Shows while AlgoMinutes is recording audio"
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
@@ -200,9 +200,9 @@ class RecordingService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Wassup Meeting")
+            .setContentTitle("AlgoMinutes")
             .setContentText("Recording in progress…")
-            .setSmallIcon(R.drawable.ic_stat_wassup)
+            .setSmallIcon(R.drawable.ic_stat_algominutes)
             .setOngoing(true)
             .apply { pendingIntent?.let { setContentIntent(it) } }
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)

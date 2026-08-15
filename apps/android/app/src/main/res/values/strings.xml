@@ -4,5 +4,5 @@
   the Compose client in Track B2.
 -->
 <resources>
-    <string name="app_name">Wassup Meeting</string>
+    <string name="app_name">AlgoMinutes</string>
 </resources>
