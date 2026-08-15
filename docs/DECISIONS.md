@@ -3,6 +3,56 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## OPEN decisions — for you to make (seams built either way, not decided)
+
+- **A6.3 — guest mode vs forced signup.** NOT decided. **Seam:** entitlement + usage_ledger are keyed by
+  a resolved `uid` that works identically for an anonymous (Firebase anonymous auth) or permanent account,
+  so either can be chosen without a schema change. **Tradeoff:** guest mode (record → see a summary before
+  creating an account) is one of the biggest conversion levers in this category, BUT you must design the
+  anonymous→permanent upgrade *now* or you inherit an orphaned-data migration; forced signup is a simpler
+  data model with higher first-run friction. If you choose guest mode, the remaining work is the
+  anonymous→permanent account-link flow (client) — the server data model already supports it.
+- **A9.3 — free trial vs perpetual free tier.** NOT decided. **Seam:** `subscriptions.trial_end` (present
+  iff a trial is granted) + status `trialing` + `PLAN_MONTHLY_INCLUDED_MINUTES.free = 120`; entitlement
+  honours whichever exists. **Tradeoff:** a trial forces a decision and converts harder (implement via
+  StoreKit 2 intro offers / Play free-trial offers, A9.4); a perpetual free tier grows word-of-mouth but
+  costs compute forever. Both are representable now; nothing in the code picks one.
+
+## A7 — Reliability & async UX
+
+- **A7.1 offline capture was already substantially built (§5); extended, not rewritten.** Added a durable
+  per-recording upload state (`recorded→uploading→processing→ready→failed` + byte offset) to the
+  `RecordingStore` sidecar and surfaced it in `PendingRecordingsView`. Local-first write, recovery-on-relaunch,
+  and play-before-upload already held.
+- **A7.2 resumable upload — additive new transport, NOT a §5 rewrite.** The inherited `UploadService`
+  (Firebase `putFile`) does not do URLSession background transfers and restarts from byte 0 across launches
+  — which A7.2 (the phase) explicitly requires. Rather than rewrite the working uploader, added a NEW
+  `BackgroundUploadService` (URLSession background, chunked, persisted byte-offset, resume-after-reboot)
+  against a new server **upload-session contract** (`POST /v1/uploads` → GCS resumable session), wired as
+  the resumable path but **gated OFF by default pending on-device verification** (can't build/test here);
+  Firebase `putFile` stays as the working fallback. This is the case for the change, made here per §5.
+  Wi-Fi-only is a P1 settings toggle. **Android upload is B2** — it consumes the same upload-session contract.
+- **A7.3 notifications — `services/notifier` is a NEW service.** Operating cost (§3.3): one async Cloud Run
+  service (scale-to-zero, no idle floor) + the `notify` Cloud Tasks queue + one dashboard/alert; cost driver
+  is FCM fan-out volume (cheap). Push permission is requested only AFTER the first recording (never at
+  launch). Real APNs/FCM device registration is `TODO(A4-apple)` (needs the iOS Firebase app). Local
+  notification is the fallback when push is declined; taps deep-link via `algominutes://note/<id>`.
+- **A7.4 failure/quota integrity.** Refund-on-failure is a **reversal row** in `usage_ledger` (never a
+  delete), appended on a worker's FINAL attempt. **Metering happens at ingest in the api process route**
+  (before transcode is queued — A9.2, so we never pay for STT on over-quota work); the workers do the
+  *refund*. **Embedder failure does NOT refund and does NOT notify** — the note is still readable without
+  embeddings, so it's only dead-lettered. DLQ = a `dead_letter` table (Cloud Tasks has no native DLQ) with
+  an admin view; workers write it on final attempt.
+
+## A9 — Revenue layer (schema groundwork only)
+
+- **Schema + repo only** (per instruction) — no StoreKit / Play / Stripe / paywall UI (those depend on the
+  OPEN decisions above). `plans` + `usage_ledger` added; `subscriptions` extended with `source` (dual-rail
+  seam, A9.4) + `trial_end` (A9.3 seam). Plan minute quotas are **config-authoritative**
+  (`@algominutes/contracts` `PLAN_MONTHLY_INCLUDED_MINUTES`), mirrored by the `plans` table.
+- **Entitlement is server-side** (`assertCanMeter`/`resolveEntitlement` over the ledger) — never trust the
+  client; the `GET /v1/entitlement` endpoint exposes it read-only.
+
 ## A5 — Rename to AlgoMinutes
 
 - **Renamed class-by-class, one commit per class** (iOS, Android, web+services+packages+.claude, docs) —

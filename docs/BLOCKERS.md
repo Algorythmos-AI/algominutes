@@ -56,6 +56,18 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     handoff needs the app added to `group.com.algorythmos.algominutes` when the extension is wired (below).
   - Minor: the web "Sign in with Google" mark is a single indigo tint, not Google's official multicolour
     branding — revisit for store/brand compliance (pre-existing, not introduced by the rename).
+- **A9 billing implementation is blocked on your two OPEN decisions** (guest vs signup A6.3; trial vs free
+  A9.3 — see DECISIONS.md). Schema + entitlement seams are built; StoreKit/Play/Stripe/paywall wait on you.
+- **A9.4 blended cost-per-minute not measured** — gates pricing (needs A11 deployed pipeline). The
+  1,500-min Pro tier at A$29 requires COGS well under 1¢/min. See PERFORMANCE-BUDGET.md.
+- **A7.2 background upload is gated OFF by default** — the new URLSession-background/chunked path can't be
+  built/tested here; verify on-device (A11) before flipping the default. Firebase `putFile` remains the
+  working fallback. The `/v1/uploads` GCS resumable-session endpoint is `TODO(A11)` (no GCS creds to test).
+- **A7.3 real push is `TODO(A4-apple)`** — iOS APNs/FCM registration needs the iOS Firebase app
+  (GoogleService-Info.plist), pending the Apple Team ID. The flow is coded; the notifier service can send
+  once tokens register. Android push is B2.
+- **iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment** — flagged by the A7 map;
+  reconcile before finalising upload size limits (not changed this run).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
   the palette is a provisional, accessible v1. Full light-mode wiring across the (dark-first) UI is a follow-up.
 - **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
