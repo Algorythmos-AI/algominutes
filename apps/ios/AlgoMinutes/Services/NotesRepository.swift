@@ -23,6 +23,12 @@ final class NotesRepository {
     private var retitleAttempted = Set<String>()
     private var retryInFlight = Set<String>()
 
+    /// A7.3: previous per-note status, to detect a completion transition and post
+    /// the local-notification fallback exactly once. Empty until the first
+    /// snapshot so an app launch that finds already-finished notes stays silent.
+    private var lastStatusById: [String: NoteStatus] = [:]
+    private var receivedFirstSnapshot = false
+
     static let maxRetryAttempts = 3
 
     init(api: APIClient) {
@@ -59,6 +65,8 @@ final class NotesRepository {
         stuckCheckRan.removeAll()
         retitleAttempted.removeAll()
         retryInFlight.removeAll()
+        lastStatusById.removeAll()
+        receivedFirstSnapshot = false
         resubscribeAttempts = 0
     }
 
@@ -79,6 +87,7 @@ final class NotesRepository {
                     self.listenerHealthy = true
                     self.resubscribeAttempts = 0
                     let parsed = snapshot.documents.compactMap { Note(id: $0.documentID, data: $0.data()) }
+                    self.notifyCompletedTransitions(newNotes: parsed)
                     self.notes = parsed.sorted { $0.createdAt > $1.createdAt }
                     self.autoRetitleReadyNotes()
                 }
@@ -144,6 +153,30 @@ final class NotesRepository {
 
     func markNoteError(id: String, message: String) {
         updateNote(id: id, fields: ["status": NoteStatus.error.rawValue, "errorMessage": message])
+    }
+
+    /// A7.3: post the local `note_ready` / `note_failed` fallback when a note
+    /// crosses from in-progress to a terminal state. Only fires on a genuine
+    /// transition seen after the first snapshot, so relaunching into a
+    /// backlog of finished notes stays silent. `RecordingNotifier` itself
+    /// suppresses the banner while the app is foregrounded.
+    private func notifyCompletedTransitions(newNotes: [Note]) {
+        defer {
+            lastStatusById = Dictionary(newNotes.map { ($0.id, $0.status) }, uniquingKeysWith: { _, new in new })
+            receivedFirstSnapshot = true
+        }
+        guard receivedFirstSnapshot else { return }
+        for note in newNotes {
+            guard let previous = lastStatusById[note.id], previous.isInProgress else { continue }
+            switch note.status {
+            case .ready:
+                RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: true)
+            case .error:
+                RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: false)
+            default:
+                break
+            }
+        }
     }
 
     /// Deleting the doc triggers the backend `onNoteDeleted` cascade.

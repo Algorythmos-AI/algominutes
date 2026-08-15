@@ -1,5 +1,17 @@
 import Foundation
 
+/// Per-recording upload lifecycle the CLIENT tracks locally (survives app kill /
+/// reboot), mirroring `RecordingState` in
+/// `packages/contracts/src/schemas/async.ts`. Distinct from the server-side
+/// `NoteStatus` pipeline detail:
+///   recorded   = on disk, not yet uploaded
+///   uploading  = resumable upload in flight (see BackgroundUploadService / putFile)
+///   processing = uploaded; server pipeline running (queued→…→summarizing)
+///   ready | failed = terminal
+enum RecordingState: String, Codable, Equatable, Sendable {
+    case recorded, uploading, processing, ready, failed
+}
+
 /// Durable registry of on-disk recordings and their note association.
 ///
 /// Recordings live in `Application Support/recordings/` — NOT
@@ -27,6 +39,16 @@ final class RecordingStore {
         /// was ever created — recovery must create a fresh note for it.
         var noteId: String?
         var createdAt: Date
+
+        // A7.1 — durable upload lifecycle. Defaulted so both the memberwise
+        // initializer (existing call sites) and old sidecars written before A7
+        // (no such keys — see the custom `init(from:)` below) keep working.
+        var state: RecordingState = .recorded
+        /// Bytes already accepted by the resumable session, persisted so a
+        /// background upload resumes from the offset after a reboot (A7.2).
+        var uploadedBytes: Int64?
+        /// Last upload/processing failure, shown on the pending-recordings badge.
+        var lastError: String?
 
         var id: String { recordingId }
         var isAssociated: Bool { noteId != nil }
@@ -117,6 +139,33 @@ final class RecordingStore {
         remove(fileName: fileURL.lastPathComponent)
     }
 
+    // MARK: - Upload state (A7.1 / A7.2)
+
+    /// Read the sidecar for a specific file, if one exists. Callers mutate the
+    /// returned value and pass it back to `write(_:)`.
+    func pendingRecording(forFileName fileName: String) -> PendingRecording? {
+        readSidecar(forFileName: fileName)
+    }
+
+    /// Durably record an upload-lifecycle transition on the sidecar. No-op for a
+    /// file that has no sidecar yet (an orphan captured before association) —
+    /// there is nothing to annotate until `associate(...)` writes one.
+    ///
+    /// `uploadedBytes`/`lastError` are only touched when provided, so a plain
+    /// state flip does not clobber a persisted resume offset.
+    func setUploadState(
+        fileName: String,
+        state: RecordingState,
+        uploadedBytes: Int64? = nil,
+        lastError: String?? = .none
+    ) {
+        guard var recording = readSidecar(forFileName: fileName) else { return }
+        recording.state = state
+        if let uploadedBytes { recording.uploadedBytes = uploadedBytes }
+        if case let .some(err) = lastError { recording.lastError = err }
+        write(recording)
+    }
+
     // MARK: - Queries
 
     func pendingRecording(forNoteId noteId: String) -> PendingRecording? {
@@ -170,5 +219,29 @@ final class RecordingStore {
         if let dot = name.firstIndex(of: ".") { name = String(name[..<dot]) }
         if name.hasPrefix("recording_") { name.removeFirst("recording_".count) }
         return name
+    }
+}
+
+// MARK: - Backward-compatible decoding (A7.1)
+
+extension RecordingStore.PendingRecording {
+    /// Old sidecars written before A7 carry no `state`/`uploadedBytes`/`lastError`
+    /// keys. Synthesised `Decodable` treats a missing key as an error and ignores
+    /// property defaults, so decode the new fields with `decodeIfPresent` and fall
+    /// back to `.recorded`. Living in an extension keeps the memberwise
+    /// initializer available to existing call sites. Uses the default date
+    /// strategy, matching the encoder in `write(_:)`.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        recordingId = try c.decode(String.self, forKey: .recordingId)
+        fileName = try c.decode(String.self, forKey: .fileName)
+        mimeType = try c.decode(String.self, forKey: .mimeType)
+        ext = try c.decode(String.self, forKey: .ext)
+        durationSeconds = try c.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        noteId = try c.decodeIfPresent(String.self, forKey: .noteId)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        state = try c.decodeIfPresent(RecordingState.self, forKey: .state) ?? .recorded
+        uploadedBytes = try c.decodeIfPresent(Int64.self, forKey: .uploadedBytes)
+        lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
     }
 }

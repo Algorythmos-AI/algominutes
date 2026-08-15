@@ -16,6 +16,10 @@ final class AppEnvironment {
     let audioSession: AudioSessionCoordinator
     let player: AudioPlayerService
     let transcripts: TranscriptRepository
+    /// A7.2 resumable/background uploader. Gated OFF by
+    /// `AppFeatureFlags.backgroundResumableUpload`; `UploadService` stays the
+    /// default path until this is verified on a device.
+    let backgroundUploads: BackgroundUploadService
 
     /// Upload progress (0-100) for the note currently uploading, keyed by id.
     var uploadProgress: [String: Int] = [:]
@@ -44,6 +48,7 @@ final class AppEnvironment {
         self.audioSession = session
         self.player = AudioPlayerService(session: session, store: store)
         self.transcripts = TranscriptRepository(api: api)
+        self.backgroundUploads = BackgroundUploadService(store: store, api: api)
         startNetworkWatch()
     }
 
@@ -225,6 +230,8 @@ final class AppEnvironment {
             recordingStore.associate(
                 fileURL: fileURL, noteId: noteId, mimeType: mimeType, ext: ext, durationSeconds: durationSeconds
             )
+            // A7.1 durable lifecycle: mark uploading before the first byte moves.
+            recordingStore.setUploadState(fileName: fileURL.lastPathComponent, state: .uploading)
         }
         onNoteCreated(noteId)
 
@@ -246,6 +253,11 @@ final class AppEnvironment {
             // Keep the local recording — it is associated with `noteId` and the
             // user can retry, which re-uploads from disk.
             let message = (error as? UploadError)?.errorDescription ?? UploadError.failed.errorDescription!
+            if kind == .recording {
+                recordingStore.setUploadState(
+                    fileName: fileURL.lastPathComponent, state: .failed, lastError: .some(message)
+                )
+            }
             notes.markNoteError(id: noteId, message: message)
             alertMessage = message
             return
@@ -365,17 +377,37 @@ final class AppEnvironment {
         uploadProgress[noteId] = 0
         defer { uploadProgress[noteId] = nil }
 
+        // A7.1: clear any prior failure and mark uploading before bytes move.
+        recordingStore.setUploadState(fileName: pending.fileName, state: .uploading, lastError: .some(nil))
+
         do {
-            try await uploads.upload(
-                fileURL: fileURL,
-                to: storagePath,
-                contentType: pending.mimeType,
-                kind: .recording,
-                applyTimeout: true,
-                onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
-            )
+            if AppFeatureFlags.backgroundResumableUpload {
+                // A7.2 resumable path — survives reboot via a persisted byte
+                // offset. Gated OFF; see AppFeatureFlags. Untested on device.
+                try await backgroundUploads.upload(
+                    fileURL: fileURL,
+                    noteId: noteId,
+                    workspaceId: wsId,
+                    pending: pending,
+                    contentType: pending.mimeType,
+                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
+                )
+            } else {
+                // Documented fallback: Firebase resumable putFile (resumes within
+                // a session; restarts from byte 0 across launches — which is why
+                // the bytes are kept on disk and re-driven here).
+                try await uploads.upload(
+                    fileURL: fileURL,
+                    to: storagePath,
+                    contentType: pending.mimeType,
+                    kind: .recording,
+                    applyTimeout: true,
+                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
+                )
+            }
         } catch {
             let message = (error as? UploadError)?.errorDescription ?? UploadError.failed.errorDescription!
+            recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
             notes.markNoteError(id: noteId, message: message)
             return .blocked(message: message)
         }

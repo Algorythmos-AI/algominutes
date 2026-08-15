@@ -40,6 +40,9 @@ enum CaptureAction: String, Identifiable, CaseIterable {
 
 struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
+    // A7.3: a note deep link (push tap or algominutes:// URL) lands here and
+    // drives the existing selectedNoteId navigation.
+    @Environment(DeepLinkRouter.self) private var deepLinkRouter
 
     @State private var activeSheet: CaptureAction?
     @State private var recorderFlow = RecorderFlowState()
@@ -89,6 +92,12 @@ struct HomeView: View {
                 NoteDetailView(noteId: noteId)
             }
         }
+        // Consume a deep link both when it changes and if one is already waiting
+        // when Home first appears (a cold launch from a notification tap).
+        .onChange(of: deepLinkRouter.pendingNoteId) { _, noteId in
+            consumeDeepLink(noteId)
+        }
+        .onAppear { consumeDeepLink(deepLinkRouter.pendingNoteId) }
         .sheet(item: $activeSheet) { action in
             switch action {
             case .recording:
@@ -328,6 +337,13 @@ struct HomeView: View {
         let inFlight = env.recorder.currentFileURL?.lastPathComponent
         orphanRecording = env.recordingStore.allPending()
             .first { $0.noteId == nil && $0.fileName != inFlight }
+    }
+
+    /// Open a deep-linked note and clear the router so it fires once.
+    private func consumeDeepLink(_ noteId: String?) {
+        guard let noteId, !noteId.isEmpty else { return }
+        selectedNoteId = noteId
+        deepLinkRouter.pendingNoteId = nil
     }
 
     private func recoverOrphan() {

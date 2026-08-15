@@ -179,7 +179,10 @@ struct NoteDetailView: View {
                 case .ready:
                     readyContent(note)
                 case .error:
-                    NoteErrorPane(errorMessage: note.errorMessage) { retry(note) }
+                    NoteErrorPane(
+                        errorMessage: note.errorMessage,
+                        diagnosticCode: note.diagnosticCode
+                    ) { retry(note) }
                 default:
                     ProcessingPane(
                         stage: NoteProcessingStage.from(

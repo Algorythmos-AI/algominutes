@@ -16,6 +16,11 @@ enum StorageKind {
 
     var maxBytes: Int64 {
         switch self {
+        // FLAG(A7.2 — do not fix here): the doc comment on `case recording`
+        // above and the user-facing copy in UploadService.tooLarge both state a
+        // 120 MB recording cap, but this returns 50 MB. `storage.rules` is the
+        // source of truth — reconcile these three before relying on maxBytes for
+        // a pre-flight size guard. Left as-is to avoid changing behaviour blind.
         case .recording, .scan: return 50 * 1024 * 1024
         case .importFile: return 500 * 1024 * 1024
         }
