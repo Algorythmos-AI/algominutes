@@ -1,6 +1,6 @@
 // Recording limits — plan-derived, config-driven (A6.2).
 //
-// Replaces the web client's hardcoded 2-hour cap ("Slater staff meetings run up
+// Replaces the web client's hardcoded 2-hour cap ("staff meetings run up
 // to 2 h"). This is the PER-RECORDING maximum duration; the monthly minute quota
 // is a separate entitlement concern (A9). The per-plan values are tunable in A9;
 // until entitlements resolve, clients use DEFAULT_MAX_RECORDING_SECONDS.

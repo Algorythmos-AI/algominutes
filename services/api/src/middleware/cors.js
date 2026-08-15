@@ -8,8 +8,9 @@
 // functions default list, which is the one that keeps the native clients
 // working. `ALLOWED_ORIGINS` (comma-separated env) is added on top / overrides.
 //
-// NOTE: identifiers are deliberately NOT renamed — the wassup→algominutes
-// rename is a later phase (BUILD-PLAN). Only the source's origins are kept.
+// NOTE: production origins (https://algominutes.com, https://api.algominutes.com)
+// are supplied at deploy time via ALLOWED_ORIGINS; only the localhost dev
+// origins are baked in here so the native clients keep working.
 
 import cors from 'cors';
 

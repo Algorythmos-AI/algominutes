@@ -83,7 +83,7 @@ export function buildRouter() {
     if (!result.buffer) return res.status(result.status).json(result.body);
     res.setHeader('Content-Type', DOCX_CONTENT_TYPE);
     res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
-    // Clinical content: never cached by an intermediary.
+    // Sensitive content: never cached by an intermediary.
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).send(result.buffer);
   }));

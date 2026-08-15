@@ -69,7 +69,7 @@ function vectorToSqlText(values) {
 // generativelanguage.googleapis.com/v1beta returns 404 for this model
 // from a public API key; the same model name on Vertex AI works with
 // service-account ADC. The embedder Cloud Run service runs as
-// `wassup-jobs-sa` which has roles/aiplatform.user, so ADC just works
+// `algominutes-jobs-sa` which has roles/aiplatform.user, so ADC just works
 // here without an apiKey. See docs/runbooks/phase3-bug-log.md § Bug 11.
 async function embedChunks({ chunks, log, project, location }) {
   const { GoogleAuth } = require('google-auth-library');

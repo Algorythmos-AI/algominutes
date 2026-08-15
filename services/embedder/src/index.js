@@ -21,7 +21,7 @@ function pool() {
   // Cloud SQL pg_hba.conf rejects unencrypted connections from the VPC
   // connector range. Same fix as services/transcoder/src/db.js:35.
   // Without this the embedder fails every task with
-  // "pg_hba.conf rejects connection ... no encryption" and the Slater
+  // "pg_hba.conf rejects connection ... no encryption" and the
   // alpha search/chat path has no embeddings to query (Bug 16).
   const ssl = { rejectUnauthorized: false };
   _pool = new Pool(
@@ -83,7 +83,7 @@ app.post('/', async (req, res) => {
     // Deliberately NOT marked as a failed note, unlike the transcoder and
     // summarizer. By the time embedding runs the transcript and summary exist
     // and the note is genuinely usable — flipping it to 'error' would hide a
-    // good consultation because of a search-index problem.
+    // good recording because of a search-index problem.
     //
     // But it is not nothing either: the note stays 'ready' and is silently
     // absent from Search and Chat, which is worse than a visible failure

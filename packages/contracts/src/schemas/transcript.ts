@@ -2,7 +2,7 @@
 // differ, so both are modelled.
 //
 // Note on SpeakerLabel / TranscriptTime: those iOS types
-// (ios-native/Wassup/Models/SpeakerLabel.swift, TranscriptTime.swift) are pure
+// (apps/ios/AlgoMinutes/Models/SpeakerLabel.swift, TranscriptTime.swift) are pure
 // CLIENT logic — reconciling an embedded "Speaker 1:" prefix, parsing a
 // display timestamp back into seconds. They carry no wire fields, so there is
 // no schema for them; they consume the fields defined here. The server does

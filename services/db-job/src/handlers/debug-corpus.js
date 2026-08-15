@@ -40,7 +40,7 @@ async function run({ log, traceId, env }) {
       log.info({ traceId, ...r }, 'note_stats');
     }
 
-    const project = process.env.GCLOUD_PROJECT || 'wassup-meeting';
+    const project = process.env.GCLOUD_PROJECT || 'algominutes-dev';
     const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
     const queries = [
       'CJC 1295 and Ipamorelin peptide stack',

@@ -102,13 +102,13 @@ async function extractChunk({ inputPath, startSec, endSec, outputPath }) {
 }
 
 function ensureTempDir(noteId) {
-  const dir = path.join('/tmp', `wassup-${noteId}`);
+  const dir = path.join('/tmp', `algominutes-${noteId}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 function cleanupTempDir(noteId) {
-  const dir = path.join('/tmp', `wassup-${noteId}`);
+  const dir = path.join('/tmp', `algominutes-${noteId}`);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

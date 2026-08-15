@@ -1,7 +1,7 @@
 // Cross-cutting primitives and envelopes shared by every endpoint.
 //
-// Field names are the WIRE names the wassup backend already emits (camelCase),
-// carried over verbatim — this phase does not rename wassup identifiers.
+// Field names are the WIRE names the backend emits (camelCase),
+// carried over verbatim.
 import { z } from './zod';
 
 /**

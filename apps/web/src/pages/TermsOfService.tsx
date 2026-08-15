@@ -62,7 +62,7 @@ export default function TermsOfService({ onBack }: Props) {
           <section>
             <h2 style={sectionHeading}>1. Agreement</h2>
             <p>
-              By signing in to Wassup Doc you agree to these Terms and to our{' '}
+              By signing in to AlgoMinutes you agree to these Terms and to our{' '}
               <a href="/privacy" style={{ color: '#FFFFFF', textDecoration: 'underline' }}>
                 Privacy Policy
               </a>
@@ -71,12 +71,12 @@ export default function TermsOfService({ onBack }: Props) {
           </section>
 
           <section>
-            <h2 style={sectionHeading}>2. Clinical alpha</h2>
+            <h2 style={sectionHeading}>2. Alpha</h2>
             <p>
-              Wassup Doc is in clinical alpha. The service is provided to a small number of
+              AlgoMinutes is in alpha. The service is provided to a small number of
               testers for evaluation. Features may change, downtime is possible, and the
-              service should not be used as the sole record for clinical, legal, or
-              financial purposes during this period.
+              service should not be used as the sole record for legal, financial, or
+              other important purposes during this period.
             </p>
           </section>
 
@@ -94,7 +94,7 @@ export default function TermsOfService({ onBack }: Props) {
             <p>
               You may only record conversations you are entitled to record. If others
               are present, you must inform them and obtain their consent in any
-              jurisdiction that requires it. Wassup Doc is not responsible for recordings
+              jurisdiction that requires it. AlgoMinutes is not responsible for recordings
               made without proper consent.
             </p>
           </section>
@@ -156,7 +156,7 @@ export default function TermsOfService({ onBack }: Props) {
           <section>
             <h2 style={sectionHeading}>9. Service &ldquo;as is&rdquo;</h2>
             <p>
-              Wassup Doc is provided on an as-is basis. To the extent permitted by law, we
+              AlgoMinutes is provided on an as-is basis. To the extent permitted by law, we
               disclaim all warranties, express or implied, including merchantability,
               fitness for a particular purpose, and non-infringement. We do not warrant
               that transcripts or summaries are accurate, complete, or suitable for any
@@ -167,7 +167,7 @@ export default function TermsOfService({ onBack }: Props) {
           <section>
             <h2 style={sectionHeading}>10. Limitation of liability</h2>
             <p>
-              To the maximum extent permitted by law, Wassup Doc and its operator are not
+              To the maximum extent permitted by law, AlgoMinutes and its operator are not
               liable for indirect, incidental, special, consequential, or punitive
               damages, or for loss of profits, revenue, data, or goodwill. Our total
               liability for any claim arising from the service is limited to the amount

@@ -66,7 +66,7 @@ export default function InstantRecorderConsent({ open, onCancel, onContinue }: P
 
             {!alreadySeen && (
               <p style={{ color: '#8C8684', fontFamily: 'Titillium Web, sans-serif', fontSize: '0.85rem', lineHeight: 1.6 }}>
-                Wassup Doc records audio from this device for as long as you're recording. The audio is uploaded to be transcribed and summarised, then kept in your account until you delete it.
+                AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded to be transcribed and summarised, then kept in your account until you delete it.
               </p>
             )}
 

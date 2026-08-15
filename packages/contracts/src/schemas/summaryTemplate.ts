@@ -7,7 +7,7 @@
 //
 // Source shapes:
 //   - ids + `label` + `version`  ← shared/summary-templates.cjs (TEMPLATES)
-//   - `blurb` + `icon`           ← ios-native/Wassup/Models/SummaryTemplate.swift
+//   - `blurb` + `icon`           ← apps/ios/AlgoMinutes/Models/SummaryTemplate.swift
 //     (SF Symbol name; the web renders its own glyph but the id/label/blurb
 //      are shared).
 import { z } from './zod';

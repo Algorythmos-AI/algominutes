@@ -2,7 +2,7 @@
 
 /* ─────────────────────────────────────────────
    TODO(brand A6.5): AlgoMinutes design tokens.
-   Client design tokens (the "INTEGRANT" system) and the Rajdhani/Titillium web
+   The prior client design tokens and the Rajdhani/Titillium web
    font import were removed here. The real AlgoMinutes palette, type scale, and
    fonts are defined once in @algominutes/tokens (packages/tokens) and applied to
    web, SwiftUI Theme, and the Compose theme. The neutral placeholder values
@@ -80,7 +80,7 @@ p, span, li { color: var(--color-body); }
 }
 
 /* Dot-grid texture — faint monochrome engineering grid, masked so it's
-   strongest at the top and fades toward the bottom for depth (clinical,
+   strongest at the top and fades toward the bottom for depth (precise,
    not busy). Sits above the mesh, below content. */
 .owll-bg::before {
   content: '';

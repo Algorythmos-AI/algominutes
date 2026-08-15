@@ -20,8 +20,8 @@ const { pool, postgresEnabled } = pgQueryModule;
 
 // Where a share link points. Deliberately a constant — this value is the
 // hosting origin, which is fixed for the project and already hardcoded
-// client-side. NOT renamed: the wassup→algominutes rename is a later phase.
-const SHARE_BASE_URL = 'https://wassup-meeting.web.app';
+// client-side.
+const SHARE_BASE_URL = 'https://algominutes.com';
 
 // ── shareCreate ────────────────────────────────────────────────────────
 // The raw token is returned HERE AND NOWHERE ELSE. Only sha256(token) is

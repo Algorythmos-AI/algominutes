@@ -1,5 +1,5 @@
 -- 001_init.sql
--- Wassup Meeting — initial Postgres schema.
+-- AlgoMinutes — initial Postgres schema.
 --
 -- Source-of-truth for queryable meeting data. Firestore continues to be
 -- the live/realtime cache projection used by the SPA; every mutation

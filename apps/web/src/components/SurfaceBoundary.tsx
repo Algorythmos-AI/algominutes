@@ -11,7 +11,7 @@ type State = { failed: boolean };
  * The app had exactly one error boundary, at the root. So a throw anywhere —
  * a null field in a search result, a malformed citation — unmounted the entire
  * tree, and the recording screen is part of that tree. A bug in Search could
- * therefore end a consultation that was being recorded.
+ * therefore end a meeting that was being recorded.
  *
  * Wrap the surfaces that render server data. Keep the recording path outside
  * any of them, so it is never the thing that gets replaced.

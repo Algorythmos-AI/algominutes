@@ -14,7 +14,7 @@ import { getPool, isPostgresEnabled, withTx } from './db';
 // Shared, Postgres-only edit writer. Same module the deployed Cloud Function
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
-// Ported from wasssup-meeting: shared/note-edit.cjs now lives in @algominutes/ai.
+// Ported from the original app: note-edit.cjs now lives in @algominutes/ai.
 import noteEditShared from '@algominutes/ai/note-edit.cjs';
 const { writeNoteEditWithinTx } = noteEditShared as {
   writeNoteEditWithinTx: (

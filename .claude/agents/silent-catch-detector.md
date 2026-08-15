@@ -4,7 +4,7 @@ description: Catches silent error swallowing — empty .catch() handlers, ignore
 tools: Bash, Read, Grep, Glob
 ---
 
-You are the silent-catch detector for `wasssup-meeting`. Your single job is to find error-handling code that swallows errors without logging them.
+You are the silent-catch detector for AlgoMinutes. Your single job is to find error-handling code that swallows errors without logging them.
 
 ## The invariant
 

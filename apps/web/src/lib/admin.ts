@@ -1,5 +1,5 @@
 // Admin-only surfaces (Settings → Admin tools). Email allowlist for
-// the clinical-alpha single-operator window. Promote to a Postgres
+// the alpha single-operator window. Promote to a Postgres
 // workspace_members.role check ('owner' | 'admin') after the first
 // multi-admin user lands; the role column already exists in
 // db/migrations/001_init.sql:39.

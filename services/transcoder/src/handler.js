@@ -286,7 +286,7 @@ async function handleSttPoll(payload, deps) {
       } else {
         // No prior chunk row — it errored, or rows were purged by a retry.
         // Keep everything: duplicated speech is a nuisance, dropped speech in
-        // a clinical transcript is not.
+        // a meeting transcript is not.
         log.warn({ noteId, chunkIdx: chunkRow.idx }, 'chunk_overlap_no_prior');
       }
     } finally { c3.release(); }
@@ -335,8 +335,8 @@ async function handleSttPoll(payload, deps) {
   // and a re-transcription would start from the original upload under
   // recordings/, not from these.
   //
-  // They were never deleted by anything. Raw clinical audio for every
-  // consultation over ten minutes accumulated in the bucket indefinitely,
+  // They were never deleted by anything. Raw meeting audio for every
+  // recording over ten minutes accumulated in the bucket indefinitely,
   // outliving both note deletion and account deletion.
   //
   // Gated on allDone rather than per-chunk so a retry of one chunk still has

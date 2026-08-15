@@ -88,7 +88,7 @@ const MAX_RECORDING_SECONDS = DEFAULT_MAX_RECORDING_SECONDS;
  * Copy for the approaching-cap banner.
  *
  * Derived from MAX_RECORDING_SECONDS rather than written out: the banner used
- * to read "…s left — Wassup auto-stops at 60:00" while the cap had been two
+ * to read "…s left — AlgoMinutes auto-stops at 60:00" while the cap had been two
  * hours, so it was both raw seconds and wrong by a factor of two. Mirrors
  * RecordingView.capWarning on iOS.
  */
@@ -144,7 +144,7 @@ const shareTokenFromPath = (path: string): string | null => {
 
 export default function App() {
   // Static legal pages: initial value comes from the URL, so an App Store
-  // reviewer hitting https://wassup-meeting.web.app/privacy lands directly
+  // reviewer hitting https://algominutes.com/privacy lands directly
   // on the page. In-app navigation from Settings/login flips this state
   // without reloading the WKWebView (Capacitor would otherwise treat
   // <a href="/privacy"> as a full page navigation, killing in-memory
@@ -192,7 +192,7 @@ export default function App() {
   const [notes, setNotes]                   = useState<Note[]>([]);
   // Same distinction for the notes list: `notes` starts empty, so "No notes
   // yet — tap a recording option" rendered before the first snapshot arrived.
-  // To a doctor with 40 consultations that reads as data loss.
+  // To a user with 40 meetings that reads as data loss.
   const [notesLoaded, setNotesLoaded]       = useState(false);
   const [notesError, setNotesError]         = useState<string | null>(null);
   const [activeTab, setActiveTab]           = useState('home');
@@ -330,7 +330,7 @@ export default function App() {
   }, [broadcastState, platform]);
 
   // Recovery: on app mount, ask native for current broadcast state. If a
-  // recording is sitting in the App Group container (e.g. Wassup Doc was killed
+  // recording is sitting in the App Group container (e.g. AlgoMinutes was killed
   // mid-upload), pick it up. If a broadcast was active, resume the polling.
   useEffect(() => {
     if (platform === 'web' || !user) return;
@@ -400,7 +400,7 @@ export default function App() {
             safeSetState(setBroadcastDurationMs, 0);
             alert(platform === 'android'
               ? 'Meeting recording did not start. Approve Android screen/audio capture, then switch to your meeting app.'
-              : 'Broadcast didn\'t start. In the iOS sheet, tap "Start Broadcast" and make sure Wassup Doc is selected.');
+              : 'Broadcast didn\'t start. In the iOS sheet, tap "Start Broadcast" and make sure AlgoMinutes is selected.');
           }
         } catch (err) {
           console.warn('broadcast_start_timeout_check_failed', err);
@@ -551,7 +551,7 @@ export default function App() {
           // Nothing was set in state here, so a listener failure was
           // indistinguishable from having no notes — permission-denied is not
           // transient, and it retried forever behind an empty list that looked
-          // like every consultation had vanished.
+          // like every meeting had vanished.
           setNotesLoaded(true);
           setNotesError(
             err.code === 'permission-denied'
@@ -745,7 +745,7 @@ export default function App() {
 
   // Warn before a refresh or tab close discards an in-progress recording.
   // Chunks live only in chunksRef and are never flushed anywhere, so closing
-  // the tab silently destroys the whole consultation.
+  // the tab silently destroys the whole meeting.
   useEffect(() => {
     if (!isRecording) return;
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
@@ -926,7 +926,7 @@ export default function App() {
     try {
       const pdfBlob = await imagesToPdfBlob(images);
       const fileName = `${(images[0].name || 'Scan').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_').slice(0, 60)}.pdf`;
-      await saveOrShareBlob(pdfBlob, fileName, 'Save or share PDF', 'Wassup Doc scanned PDF');
+      await saveOrShareBlob(pdfBlob, fileName, 'Save or share PDF', 'AlgoMinutes scanned PDF');
       safeSetState(setShowScanSheet, false);
     } catch (err) {
       console.error('images_pdf_failed', err);
@@ -1043,7 +1043,7 @@ export default function App() {
       // the device the track came from goes away. None of this was handled, so
       // the track ended, no data arrived, the timer kept counting, and the
       // screen kept saying "Recording in progress" — until the doctor pressed
-      // stop and got "No audio captured" with the consultation gone.
+      // stop and got "No audio captured" with the meeting gone.
       //
       // Stopping here keeps everything captured up to this point, because the
       // chunks already collected are what stopRecording assembles.
@@ -1452,7 +1452,7 @@ export default function App() {
       const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
       await Share.share({
         title: fileName,
-        text: `Wassup Doc summary: ${note.title || 'Untitled'}`,
+        text: `AlgoMinutes summary: ${note.title || 'Untitled'}`,
         files: [uri],
         dialogTitle: 'Save or share PDF',
       });
@@ -1538,7 +1538,7 @@ export default function App() {
           >
             <img
               src="/logo.png"
-              alt="Wassup Doc"
+              alt="AlgoMinutes"
               className="h-20 w-auto"
               style={{ filter: 'drop-shadow(0 0 28px rgba(10,132,255,0.55))' }}
             />
@@ -1547,7 +1547,7 @@ export default function App() {
           <h1
             style={{ fontFamily: 'Rajdhani, sans-serif', fontSize: '2.6rem', fontWeight: 800, color: '#FFFFFF', marginBottom: '0.5rem' }}
           >
-            Wassup Doc
+            AlgoMinutes
           </h1>
           <p style={{ color: '#8C8684', fontFamily: 'Titillium Web, sans-serif', fontSize: '1rem', marginBottom: '3rem' }}>
             Your intelligent AI meeting &amp; document assistant.
@@ -2016,7 +2016,7 @@ export default function App() {
                 <div className="flex items-center gap-3">
                   <img
                     src="/logo.png"
-                    alt="Wassup Doc"
+                    alt="AlgoMinutes"
                     className="h-9 w-auto"
                     style={{ filter: 'drop-shadow(0 0 14px rgba(10,132,255,0.65))' }}
                   />
@@ -2024,11 +2024,11 @@ export default function App() {
                     className="owll-wordmark"
                     style={{ fontFamily: 'Rajdhani, sans-serif', fontWeight: 900, fontSize: '1.75rem', letterSpacing: '-0.015em' }}
                   >
-                    Wassup Doc
+                    AlgoMinutes
                   </span>
                 </div>
 
-                {/* UPGRADE button removed for Slater alpha — no IAP wired,
+                {/* UPGRADE button removed for the alpha — no IAP wired,
                     Apple App Store rejects non-IAP paywall buttons. Re-add
                     behind StoreKit/IAP integration when monetization is in
                     scope. See plan v3.2 §ζ.minimal. */}
@@ -2063,7 +2063,7 @@ export default function App() {
                           ? 'Approve Android screen/audio capture'
                           : 'Tap "Start Broadcast" in the iOS sheet'
                         : platform === 'android'
-                          ? `${fmt(broadcastSeconds)} — Stop from the Wassup Doc notification`
+                          ? `${fmt(broadcastSeconds)} — Stop from the AlgoMinutes notification`
                           : `${fmt(broadcastSeconds)} — Tap the red bar at the top to stop`}
                     </p>
                   </div>
@@ -2540,7 +2540,7 @@ export default function App() {
               </h2>
 
               <p style={{ fontFamily: 'Titillium Web, sans-serif', fontSize: '0.88rem', color: '#8C8684', lineHeight: 1.55, marginBottom: '1.5rem' }}>
-                Wassup Doc records audio from this device for as long as you're recording. The audio is uploaded to be transcribed and summarised, then kept in your account until you delete it. You can stop at any time.
+                AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded to be transcribed and summarised, then kept in your account until you delete it. You can stop at any time.
               </p>
 
               <div className="flex gap-3">

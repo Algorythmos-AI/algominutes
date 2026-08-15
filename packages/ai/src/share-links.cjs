@@ -51,7 +51,7 @@ function hashToken(token) {
  *
  * Salted with the note id so the same visitor is correlatable *within* one
  * note — enough to recognise enumeration — but not across notes, which would
- * amount to a movement history for whoever a clinician shared a consult with.
+ * amount to a movement history for whoever shared a note.
  * Truncated because 16 bytes is ample for that and less to leak.
  */
 function hashIp(ip, salt) {

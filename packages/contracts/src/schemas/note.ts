@@ -3,7 +3,7 @@
 // Source shapes:
 //   - NoteStatus / NoteType / Summary / Note  ← src/types.ts (the Firestore
 //     document the web app renders) reconciled with
-//     ios-native/Wassup/Models/Note.swift (the client model that reads a
+//     apps/ios/AlgoMinutes/Models/Note.swift (the client model that reads a
 //     subset of the same document).
 //
 // The Firestore `Note` is delivered to clients via the Firestore listener, not

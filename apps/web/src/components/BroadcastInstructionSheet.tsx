@@ -10,7 +10,7 @@ interface Props {
 }
 
 const IOS_STEPS: { Icon: typeof Radio; title: string; body: string }[] = [
-  { Icon: Radio,             title: 'Start the broadcast', body: 'Tap "Start Broadcast" in the sheet that iOS shows. Make sure Wassup Doc is selected.' },
+  { Icon: Radio,             title: 'Start the broadcast', body: 'Tap "Start Broadcast" in the sheet that iOS shows. Make sure AlgoMinutes is selected.' },
   { Icon: MonitorSmartphone, title: 'Switch to your meeting', body: 'Open Google Meet, Microsoft Teams, or any meeting app and join your call.' },
   { Icon: Square,            title: 'Tap the red bar to stop', body: 'When the meeting ends, tap the red status bar at the top of your screen, then Stop.' },
 ];
@@ -18,7 +18,7 @@ const IOS_STEPS: { Icon: typeof Radio; title: string; body: string }[] = [
 const ANDROID_STEPS: { Icon: typeof Radio; title: string; body: string }[] = [
   { Icon: Radio,             title: 'Allow recording', body: 'Approve Android screen/audio capture when the system prompt appears.' },
   { Icon: MonitorSmartphone, title: 'Switch to your meeting', body: 'Open Google Meet, Microsoft Teams, or any meeting app and join your call.' },
-  { Icon: Square,            title: 'Stop from notification', body: 'When the meeting ends, pull down notifications and tap Stop on the Wassup Doc recording notification.' },
+  { Icon: Square,            title: 'Stop from notification', body: 'When the meeting ends, pull down notifications and tap Stop on the AlgoMinutes recording notification.' },
 ];
 
 export default function BroadcastInstructionSheet({ open, platform, onCancel, onContinue }: Props) {
@@ -66,8 +66,8 @@ export default function BroadcastInstructionSheet({ open, platform, onCancel, on
 
             <p style={{ color: '#8C8684', fontFamily: 'Titillium Web, sans-serif', fontSize: '0.85rem', lineHeight: 1.6 }}>
               {isAndroid
-                ? 'Android will let Wassup Doc capture supported meeting audio and your microphone. Three steps:'
-                : 'iOS will let Wassup Doc capture audio from your meeting app and your microphone. Three steps:'}
+                ? 'Android will let AlgoMinutes capture supported meeting audio and your microphone. Three steps:'
+                : 'iOS will let AlgoMinutes capture audio from your meeting app and your microphone. Three steps:'}
             </p>
 
             <div className="space-y-3">

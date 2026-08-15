@@ -29,7 +29,7 @@ export async function authedFetch(
   // A single 401 is not proof the session is dead — the cached token may have
   // simply expired. Force a refresh and try once more before concluding
   // anything, so an ordinary hour-old token does not sign a doctor out
-  // mid-consultation.
+  // mid-meeting.
   console.warn(`[api] authedFetch:401 path=${path} — refreshing token and retrying once`);
   const retry = await requestOnce(path, body, signal, true);
   if (retry.status === 401) {

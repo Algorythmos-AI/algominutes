@@ -2,7 +2,7 @@
 
 // Firestore status mirror. Cloud Run uses the bound SA via the admin
 // SDK, which bypasses security rules — granting roles/datastore.user
-// to wassup-jobs-sa is the supported pattern.
+// to algominutes-jobs-sa is the supported pattern.
 
 let _initialized = false;
 function db() {

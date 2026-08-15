@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS shares_note_created_idx ON shares(note_id, created_at
 -- appends rather than updating the grant row on every request.
 --
 -- ip_hash, never a raw IP: enough to spot enumeration, not enough to build a
--- location history of whoever a clinician shared a consult with.
+-- location history of whoever shared a note.
 CREATE TABLE IF NOT EXISTS share_access_log (
   id          BIGSERIAL PRIMARY KEY,
   share_id    UUID NOT NULL REFERENCES shares(id) ON DELETE CASCADE,

@@ -147,7 +147,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
       let answer = '';
       // Whether the server's terminal `event: done` frame ever arrived. Without
       // this a dropped connection ended the loop on `done` from the reader and
-      // rendered a half-sentence clinical answer as though it were complete.
+      // rendered a half-sentence answer as though it were complete.
       let sawTerminalFrame = false;
 
       // No byte for this long means the stream is dead rather than thinking.
@@ -203,7 +203,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
       }
 
       // Say so rather than letting a truncated answer pass as a whole one.
-      // For a clinical question a half-answer read as complete is worse than
+      // For a meeting question a half-answer read as complete is worse than
       // a visible failure.
       if (!sawTerminalFrame) {
         setMessages((prev) =>

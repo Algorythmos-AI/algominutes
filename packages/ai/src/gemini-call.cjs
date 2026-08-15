@@ -9,7 +9,7 @@
 // audit bug 13) was the same root cause as bug 11 (embedder model 404):
 // the public endpoint isn't reliably reachable through this VPC, but
 // `*-aiplatform.googleapis.com` is. ADC from the bound service account
-// (`wassup-jobs-sa`) authenticates; no API key needed. The function's
+// (`algominutes-jobs-sa`) authenticates; no API key needed. The function's
 // signature stays the same as the old @google/generative-ai version so
 // callers don't change — `apiKey` is now ignored.
 

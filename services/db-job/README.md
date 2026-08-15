@@ -1,7 +1,7 @@
 # services/db-job — Cloud Run Job for programmatic DB ops
 
 Tier 4 in `docs/runbooks/cloud-sql-access.md` — runs inside the
-wassup-meeting VPC with native private-IP access to wassup-meeting-pg.
+project VPC with native private-IP access to ${GCP_PROJECT}-pg.
 Use this instead of laptop-tethered scripts for any long-running or
 programmatic DB work (corpus backfill, batch eval, scheduled audits).
 
@@ -36,19 +36,19 @@ pattern):
 cp -R shared services/db-job/shared
 trap 'rm -rf services/db-job/shared' EXIT
 gcloud builds submit services/db-job \
-  --tag us-central1-docker.pkg.dev/wassup-meeting/cloud-run-source-deploy/db-job:TAG \
-  --project wassup-meeting
+  --tag us-central1-docker.pkg.dev/${GCP_PROJECT}/cloud-run-source-deploy/db-job:TAG \
+  --project ${GCP_PROJECT}
 ```
 
 First-time create:
 
 ```bash
 gcloud run jobs create db-job \
-  --image us-central1-docker.pkg.dev/wassup-meeting/cloud-run-source-deploy/db-job:TAG \
-  --region us-central1 --project wassup-meeting \
+  --image us-central1-docker.pkg.dev/${GCP_PROJECT}/cloud-run-source-deploy/db-job:TAG \
+  --region us-central1 --project ${GCP_PROJECT} \
   --vpc-connector sql-connector \
   --vpc-egress private-ranges-only \
-  --service-account wassup-jobs-sa@wassup-meeting.iam.gserviceaccount.com \
+  --service-account algominutes-jobs-sa@${GCP_PROJECT}.iam.gserviceaccount.com \
   --set-env-vars PGHOST=10.47.0.5,PGUSER=postgres,PGDATABASE=postgres,JOB_NAME=verify-phase-0 \
   --set-secrets PGPASSWORD=CLOUD_SQL_PASSWORD:latest \
   --max-retries 0 --task-timeout 3600
@@ -57,22 +57,22 @@ gcloud run jobs create db-job \
 Subsequent updates (image only, preserves env + secrets):
 
 ```bash
-gcloud run jobs update db-job --region us-central1 --project wassup-meeting \
-  --image us-central1-docker.pkg.dev/wassup-meeting/cloud-run-source-deploy/db-job:NEW_TAG
+gcloud run jobs update db-job --region us-central1 --project ${GCP_PROJECT} \
+  --image us-central1-docker.pkg.dev/${GCP_PROJECT}/cloud-run-source-deploy/db-job:NEW_TAG
 ```
 
 ## Invoke
 
 ```bash
 # verify-phase-0 (read-only)
-gcloud run jobs execute db-job --region us-central1 --project wassup-meeting \
+gcloud run jobs execute db-job --region us-central1 --project ${GCP_PROJECT} \
   --update-env-vars JOB_NAME=verify-phase-0 --wait
 
 # backfill-pr-d (DESTRUCTIVE — see Phase β.3 in plan v3.1 for full pre-flight)
-gcloud run jobs execute db-job --region us-central1 --project wassup-meeting \
+gcloud run jobs execute db-job --region us-central1 --project ${GCP_PROJECT} \
   --update-env-vars JOB_NAME=backfill-pr-d,MODE=dry-run --wait
 # review dry-run output, get user authorization, then:
-gcloud run jobs execute db-job --region us-central1 --project wassup-meeting \
+gcloud run jobs execute db-job --region us-central1 --project ${GCP_PROJECT} \
   --update-env-vars JOB_NAME=backfill-pr-d,MODE=commit --wait
 ```
 
@@ -81,7 +81,7 @@ Read structured logs:
 ```bash
 gcloud logging read \
   'resource.type=cloud_run_job AND resource.labels.job_name=db-job' \
-  --project wassup-meeting --limit 200 --freshness=15m \
+  --project ${GCP_PROJECT} --limit 200 --freshness=15m \
   --format=json | jq '.[].jsonPayload | {level, msg, query, pass, row, mode}'
 ```
 

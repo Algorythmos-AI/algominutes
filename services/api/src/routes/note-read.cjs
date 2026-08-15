@@ -106,7 +106,7 @@ function childLog(log, fields) {
 
 // ── serialisation ─────────────────────────────────────────────────────
 // pg returns TIMESTAMPTZ as Date. The iOS and web clients both parse ISO-8601
-// strings (ios-native/Wassup/Models/Note.swift parseISO), so normalise here
+// strings (the iOS client's Note model parseISO), so normalise here
 // rather than relying on incidental JSON.stringify behaviour.
 function iso(value) {
   if (!value) return null;

@@ -25,7 +25,7 @@ function buildConfig(): PoolConfig {
   return {
     host: process.env.PGHOST,
     port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-    database: process.env.PGDATABASE || 'wassup',
+    database: process.env.PGDATABASE || 'algominutes',
     user: process.env.PGUSER || 'app',
     password: process.env.PGPASSWORD,
     max: 8,

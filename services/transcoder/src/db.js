@@ -95,9 +95,9 @@ async function markChunkDone(client, { chunkId, noteId }) {
   // the already-enqueued polls land in the gap.
   //
   // The old check let the summarizer run on the first two chunks of a
-  // six-chunk consult, and claimSummarizerEnqueue then made it permanent: the
+  // six-chunk recording, and claimSummarizerEnqueue then made it permanent: the
   // note reached 'ready' carrying a fluent, complete-looking summary of a third
-  // of the recording. Nothing anywhere reported an error. For a clinical
+  // of the recording. Nothing anywhere reported an error. For a meeting
   // transcript that is the worst possible failure — confidently wrong.
   //
   // chunks_total is written up front from plan.length (handler.js), so it is
@@ -153,7 +153,7 @@ async function fetchTailWords(client, { noteId, fromMs }) {
  * something to infer from comparing strings. Returns null when there is no
  * prior row — errored, or purged by a retry — and the caller then keeps every
  * word, because duplicated speech is a nuisance and dropped speech in a
- * clinical transcript is not.
+ * meeting transcript is not.
  */
 async function fetchPriorChunkEndMs(client, { noteId, idx }) {
   const { rows } = await client.query(

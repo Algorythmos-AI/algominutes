@@ -7,7 +7,7 @@
  * returned 500, and its `mirrorError` writes Firestore alone — so after a
  * permanent failure Firestore said `error` while Postgres stayed `transcribing`
  * forever. `/api/note`, which the iOS app reads, serves the Postgres status, so
- * the two clients disagreed about whether a consultation had failed and the
+ * the two clients disagreed about whether a recording had failed and the
  * note showed a spinner that would never resolve. There is no server-side
  * sweeper, and the client watchdog only ticks while the app is foregrounded.
  *
