@@ -3,6 +3,28 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A6 — Generalise the product (credential-free parts)
+
+- **A6.1 templates:** removed the client `clinical` template; kept `general` + `actions_only`; added
+  `standup`, `interview`, `sales_call`, `lecture`, `one_on_one`, `board_meeting`, `client_meeting`. Every
+  template reuses the flat `BASE_SCHEMA` (gist/actionItems/keyDecisions) — the structured-output invariant
+  is preserved, not loosened (a template that added fields would be silently dropped by the tables, the
+  Swift model, and the gemini-1.5-flash fallback). Canonical set in `@algominutes/ai`; mirrored to
+  `packages/contracts` (enum + `SUMMARY_TEMPLATES` + openapi) and the iOS enum/tests. Web renders from the
+  contract; Android is B2. This is a three-client contract change — openapi/model regen is deferred (no deps).
+- **A6.2 recording cap:** replaced the hardcoded 2h cap + "Slater staff meetings" justification with a
+  named, plan-derived config (`RECORDING_LIMITS`/`DEFAULT_MAX_RECORDING_SECONDS`/`maxRecordingSecondsForPlan`)
+  in `@algominutes/contracts`. Kept 2h as the default-tier value to avoid a cost-affecting behaviour change;
+  per-plan values are TODO(A9). Web imports it; iOS mirrors the constant (Swift can't import the TS const).
+- **A6.7 strings:** stood up the string catalog (`packages/tokens/strings/en.json`, 57 strings) + typed
+  `t()`/`strings` accessor now so i18n is not a three-client retrofit. **Template labels/blurbs are NOT
+  duplicated in tokens** — they stay with the template set in `@algominutes/contracts`. iOS/Android consume
+  generated `Localizable.strings`/`strings.xml` from the catalog; that codegen (json→platform) is TODO,
+  same pattern as contracts models. The exhaustive per-file migration of every remaining hardcoded string
+  is a tracked follow-up — the infra + a real shared catalog + web wiring are in place.
+- **A6.4 / A6.6 delivered as audits** (`docs/audits/`), not implementation — the user scoped these as the
+  audit passes. Onboarding/sample-note/permission-explainer building and copy fixes execute from the audits.
+
 ## A3 — Port, consolidate, contract
 
 - **db-job folds into a scheduled Cloud Run job, not `api` (§3.2).** Its handlers (`eval-recall`,
