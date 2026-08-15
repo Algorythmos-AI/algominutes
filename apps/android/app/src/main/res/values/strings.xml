@@ -1,8 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Minimal strings for the audio-layer module (A3). Full app strings arrive with
-  the Compose client in Track B2.
+  Strings for the audio-layer module (A3) plus the A10 launch-blocker copy the
+  B2 Compose UI will render: the pre-recording consent notice (A10 #2) and the
+  permission rationales (A10 #3). Full app strings arrive with the Compose
+  client in Track B2.
 -->
 <resources>
     <string name="app_name">AlgoMinutes</string>
+
+    <!--
+      A10 #2 — Pre-recording consent notice (conservative default, NO
+      jurisdiction rules). Copy mirrors docs/CONSENT.md §2.2 and the iOS
+      RecorderConsentFlow two-step sheet, kept in parity across platforms.
+      TODO(B2): the Compose consent sheet renders these; "Start" stays disabled
+      until consent_checkbox is ticked, re-presented EVERY session.
+      TODO(legal): wording is frozen pending the §4 legal opinion — do not
+      re-word to assert any specific legal standard is met (CONSENT.md §2.3).
+    -->
+    <string name="consent_notice_step1_title">Ready to record?</string>
+    <string name="consent_notice_step1_body">AlgoMinutes records audio from this device for as long as you’re recording. Afterwards it’s transcribed and summarised for you. You can stop at any time.</string>
+    <string name="consent_notice_step2_title">Before you record</string>
+    <string name="consent_notice_step2_body">Recording laws vary by location, and it’s your responsibility to have everyone’s consent. Your audio is uploaded to your account, transcribed and summarised, and kept until you delete it; the local copy on this device is removed after it uploads.</string>
+    <string name="consent_checkbox">I have permission from anyone whose voice may be captured. If others are present, I’ll let them know the meeting is being recorded.</string>
+    <string name="consent_start_disabled_hint">Tick the box to start</string>
+
+    <!--
+      A10 #3 — Permission rationales (shown before/with the OS prompt by the B2
+      rationale dialog). Specific and honest: what is recorded, why, and where
+      it goes. Copy mirrors docs/STORE-COMPLIANCE.md §5. Vague rationales get
+      recording apps rejected. The matching manifest permissions are declared in
+      AndroidManifest.xml (RECORD_AUDIO, POST_NOTIFICATIONS,
+      FOREGROUND_SERVICE_MICROPHONE, FOREGROUND_SERVICE_MEDIA_PROJECTION).
+    -->
+    <string name="rationale_record_audio">AlgoMinutes needs the microphone to record the meeting or note you’re capturing. The audio is uploaded to your account to be transcribed and summarised, then kept until you delete it. Recording only happens while you’re actively recording.</string>
+    <string name="rationale_post_notifications">Allow notifications so AlgoMinutes can tell you when a recording has finished transcribing and your summary is ready, and to show the ongoing “recording in progress” notice.</string>
+    <string name="rationale_foreground_service_microphone">AlgoMinutes keeps recording reliably in the background while you use other apps by running a foreground service with a persistent notification. It is used only for microphone recording that you started, for the duration of the recording.</string>
+    <!--
+      MediaProjection has no runtime dangerous-permission prompt (it is approved
+      in the system screen/audio-capture dialog each time), but the B2 UI should
+      explain it before launching that dialog, and Play requires the declaration.
+      TODO(legal): confirm this justification meets Play’s current MediaProjection
+      policy at submission time (CONSENT.md / STORE-COMPLIANCE.md §5).
+    -->
+    <string name="rationale_media_projection">To record audio from another app (for example a video call), AlgoMinutes uses Android’s screen/media capture, which you approve in a system dialog each time. It is used only to capture audio for your recording — no screen content is stored — and only while you are recording.</string>
 </resources>

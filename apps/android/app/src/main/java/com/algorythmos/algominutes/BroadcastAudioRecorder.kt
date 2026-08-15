@@ -32,8 +32,15 @@ import java.io.File
  * See `// TODO(android B2)` on [mediaProjectionConsentIntent] / [start].
  *
  * @param context any Context; the application context is retained.
+ * @param consentGate the recording-consent SEAM (A10 #2 · `docs/CONSENT.md`
+ *   §5.2), consulted before capture starts. Defaults to the v1.0 conservative
+ *   [AllowWithNoticeConsentGate]; TODO(android B2) pass a gate wired to the
+ *   per-session consent checkbox.
  */
-class BroadcastAudioRecorder(context: Context) : AudioRecorder {
+class BroadcastAudioRecorder(
+    context: Context,
+    private val consentGate: ConsentGate = AllowWithNoticeConsentGate(),
+) : AudioRecorder {
 
     private val appContext: Context = context.applicationContext
 
@@ -89,12 +96,23 @@ class BroadcastAudioRecorder(context: Context) : AudioRecorder {
      * come from a successful (RESULT_OK) consent launch. Passes them through as
      * the exact extras the service reads (EXTRA_RESULT_CODE / EXTRA_RESULT_DATA).
      *
-     * @return true if a start was dispatched; false if unsupported or already running.
+     * `suspend` because it consults the recording-consent SEAM ([consentGate])
+     * before capture starts (A10 #2 · `docs/CONSENT.md` §5.2) — the single
+     * enforcement point for the app-audio path. Note the MediaProjection system
+     * consent (screen/audio capture) is a *separate*, OS-level grant obtained
+     * via [mediaProjectionConsentIntent]; this gate is the recording-consent
+     * layer (who may be recorded), not the OS capture permission.
+     *
+     * @return true if a start was dispatched; false if unsupported, already
+     *   running, or the consent gate was not satisfied.
      */
     @RequiresApi(Build.VERSION_CODES.Q)
-    fun start(resultCode: Int, resultData: Intent): Boolean {
+    suspend fun start(resultCode: Int, resultData: Intent): Boolean {
         if (!isSupported()) return false
         if (isRecording) return false
+        // SEAM (A10 #2 / CONSENT.md §5.2): consent gate — one gate, all paths.
+        // v1.0 default = allow-with-notice; the §4 legal layer slots in here.
+        if (!consentGate.satisfied(CaptureKind.APP_AUDIO)) return false
         val intent = Intent(appContext, BroadcastRecordingService::class.java).apply {
             action = BroadcastRecordingService.ACTION_START
             putExtra(BroadcastRecordingService.EXTRA_RESULT_CODE, resultCode)
