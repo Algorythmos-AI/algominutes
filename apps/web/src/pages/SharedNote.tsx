@@ -56,6 +56,20 @@ export default function SharedNote({ token }: { token: string }) {
   const [state, setState] = useState<'loading' | 'ok' | 'gone' | 'busy' | 'error'>('loading');
   const [data, setData] = useState<SharedNoteData | null>(null);
 
+  // A10: a shared note must never be indexed. This page-level robots meta is the
+  // host-agnostic control (Google honours it); robots.txt Disallow, the vercel.json
+  // X-Robots-Tag header on /s/**, and the API's no-store + X-Robots-Tag on the data
+  // response are the additional layers.
+  useEffect(() => {
+    const meta = document.createElement('meta');
+    meta.name = 'robots';
+    meta.content = 'noindex, nofollow';
+    document.head.appendChild(meta);
+    return () => {
+      document.head.removeChild(meta);
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
