@@ -56,8 +56,37 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     handoff needs the app added to `group.com.algorythmos.algominutes` when the extension is wired (below).
   - Minor: the web "Sign in with Google" mark is a single indigo tint, not Google's official multicolour
     branding — revisit for store/brand compliance (pre-existing, not introduced by the rename).
-- **A9 billing implementation is blocked on your two OPEN decisions** (guest vs signup A6.3; trial vs free
-  A9.3 — see DECISIONS.md). Schema + entitlement seams are built; StoreKit/Play/Stripe/paywall wait on you.
+- **A9.3/A6.3 are now DECIDED** (reverse trial + guest mode) and the billing rails are built. Remaining
+  A9 items need your credentials/decisions:
+  - **`FREE_FLOOR_MINUTES` is UNSET → free floor = 0 metered minutes (fail-safe).** The post-trial free
+    tier does NO metered work until you set the number in `@algominutes/contracts` limits.ts after A11
+    measures blended COGS/min. **Ship-blocker for the free floor** — shipping a guessed number risks an
+    unbounded bill (A9.3). Pro included minutes (1500) is also config, confirm post-COGS.
+  - **Billing credentials (Secret Manager, per env):** Stripe secret + webhook signing key + price ids;
+    Apple App Store Server API key (`TODO(A4-apple)`) + App Store Connect products; Google Play service
+    account + RTDN Pub/Sub topic + Play Console products. Receipt validation + webhooks are coded but
+    untestable here (`TODO(A11)`).
+  - **App Review 3.1.3:** iOS paywall shows StoreKit pricing only (no web-pricing reference) — safe
+    globally; if you later want to surface the cheaper web rail on iOS it's US-storefront-only (see DECISIONS).
+
+### ⚠️ Trial state-machine fragilities (you asked me to flag these)
+  1. **Reinstall-restart abuse (the big one).** No-account-for-7-days + anonymous identity means a user can
+     delete + reinstall to get a fresh anonymous uid and a new 7-day trial. The server keys the trial to
+     uid and `ensureTrial` is idempotent per-uid, but a *new* uid escapes it. The `trial_device_hash` column
+     is a **seam, not enforced.** Fix needs a durable device signal — iOS DeviceCheck/App Attest (1 bit per
+     device) and Android Play Integrity — or gating trial-start behind a lightweight identity. **Decision +
+     platform work required before launch.**
+  2. **Missed cancellation/expiry webhook → over-grant.** Entitlement is derived from `current_period_end`;
+     if an EXPIRED/cancel webhook is dropped, the user stays `active` until the stored period lapses. Needs a
+     periodic reconciliation job (poll Apple/Stripe/Google status) + the `expireElapsedTrials` sweep on a
+     schedule. Not built (no scheduler wired — A11/infra).
+  3. **Cross-rail double-charge race.** The client hides "buy" when already entitled and the server logs
+     `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
+     can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
+     support. Consider a server pre-purchase entitlement check.
+  4. **Trial vs monthly-quota window mismatch (minor).** The trial is an absolute 7-day window; metered
+     quota resets on the calendar month (UTC). A trial crossing a month boundary gets a fresh monthly
+     bucket — bounded and low-risk, noted for awareness.
 - **A9.4 blended cost-per-minute not measured** — gates pricing (needs A11 deployed pipeline). The
   1,500-min Pro tier at A$29 requires COGS well under 1¢/min. See PERFORMANCE-BUDGET.md.
 - **A7.2 background upload is gated OFF by default** — the new URLSession-background/chunked path can't be
