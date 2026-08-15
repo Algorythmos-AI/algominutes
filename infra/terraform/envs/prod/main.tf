@@ -1,0 +1,88 @@
+# ===========================================================================
+# AlgoMinutes — PRODUCTION environment (thin caller)
+# Same architecture as staging, on a modest dedicated tier with data-loss
+# guards ON.
+# ===========================================================================
+
+terraform {
+  required_version = ">= 1.9"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 6.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+variable "project_id" {
+  type = string
+}
+variable "project_number" {
+  type = string
+}
+variable "region" {
+  type    = string
+  default = "australia-southeast1"
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}
+
+module "environment" {
+  source = "../../modules/environment"
+
+  env            = "prod"
+  project_id     = var.project_id
+  project_number = var.project_number
+  region         = var.region
+
+  # Modest dedicated tier.
+  db_tier                   = "db-custom-1-3840" # 1 vCPU / 3.75 GB
+  db_disk_size_gb           = 20
+  db_point_in_time_recovery = true
+  deletion_protection       = true
+
+  recordings_lifecycle_days = 0     # keep prod recordings (no lifecycle delete)
+  bucket_force_destroy      = false # never blow away prod buckets
+
+  firestore_deletion_policy = "ABANDON"
+}
+
+# Re-export module outputs at the root for convenience.
+output "sql_instance_connection_name" {
+  value = module.environment.sql_instance_connection_name
+}
+output "sql_private_ip" {
+  value = module.environment.sql_private_ip
+}
+output "bucket_names" {
+  value = module.environment.bucket_names
+}
+output "queue_ids" {
+  value = module.environment.queue_ids
+}
+output "service_account_emails" {
+  value = module.environment.service_account_emails
+}
+output "vpc_connector_id" {
+  value = module.environment.vpc_connector_id
+}
+output "db_password_secret_id" {
+  value = module.environment.db_password_secret_id
+}
