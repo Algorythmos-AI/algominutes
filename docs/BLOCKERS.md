@@ -26,6 +26,15 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
 - **All `shared/` lives in `@algominutes/ai`** (incl. pg-query/storage-paths). If you'd prefer pg-query in
   `@algominutes/db`, it's a small move (the service `sharedRequire` ai→db fallback already tolerates it).
 - **`main` not pushed / not protected during this run** (see §1). 
+- **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
+  triggers it and its only permission copy is mic-only; App Review will question an unexplained
+  system-capture extension. Decide before the iOS submission build: **wire it** (RPSystemBroadcastPickerView
+  + honest capture copy + the A4 App Group) **or exclude it** from that build. Needs the A4 App Group either
+  way. Default applied: left re-homed in the repo, unwired.
+- **A6.4 onboarding deliverables still to BUILD** (audit only so far): permission *explainer* + Settings
+  deep-link on denial, and a **sample note** (missing on both platforms — the biggest named gap). Web Home
+  has no first-run/empty state; iOS notes-listener failure is silent (`NotesRepository.swift:74`). See
+  `docs/audits/A6.4-STATES-AUDIT.md` punch list.
 
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
