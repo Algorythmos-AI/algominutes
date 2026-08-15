@@ -237,6 +237,12 @@ struct NoteDetailView: View {
         switch viewModel.tab {
         case .summary:
             SummaryPane(summary: note.summary)
+                // A9.6 + A6.3: the moment the first summary is actually on screen.
+                // Fires `first_summary_viewed` once and, for a guest, presents the
+                // account prompt (or the paywall if the trial is already over).
+                .onAppear {
+                    env.billing.onFirstSummaryViewed(isGuest: env.auth.isAnonymous)
+                }
         case .transcript:
             let lines = env.transcripts.displayLines(mirrored: note.transcript, for: note.id)
             // Follow and seek only while this note is the one loaded in the

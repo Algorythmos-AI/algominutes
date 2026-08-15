@@ -160,6 +160,116 @@ final class AuthService: NSObject {
     }
     #endif
 
+    // MARK: - Guest identity + upgrade (A6.3)
+
+    /// True while the signed-in user is a throwaway anonymous account.
+    var isAnonymous: Bool { user?.isAnonymous ?? false }
+
+    /// A6.3 guest mode: give the app a real Firebase identity WITHOUT an account
+    /// prompt, so a first-time user can record and see a summary before ever
+    /// signing in. Called at launch when no user exists. Unlike
+    /// `signInAsDevGuest` (DEBUG-only) this ships in Release — it is the default
+    /// identity, and the anonymous uid is later upgraded in place, never
+    /// replaced (see `linkWithGoogle` / `completeAppleLink`).
+    ///
+    /// Requires the Anonymous provider to be enabled in Firebase Auth.
+    func ensureAnonymousIdentity() async {
+        guard Auth.auth().currentUser == nil, !isSigningIn else { return }
+        isSigningIn = true
+        defer { isSigningIn = false }
+        do {
+            try await Auth.auth().signInAnonymously()
+        } catch {
+            // Non-fatal: LoginView remains as the fallback path.
+            AppLog.error("anonymous_identity_failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Upgrade an anonymous guest to a permanent Google account IN PLACE.
+    ///
+    /// The whole point of A6.3: `link(with:)` attaches the Google credential to
+    /// the CURRENT anonymous user, so the Firebase uid — and therefore the
+    /// workspace id, every note, and the reverse-trial clock — is PRESERVED. No
+    /// data migration, no trial restart.
+    ///
+    /// If the Google account is already a separate Firebase user, linking is
+    /// impossible; we sign into that existing account instead (the anonymous
+    /// scratch data is left behind — the alternative would be silently merging
+    /// two identities, which we must not do).
+    func linkWithGoogle() async {
+        guard !isSigningIn else { return }
+        isSigningIn = true
+        defer { isSigningIn = false }
+        authError = nil
+        do {
+            guard let current = Auth.auth().currentUser else {
+                await signInWithGoogle() // no guest to upgrade — plain sign-in.
+                return
+            }
+            guard let rootVC = Self.presentingViewController() else { return }
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootVC)
+            guard let idToken = result.user.idToken?.tokenString else {
+                throw APIError.invalidResponse
+            }
+            let credential = GoogleAuthProvider.credential(
+                withIDToken: idToken, accessToken: result.user.accessToken.tokenString
+            )
+            do {
+                try await current.link(with: credential) // preserves uid
+            } catch let error as NSError where error.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
+                // That Google account is a different Firebase user already. Fall
+                // back to signing into it; the anonymous uid is abandoned.
+                let existing = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
+                try await Auth.auth().signIn(with: existing)
+            }
+        } catch is CancellationError {
+        } catch let error as NSError where error.code == GIDSignInError.canceled.rawValue {
+        } catch {
+            authError = "Couldn't link your account. Please try again."
+        }
+    }
+
+    /// Apple half of the in-place upgrade, driven by the native
+    /// `SignInWithAppleButton` in the account prompt (use `prepareAppleRequest`
+    /// to set up the request). Same uid-preserving contract as `linkWithGoogle`.
+    func completeAppleLink(_ result: Result<ASAuthorization, Error>) async {
+        guard !isSigningIn else { return }
+        isSigningIn = true
+        defer { isSigningIn = false }
+        authError = nil
+
+        switch result {
+        case .failure(let error):
+            if let asError = error as? ASAuthorizationError, asError.code == .canceled { return }
+            authError = "Couldn't link your account. Please try again."
+        case .success(let authorization):
+            guard let appleCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let nonce = currentNonce,
+                  let tokenData = appleCredential.identityToken,
+                  let idToken = String(data: tokenData, encoding: .utf8) else {
+                authError = "Couldn't link your account. Please try again."
+                return
+            }
+            let credential = OAuthProvider.appleCredential(
+                withIDToken: idToken, rawNonce: nonce, fullName: appleCredential.fullName
+            )
+            do {
+                if let current = Auth.auth().currentUser {
+                    do {
+                        try await current.link(with: credential) // preserves uid
+                    } catch let error as NSError where error.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
+                        let existing = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
+                        try await Auth.auth().signIn(with: existing)
+                    }
+                } else {
+                    try await Auth.auth().signIn(with: credential)
+                }
+            } catch {
+                authError = "Couldn't link your account. Please try again."
+            }
+        }
+    }
+
     // MARK: - Session
 
     func signOut() {

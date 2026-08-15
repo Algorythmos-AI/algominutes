@@ -16,6 +16,9 @@ final class AppEnvironment {
     let audioSession: AudioSessionCoordinator
     let player: AudioPlayerService
     let transcripts: TranscriptRepository
+    /// A9.4/A9.5/A9.6 billing: entitlement, StoreKit, paywall + funnel. Views
+    /// bind to this for the trial banner, paywall, and account prompt.
+    let billing: BillingService
     /// A7.2 resumable/background uploader. Gated OFF by
     /// `AppFeatureFlags.backgroundResumableUpload`; `UploadService` stays the
     /// default path until this is verified on a device.
@@ -29,6 +32,10 @@ final class AppEnvironment {
 
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
+
+    /// Shown on a note that couldn't process because the user is out of quota
+    /// (A9.4). The paywall carries the actual upgrade path.
+    static let quotaMessage = "You've used up your included minutes. Upgrade to Pro to keep processing."
 
     /// Guards against a double-fired retry for the same note.
     private var retryInFlight = Set<String>()
@@ -48,6 +55,7 @@ final class AppEnvironment {
         self.audioSession = session
         self.player = AudioPlayerService(session: session, store: store)
         self.transcripts = TranscriptRepository(api: api)
+        self.billing = BillingService(api: api)
         self.backgroundUploads = BackgroundUploadService(store: store, api: api)
         startNetworkWatch()
     }
@@ -114,12 +122,17 @@ final class AppEnvironment {
         // and the request lands at the one moment its purpose is obvious. Asking
         // at launch gets denied, and iOS only ever asks once.
         Task { await RecordingNotifier.requestAuthorizationIfNeeded() }
+        // A9.6: the recorder is now actually capturing — the funnel's entry.
+        billing.onFirstRecordingStarted()
     }
 
     func startSession() {
         guard let user = auth.user, let wsId = auth.workspaceId else { return }
         notes.start(uid: user.uid, workspaceId: wsId)
         Task { await resumePendingUploads() }
+        // A9: load products + the server-resolved entitlement for this identity
+        // (works for anonymous guests too — the token is what matters).
+        Task { await billing.bootstrap() }
     }
 
     func endSession() {
@@ -277,6 +290,12 @@ final class AppEnvironment {
                 storagePath: storagePath,
                 mimeType: mimeType
             ))
+        } catch APIError.quotaExceeded {
+            // A9.4: out of included minutes. Present the paywall rather than a
+            // dead-end error; the recording is safe and can process once Pro.
+            AppLog.info("process_kickoff_quota_exceeded noteId=\(noteId)")
+            notes.markNoteError(id: noteId, message: Self.quotaMessage)
+            billing.onQuotaExceeded()
         } catch {
             AppLog.error("process_kickoff_failed: \(error.localizedDescription)")
             let message = type == .importAudio
@@ -420,6 +439,11 @@ final class AppEnvironment {
                 storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt
             ))
             return .queued
+        } catch APIError.quotaExceeded {
+            AppLog.info("reupload_kickoff_quota_exceeded noteId=\(noteId)")
+            notes.markNoteError(id: noteId, message: Self.quotaMessage)
+            billing.onQuotaExceeded()
+            return .blocked(message: Self.quotaMessage)
         } catch {
             AppLog.error("reupload_process_kickoff_failed: \(error.localizedDescription)")
             notes.markNoteError(id: noteId, message: "Could not start processing. Please try again.")

@@ -35,6 +35,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     usageCard
 
+                    subscriptionCard
+
                     OwllCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Link(destination: LegalLinks.webApp) {
@@ -167,6 +169,64 @@ struct SettingsView: View {
                     usageStat(value: "\(env.notes.notes.count)", unit: "", label: "Notes")
                 }
             }
+        }
+    }
+
+    /// Subscription status + entry points. The Restore button lives here (and on
+    /// the paywall) so it is always reachable, including for a guest who has not
+    /// created a permanent account — an App Review requirement.
+    @ViewBuilder
+    private var subscriptionCard: some View {
+        OwllCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("PLAN")
+                            .font(Typography.eyebrow())
+                            .tracking(1.4)
+                            .foregroundStyle(Theme.muted)
+                        Text(planLabel)
+                            .font(Typography.headline())
+                            .foregroundStyle(Theme.heading)
+                    }
+                    Spacer()
+                    if env.billing.entitlement?.state != .active {
+                        Button("Go Pro") { env.billing.presentPaywall(.manual) }
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.onInverse)
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Theme.inverse))
+                    }
+                }
+                Divider().overlay(Theme.borderSoft)
+                Button("Restore Purchases") {
+                    Task { await env.billing.store.restore(); await env.billing.refresh() }
+                }
+                .font(Typography.body(15))
+                .foregroundStyle(Theme.body)
+                if env.billing.entitlement?.state == .active {
+                    Divider().overlay(Theme.borderSoft)
+                    Button("Manage Subscription") {
+                        Task { await env.billing.store.showManageSubscriptions() }
+                    }
+                    .font(Typography.body(15))
+                    .foregroundStyle(Theme.body)
+                }
+            }
+        }
+    }
+
+    private var planLabel: String {
+        switch env.billing.entitlement?.state {
+        case .active?: return "Pro"
+        case .trialing?:
+            if let days = env.billing.trialDaysRemaining {
+                return "Free trial · \(days) day\(days == 1 ? "" : "s") left"
+            }
+            return "Free trial"
+        case .expired?, .freeFloor?: return "Free"
+        case .none: return "Free"
         }
     }
 
