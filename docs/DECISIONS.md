@@ -34,6 +34,18 @@ choices made during the automated A2/A3 run so they are auditable from the git l
 - **Client brand fonts (Rajdhani/Titillium) dropped** for a system font stack; **final hue, logo/wordmark
   art, and typeface are `TODO(brand)`** — no artwork generated, per instruction.
 
+## A6.9 — Accessibility
+
+- **Applied the safe, high-confidence fixes** (VoiceOver/ARIA labels on icon-only controls, one
+  Dynamic-Type fix, 10 touch-targets to 44pt/px across iOS + web) and **flagged contrast/layout for design**
+  rather than auto-changing brand tokens. Report: `docs/audits/A6.9-ACCESSIBILITY.md`.
+- **Contrast recommendation (needs brand sign-off, tied to the TODO(brand) hue):** the provisional accent
+  `#5B67F0` is 4.34:1 on the dark bg — **fine for large text/fills but below AA (4.5:1) for normal-size
+  text/links.** Recommended fix when the brand hue is set: reserve the accent for large text/fills and add
+  an `accentText` token (a lighter indigo, ~`#8B93F7`, ≥4.5:1 on `#0B0B10`); bump `placeholder`
+  (`#5A5D6E`, 3.02:1) to ~`#6E7183`. Not applied now — the final palette is a brand decision.
+- **Android TalkBack + Compose a11y deferred to B2** (no Compose app yet).
+
 ## A4 — Provision infrastructure (non-Apple)
 
 - **Nothing was provisioned live** — the automated session's gcloud identity (`skalaliya@gmail.com`) has
