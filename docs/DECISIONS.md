@@ -3,20 +3,35 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
-## OPEN decisions — for you to make (seams built either way, not decided)
+## DECIDED — A9.3 & A6.3 (2026-08-16)
 
-- **A6.3 — guest mode vs forced signup.** NOT decided. **Seam:** entitlement + usage_ledger are keyed by
-  a resolved `uid` that works identically for an anonymous (Firebase anonymous auth) or permanent account,
-  so either can be chosen without a schema change. **Tradeoff:** guest mode (record → see a summary before
-  creating an account) is one of the biggest conversion levers in this category, BUT you must design the
-  anonymous→permanent upgrade *now* or you inherit an orphaned-data migration; forced signup is a simpler
-  data model with higher first-run friction. If you choose guest mode, the remaining work is the
-  anonymous→permanent account-link flow (client) — the server data model already supports it.
-- **A9.3 — free trial vs perpetual free tier.** NOT decided. **Seam:** `subscriptions.trial_end` (present
-  iff a trial is granted) + status `trialing` + `PLAN_MONTHLY_INCLUDED_MINUTES.free = 120`; entitlement
-  honours whichever exists. **Tradeoff:** a trial forces a decision and converts harder (implement via
-  StoreKit 2 intro offers / Play free-trial offers, A9.4); a perpetual free tier grows word-of-mouth but
-  costs compute forever. Both are representable now; nothing in the code picks one.
+- **A9.3 — REVERSE TRIAL** (not freemium, not a plain trial). Day 1–7: full features, **no card**, on web
+  and mobile. After day 7: account drops to a thin **free floor** (habit-alive, not real work). **Pro
+  A$14.99/mo**, annual ≈ two months free (**A$149.90/yr**). Rationale: reverse trials convert ~24% median
+  vs ~4.5% freemium / ~14% opt-in trial; a perpetual free tier + a trial cancel out; competitors' generous
+  free tiers (Otter 300 min/mo, Fathom unlimited) mean a free tier is not a differentiator for an unbranded
+  product — the trial is. **`FREE_FLOOR_MINUTES` is DELIBERATELY UNSET** (config, loud TODO(A9-pricing)):
+  it depends on blended COGS/min which A11 measures; shipping a guessed number risks an unbounded bill, so
+  it **fails safe to 0 metered minutes until set**. Pro included minutes are config too.
+- **A6.3 — GUEST MODE with anonymous→permanent upgrade.** No card + full features for 7 days means a user
+  records and sees a summary before any account exists. Entitlement/ledger already key off a resolved uid
+  that works for anonymous (Firebase anonymous auth) or permanent accounts — and Firebase
+  `linkWithCredential` PRESERVES the uid, so upgrade loses no data and does not restart the trial. Prompt
+  for the account **at the moment of value (after the first summary)**, never at launch.
+
+  ⚠️ **Fragility flagged (see BLOCKERS):** no-account-for-7-days + anonymous means a reinstall with a fresh
+  anonymous uid can restart the trial. Server keys the trial to uid; binding it to a durable device signal
+  (iOS DeviceCheck/App Attest, Android Play Integrity) to stop reinstall-restart is a separate anti-abuse
+  decision — a `trial_device_hash` seam column exists but is not enforced.
+
+## A9.4 — App Review Guideline 3.1.3 (checked 2026-08-16)
+
+- **Current rule:** external-purchase links / web-pricing CTAs are allowed **only on the US storefront**
+  (no entitlement required there since 2025); other storefronts remain restricted, misleading price
+  comparisons are prohibited, and a button that visually mimics an IAP button triggers the full disclosure
+  flow. **Decision:** the **iOS paywall shows StoreKit pricing ONLY and never references web pricing**
+  (AlgoMinutes ships globally from AU; the permissive rule is US-only). Revisit per-storefront if we later
+  want to surface the cheaper web rail on iOS. Flagged to you rather than assumed.
 
 ## A7 — Reliability & async UX
 
