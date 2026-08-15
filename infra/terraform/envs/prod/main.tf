@@ -33,6 +33,10 @@ variable "region" {
   type    = string
   default = "australia-southeast1"
 }
+variable "db_edition" {
+  type    = string
+  default = "ENTERPRISE"
+}
 
 provider "google" {
   project = var.project_id
@@ -54,6 +58,7 @@ module "environment" {
 
   # Modest dedicated tier.
   db_tier                   = "db-custom-1-3840" # 1 vCPU / 3.75 GB
+  db_edition                = var.db_edition
   db_disk_size_gb           = 20
   db_point_in_time_recovery = true
   deletion_protection       = true

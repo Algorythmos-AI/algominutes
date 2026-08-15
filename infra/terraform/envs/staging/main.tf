@@ -32,6 +32,10 @@ variable "region" {
   type    = string
   default = "australia-southeast1"
 }
+variable "db_edition" {
+  type    = string
+  default = "ENTERPRISE"
+}
 
 provider "google" {
   project = var.project_id
@@ -51,8 +55,10 @@ module "environment" {
   project_number = var.project_number
   region         = var.region
 
-  # Smallest viable tiers.
+  # Smallest viable tiers. db-f1-micro is shared-core → requires ENTERPRISE
+  # edition (set in tfvars); ENTERPRISE_PLUS rejects it.
   db_tier                   = "db-f1-micro"
+  db_edition                = var.db_edition
   db_disk_size_gb           = 10
   db_point_in_time_recovery = false
   deletion_protection       = false
