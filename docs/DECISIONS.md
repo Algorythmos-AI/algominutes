@@ -3,6 +3,32 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A4 — Provision infrastructure (non-Apple)
+
+- **Nothing was provisioned live** — the automated session's gcloud identity (`skalaliya@gmail.com`) has
+  no access to `algominutes-staging`/`prod` (owned by `gcp-admin@algorythmos.com`). I did not authenticate
+  as another account. Safe default: author everything apply-ready and hand the apply to a `gcp-admin` shell.
+- **Infrastructure as Terraform, not imperative gcloud** (BUILD-PLAN §4.3). Idempotent, reviewable, one
+  `terraform apply` per env. Structure: a reusable `modules/environment` + thin `envs/{staging,prod}` callers.
+- **Cloud Run services are NOT in Terraform.** Their runtime service accounts, IAM, VPC connector and
+  Artifact Registry are; the service *deploys* (build → push → deploy) are per-service in A11 (§3.3 "own
+  deploy"). Terraform provisions the durable infra around them.
+- **VPC + private IP + serverless connector included** — required by the invariant "Vertex AI only from
+  Cloud Run behind the VPC connector; the public Gemini client does not work from there." Cloud SQL is
+  private-IP only.
+- **Staging tier differences** (mirror prod architecture at the smallest viable tier): Cloud SQL
+  `db-f1-micro`/10GB, PITR off, `deletion_protection` off, 7-day recordings-bucket lifecycle, Firestore
+  deletion allowed. **Prod:** dedicated `db-custom-1-3840`/20GB, PITR on, `deletion_protection` on, no
+  recordings lifecycle. Both ZONAL to start (REGIONAL HA is a later prod hardening).
+- **§4.6 circuit breaker fails OPEN on a meter-read error** — a broken cost meter logs loudly but does not
+  halt the whole product; the sustained-outage backstop is the budget alerts + monitoring. Trip on a real
+  over-cap read is hard (non-retryable). The spend reader is a stub (returns 0) until A9 wires
+  usage_ledger/COGS, so the breaker is present-and-wired but inert now.
+- **Budgets not managed in Terraform** — they already exist (INFRASTRUCTURE §4.4); recreating would
+  conflict. The prod-budget re-scope stays a manual open item.
+- **Firebase configs regenerated per env via the CLI** (runbook step 4), never copied from the client
+  project, and never committed (git-ignored).
+
 ## A6 — Generalise the product (credential-free parts)
 
 - **A6.1 templates:** removed the client `clinical` template; kept `general` + `actions_only`; added
