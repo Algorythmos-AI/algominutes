@@ -356,7 +356,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
             className="w-9 h-9 rounded-full flex items-center justify-center"
             style={{
               background: 'linear-gradient(135deg, #F2F7FF 0%, #DCEAFF 100%)',
-              color: '#0A84FF',
+              color: '#5B67F0',
             }}
           >
             <Square size={13} fill="currentColor" />
@@ -369,7 +369,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
             className="w-9 h-9 rounded-full flex items-center justify-center disabled:opacity-50"
             style={{
               background: 'linear-gradient(135deg, #F2F7FF 0%, #DCEAFF 100%)',
-              color: '#0A84FF',
+              color: '#5B67F0',
             }}
           >
             <Send size={16} />
