@@ -77,8 +77,12 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import type { Note, NoteType, Summary } from './types';
+import { DEFAULT_MAX_RECORDING_SECONDS } from '@algominutes/contracts';
 
-const MAX_RECORDING_SECONDS = 2 * 60 * 60; // 2-hour hard cap (Slater staff meetings run up to 2 h)
+// Per-recording cap is plan-derived config (A6.2), defined once in
+// @algominutes/contracts. Until entitlements resolve (A9), the web client uses
+// the default-tier cap. TODO(A9): read the signed-in user's plan cap.
+const MAX_RECORDING_SECONDS = DEFAULT_MAX_RECORDING_SECONDS;
 
 /**
  * Copy for the approaching-cap banner.
