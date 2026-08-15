@@ -64,7 +64,7 @@ For **each** project (`algominutes-staging`, `algominutes-prod`):
 firebase use algominutes-<env>
 # iOS app
 firebase apps:create ios "AlgoMinutes iOS" --bundle-id com.algorythmos.algominutes
-firebase apps:sdkconfig ios <APP_ID> --out apps/ios/Wassup/Resources/GoogleService-Info.plist   # gitignored
+firebase apps:sdkconfig ios <APP_ID> --out apps/ios/AlgoMinutes/Resources/GoogleService-Info.plist   # gitignored
 # Android app
 firebase apps:create android "AlgoMinutes Android" --package-name com.algorythmos.algominutes
 firebase apps:sdkconfig android <APP_ID> --out apps/android/app/google-services.json            # gitignored
