@@ -1,4 +1,77 @@
 {
-  "$comment": "TODO(i18n A6.7): externalise every user-facing string here (English v1.0, French next). Retrofitting i18n across three clients is miserable; strings land here as A6.4/A6.6 audit each surface.",
-  "app": { "name": "AlgoMinutes" }
+  "app": {
+    "name": "AlgoMinutes",
+    "tagline": "Record, transcribe, and get the minutes."
+  },
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "retry": "Retry",
+    "done": "Done",
+    "close": "Close",
+    "share": "Share",
+    "edit": "Edit",
+    "rename": "Rename",
+    "ok": "OK",
+    "continue": "Continue",
+    "back": "Back",
+    "next": "Next",
+    "skip": "Skip"
+  },
+  "nav": {
+    "home": "Home",
+    "files": "Files",
+    "chat": "Ask AI",
+    "settings": "Settings"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "signInWithApple": "Sign in with Apple",
+    "signInWithGoogle": "Continue with Google",
+    "signInFailed": "We couldn't sign you in. Please try again."
+  },
+  "recorder": {
+    "tapToStart": "Tap to record",
+    "recording": "Recording",
+    "paused": "Paused",
+    "stop": "Stop",
+    "capWarning": "{left} left — recording stops automatically at {capHours} hours",
+    "recordingFailed": "We couldn't start recording. Check microphone access and try again."
+  },
+  "states": {
+    "notesEmptyTitle": "No notes yet",
+    "notesEmptyBody": "Record your first meeting and AlgoMinutes will transcribe it and write the minutes.",
+    "loading": "Loading…",
+    "processing": "Processing your recording…",
+    "uploading": "Uploading…",
+    "ready": "Ready",
+    "failed": "Something went wrong"
+  },
+  "note": {
+    "transcript": "Transcript",
+    "summary": "Summary",
+    "actionItems": "Action items",
+    "keyDecisions": "Key decisions",
+    "untitled": "Untitled note",
+    "renameTitle": "Rename note"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "network": "You appear to be offline. We'll retry when you're back online.",
+    "uploadFailed": "Upload failed. We'll keep retrying — your recording is saved on this device.",
+    "transcodeFailed": "We couldn't process the audio. You can retry from the note.",
+    "summaryFailed": "The transcript is ready, but the summary failed. You can regenerate it.",
+    "exportFailed": "Export failed. Please try again.",
+    "quotaExceeded": "You've reached your plan's limit. Upgrade to keep recording."
+  },
+  "onboarding": {
+    "micExplainerTitle": "AlgoMinutes needs your microphone",
+    "micExplainerBody": "So it can record the meeting and turn it into minutes. Audio stays on your device until you choose to process it.",
+    "pushExplainerTitle": "Get notified when your notes are ready",
+    "pushExplainerBody": "Processing runs in the background. We'll let you know the moment your minutes are ready.",
+    "firstRecordingCta": "Record your first meeting",
+    "sampleNoteTitle": "Sample: Product sync"
+  }
 }

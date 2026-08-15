@@ -6,6 +6,7 @@
   "license": "UNLICENSED",
   "type": "module",
   "exports": {
+    ".": "./src/index.ts",
     "./tokens.json": "./tokens.json",
     "./strings/en.json": "./strings/en.json"
   }
