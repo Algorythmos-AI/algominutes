@@ -167,12 +167,28 @@ expensive AI pipeline while leaving the API serving.
 same region, same IAM shape — at the **smallest viable tier** of each. It is not a capacity test of
 production. Record tier differences in `docs/DECISIONS.md`.
 
-### 4.5 Services (A4) — ✍️ authored as apply-ready Terraform, ⏳ not yet applied
+### 4.5 Services (A4) — ✅ STAGING live · ⏳ prod authored, not applied
 
-**Status (15 Aug 2026):** the non-Apple infrastructure is authored as **Terraform** in
-`infra/terraform/` (modules/environment + envs/{staging,prod}); `terraform validate` passes both envs.
-**Nothing is live yet** — the provisioning session's gcloud identity lacked access to the org projects, so
-the apply must run from a `gcp-admin@algorythmos.com` shell. Steps: `docs/runbooks/gcp-provisioning.md`.
+**Status (15 Aug 2026):** infrastructure is authored as **Terraform** in `infra/terraform/`
+(modules/environment + envs/{staging,prod}); `terraform validate` passes both envs. Apply steps:
+`docs/runbooks/gcp-provisioning.md`; prod-specific notes: `docs/runbooks/prod-firebase-config.md`.
+
+- **`algominutes-staging`: ✅ APPLIED — 111 resources live** (`terraform apply` succeeded; Cloud SQL
+  `edition = ENTERPRISE`, see DECISIONS A4).
+- **`algominutes-prod`: ⏳ not yet applied.** Same Terraform, run from a `gcp-admin@algorythmos.com` shell.
+
+**Firebase — staging** (`algominutes-staging`):
+- Firebase enabled, **Blaze** (pay-as-you-go) plan.
+- **Google sign-in** enabled (support email `gcp-admin@algorythmos.com`). Apple sign-in pending the Team ID.
+- Apps registered: **Web** ("AlgoMinutes Web") and **Android** ("AlgoMinutes Android"). **iOS not
+  registered** — blocked on the Apple Team ID (`TODO(A4-apple)`).
+- Web appId `1:627101926311:web:3b656d832081e12b19ac82` · messagingSenderId `627101926311` (= project
+  number). Android `google-services.json` is on disk at `apps/android/app/` (git-ignored). The web apiKey
+  and full config live in `apps/web/.env` (git-ignored) — **not recorded here** (public but kept in .env).
+- **Firebase Analytics is NOT initialised** in the web client (no `getAnalytics()` call); the config's
+  `measurementId` is present but unused. Turning Analytics on is a deliberate A10 decision (privacy policy
+  + Data Safety), not a default — see DECISIONS.
+
 The §4.6 **daily-spend circuit breaker is implemented in code** (`packages/ai/src/spend-guard.cjs`, caps
 staging A$20 / prod A$200), wired into the transcoder + summarizer; its spend reader is stubbed until A9.
 
