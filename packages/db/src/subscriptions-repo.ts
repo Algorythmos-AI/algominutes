@@ -30,13 +30,33 @@ export async function getSubscription(uid: string): Promise<SubscriptionRow | nu
   return (rows[0] as SubscriptionRow) ?? null;
 }
 
+/** Has this device already consumed a reverse trial (under any uid)? (A10 #7) */
+export async function deviceHasPriorTrial(deviceHash: string): Promise<boolean> {
+  if (!isPostgresEnabled() || !deviceHash) return false;
+  const { rows } = await getPool().query(
+    `SELECT 1 FROM subscriptions WHERE trial_device_hash = $1 AND trial_started_at IS NOT NULL LIMIT 1`,
+    [deviceHash],
+  );
+  return rows.length > 0;
+}
+
 /**
- * Start the 7-day reverse trial for a user the first time they hit value. IDEMPOTENT:
- * if a row already exists it is returned unchanged — a reinstall (same uid) or a
- * second call never restarts the clock. Anonymous-reinstall-with-a-new-uid CAN still
- * restart (see BLOCKERS — device-bound anti-abuse is a flagged seam via deviceHash).
+ * Start the 7-day reverse trial the first time a user hits value. IDEMPOTENT:
+ * an existing row is returned unchanged — same-uid reinstall never restarts the clock.
+ *
+ * Anti-abuse (A10 #7 — closes A9 fragility #1): a FRESH trial is granted only if the
+ * eligibility gate passes; otherwise the account opens directly on the free floor
+ * (no trial), never a new 7 days:
+ *   - ios/android: a `deviceHash` (from DeviceCheck / Play Integrity) is REQUIRED,
+ *     and must not have trialed before. NOTE: the server currently TRUSTS the
+ *     client-sent hash — verifying the attestation token's authenticity with
+ *     Apple/Google is TODO(A4-apple)/(A11).
+ *   - web: an email on the account is REQUIRED (`emailPresent`).
  */
-export async function ensureTrial(uid: string, opts: { deviceHash?: string } = {}): Promise<SubscriptionRow> {
+export async function ensureTrial(
+  uid: string,
+  opts: { deviceHash?: string; platform?: 'ios' | 'android' | 'web'; emailPresent?: boolean } = {},
+): Promise<SubscriptionRow> {
   if (!isPostgresEnabled()) {
     return {
       uid, plan: DEFAULT_PLAN_ID, status: 'trialing', source: null, entitlement_state: 'trialing',
@@ -45,12 +65,36 @@ export async function ensureTrial(uid: string, opts: { deviceHash?: string } = {
       stripe_subscription_id: null, stripe_customer_id: null,
     };
   }
+  const existing = await getSubscription(uid);
+  if (existing) return existing; // never restart on same uid
+
+  // Eligibility gate for a FRESH trial.
+  let eligible = true;
+  if (opts.platform === 'web') {
+    eligible = opts.emailPresent === true; // web requires an email
+  } else if (opts.platform === 'ios' || opts.platform === 'android') {
+    eligible = !!opts.deviceHash && !(await deviceHasPriorTrial(opts.deviceHash)); // require + unused device
+  }
+  // Unknown platform (server-to-server / tests): default to eligible.
+
+  if (eligible) {
+    const { rows } = await getPool().query(
+      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, trial_device_hash)
+         VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval, $3)
+       ON CONFLICT (uid) DO NOTHING
+       RETURNING *`,
+      [uid, String(TRIAL_DAYS), opts.deviceHash ?? null],
+    );
+    return rows[0] ?? (await getSubscription(uid))!;
+  }
+
+  // Not eligible for a fresh trial → open on the free floor (no trial_end set).
   const { rows } = await getPool().query(
-    `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, trial_device_hash)
-       VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval, $3)
+    `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_device_hash)
+       VALUES ($1, 'free', 'active', 'free_floor', $2)
      ON CONFLICT (uid) DO NOTHING
      RETURNING *`,
-    [uid, String(TRIAL_DAYS), opts.deviceHash ?? null],
+    [uid, opts.deviceHash ?? null],
   );
   return rows[0] ?? (await getSubscription(uid))!;
 }

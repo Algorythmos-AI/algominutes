@@ -1,4 +1,5 @@
 // POST /v1/process — Phase 3 thin async kickoff.
+import crypto from 'node:crypto';
 //
 // Ported from functions/index.js `exports.processIntelligence`
 // (BUILD-PLAN §3.1: one HTTP surface). Validates the request, persists
@@ -214,7 +215,21 @@ export async function processIntelligenceRoute(req, res) {
   try {
     // A9.3 reverse trial auto-starts at first value (first metered action), not at
     // install — idempotent, so a same-uid reinstall never restarts the 7 days.
-    await ensureTrial(callerUid);
+    // A10 #7 anti-abuse: mobile must present a device-attestation token (hashed →
+    // trial_device_hash; a device that already trialed gets no fresh trial); web
+    // must have an email on the account. Failing the gate opens on the free floor,
+    // not a new 7 days. (Verifying the attestation token's authenticity with
+    // Apple/Google is TODO(A4-apple)/(A11) — the hash is trusted for now.)
+    const attToken = String(req.headers['x-device-attestation'] || '');
+    const devPlatform = String(req.headers['x-device-platform'] || '') || undefined;
+    const deviceHash = attToken
+      ? crypto.createHash('sha256').update(attToken).digest('hex')
+      : undefined;
+    await ensureTrial(callerUid, {
+      deviceHash,
+      platform: devPlatform,
+      emailPresent: !!req.authEmail,
+    });
     await assertCanMeter(callerUid, minutes);
     // Idempotent under Cloud Tasks / client retry: the UNIQUE idempotency_key
     // makes a replay a no-op, so we never double-charge a note's ingest.

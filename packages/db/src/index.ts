@@ -11,3 +11,4 @@ export * from './dead-letter-repo.js';
 export * from './push-tokens-repo.js';
 export * from './subscriptions-repo.js';
 export * from './analytics-repo.js';
+export * from './compliance-repo.js';
