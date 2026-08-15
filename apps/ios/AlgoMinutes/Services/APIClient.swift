@@ -67,6 +67,14 @@ final class APIClient: Sendable {
 
     private func post(path: String, body: [String: Any]) async throws -> [String: Any] {
         let req = try await request(path: path, body: body)
+        return try await perform(req)
+    }
+
+    /// Send a prepared request and decode the JSON dictionary, mapping the
+    /// shared error cases (quota, non-2xx). Extracted so `processAudio` can
+    /// build a request, inject the device-attestation headers, and reuse the
+    /// exact same send/parse path as `post`.
+    private func perform(_ req: URLRequest) async throws -> [String: Any] {
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -125,7 +133,20 @@ final class APIClient: Sendable {
         if let u = r.sourceUrl { body["sourceUrl"] = u }
         if let m = r.mimeType { body["mimeType"] = m }
         if let a = r.retryAttempt { body["retryAttempt"] = a }
-        return try await post(path: "api/process-audio", body: body)
+
+        // A10 #7: the process request is the trial kickoff. Bind it to the
+        // device with a DeviceCheck token so the server (which hashes it into
+        // trial_device_hash) can refuse a second fresh trial from the same
+        // device. Best-effort: an absent token just omits the header, and the
+        // server falls back to account-level trial checks.
+        // TODO(A4-apple): server-side DeviceCheck validation needs the Apple
+        // DeviceCheck key configured; the client half is wired here.
+        var req = try await request(path: "api/process-audio", body: body)
+        req.setValue(DeviceAttestationService.platformHeaderValue, forHTTPHeaderField: "X-Device-Platform")
+        if let token = await DeviceAttestationService.attestationToken() {
+            req.setValue(token, forHTTPHeaderField: "X-Device-Attestation")
+        }
+        return try await perform(req)
     }
 
     // MARK: - Resumable upload session (A7.2)
@@ -463,6 +484,67 @@ final class APIClient: Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    // MARK: - A10 compliance (terms, retention, support)
+    //
+    // Field names mirror packages/contracts/src/schemas/compliance.ts exactly:
+    //   AcceptTermsRequest, SetRetentionRequest, SupportRequest.
+
+    /// A10 #3: record timestamped acceptance of the Terms + Privacy Policy at
+    /// signup. The server stamps the time and stores (uid, versions). Idempotent
+    /// — safe to re-post; the caller only calls it when the accepted version has
+    /// changed. `platform` is fixed to "ios".
+    @discardableResult
+    func acceptTerms(
+        termsVersion: String,
+        privacyVersion: String,
+        appVersion: String? = nil
+    ) async throws -> [String: Any] {
+        var body: [String: Any] = [
+            "termsVersion": termsVersion,
+            "privacyVersion": privacyVersion,
+            "platform": "ios",
+        ]
+        if let appVersion { body["appVersion"] = appVersion }
+        return try await post(path: "v1/account/accept-terms", body: body)
+    }
+
+    /// A10 #5: set the note-retention window. `days == nil` means "keep until I
+    /// delete" (sent as JSON null, which the contract's nullable field accepts).
+    @discardableResult
+    func setRetention(days: Int?) async throws -> [String: Any] {
+        let body: [String: Any] = ["retentionDays": days ?? NSNull()]
+        return try await post(path: "v1/account/retention", body: body)
+    }
+
+    /// A10 #4 support kinds. Mirrors SupportRequest.kind.
+    enum SupportKind: String {
+        case contact
+        case badTranscript = "bad_transcript"
+        case badSummary = "bad_summary"
+    }
+
+    /// A10 #4: submit a support / feedback request with diagnostic context ONLY.
+    ///
+    /// NEVER attaches audio or transcript — `noteId` is a reference the server
+    /// uses to look up its own logs, not content the client uploads
+    /// (docs/STORE-COMPLIANCE.md §1). `appVersion`/`device` are non-sensitive
+    /// diagnostics.
+    @discardableResult
+    func submitSupport(
+        kind: SupportKind,
+        message: String? = nil,
+        noteId: String? = nil,
+        appVersion: String? = nil,
+        device: String? = nil
+    ) async throws -> [String: Any] {
+        var body: [String: Any] = ["kind": kind.rawValue, "platform": "ios"]
+        if let message, !message.isEmpty { body["message"] = message }
+        if let noteId { body["noteId"] = noteId }
+        if let appVersion { body["appVersion"] = appVersion }
+        if let device { body["device"] = device }
+        return try await post(path: "v1/support", body: body)
     }
 
     // MARK: - Billing (A9.4) + analytics (A9.6)

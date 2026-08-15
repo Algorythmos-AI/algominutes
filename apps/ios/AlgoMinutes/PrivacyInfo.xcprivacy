@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+	A10 #3 privacy manifest. MUST stay in sync with docs/STORE-COMPLIANCE.md §4.1
+	and the App Store Connect Nutrition Labels (§2). Analytics/tracking is OFF
+	(A6.9/A10 decision) — NSPrivacyTracking=false, tracking domains empty, no
+	Usage-Data / advertising-identifier types declared. Do NOT add analytics here.
+	TODO(A4-apple): validate this manifest against Apple's current required-reason
+	API list and the Privacy Report at build time (needs a signed build on the
+	Algorythmos team; can't be exercised in this environment).
+-->
 <dict>
 	<key>NSPrivacyTracking</key>
 	<false/>
@@ -44,6 +53,45 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
+		<!-- Transcripts + scanned text/images (STORE-COMPLIANCE §1 rows 2). -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- FCM push token — used only to notify when a note is ready (row 4). -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- Crash/diagnostic context via Crashlytics (row 5). Linked (carries uid). -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeCrashData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
@@ -61,6 +109,21 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
+			</array>
+		</dict>
+		<!--
+			RecorderService.freeDiskBytes reads volumeAvailableCapacityForImportant-
+			Usage to refuse a recording that would fill the disk. Declared with the
+			"display to user"/on-demand disk-space reason (STORE-COMPLIANCE §4.1).
+			TODO(A4-apple): confirm E174.1 vs 85F4.1 against Apple's current
+			required-reason list at submission.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
 			</array>
 		</dict>
 	</array>

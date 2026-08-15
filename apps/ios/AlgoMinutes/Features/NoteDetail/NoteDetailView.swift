@@ -14,6 +14,8 @@ struct NoteDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel = NoteDetailViewModel()
+    /// A10 #4: present the support composer for a "bad transcript" report.
+    @State private var reportingBadTranscript = false
 
     /// Re-derived every render rather than captured. The Firestore listener is
     /// the source of truth for the screen, so a mirror write — a status change,
@@ -242,6 +244,14 @@ struct NoteDetailView: View {
                 // account prompt (or the paywall if the trial is already over).
                 .onAppear {
                     env.billing.onFirstSummaryViewed(isGuest: env.auth.isAnonymous)
+                    // A10 #6: a successful summary is the value moment — ask for a
+                    // review here (rate-limited, once per version), never at launch.
+                    // Skipped while the account/paywall sheet is up so two prompts
+                    // don't stack.
+                    if note.summary != nil, note.status == .ready,
+                       !env.billing.isAccountPromptPresented, !env.billing.isPaywallPresented {
+                        AppReviewController.requestReviewIfAppropriate()
+                    }
                 }
         case .transcript:
             let lines = env.transcripts.displayLines(mirrored: note.transcript, for: note.id)
@@ -269,14 +279,20 @@ struct NoteDetailView: View {
             if !lines.isEmpty {
                 TranscriptRatingCard(
                     rating: viewModel.rating,
-                    isSaving: viewModel.isSavingRating
-                ) { stars in
-                    guard let workspaceId = env.auth.workspaceId else { return }
-                    viewModel.rate(stars, noteId: note.id, workspaceId: workspaceId, api: env.api) {
-                        env.alertMessage = $0
-                    }
-                }
+                    isSaving: viewModel.isSavingRating,
+                    onRate: { stars in
+                        guard let workspaceId = env.auth.workspaceId else { return }
+                        viewModel.rate(stars, noteId: note.id, workspaceId: workspaceId, api: env.api) {
+                            env.alertMessage = $0
+                        }
+                    },
+                    onReport: { reportingBadTranscript = true }
+                )
                 .padding(.top, Theme.Spacing.md)
+                .sheet(isPresented: $reportingBadTranscript) {
+                    SupportComposerView(kind: .badTranscript, noteId: note.id)
+                        .algoMinutesSheet([.medium, .large])
+                }
             }
         }
     }

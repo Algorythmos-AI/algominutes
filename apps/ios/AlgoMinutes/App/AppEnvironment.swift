@@ -13,6 +13,10 @@ final class AppEnvironment {
     let uploads: UploadService
     let recorder: RecorderService
     let recordingStore: RecordingStore
+    /// A10 §5 consent seam. Shared between the pre-recording notice UI
+    /// (`RecorderConsentFlow` calls `acknowledge()`) and the recorder (which
+    /// evaluates it in `RecorderService.start()`). See `docs/CONSENT.md`.
+    let consentGate: SessionConsentGate
     let audioSession: AudioSessionCoordinator
     let player: AudioPlayerService
     let transcripts: TranscriptRepository
@@ -50,7 +54,9 @@ final class AppEnvironment {
         self.uploads = UploadService()
         let store = RecordingStore()
         self.recordingStore = store
-        self.recorder = RecorderService(store: store)
+        let consentGate = SessionConsentGate()
+        self.consentGate = consentGate
+        self.recorder = RecorderService(store: store, consentGate: consentGate)
         let session = AudioSessionCoordinator()
         self.audioSession = session
         self.player = AudioPlayerService(session: session, store: store)
@@ -133,6 +139,35 @@ final class AppEnvironment {
         // A9: load products + the server-resolved entitlement for this identity
         // (works for anonymous guests too — the token is what matters).
         Task { await billing.bootstrap() }
+        // A10 #3: capture Terms + Privacy acceptance at account creation.
+        Task { await recordTermsAcceptanceIfNeeded() }
+    }
+
+    /// A10 #3: record timestamped Terms + Privacy acceptance for a permanent
+    /// account, once per (uid, version) pair.
+    ///
+    /// Fires when a real account exists — including the guest→permanent upgrade,
+    /// which is the moment a throwaway anonymous identity becomes one that has
+    /// agreed to the Terms (STORE-COMPLIANCE §8). A still-anonymous guest hasn't
+    /// created an account yet, so it's deferred until they do. Re-posts when the
+    /// document version bumps (`ComplianceContract.termsVersion`).
+    func recordTermsAcceptanceIfNeeded() async {
+        guard let user = auth.user, !user.isAnonymous else { return }
+        let key = "terms_accepted.\(user.uid)"
+        let acceptedTag = "\(ComplianceContract.termsVersion)|\(ComplianceContract.privacyVersion)"
+        guard UserDefaults.standard.string(forKey: key) != acceptedTag else { return }
+        do {
+            try await api.acceptTerms(
+                termsVersion: ComplianceContract.termsVersion,
+                privacyVersion: ComplianceContract.privacyVersion,
+                appVersion: DeviceInfo.appVersion
+            )
+            UserDefaults.standard.set(acceptedTag, forKey: key)
+            AppLog.info("terms_acceptance_recorded")
+        } catch {
+            // Non-fatal — retried on the next session. Do not block the app.
+            AppLog.error("terms_acceptance_failed: \(error.localizedDescription)")
+        }
     }
 
     func endSession() {
@@ -161,6 +196,9 @@ final class AppEnvironment {
         uploadProgress.removeAll()
         retryInFlight.removeAll()
         resumeInFlight.removeAll()
+        // Don't carry one user's recording-consent acknowledgement into the
+        // next user's session on a shared device.
+        consentGate.reset()
         let pending = recordingStore.allPending()
         if !pending.isEmpty {
             AppLog.error("sign_out_discarding_pending count=\(pending.count)")

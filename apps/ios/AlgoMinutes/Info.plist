@@ -38,11 +38,11 @@
 		<string>audio</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>AlgoMinutes records audio from this device so recordings and meetings can be transcribed and summarised for you.</string>
+	<string>AlgoMinutes records audio from your microphone only while you are recording a meeting or note. The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and is kept there until you delete it. Recording never starts on its own.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>AlgoMinutes uses the camera to scan text from documents and images.</string>
+	<string>AlgoMinutes uses the camera only when you choose to scan text from a document. The captured image is used to extract text into your notes and, if saved, is stored in your account until you delete it. It is never used for tracking or advertising.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>AlgoMinutes opens your photo library so you can choose an image to scan text from.</string>
+	<string>AlgoMinutes opens your photo library only when you pick an image to scan text from. Only the image you choose is read; it is used to extract text into your notes and is not scanned for any other purpose.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIAppFonts</key>

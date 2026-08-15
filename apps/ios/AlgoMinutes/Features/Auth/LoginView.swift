@@ -83,9 +83,16 @@ struct LoginView: View {
             }
             .padding(.horizontal, 24)
 
-            HStack(spacing: 16) {
-                Link("Privacy Policy", destination: LegalLinks.privacy)
-                Link("Terms of Service", destination: LegalLinks.terms)
+            // A10 #3: signing in creates the account and records timestamped
+            // acceptance of these documents (AppEnvironment.recordTermsAcceptanceIfNeeded).
+            VStack(spacing: 6) {
+                Text("By continuing you agree to our Terms of Service and Privacy Policy.")
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                HStack(spacing: 16) {
+                    Link("Privacy Policy", destination: LegalLinks.privacy)
+                    Link("Terms of Service", destination: LegalLinks.terms)
+                }
             }
             .font(Typography.body(12))
             .foregroundStyle(Theme.tertiary)

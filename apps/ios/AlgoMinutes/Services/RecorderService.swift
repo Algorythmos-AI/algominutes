@@ -91,8 +91,15 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
 
     private let store: RecordingStore
 
-    init(store: RecordingStore) {
+    /// A10 §5 SEAM: the consent decision evaluated before capture starts. v1.0's
+    /// gate is satisfied iff the per-session pre-recording notice was
+    /// acknowledged; the jurisdiction-aware §4 layer plugs in here later without
+    /// touching `start()`. See `docs/CONSENT.md`.
+    let consentGate: ConsentGate
+
+    init(store: RecordingStore, consentGate: ConsentGate = SessionConsentGate()) {
         self.store = store
+        self.consentGate = consentGate
         super.init()
     }
 
@@ -109,6 +116,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     enum RecorderError: LocalizedError {
         case permissionDenied
         case alreadyRecording
+        case consentNotSatisfied
         case sessionFailed(String)
         case startFailed(String)
         case insufficientStorage(freeMB: Int)
@@ -119,6 +127,8 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
                 return "Microphone permission is required to record audio. Please enable it in Settings."
             case .alreadyRecording:
                 return "A recording is already in progress"
+            case .consentNotSatisfied:
+                return "Please acknowledge the recording notice before you start."
             case .sessionFailed(let m):
                 return "Failed to configure audio session: \(m)"
             case .startFailed(let m):
@@ -146,6 +156,15 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     func start() async throws {
         guard recorder == nil else { throw RecorderError.alreadyRecording }
         guard await requestPermission() else { throw RecorderError.permissionDenied }
+
+        // SEAM (A10 §4, docs/CONSENT.md §5): the jurisdiction-aware consent
+        // layer plugs in here. v1.0 ships a gate whose only implementation is
+        // "the per-session consent checkbox in RecorderConsentFlow was ticked".
+        // §4 replaces the gate's body; this call site does not change. One gate,
+        // all paths — no capture path may start without passing it.
+        guard await consentGate.satisfied(for: .microphone) else {
+            throw RecorderError.consentNotSatisfied
+        }
 
         // Refuse up front rather than fail at minute 55. AVAudioRecorder's
         // encode error arrives partway through, and before the salvage path

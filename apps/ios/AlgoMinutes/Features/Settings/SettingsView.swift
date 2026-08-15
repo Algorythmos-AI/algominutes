@@ -62,6 +62,18 @@ struct SettingsView: View {
                         }
                     }
 
+                    // A10 #5: automatic note-retention window.
+                    RetentionSettingsCard()
+
+                    // A10 #4: static FAQ + contact support.
+                    OwllCard {
+                        NavigationLink {
+                            HelpSupportView()
+                        } label: {
+                            linkRow(label: "Help & Support", icon: "questionmark.circle")
+                        }
+                    }
+
                     OwllCard {
                         VStack(alignment: .leading, spacing: 14) {
                             infoRow(label: "Account", value: env.auth.user?.email ?? "—")
