@@ -28,6 +28,7 @@ import { clientErrorRoute } from './client-error.js';
 import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
+import { trackEventRoute } from './events.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
 
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
@@ -191,6 +192,8 @@ export function buildRouter() {
 
   // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
   router.get('/entitlement', authMiddleware, wrap(entitlementRoute));
+  // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
+  router.post('/events', authMiddleware, wrap(trackEventRoute));
 
   // ── A7.4 dead-letter admin view ── admin-dead-letters.js ────────────────
   // Operator-only: authMiddleware sets req.uid, adminMiddleware gates on the
