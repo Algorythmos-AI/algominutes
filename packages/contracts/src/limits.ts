@@ -45,3 +45,36 @@ export function monthlyIncludedMinutes(plan: PlanId = DEFAULT_PLAN_ID): number |
 // Entitlement is checked SERVER-SIDE on every metered action (A9.1) — never trust
 // the client. The check lives in @algominutes/db (entitlements.ts) over usage_ledger.
 
+// ── Reverse trial + pricing (A9.3, DECIDED) ─────────────────────────────────
+// Day 1–7: full features, no card (trial minutes = Pro's, to bound cost). After
+// day 7: the free floor.
+export const TRIAL_DAYS = 7;
+
+/** During the reverse trial a user gets Pro-level minutes (bounded, not unlimited). */
+export function trialIncludedMinutes(): number | null {
+  return PLAN_MONTHLY_INCLUDED_MINUTES.pro;
+}
+
+// ⚠️ FREE_FLOOR_MINUTES is DELIBERATELY UNSET (A9.3). The right number depends on
+// the blended COGS/min that A11 measures; shipping a guessed value risks an
+// unbounded bill. It therefore FAILS SAFE: `null` → 0 metered minutes on the free
+// floor until a real number is set here. TODO(A9-pricing): set after A11 COGS.
+export const FREE_FLOOR_MINUTES: number | null = null;
+
+/** Minutes on the post-trial free floor. Null config → 0 (fail safe). */
+export function freeFloorMinutes(): number {
+  return FREE_FLOOR_MINUTES == null ? 0 : FREE_FLOOR_MINUTES;
+}
+
+// Prices are config, not hardcoded in UI. Amounts in the store/Stripe are the
+// source of truth for charging; these drive display + must be kept in sync.
+export const PRICING = {
+  currency: 'AUD',
+  proMonthly: 14.99,
+  proAnnual: 149.9, // ≈ two months free
+  // TODO(A9-pricing): confirm the annual figure + store/Stripe product prices match.
+} as const;
+
+/** Entitlement lifecycle states (A9.3): trialing → active | (expired →) free_floor. */
+export type EntitlementState = 'trialing' | 'active' | 'expired' | 'free_floor';
+

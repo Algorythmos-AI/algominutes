@@ -87,14 +87,20 @@ export function noteDeepLink(noteId: string): string {
 }
 
 // ── A9.1 entitlement response (server-resolved, never trust the client) ───────
+export const EntitlementState = z
+  .enum(['trialing', 'active', 'expired', 'free_floor'])
+  .openapi('EntitlementState');
+
 export const EntitlementResponse = z
   .object({
+    state: EntitlementState, // A9.3 reverse-trial state
     plan: z.enum(['free', 'pro', 'team']),
     billingPeriod: z.string(), // YYYY-MM
     includedMinutes: z.number().nullable(), // null = per-seat/unmetered
     usedMinutes: z.number(),
     remainingMinutes: z.number().nullable(), // null when includedMinutes is null
     overQuota: z.boolean(),
+    trialEndsAt: z.string().nullable().optional(), // ISO; present while trialing
   })
   .openapi('EntitlementResponse');
 
