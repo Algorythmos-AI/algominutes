@@ -28,6 +28,16 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   conflict. The prod-budget re-scope stays a manual open item.
 - **Firebase configs regenerated per env via the CLI** (runbook step 4), never copied from the client
   project, and never committed (git-ignored).
+- **Staging is provisioned (15 Aug 2026).** `terraform apply` on `algominutes-staging` succeeded — 111
+  resources live. Firebase enabled (Blaze), Google sign-in on, Web + Android apps registered; iOS app not
+  registered (pending Apple Team ID). Prod is authored but not yet applied.
+- **Web Firebase config lives in `apps/web/.env`** (git-ignored), read via `import.meta.env.VITE_FIREBASE_*`
+  in `firebase.ts` and `VITE_API_BASE_URL` in `apiUrl.ts`. All 8 vars align with `.env.example` — no
+  missing/extra. The apiKey is a public domain-restricted client key but is kept out of git and out of
+  INFRASTRUCTURE.md; `.env` is the single place for it. Per-env values never shared (prod regenerates).
+- **Firebase Analytics is deliberately OFF in the web client.** No `getAnalytics()` call exists; the
+  config's `measurementId` is present but unused, so no analytics data is collected. Turning it on is an
+  A10 decision (privacy policy + store Data Safety), not a default. Recorded so it stays a choice.
 - **Cloud SQL `edition` pinned to `ENTERPRISE` (both envs), set in tfvars.** The first staging apply failed
   — Google now defaults new Postgres instances to `ENTERPRISE_PLUS`, which rejects shared-core tiers
   (`db-f1-micro`). Added a `db_edition` module variable (default `ENTERPRISE`, validated to the two allowed

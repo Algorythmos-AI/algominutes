@@ -12,22 +12,27 @@ run; each item has a safe reversible default already applied. Grouped by type.
 - [ ] **Rotate the exposed Gemini API key + purge source history** (EXTRACTION-AUDIT §5). Source-side,
       in `~/src/wasssup-meeting`; not touched by this run.
 
-## 2. A4 provisioning — needs a `gcp-admin` shell to apply
+## 2. A4 provisioning
 
-The non-Apple A4 infra is authored apply-ready (Terraform in `infra/terraform/`, runbook in
-`docs/runbooks/gcp-provisioning.md`) but **nothing is live** — the session's gcloud identity
-(`skalaliya@gmail.com`) has no access to the org projects. To make it live:
+**Staging: ✅ DONE** — `terraform apply` live (111 resources), Firebase enabled (Blaze), Google sign-in on,
+Web + Android apps registered, `apps/web/.env` + `apps/android/app/google-services.json` wired (both
+git-ignored). **Prod: ⏳ pending.** Remaining, all from a `gcp-admin@algorythmos.com` shell:
 
-- [ ] From a shell authed as **`gcp-admin@algorythmos.com`**: bootstrap the two state buckets, then
-      `terraform apply` in `infra/terraform/envs/staging` then `.../prod` (runbook §1–2).
-- [ ] **Regenerate Firebase configs per env** via the Firebase CLI (runbook §4) — iOS plist, Android json,
-      web config. Never copy the client's; they stay git-ignored.
-- [ ] Enable Firebase Auth providers (Google now; **Apple needs the Team ID — A4-apple**).
-- [ ] Run migrations against each Cloud SQL instance (runbook §6).
-- [ ] **Re-scope `algominutes-prod-budget`** to the prod project only (INFRASTRUCTURE open item).
+- [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
+      `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).
+- [ ] **Prod Firebase:** enable Firebase (Blaze), Google sign-in, register Web + Android apps, download a
+      **fresh** `google-services.json` + create a **prod** `apps/web/.env` — never reuse staging's values
+      (runbook `prod-firebase-config.md`).
+- [ ] **Run migrations** against the staging Cloud SQL now (it's live) and prod after apply (runbook §6).
+- [ ] **Re-scope `algominutes-prod-budget`** from the whole billing account to the prod project only
+      (INFRASTRUCTURE open item #2 — still outstanding).
 - [ ] Confirm the domain registrar for `algominutes.com` / `.com.au` (INFRASTRUCTURE §6 TODO).
-- **Still Apple-blocked (`TODO(A4-apple)`):** Apple Team ID (→ iOS Firebase app + App Store Connect) and
-  the Android upload keystore (Track B). Left untouched, as instructed.
+- **iOS Firebase app pending the Apple Team ID (`TODO(A4-apple)`)** — can't register the iOS app or
+  download `GoogleService-Info.plist` until enrolment completes. Android upload keystore also pending
+  (Track B). Left untouched, as instructed.
+- Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes
+  `https://wassup-meeting.web.app` as the prod API origin — a client reference to replace at rename time,
+  and the web currently ignores `VITE_API_BASE_URL` on local/capacitor hosts in favour of it.
 
 See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
