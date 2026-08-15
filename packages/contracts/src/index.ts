@@ -4,6 +4,7 @@
 // the api service. After editing a schema, run `npm run openapi && npm run
 // models` so the OpenAPI doc and the generated Swift/Kotlin models stay in sync.
 export * from './version';
+export * from './limits';
 export * from './schemas';
 
 // The OpenAPI builder is exported for the api service (to serve /openapi.json)

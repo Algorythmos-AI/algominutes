@@ -8,10 +8,13 @@ import UIKit
 @Observable
 @MainActor
 final class RecorderService: NSObject, AVAudioRecorderDelegate {
-    // 2-hour cap: Dr Slater's staff meetings at Integrant run up to 2 hours.
-    // A full 2-hour recording at 64 kbps AAC is ~57 MB — inside the 120 MB
-    // storage-rules limit for the recordings path. Warn 5 minutes before cap.
-    static let maxRecordingSeconds = 7200
+    // Per-recording cap — plan-derived config (A6.2). Mirrors
+    // DEFAULT_MAX_RECORDING_SECONDS in @algominutes/contracts (the single source);
+    // Swift can't import the TS const, so it is duplicated here with a TODO to
+    // read the signed-in user's plan cap once entitlements land (A9).
+    // A full 2-hour recording at 64 kbps AAC is ~57 MB. Warn 5 minutes before cap.
+    // TODO(A9): source this from the user's plan entitlement, not a constant.
+    static let maxRecordingSeconds = 2 * 60 * 60
     static let warnAfterSeconds = maxRecordingSeconds - 300
 
     private(set) var isRecording = false
