@@ -36,6 +36,35 @@ git-ignored). **Prod: ⏳ pending.** Remaining, all from a `gcp-admin@algorythmo
 
 See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
+## A10 launch blockers — needs YOU (legal / brand / infra)
+
+**Legal (`TODO(legal)`) — highest priority, blocks the consent layer + listings:**
+- [ ] **State-by-state / export-market recording-consent opinion** — NOT commissioned. Blocks the full
+      consent layer (jurisdiction, per-participant log, audible announcement). The seam is built; the rules
+      must not be guessed.
+- [ ] **Terms of Service + Privacy Policy** drafting/review — must be linked from both store listings, the
+      consent notice, the deletion page, and signup. Blocking.
+- [ ] UGC/moderation applicability + final age rating; MediaProjection justification vs current Play policy;
+      any billing/tax minimum-retention obligation; confirm the 30-day retention figure so the plist,
+      policy, and deletion page all match.
+
+**Brand (`TODO(brand)`):**
+- [ ] All store imagery (screenshots, icon, feature graphic, app-preview video) — blocks the listing.
+- [ ] The public deletion-page domain + a support/privacy email address — blocks Play submission.
+
+**Infra (`TODO(A11)`):**
+- [ ] Cloud SQL PITR + Storage lifecycle/version expiry ≤30 days (makes the deletion promise true) + Cloud
+      Logging retention; the scheduled retention-enforcer + trial-expiry sweep jobs.
+- [ ] Server-side attestation verification (DeviceCheck key / Play Integrity) so the #7 device hash is
+      trusted, not just accepted; needs a real device to verify end-to-end.
+
+**Engineering follow-ups (no external input):**
+- [ ] Consolidate the two account-deletion paths (legacy Settings modal → Cloud Function vs new
+      `/delete-account` page → `/v1/account/delete`) onto one.
+- [ ] Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
+      without them).
+- [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7).
+
 ## 3. Business/engineering decisions deferred (safe default applied)
 
 Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to revisit:

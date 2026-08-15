@@ -3,6 +3,39 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A10 — Launch blockers (diarisation skipped — its own scoped run)
+
+- **Share links SHIP ON.** All four hardening requirements verified met: token stored as sha256 hash
+  (plaintext `token` dropped, 006), `expires_at` NOT NULL, `revoked_at` + revoke path, robots.txt
+  Disallow. The one real gap — the `/s/**` PAGE had no noindex (firebase.json has no headers block; the
+  robots.txt comment claimed one that never existed) — was CLOSED: in-app `<meta robots noindex>` on the
+  shared-note page (host-agnostic control), `apps/web/vercel.json` X-Robots-Tag on `/s/**`, and the API
+  `/v1/shares/read` already sends X-Robots-Tag + no-store. Read path hashes the token, checks
+  revoked/expiry, logs outcome to `share_access_log`.
+- **Consent (conservative default + seam only).** v1.0 never auto-records; a per-session, plain-English
+  pre-recording notice must be acknowledged; the recorder consults a single `ConsentGate` right after the
+  permission check (iOS + Android), so the full layer swaps only the gate body — no recorder rewrite. The
+  full jurisdiction/per-participant-log/audible-announcement layer is `TODO(legal)` and was NOT implemented
+  or guessed (opinion not commissioned).
+- **Store compliance.** PrivacyInfo/Apple labels/Play Data Safety declare analytics/tracking = NONE (the A6
+  decision), not the default. Permission strings rewritten to specific what/why/where. Account deletion has
+  TWO paths for now: the legacy Settings modal (Cloud Function) kept behaviour-preserving + the new public
+  `/delete-account` page (Play-required) → `/v1/account/delete`; consolidate to one path later. Age
+  ratings recommended (Apple 4+ pending UGC review, Play "Everyone"). Timestamped Terms+Privacy acceptance
+  at signup (versioned).
+- **Data retention.** User-set retention (`RETENTION_OPTIONS_DAYS` + keep-until-delete default); a stated
+  30-day backup-propagation window (cap Cloud SQL PITR + Storage lifecycle ≤30d so deletion ages out rather
+  than editing backups); local device audio purged only on confirmed upload. Enforcer job + backup config
+  are `TODO(A11)`.
+- **Store listing** = distribution: summary-first screenshot plan, keyword research, demo outline, ratings
+  prompt after a viewed successful summary (never launch). Draft copy only; imagery `TODO(brand)`.
+- **#7 trial anti-abuse (closes A9 fragility #1).** Server enforces: mobile needs a device-attestation hash
+  (unused device → fresh trial; else free floor), web needs an account email. Client tokens: iOS DeviceCheck,
+  Android Play Integrity (stub, no fake token). The attestation token's AUTHENTICITY verification is
+  `TODO(A4-apple)/(A11)` — the server trusts the client hash for now.
+- **Analytics events NOT extended** for support/terms/retention/deletion (the `AnalyticsEvent` enum lacks
+  them; the A9.6 conversion funnel is complete). Adding those event names + emit calls is a small follow-up.
+
 ## DECIDED — A9.3 & A6.3 (2026-08-16)
 
 - **A9.3 — REVERSE TRIAL** (not freemium, not a plain trial). Day 1–7: full features, **no card**, on web
