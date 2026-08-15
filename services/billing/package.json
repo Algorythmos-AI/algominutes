@@ -1,0 +1,25 @@
+{
+  "name": "@algominutes/billing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes billing service (BUILD-PLAN §3.2, A9.4/A9.5): server-side receipt validation (StoreKit 2 / Play), Stripe Checkout + Billing Portal, and the PUBLIC store/Stripe webhooks that are the ONLY source of a paid entitlement. Separate scaling pool from user traffic; entitlement is written once per uid through @algominutes/db.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "tsx src/index.js",
+    "dev": "tsx watch src/index.js"
+  },
+  "dependencies": {
+    "@algominutes/ai": "*",
+    "@algominutes/db": "*",
+    "express": "^4.21.2",
+    "firebase-admin": "^13.8.0",
+    "googleapis": "^144.0.0",
+    "stripe": "^17.5.0",
+    "tsx": "^4.21.0"
+  }
+}
