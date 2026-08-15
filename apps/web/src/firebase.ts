@@ -6,6 +6,7 @@ import {
   browserSessionPersistence,
   inMemoryPersistence,
   browserPopupRedirectResolver,
+  signInAnonymously,
 } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
@@ -46,3 +47,25 @@ export const auth = initializeAuth(app, {
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app);
+
+// ── A6.3 guest identity ──────────────────────────────────────────────────────
+// Guest mode: a visitor can record/see a summary before any account. We back
+// that with a Firebase *anonymous* user so every request is still authed and,
+// crucially, the uid is stable — an "upgrade" later attaches Google to this
+// SAME uid via linkWithCredential (see lib/guestAuth.ts), so nothing the guest
+// created is orphaned. The prompt to upgrade is shown AFTER the first summary,
+// never at launch.
+let anonInFlight: Promise<void> | null = null;
+export async function ensureAnonymousIdentity(): Promise<void> {
+  if (auth.currentUser) return;
+  // Coalesce concurrent callers: onAuthStateChanged(null) can race an explicit
+  // bootstrap call, and we must never open two anonymous sessions.
+  if (!anonInFlight) {
+    anonInFlight = signInAnonymously(auth)
+      .then(() => undefined)
+      .finally(() => {
+        anonInFlight = null;
+      });
+  }
+  return anonInFlight;
+}

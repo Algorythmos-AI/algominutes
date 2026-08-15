@@ -1,6 +1,8 @@
 import { Capacitor, CapacitorHttp } from './native-shim/core';
 import { auth } from '../firebase';
 import { apiUrl } from './apiUrl';
+import { reportCrash } from './crashReport';
+import type { EntitlementResponse } from '@algominutes/contracts';
 
 /**
  * Called when the backend rejects our token twice in a row.
@@ -16,6 +18,41 @@ export function setAuthExpiredHandler(fn: (() => void) | null): void {
   onAuthExpired = fn;
 }
 
+/**
+ * Called when any metered endpoint rejects with 402 `quota_exceeded` (A9.5).
+ * The reverse-trial floor is enforced server-side; the client's job is only to
+ * surface the paywall with the entitlement the server returned. Wired from
+ * App.tsx so the fetch layer stays UI-agnostic — mirrors setAuthExpiredHandler.
+ */
+let onQuotaExceeded: ((entitlement: EntitlementResponse | null) => void) | null = null;
+export function setQuotaExceededHandler(
+  fn: ((entitlement: EntitlementResponse | null) => void) | null,
+): void {
+  onQuotaExceeded = fn;
+}
+
+/**
+ * A 402 from any metered call means the reverse-trial floor was hit. Parse the
+ * body (cloned, so the caller still gets an intact Response), and if it carries
+ * the `quota_exceeded` marker, hand the returned entitlement to the paywall
+ * handler. Always returns the original response unchanged.
+ */
+async function maybeSurfaceQuota(resp: Response): Promise<Response> {
+  if (resp.status !== 402) return resp;
+  try {
+    const data = (await resp.clone().json()) as
+      | { error?: string; code?: string; entitlement?: EntitlementResponse }
+      | null;
+    const marker = data?.error ?? data?.code;
+    if (marker === 'quota_exceeded') {
+      onQuotaExceeded?.(data?.entitlement ?? null);
+    }
+  } catch (err) {
+    reportCrash('quota_response_parse_failed', err);
+  }
+  return resp;
+}
+
 // Same-origin POST with the user's Firebase ID token attached. Throws
 // if no user is signed in, since every backend endpoint requires auth.
 export async function authedFetch(
@@ -24,7 +61,7 @@ export async function authedFetch(
   signal?: AbortSignal,
 ): Promise<Response> {
   const resp = await requestOnce(path, body, signal, false);
-  if (resp.status !== 401) return resp;
+  if (resp.status !== 401) return maybeSurfaceQuota(resp);
 
   // A single 401 is not proof the session is dead — the cached token may have
   // simply expired. Force a refresh and try once more before concluding
@@ -36,7 +73,7 @@ export async function authedFetch(
     console.error(`[api] authedFetch:401_after_refresh path=${path} — session is not recoverable`);
     onAuthExpired?.();
   }
-  return retry;
+  return maybeSurfaceQuota(retry);
 }
 
 async function requestOnce(
