@@ -10,6 +10,8 @@ struct NoteErrorPane: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.heading)
+                // Decorative — the "Processing failed" heading below carries the meaning.
+                .accessibilityHidden(true)
             Text("Processing failed")
                 .font(Typography.heading(18, weight: .bold))
                 .foregroundStyle(Theme.heading)

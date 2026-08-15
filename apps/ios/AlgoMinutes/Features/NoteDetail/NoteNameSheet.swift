@@ -55,6 +55,9 @@ struct NoteNameSheet: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(Theme.tertiary)
+                            // 44pt hit target (tokens a11y.minTouchTargetPx) — the glyph alone is ~17pt.
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Clear name")
                 }

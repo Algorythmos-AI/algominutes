@@ -2379,22 +2379,39 @@ export default function App() {
       {/* ── Bottom nav ── */}
       <nav className="owll-nav fixed bottom-0 w-full flex justify-around items-center py-4 px-6 z-40">
         {[
-          { id: 'home',   Icon: Home,           tab: 'home'   },
-          { id: 'folder', Icon: Folder,         tab: 'folder' },
-          { id: 'search', Icon: Search,         tab: 'search' },
-          { id: 'chat',   Icon: MessageSquare,  tab: 'chat'   },
-        ].map(({ id, Icon, tab }) => (
-          <button key={id} id={`nav-${id}`} onClick={() => setActiveTab(tab)} className="flex flex-col items-center">
+          { id: 'home',   Icon: Home,           tab: 'home',   label: 'Home'   },
+          { id: 'folder', Icon: Folder,         tab: 'folder', label: 'Files'  },
+          { id: 'search', Icon: Search,         tab: 'search', label: 'Search' },
+          { id: 'chat',   Icon: MessageSquare,  tab: 'chat',   label: 'Ask AI' },
+        ].map(({ id, Icon, tab, label }) => (
+          <button
+            key={id}
+            id={`nav-${id}`}
+            onClick={() => setActiveTab(tab)}
+            aria-label={label}
+            aria-current={activeTab === tab ? 'page' : undefined}
+            className="flex flex-col items-center justify-center"
+            style={{ minWidth: 44, minHeight: 44 }}
+          >
             <Icon
               size={26}
+              aria-hidden="true"
               fill={activeTab === tab ? 'currentColor' : 'none'}
               style={{ color: activeTab === tab ? '#FFFFFF' : '#5C5856', transition: 'color 0.18s' }}
             />
           </button>
         ))}
-        <button id="nav-settings" onClick={() => setActiveTab('settings')} className="flex flex-col items-center">
+        <button
+          id="nav-settings"
+          onClick={() => setActiveTab('settings')}
+          aria-label="Settings"
+          aria-current={activeTab === 'settings' ? 'page' : undefined}
+          className="flex flex-col items-center justify-center"
+          style={{ minWidth: 44, minHeight: 44 }}
+        >
           <Settings
             size={26}
+            aria-hidden="true"
             fill={activeTab === 'settings' ? 'currentColor' : 'none'}
             style={{ color: activeTab === 'settings' ? '#FFFFFF' : '#5C5856', transition: 'color 0.18s' }}
           />

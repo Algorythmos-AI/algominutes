@@ -188,6 +188,9 @@ struct ChatView: View {
                     .foregroundStyle(canSend ? Theme.heading : Theme.tertiary)
             }
             .disabled(!canSend)
+            // 44pt hit target (tokens a11y.minTouchTargetPx) — the glyph is 32pt.
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .accessibilityLabel("Send message")
         }
         .padding(.horizontal, 16)

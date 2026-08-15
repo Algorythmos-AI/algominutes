@@ -359,7 +359,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
               color: '#5B67F0',
             }}
           >
-            <Square size={13} fill="currentColor" />
+            <Square size={13} fill="currentColor" aria-hidden="true" />
           </button>
         ) : (
           <button
@@ -372,7 +372,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
               color: '#5B67F0',
             }}
           >
-            <Send size={16} />
+            <Send size={16} aria-hidden="true" />
           </button>
         )}
       </form>

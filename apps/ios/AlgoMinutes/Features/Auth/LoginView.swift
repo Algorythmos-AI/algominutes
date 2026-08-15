@@ -46,9 +46,10 @@ struct LoginView: View {
                 } label: {
                     HStack {
                         Image(systemName: "g.circle.fill")
-                        Text("Sign in with Google")
+                        Text("Sign in with Google")  // TODO(i18n): tokens key auth.signInWithGoogle
                     }
-                    .font(.system(size: 17, weight: .semibold))
+                    // Scalable label (Dynamic Type) — matches SignInWithAppleButton, which scales its own text.
+                    .font(Typography.label(17))
                     .foregroundStyle(Theme.heading)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)

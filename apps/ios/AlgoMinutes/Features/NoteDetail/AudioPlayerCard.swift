@@ -76,6 +76,9 @@ struct AudioPlayerCard: View {
         }
         .buttonStyle(CardButtonStyle())
         .disabled(!isCurrent)
+        // 44pt hit target (tokens a11y.minTouchTargetPx) — the glyph is ~22pt.
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
         .accessibilityLabel(seconds < 0 ? "Back 5 seconds" : "Forward 5 seconds")
     }
 
@@ -90,6 +93,9 @@ struct AudioPlayerCard: View {
                 .overlay(Capsule().stroke(Theme.outline, lineWidth: 1))
         }
         .buttonStyle(CardButtonStyle())
+        // 44pt hit target (tokens a11y.minTouchTargetPx) — the pill is shorter than 44pt.
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
         .accessibilityLabel("Playback speed \(player.speed.label)")
     }
 
