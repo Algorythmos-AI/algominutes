@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@algominutes/ai": "*",
+    "@algominutes/contracts": "*",
     "@algominutes/db": "*",
     "@google/genai": "^1.29.0",
     "cors": "^2.8.6",

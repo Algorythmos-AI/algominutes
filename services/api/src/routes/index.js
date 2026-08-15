@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 
 import { authMiddleware } from '../middleware/auth.js';
+import { adminMiddleware } from '../middleware/admin.js';
 
 // server.ts-derived routes (ESM).
 import { processAudioRoute } from './process-audio.js';
@@ -22,6 +23,12 @@ import { regenerateSummaryRoute } from './regenerate-summary.js';
 import { shareCreateRoute, shareRevokeRoute } from './shares.js';
 import { noteFeedbackRoute } from './note-feedback.js';
 import { clientErrorRoute } from './client-error.js';
+
+// A7 async-UX + reliability and A9 entitlement routes (ESM).
+import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
+import { registerPushTokenRoute } from './push-register.js';
+import { entitlementRoute } from './entitlement.js';
+import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
 
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
 import noteReadModule from './note-read.cjs';
@@ -173,6 +180,23 @@ export function buildRouter() {
   // (see app.js) so a crashing client can always report. Nothing touches
   // Postgres; every field is length-capped before it reaches the log.
   router.post('/client-error', wrap(async (req, res) => clientErrorRoute(req, res)));
+
+  // ── A7.2 resumable uploads ── services/api/src/routes/uploads.js ────────
+  router.post('/uploads', authMiddleware, wrap(createUploadSessionRoute));
+  router.get('/uploads/:uploadId', authMiddleware, wrap(getUploadStatusRoute));
+  router.post('/uploads/:uploadId/complete', authMiddleware, wrap(completeUploadRoute));
+
+  // ── A7.3 POST /v1/push/register ── push-register.js ─────────────────────
+  router.post('/push/register', authMiddleware, wrap(registerPushTokenRoute));
+
+  // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
+  router.get('/entitlement', authMiddleware, wrap(entitlementRoute));
+
+  // ── A7.4 dead-letter admin view ── admin-dead-letters.js ────────────────
+  // Operator-only: authMiddleware sets req.uid, adminMiddleware gates on the
+  // ADMIN_UIDS allowlist (see middleware/admin.js).
+  router.get('/admin/dead-letters', authMiddleware, adminMiddleware, wrap(listDeadLettersRoute));
+  router.post('/admin/dead-letters/:id/resolve', authMiddleware, adminMiddleware, wrap(resolveDeadLetterRoute));
 
   return router;
 }

@@ -27,6 +27,12 @@ import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 
+// A9.2 metered-minutes gate — assert quota and charge the ledger BEFORE any paid
+// transcode work is queued. resolveEntitlement/assertCanMeter/meterMinutes all
+// live in the @algominutes/db repo layer (never trust the client for quota).
+import { assertCanMeter, meterMinutes, QuotaExceededError } from '@algominutes/db';
+import { toEntitlementResponse } from './entitlement.js';
+
 const { MAX_AUDIO_BYTES, isValidId, publicErrorFor, enforceUsageBudget } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
 const { enqueueTask } = cloudTasksModule;
@@ -149,12 +155,13 @@ export async function processIntelligenceRoute(req, res) {
   const noteRef = db.doc(`workspaces/${workspaceId}/notes/${noteId}`);
 
   // ── Idempotency & ownership (cheap; before rate limit) ────
+  let noteData = null;
   try {
     const noteSnap = await noteRef.get();
     if (!noteSnap.exists) return res.status(404).json({ error: 'Note not found' });
-    const note = noteSnap.data();
-    if (note.authorId !== callerUid) return res.status(403).json({ error: 'Not your note' });
-    if (note.status === 'ready') return res.json({ success: true, noteId, cached: true });
+    noteData = noteSnap.data();
+    if (noteData.authorId !== callerUid) return res.status(403).json({ error: 'Not your note' });
+    if (noteData.status === 'ready') return res.json({ success: true, noteId, cached: true });
   } catch (err) {
     log.error({ err }, 'ownership_check_failed');
     return res.status(500).json({ error: 'Ownership check failed' });
@@ -191,6 +198,44 @@ export async function processIntelligenceRoute(req, res) {
       .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:rate_limit_mirror'));
     log.warn({ reason: err.message, bytes: probedSize }, 'usage_budget_exceeded');
     return res.status(429).json({ error: userMsg });
+  }
+
+  // ── A9.2 metered-minutes quota gate ───────────────────────
+  // Enforced SERVER-SIDE before any paid transcode work is queued: rejecting
+  // over-quota work AFTER paying Google for STT is the expensive mistake. The
+  // duration is the client's estimate at ingest (the transcoder's ffprobe is
+  // the authoritative measure later); billing rounds partial minutes up.
+  const durationSecEstimate = Number(
+    req.body?.durationSec ?? req.body?.duration ?? noteData?.duration ?? noteData?.durationSec ?? 0,
+  );
+  const minutes = Number.isFinite(durationSecEstimate) && durationSecEstimate > 0
+    ? Math.ceil(durationSecEstimate / 60)
+    : 0;
+  try {
+    await assertCanMeter(callerUid, minutes);
+    // Idempotent under Cloud Tasks / client retry: the UNIQUE idempotency_key
+    // makes a replay a no-op, so we never double-charge a note's ingest.
+    await meterMinutes({
+      uid: callerUid,
+      workspaceId,
+      noteId,
+      minutes,
+      reason: 'ingest',
+      idempotencyKey: `${noteId}:ingest`,
+    });
+  } catch (err) {
+    // instanceof is the intent; the code check is the cross-realm fallback
+    // (a QuotaExceededError thrown from another module copy still matches).
+    if (err instanceof QuotaExceededError || err?.code === 'QUOTA_EXCEEDED') {
+      log.warn({ minutes, plan: err.entitlement?.plan }, 'quota_exceeded');
+      return res.status(402).json({
+        error: 'quota_exceeded',
+        message: "You've reached your plan's limit. Upgrade to keep recording.",
+        entitlement: err.entitlement ? toEntitlementResponse(err.entitlement) : null,
+      });
+    }
+    log.error({ err }, 'meter_ingest_failed');
+    return res.status(500).json({ error: "We couldn't queue your audio. Please try again." });
   }
 
   // ── Persist queued state in PG + Firestore mirror ─────────
