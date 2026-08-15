@@ -54,6 +54,17 @@ A4 credentials + A11 build wiring.
 - **Client identifiers + `wassup`/`clinical` naming still present throughout** — by design. The global
   rename is **A5**; identifier replacement is **A4/A5**. So the BUILD-PLAN "Verify" grep for
   `wassup|clinical` will NOT be clean until A5 — expected at this stage.
+- **Root `tests/` vitest suite was NOT ported in A3** (found during A6.1). The source had ~24 test files
+  (summary-templates, redaction, contract, idempotency, share-links, etc.). They are PLATFORM assets the
+  A11 test strategy relies on — port + adapt them (paths → new layout) as an A3/A11 follow-up. A6.1's
+  template change updated the iOS `WassupTests` assertions but there is no server-side
+  `summary-templates.test.ts` in the repo to update yet.
+- **A6.7 is foundation-only:** the catalog + `t()` accessor + web wiring are in, but the **exhaustive
+  per-file string migration** in `apps/web`/`apps/ios` and the **iOS/Android string codegen**
+  (json → `Localizable.strings`/`strings.xml`) are pending (TODO in `packages/tokens/README.md`).
+- **A6.1 is a three-client contract change:** `openapi.v1.json` + iOS enum were hand-updated to match;
+  `npm run openapi` / `npm run models` regeneration was not run (no deps) — regenerate at A4/A11 and
+  confirm they match the hand edits.
 
 ---
 
