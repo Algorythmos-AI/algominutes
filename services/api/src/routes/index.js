@@ -29,6 +29,7 @@ import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } f
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
 import { trackEventRoute } from './events.js';
+import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
 
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
@@ -194,6 +195,10 @@ export function buildRouter() {
   router.get('/entitlement', authMiddleware, wrap(entitlementRoute));
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
   router.post('/events', authMiddleware, wrap(trackEventRoute));
+  // ── A10 compliance ── compliance.js ────────────────────────────────────
+  router.post('/account/retention', authMiddleware, wrap(setRetentionRoute));
+  router.post('/account/accept-terms', authMiddleware, wrap(acceptTermsRoute));
+  router.post('/support', authMiddleware, wrap(supportRoute));
 
   // ── A7.4 dead-letter admin view ── admin-dead-letters.js ────────────────
   // Operator-only: authMiddleware sets req.uid, adminMiddleware gates on the

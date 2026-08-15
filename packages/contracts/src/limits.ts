@@ -78,3 +78,13 @@ export const PRICING = {
 /** Entitlement lifecycle states (A9.3): trialing → active | (expired →) free_floor. */
 export type EntitlementState = 'trialing' | 'active' | 'expired' | 'free_floor';
 
+
+// ── A10 compliance constants ─────────────────────────────────────────────────
+// Bump when the documents change; a bump requires re-acceptance (terms_acceptance).
+export const TERMS_VERSION = '2026-08-16';
+export const PRIVACY_VERSION = '2026-08-16';
+
+// Default note retention when the user hasn't set one (A10 #5). See docs/DATA-RETENTION.md.
+// null = keep until the user deletes (with the soft-delete + 30-day backup window).
+export const DEFAULT_RETENTION_DAYS: number | null = null;
+export const RETENTION_OPTIONS_DAYS = [30, 90, 180, 365] as const; // user-selectable + "keep until deleted"
