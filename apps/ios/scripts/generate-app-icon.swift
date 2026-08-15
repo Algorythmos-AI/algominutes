@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Deterministic Wassup app-icon generator — pure CoreGraphics, no SwiftUI /
+// Deterministic AlgoMinutes app-icon generator — pure CoreGraphics, no SwiftUI /
 // SF Symbols (their rendering drifts across OS releases). Draws the brand
 // waveform: five white capsule bars on near-black, matching LoginView's mark
 // and the monochrome greyscale tokens (#FFFFFF -> #DEDDDE, Theme.swift).

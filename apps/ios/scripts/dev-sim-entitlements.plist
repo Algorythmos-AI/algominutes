@@ -6,12 +6,12 @@
 	     so ad-hoc `codesign` can embed them without a provisioning profile.
 	     The Simulator does not enforce the team-prefix on keychain groups, so this
 	     satisfies FirebaseAuth's keychain access. NOT used for device/Release builds,
-	     which carry Wassup/Wassup.entitlements + a real signing team instead. -->
+	     which carry AlgoMinutes/AlgoMinutes.entitlements + a real signing team instead. -->
 	<key>get-task-allow</key>
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>com.wassup.meeting</string>
+		<string>com.algorythmos.algominutes</string>
 	</array>
 </dict>
 </plist>

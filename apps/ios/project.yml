@@ -1,6 +1,6 @@
-name: Wassup
+name: AlgoMinutes
 options:
-  bundleIdPrefix: com.wassup
+  bundleIdPrefix: com.algorythmos
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -25,20 +25,20 @@ settings:
     SUPPORTS_MACCATALYST: NO
 
 targets:
-  Wassup:
+  AlgoMinutes:
     type: application
     platform: iOS
     sources:
-      - path: Wassup
+      - path: AlgoMinutes
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wassup.meeting
+        PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes
         TARGETED_DEVICE_FAMILY: "1"
-        INFOPLIST_FILE: Wassup/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Wassup/Wassup.entitlements
+        INFOPLIST_FILE: AlgoMinutes/Info.plist
+        CODE_SIGN_ENTITLEMENTS: AlgoMinutes/AlgoMinutes.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # TODO(signing A4): set Algorythmos DEVELOPMENT_TEAM + provisioning profile.
-        # Client signing identity (team HX9DZ34625, "Wassup App Store") stripped.
+        # Client signing identity (team HX9DZ34625, old App Store profile) stripped.
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
     dependencies:
@@ -68,19 +68,19 @@ targets:
           fi
         inputFiles:
           - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}
-          - $(SRCROOT)/Wassup/Resources/GoogleService-Info.plist
+          - $(SRCROOT)/AlgoMinutes/Resources/GoogleService-Info.plist
         basedOnDependencyAnalysis: false
 
-  WassupTests:
+  AlgoMinutesTests:
     type: bundle.unit-test
     platform: iOS
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
     sources:
-      - path: WassupTests
+      - path: AlgoMinutesTests
     dependencies:
-      - target: Wassup
+      - target: AlgoMinutes
 
   # ReplayKit broadcast extension — re-homed out of the deleted Capacitor ios/
   # target (EXTRACTION-AUDIT §6). On-device capture of another app's audio + App
@@ -92,7 +92,7 @@ targets:
       - path: BroadcastExtension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wassup.meeting.BroadcastExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes.BroadcastExtension
         INFOPLIST_FILE: BroadcastExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: BroadcastExtension/BroadcastExtension.entitlements
         CODE_SIGN_STYLE: Automatic
@@ -104,16 +104,16 @@ targets:
       - path: BroadcastExtensionSetupUI
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wassup.meeting.BroadcastExtensionSetupUI
+        PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes.BroadcastExtensionSetupUI
         INFOPLIST_FILE: BroadcastExtensionSetupUI/Info.plist
         CODE_SIGN_STYLE: Automatic
 
 schemes:
-  Wassup:
+  AlgoMinutes:
     build:
       targets:
-        Wassup: all
-        WassupTests: [test]
+        AlgoMinutes: all
+        AlgoMinutesTests: [test]
         BroadcastExtension: all
         BroadcastExtensionSetupUI: all
     run:
@@ -121,6 +121,6 @@ schemes:
     test:
       config: Debug
       targets:
-        - WassupTests
+        - AlgoMinutesTests
     archive:
       config: Release
