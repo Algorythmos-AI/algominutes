@@ -8,7 +8,7 @@ import { z } from './zod';
 /**
  * How much of a note a share/export carries. Source: the `SCOPES` set in
  * export-note.cjs and shared/share-links.cjs (`summary`/`transcript`/`both`),
- * and ios-native/Wassup/Models/ExportScope.swift. Shared by export and share.
+ * and apps/ios/AlgoMinutes/Models/ExportScope.swift. Shared by export and share.
  */
 export const ExportScope = z.enum(['summary', 'transcript', 'both']).openapi('ExportScope');
 

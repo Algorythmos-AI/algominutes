@@ -23,7 +23,7 @@ function pool() {
   // Without this the summarizer fails every chunked-path task with
   // "pg_hba.conf rejects connection ... no encryption". Latent for the
   // current corpus (we run almost everything through fast-path) but
-  // would break a long clinical case discussion (>10 min) for Slater.
+  // would break a long meeting discussion (>10 min).
   const ssl = { rejectUnauthorized: false };
   _pool = new Pool(
     process.env.DATABASE_URL

@@ -445,8 +445,8 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
   // Vertex, not inferred from the prompt-construction code.
   //
   // The prompt itself is no longer logged. It is post-redaction, but it still
-  // contains the retrieved clinical chunks verbatim — an entire consultation's
-  // worth of a real patient's words landing in Cloud Logging, retained under
+  // contains the retrieved meeting chunks verbatim — an entire meeting's
+  // worth of a real person's words landing in Cloud Logging, retained under
   // that bucket's policy and readable by anyone with log access. That is a
   // wider audience than the note itself has.
   //

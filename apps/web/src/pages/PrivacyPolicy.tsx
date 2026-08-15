@@ -62,12 +62,12 @@ export default function PrivacyPolicy({ onBack }: Props) {
           <section>
             <h2 style={sectionHeading}>1. Who we are</h2>
             <p>
-              Wassup Doc is a personal meeting and document assistant. This policy describes
+              AlgoMinutes is a personal meeting and document assistant. This policy describes
               what we collect, how we use it, where we store it, who we share it with,
               and how you can delete it.
             </p>
             <p>
-              Wassup Doc is currently in clinical alpha for a small number of testers. The
+              AlgoMinutes is currently in alpha for a small number of testers. The
               service is operated by the developer; contact details are at the bottom of
               this page.
             </p>
@@ -262,7 +262,7 @@ export default function PrivacyPolicy({ onBack }: Props) {
           <section>
             <h2 style={sectionHeading}>9. Children</h2>
             <p>
-              Wassup Doc is not directed at children under 13 (or under 16 in the EU/UK) and
+              AlgoMinutes is not directed at children under 13 (or under 16 in the EU/UK) and
               we do not knowingly collect their data. If you believe a child has
               registered, contact us and we will delete the account.
             </p>

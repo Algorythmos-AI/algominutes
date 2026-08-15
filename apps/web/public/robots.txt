@@ -1,4 +1,4 @@
-# Shared notes are private links, not public pages. They carry clinical
+# Shared notes are private links, not public pages. They carry sensitive
 # meeting content and are meant for one recipient, so they must never appear
 # in a search index.
 #

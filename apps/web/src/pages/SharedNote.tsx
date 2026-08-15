@@ -130,7 +130,7 @@ export default function SharedNote({ token }: { token: string }) {
   return (
     <div style={page}>
       <div style={shell}>
-        <p style={{ ...muted, marginBottom: 6 }}>Shared from Wassup Doc</p>
+        <p style={{ ...muted, marginBottom: 6 }}>Shared from AlgoMinutes</p>
         {/* Some notes have no title — a public page must not render a blank
             heading, so it falls back rather than showing nothing. */}
         <h1 style={{ fontSize: 26, marginBottom: 6 }}>{data.note.title || 'Untitled note'}</h1>
@@ -189,7 +189,7 @@ export default function SharedNote({ token }: { token: string }) {
             so a reader may see masked spans. Saying so prevents it reading as
             a transcription error. */}
         <p style={{ ...muted, marginTop: 24, lineHeight: 1.6 }}>
-          Detected card numbers, IDs and contact details are masked. Wassup Doc never stored
+          Detected card numbers, IDs and contact details are masked. AlgoMinutes never stored
           the originals. This page is read-only and is not indexed by search engines.
         </p>
       </div>

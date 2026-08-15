@@ -18,7 +18,7 @@ export const SearchRequest = z
  * the fusion origin.
  *
  * Source: functions/search-and-chat.cjs fused payload, reconciled with
- * ios-native/Wassup/Models/SearchHit.swift (`noteTitle?`, `score?`, `source?`)
+ * apps/ios/AlgoMinutes/Models/SearchHit.swift (`noteTitle?`, `score?`, `source?`)
  * and src/lib/apiSchemas.ts `SearchHitSchema`. `noteTitle` is nullable per the
  * web schema; the DB join can return a null title.
  */

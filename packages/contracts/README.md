@@ -70,7 +70,7 @@ generated/
 
 ## Faithfulness
 
-Schemas are ported verbatim from the wassup source shapes (Firestore `Note`,
+Schemas are ported verbatim from the source shapes (Firestore `Note`,
 the five function handlers, and the iOS models) — **field names are not
 renamed** in this phase. Where a shape was ambiguous, the source Swift model's
 shape was taken and a `// TODO(contracts):` note left in the schema file.

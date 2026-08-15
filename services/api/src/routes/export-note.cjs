@@ -13,7 +13,7 @@
  * Returns raw bytes, not a signed URL. A signed URL would be a second
  * unauthenticated egress surface with an independent lifetime, for a file the
  * caller is already authenticated for. Bytes mean no exports/ prefix, no
- * lifecycle policy, and no orphaned clinical transcripts sitting in a bucket.
+ * lifecycle policy, and no orphaned meeting transcripts sitting in a bucket.
  *
  * Everything here is already PII-redacted — the transcoder redacts transcript
  * text before storage — so the document carries <<REDACTED:…>> markers and
@@ -40,7 +40,7 @@ const MAX_LINES = 20000;
 const SCOPES = new Set(['summary', 'transcript', 'both']);
 
 const REDACTION_NOTICE =
-  'Detected card numbers, IDs and contact details are masked. Wassup never stored the originals.';
+  'Detected card numbers, IDs and contact details are masked. AlgoMinutes never stored the originals.';
 
 // ── data ──────────────────────────────────────────────────────────────
 

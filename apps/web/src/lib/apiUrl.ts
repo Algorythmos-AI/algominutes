@@ -1,4 +1,4 @@
-const PRODUCTION_API_ORIGIN = 'https://wassup-meeting.web.app';
+const PRODUCTION_API_ORIGIN = 'https://api.algominutes.com';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 
 function configuredApiOrigin(): string | null {

@@ -54,9 +54,9 @@ async function getSize(gcsPath) {
  * Delete every object under a prefix. Best-effort; never throws.
  *
  * Written for the chunked pipeline's intermediate FLAC files, which are raw
- * clinical audio and were never deleted by anything — not when the note was
+ * meeting audio and were never deleted by anything — not when the note was
  * deleted, not when the account was deleted, and not once transcription had
- * finished with them. Every consultation over ten minutes left its audio in
+ * finished with them. Every recording over ten minutes left its audio in
  * the bucket indefinitely.
  */
 async function deletePrefix(prefix, log) {

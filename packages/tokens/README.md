@@ -40,5 +40,5 @@ single source for that contract.
 ## Design tokens
 
 - `tokens.json` — palette, type scale, radii, shadows. **TODO(brand A6.5)** — neutral placeholder; the
-  client "INTEGRANT" tokens were not carried over. The real values land in A6.5 and apply to web
+  prior client tokens were not carried over. The real values land in A6.5 and apply to web
   (Tailwind `@theme`), SwiftUI `Theme.swift`, and the Compose theme.

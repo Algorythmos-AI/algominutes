@@ -1,8 +1,8 @@
 # services/db-job — Cloud Run Job for programmatic DB ops
 # (verification queries, corpus backfill, etc).
 #
-# Runs inside the wassup-meeting VPC with native private-IP access to
-# wassup-meeting-pg. Per CLAUDE.md §2 invariants:
+# Runs inside the project VPC with native private-IP access to
+# ${GCP_PROJECT}-pg. Per CLAUDE.md §2 invariants:
 #   - imports shared/redaction.cjs for any text reaching Gemini/embedder
 #   - uses Postgres as source of truth
 #   - no console.* — uses pino-style structured logger from shared/

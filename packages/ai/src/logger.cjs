@@ -65,7 +65,7 @@ function traceIdFrom(headers) {
 }
 
 module.exports = {
-  logger: makeLogger({ service: 'wassup-meeting' }),
+  logger: makeLogger({ service: 'algominutes' }),
   makeLogger,
   traceIdFrom,
 };

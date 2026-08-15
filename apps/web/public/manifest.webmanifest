@@ -1,7 +1,7 @@
 {
-  "name": "Wassup Doc",
-  "short_name": "Wassup Doc",
-  "description": "Record consultations and meetings, and get a transcript and summary.",
+  "name": "AlgoMinutes",
+  "short_name": "AlgoMinutes",
+  "description": "Record meetings and get a transcript and summary.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

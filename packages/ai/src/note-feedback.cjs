@@ -66,7 +66,7 @@ async function writeFeedbackWithinTx(client, { noteId, uid, rating, kind, commen
   if (comment) {
     // CLAUDE.md §2 in spirit: this text never reaches Gemini, but a human
     // will read it and it would otherwise leak into any future eval corpus.
-    // The free-text box is exactly where someone types a patient name.
+    // The free-text box is exactly where someone types a personal name.
     const redacted = redactPII(comment);
     storedComment = redacted.text;
     counts = redacted.counts && Object.keys(redacted.counts).length ? redacted.counts : null;

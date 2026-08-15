@@ -14,7 +14,7 @@
 -- table; today only 'transcription' is written.
 --
 -- `comment` is stored PII-redacted. The free-text box is exactly where a
--- clinician types "missed the patient's name, John Smith, MRN 12345". It
+-- user types "missed a name, John Smith, ID 12345". It
 -- never reaches Gemini, but a human will read it and it would otherwise leak
 -- into any future eval corpus. `redaction_counts` records what was masked,
 -- mirroring the search_query_redacted precedent.

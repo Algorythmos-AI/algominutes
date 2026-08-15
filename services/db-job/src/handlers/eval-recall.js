@@ -10,7 +10,7 @@
 // belongs in a separate retrieval-tuning PR).
 //
 // Multi-tenancy: queries are scoped to a workspace_id passed via env.
-// For Slater alpha eval we use workspace_e2e-test-uid which contains
+// For the alpha eval we use workspace_e2e-test-uid which contains
 // peptides + prp + lady-cdc.
 //
 // Output: writes a JSON summary to stdout (captured by Cloud Logging).
@@ -98,7 +98,7 @@ async function run({ log, traceId, env }) {
     idleTimeoutMillis: 30_000,
   });
 
-  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'wassup-meeting';
+  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'algominutes-dev';
   const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
   const K_MAX = 10;
 

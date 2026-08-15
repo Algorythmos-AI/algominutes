@@ -20,7 +20,7 @@ const CARD_CANDIDATE = /\b(?:\d[ -]?){12,18}\d\b/g;
 // credentials?" open after an AWS secret survived a fixture; AWS_KEY above
 // matches the access-key ID only, never the secret. A credential spoken aloud
 // or pasted into a note is a live secret, and these are cheap, high-precision
-// patterns with effectively no false-positive risk in clinical prose.
+// patterns with effectively no false-positive risk in ordinary prose.
 const GITHUB_TOKEN = /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255}\b/g;
 const GITHUB_PAT = /\bgithub_pat_[A-Za-z0-9_]{22,255}\b/g;
 const SLACK_TOKEN = /\bxox[baprs]-[A-Za-z0-9\-]{10,}\b/g;
