@@ -12,9 +12,24 @@ run; each item has a safe reversible default already applied. Grouped by type.
 - [ ] **Rotate the exposed Gemini API key + purge source history** (EXTRACTION-AUDIT §5). Source-side,
       in `~/src/wasssup-meeting`; not touched by this run.
 
-## 2. Identifiers required for A4 (the hard stop is here)
+## 2. A4 provisioning — needs a `gcp-admin` shell to apply
 
-See the dedicated section at the bottom: **"A4 identifiers needed from you."**
+The non-Apple A4 infra is authored apply-ready (Terraform in `infra/terraform/`, runbook in
+`docs/runbooks/gcp-provisioning.md`) but **nothing is live** — the session's gcloud identity
+(`skalaliya@gmail.com`) has no access to the org projects. To make it live:
+
+- [ ] From a shell authed as **`gcp-admin@algorythmos.com`**: bootstrap the two state buckets, then
+      `terraform apply` in `infra/terraform/envs/staging` then `.../prod` (runbook §1–2).
+- [ ] **Regenerate Firebase configs per env** via the Firebase CLI (runbook §4) — iOS plist, Android json,
+      web config. Never copy the client's; they stay git-ignored.
+- [ ] Enable Firebase Auth providers (Google now; **Apple needs the Team ID — A4-apple**).
+- [ ] Run migrations against each Cloud SQL instance (runbook §6).
+- [ ] **Re-scope `algominutes-prod-budget`** to the prod project only (INFRASTRUCTURE open item).
+- [ ] Confirm the domain registrar for `algominutes.com` / `.com.au` (INFRASTRUCTURE §6 TODO).
+- **Still Apple-blocked (`TODO(A4-apple)`):** Apple Team ID (→ iOS Firebase app + App Store Connect) and
+  the Android upload keystore (Track B). Left untouched, as instructed.
+
+See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
 ## 3. Business/engineering decisions deferred (safe default applied)
 
