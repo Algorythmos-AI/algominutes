@@ -46,6 +46,18 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
 - **All `shared/` lives in `@algominutes/ai`** (incl. pg-query/storage-paths). If you'd prefer pg-query in
   `@algominutes/db`, it's a small move (the service `sharedRequire` ai→db fallback already tolerates it).
 - **`main` not pushed / not protected during this run** (see §1). 
+- **A5 rename follow-ups (need Apple/infra, not code):**
+  - iOS `Info.plist` reversed-OAuth URL scheme still references the OLD client OAuth id
+    (`com.googleusercontent.apps.909388484461-…`); regenerate when the iOS Firebase app is registered
+    (`TODO(A4-apple)`). Not a `wassup` token, so it doesn't fail the grep.
+  - Backend domains `api.algominutes.com` / `algominutes.com` are wired in code but **not confirmed live**
+    (`TODO(A9-infra)`) — verify DNS/hosting when infra stands up.
+  - The **app-side** iOS entitlements has the keychain group but no `application-groups` entry; the broadcast
+    handoff needs the app added to `group.com.algorythmos.algominutes` when the extension is wired (below).
+  - Minor: the web "Sign in with Google" mark is a single indigo tint, not Google's official multicolour
+    branding — revisit for store/brand compliance (pre-existing, not introduced by the rename).
+- **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
+  the palette is a provisional, accessible v1. Full light-mode wiring across the (dark-first) UI is a follow-up.
 - **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
   triggers it and its only permission copy is mic-only; App Review will question an unexplained
   system-capture extension. Decide before the iOS submission build: **wire it** (RPSystemBroadcastPickerView
