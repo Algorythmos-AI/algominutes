@@ -3,6 +3,37 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A5 — Rename to AlgoMinutes
+
+- **Renamed class-by-class, one commit per class** (iOS, Android, web+services+packages+.claude, docs) —
+  no blind global sed, since `wassup` appears in bundle ids / package paths where a careless replace breaks
+  signing/build silently. Each class independently verified (xcodegen for iOS, `google-services.json`
+  package_name match for Android, grep-clean + invariants for web/services).
+- **iOS:** `com.wassup.meeting`→`com.algorythmos.algominutes` (+ `.BroadcastExtension`/`.BroadcastExtensionSetupUI`),
+  dir `Wassup/`→`AlgoMinutes/`, `WassupApp.swift`→`AlgoMinutesApp.swift`, keychain group + App Group →
+  `…algominutes` / `group.com.algorythmos.algominutes`, module name `Wassup`→`AlgoMinutes`. `project.yml`
+  only; xcodegen regenerates.
+- **Android:** package tree `com/wassup/meeting`→`com/algorythmos/algominutes`, namespace+applicationId,
+  action constants, app_name, channel ids, notification icon. `google-services.json` was already registered
+  against `com.algorythmos.algominutes` — verified match, left untouched.
+- **Backend domains:** `wassup-meeting.web.app` → `api.algominutes.com` (API) / `algominutes.com` (site) in
+  iOS APIClient/LoginView and web `apiUrl.ts` (env-driven, `VITE_API_BASE_URL` wins). Domains not yet
+  confirmed live — `TODO(A9-infra)`.
+- **GCP project-id refs** in service deploy configs → `${GCP_PROJECT}` / `algominutes-dev` placeholders, not
+  a hardcoded real id (per-env at deploy).
+- **Provenance docs deliberately keep the source-repo name** (`skalaliya/wasssup-meeting`) and client
+  identifiers being replaced — the verify grep's only remaining hits are those 6 docs; that is legitimate.
+
+## A6.5 — Design system
+
+- **Provisional AlgoMinutes palette + type scale** authored once in `packages/tokens/tokens.json` and applied
+  to web (`index.css` `@theme`), iOS `Theme.swift`, and a new Android Compose theme (B2 foundation). Brand
+  accent = indigo `#5B67F0` (distinct from the client's Apple-blue `#0A84FF`), refined dark neutral ramp +
+  a light ramp, status colours, modular type scale, a11y baselines. **Kept the app's dark-first aesthetic**
+  (a full light-mode wiring is a follow-up; the light ramp exists in tokens).
+- **Client brand fonts (Rajdhani/Titillium) dropped** for a system font stack; **final hue, logo/wordmark
+  art, and typeface are `TODO(brand)`** — no artwork generated, per instruction.
+
 ## A4 — Provision infrastructure (non-Apple)
 
 - **Nothing was provisioned live** — the automated session's gcloud identity (`skalaliya@gmail.com`) has
