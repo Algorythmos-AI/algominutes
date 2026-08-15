@@ -5,3 +5,6 @@ export * from './db.js';
 export * from './notes-repo.js';
 export * from './search-repo.js';
 export * from './embeddings.js';
+export * from './usage-repo.js';
+export * from './entitlements.js';
+export * from './dead-letter-repo.js';
