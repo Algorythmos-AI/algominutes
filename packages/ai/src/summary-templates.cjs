@@ -54,26 +54,6 @@ ${JSON_CONTRACT}`,
     responseSchema: BASE_SCHEMA,
   },
 
-  // Slater is the clinical alpha user. The explicit prohibition matters: a
-  // summariser that infers a diagnosis from a conversation is worse than one
-  // that summarises badly, because the output looks authoritative.
-  clinical: {
-    id: 'clinical',
-    label: 'Clinical consult',
-    version: 1,
-    promptBody: `You are a clinical documentation assistant. The transcript of a consultation or case discussion is provided below. Produce a structured summary for the clinician's own records.
-
-Rules:
-- Record only what was actually said. Do NOT infer, suggest or imply a diagnosis, dosage or treatment that was not stated aloud.
-- Attribute clinical claims to the speaker where the transcript makes that clear.
-- Put follow-ups, referrals, tests to order and callbacks in actionItems.
-- Put agreed clinical decisions and management plans in keyDecisions.
-- If something was ambiguous or inaudible, say so in the gist rather than guessing.
-
-${JSON_CONTRACT}`,
-    responseSchema: BASE_SCHEMA,
-  },
-
   // For someone who wants the to-do list and nothing else. gist stays required
   // by the schema, so it is asked for explicitly but kept to one line.
   actions_only: {
@@ -86,6 +66,115 @@ Rules:
 - gist: ONE short sentence naming what the meeting was about. No detail.
 - actionItems: every commitment, task or follow-up, phrased so it reads as an instruction. Include who owns it when the transcript says.
 - keyDecisions: only decisions that change what someone does. Omit discussion.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  // ── General-audience meeting types (A6.1). Each tailors the PROMPT only; the
+  // response shape stays the flat BASE_SCHEMA so nothing is dropped downstream.
+
+  standup: {
+    id: 'standup',
+    label: 'Standup',
+    version: 1,
+    promptBody: `You are a meeting assistant. The transcript is a team standup. Produce a structured summary.
+
+Rules:
+- gist: one line on overall progress and any theme (e.g. a shared blocker).
+- actionItems: each person's next steps and every blocker that needs unblocking, phrased as instructions with the owner when stated.
+- keyDecisions: any scope, priority or ownership changes agreed on the call.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  interview: {
+    id: 'interview',
+    label: 'Interview',
+    version: 1,
+    promptBody: `You are a hiring assistant. The transcript is a candidate interview. Produce a structured summary for the interviewer's notes.
+
+Rules:
+- Record only what was actually said; do NOT infer a hire/no-hire recommendation that was not stated.
+- gist: what role/topic the interview covered and the candidate's headline signal.
+- actionItems: follow-ups — references to check, a take-home to send, a next round to schedule.
+- keyDecisions: any evaluation decisions or agreed next steps stated aloud.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  sales_call: {
+    id: 'sales_call',
+    label: 'Sales call',
+    version: 1,
+    promptBody: `You are a sales assistant. The transcript is a sales call. Produce a structured summary.
+
+Rules:
+- gist: the prospect's need and where the deal stands in one or two sentences.
+- actionItems: every follow-up, quote to send, objection to answer or introduction to make, with the owner when stated.
+- keyDecisions: pricing, scope, timeline or go/no-go decisions the parties agreed.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  lecture: {
+    id: 'lecture',
+    label: 'Lecture',
+    version: 1,
+    promptBody: `You are a study assistant. The transcript is a lecture or talk. Produce a structured summary for later study.
+
+Rules:
+- gist: the subject and the main thesis or takeaway.
+- actionItems: readings, assignments, exam dates or exercises the speaker set, as instructions.
+- keyDecisions: the key points or conclusions worth remembering (use this for the core learnings, not literal "decisions").
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  one_on_one: {
+    id: 'one_on_one',
+    label: 'One-on-one',
+    version: 1,
+    promptBody: `You are a meeting assistant. The transcript is a one-on-one (e.g. manager and report). Produce a structured summary.
+
+Rules:
+- gist: what was discussed and the overall tone in one or two sentences.
+- actionItems: every follow-up and commitment either person made, with the owner.
+- keyDecisions: decisions about goals, growth, scope or ways of working that were agreed.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  board_meeting: {
+    id: 'board_meeting',
+    label: 'Board meeting',
+    version: 1,
+    promptBody: `You are a governance assistant. The transcript is a board or committee meeting. Produce a structured summary suitable for minutes.
+
+Rules:
+- gist: the meeting's purpose and the headline outcomes.
+- actionItems: action owners and their tasks, plus any items tabled for next time.
+- keyDecisions: resolutions passed, approvals granted and formal decisions — attribute to the body, not a guess.
+
+${JSON_CONTRACT}`,
+    responseSchema: BASE_SCHEMA,
+  },
+
+  client_meeting: {
+    id: 'client_meeting',
+    label: 'Client meeting',
+    version: 1,
+    promptBody: `You are a client-services assistant. The transcript is a meeting with a client. Produce a structured summary.
+
+Rules:
+- gist: what the client wants and where things stand in one or two sentences.
+- actionItems: every commitment made to the client and every follow-up owed, with the owner.
+- keyDecisions: scope, timeline, budget or approach decisions the parties agreed.
 
 ${JSON_CONTRACT}`,
     responseSchema: BASE_SCHEMA,
