@@ -64,6 +64,9 @@ struct AskAIComposer: View {
                 }
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || model.isStreaming)
+                // 44pt hit target (tokens a11y.minTouchTargetPx) — the visible disc is 30pt.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
                 .accessibilityLabel("Ask")
             }
             .padding(.horizontal, Theme.Spacing.lg)

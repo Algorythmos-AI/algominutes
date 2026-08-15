@@ -167,10 +167,10 @@ export default function ImportPanel({ user, onCreated, onCancel }: ImportPanelPr
         </div>
         <button
           onClick={onCancel}
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#8C8684' }}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#8C8684', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 44, minHeight: 44 }}
           aria-label="Close"
         >
-          <X size={18} />
+          <X size={18} aria-hidden="true" />
         </button>
       </div>
 

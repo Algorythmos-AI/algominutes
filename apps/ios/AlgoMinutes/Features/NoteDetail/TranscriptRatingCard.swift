@@ -32,6 +32,9 @@ struct TranscriptRatingCard: View {
                         }
                         .buttonStyle(CardButtonStyle())
                         .disabled(isSaving)
+                        // 44pt hit target (tokens a11y.minTouchTargetPx) — the glyph is 22pt.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel("\(star) star\(star == 1 ? "" : "s")")
                     }
                 }
