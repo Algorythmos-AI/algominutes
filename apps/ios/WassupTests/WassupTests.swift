@@ -1119,14 +1119,19 @@ final class ExportWireContractTests: XCTestCase {
 final class SummaryTemplateTests: XCTestCase {
     func testWireIdsMatchTheServerTemplates() {
         XCTAssertEqual(SummaryTemplate.general.rawValue, "general")
-        XCTAssertEqual(SummaryTemplate.clinical.rawValue, "clinical")
         // Snake case, not camel — the Swift case name differs from the wire id.
         XCTAssertEqual(SummaryTemplate.actionsOnly.rawValue, "actions_only")
+        XCTAssertEqual(SummaryTemplate.salesCall.rawValue, "sales_call")
+        XCTAssertEqual(SummaryTemplate.oneOnOne.rawValue, "one_on_one")
+        XCTAssertEqual(SummaryTemplate.boardMeeting.rawValue, "board_meeting")
+        XCTAssertEqual(SummaryTemplate.clientMeeting.rawValue, "client_meeting")
     }
 
-    func testShipsExactlyTheThreeServerTemplates() {
+    func testShipsExactlyTheServerTemplates() {
         XCTAssertEqual(Set(SummaryTemplate.allCases.map(\.rawValue)),
-                       ["general", "clinical", "actions_only"])
+                       ["general", "actions_only", "standup", "interview",
+                        "sales_call", "lecture", "one_on_one", "board_meeting",
+                        "client_meeting"])
     }
 
     func testEveryTemplateHasUserFacingCopy() {

@@ -450,7 +450,7 @@
       },
       "SummaryTemplateId": {
         "type": "string",
-        "enum": ["general", "clinical", "actions_only"]
+        "enum": ["general", "actions_only", "standup", "interview", "sales_call", "lecture", "one_on_one", "board_meeting", "client_meeting"]
       },
       "SummaryTemplate": {
         "type": "object",

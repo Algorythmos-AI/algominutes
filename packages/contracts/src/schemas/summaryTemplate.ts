@@ -13,9 +13,19 @@
 import { z } from './zod';
 
 /** The recognised template ids. Source: `templateIds()` in
- * shared/summary-templates.cjs (`general`, `clinical`, `actions_only`). */
+ * @algominutes/ai summary-templates.cjs. General-audience set (A6.1). */
 export const SummaryTemplateId = z
-  .enum(['general', 'clinical', 'actions_only'])
+  .enum([
+    'general',
+    'actions_only',
+    'standup',
+    'interview',
+    'sales_call',
+    'lecture',
+    'one_on_one',
+    'board_meeting',
+    'client_meeting',
+  ])
   .openapi('SummaryTemplateId');
 
 /** The server's fallback when an id is unknown. Source: DEFAULT_TEMPLATE_ID. */
@@ -50,17 +60,59 @@ export const SUMMARY_TEMPLATES: ReadonlyArray<z.infer<typeof SummaryTemplate>> =
     version: 1,
   },
   {
-    id: 'clinical',
-    label: 'Clinical consult',
-    blurb: 'Records only what was said. Never infers a diagnosis, dosage or treatment.',
-    icon: 'stethoscope',
-    version: 1,
-  },
-  {
     id: 'actions_only',
     label: 'Action items only',
     blurb: 'Just the commitments and follow-ups, with almost no discussion.',
     icon: 'checklist',
+    version: 1,
+  },
+  {
+    id: 'standup',
+    label: 'Standup',
+    blurb: "Blockers, progress and each person's next steps.",
+    icon: 'person.3',
+    version: 1,
+  },
+  {
+    id: 'interview',
+    label: 'Interview',
+    blurb: 'Candidate signals, answers and follow-ups to check.',
+    icon: 'quote.bubble',
+    version: 1,
+  },
+  {
+    id: 'sales_call',
+    label: 'Sales call',
+    blurb: 'Needs, objections, next steps and the deal state.',
+    icon: 'dollarsign.circle',
+    version: 1,
+  },
+  {
+    id: 'lecture',
+    label: 'Lecture',
+    blurb: 'Key points and takeaways, structured for study.',
+    icon: 'graduationcap',
+    version: 1,
+  },
+  {
+    id: 'one_on_one',
+    label: 'One-on-one',
+    blurb: 'Discussion, feedback and agreed follow-ups.',
+    icon: 'person.2',
+    version: 1,
+  },
+  {
+    id: 'board_meeting',
+    label: 'Board meeting',
+    blurb: 'Resolutions, approvals and action owners.',
+    icon: 'building.columns',
+    version: 1,
+  },
+  {
+    id: 'client_meeting',
+    label: 'Client meeting',
+    blurb: 'Requests, commitments and next steps with the client.',
+    icon: 'briefcase',
     version: 1,
   },
 ];
