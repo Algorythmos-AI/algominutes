@@ -5,13 +5,12 @@ Kotlin interface — nothing more.** The full native Android client (Jetpack
 Compose UI, auth, Media3 playback, WorkManager upload, networking) is **Track
 B2** and is intentionally not built here.
 
-This module was extracted from the Capacitor app at
-`src/wasssup-meeting/android`. The two MediaProjection / ForegroundService
-recorder classes are a §5 protected asset and were **ported unchanged**; the two
+This module was extracted from the upstream Capacitor app's Android project. The
+two MediaProjection / ForegroundService recorder classes are a §5 protected asset
+and were **ported unchanged**; the two
 Capacitor plugin wrappers were **replaced** by a plain Kotlin interface.
 
-> Package identifiers stay `com.wassup.meeting` this phase. The
-> `wassup -> algominutes` rename is a later phase (A5) — do not rename yet.
+> Package identifiers are `com.algorythmos.algominutes` (renamed in phase A5).
 
 ## What's here
 
@@ -20,14 +19,14 @@ app/
   build.gradle                         # minimal, Capacitor-free module build
   src/main/
     AndroidManifest.xml                # de-Capacitored: 2 services + FileProvider, no bridge Activity
-    java/com/wassup/meeting/
+    java/com/algorythmos/algominutes/
       RecordingService.kt              # PORTED VERBATIM — mic recorder (MediaRecorder foreground service)
       BroadcastRecordingService.kt     # PORTED VERBATIM — MediaProjection recorder (app audio + mic)
       AudioRecorder.kt                 # NEW interface + models (RecorderState, RecordingFile, BroadcastStatus)
       BackgroundAudioRecorder.kt       # NEW impl — drives RecordingService via Intents
       BroadcastAudioRecorder.kt        # NEW impl — drives BroadcastRecordingService via Intents
     res/
-      drawable/ic_stat_wassup.png      # notification icon used by both services
+      drawable/ic_stat_algominutes.png # notification icon used by both services
       values/strings.xml               # app_name only
       xml/file_paths.xml               # FileProvider paths (copied verbatim)
 ```
@@ -81,8 +80,8 @@ exceptions), mirroring the plugins' `reject(message)`.
 | `isRecording()`             | `val isRecording` + `val startTimeMs`             |
 
 Drives `RecordingService` with the service's own action strings:
-- start → `RecordingService.ACTION_START` = `com.wassup.meeting.ACTION_START_RECORDING` via `startForegroundService`
-- stop  → `RecordingService.ACTION_STOP`  = `com.wassup.meeting.ACTION_STOP_RECORDING` via `startService`, then polls `RecordingService.isRecording` (100 ms, ~2 s cap) before returning the file.
+- start → `RecordingService.ACTION_START` = `com.algorythmos.algominutes.ACTION_START_RECORDING` via `startForegroundService`
+- stop  → `RecordingService.ACTION_STOP`  = `com.algorythmos.algominutes.ACTION_STOP_RECORDING` via `startService`, then polls `RecordingService.isRecording` (100 ms, ~2 s cap) before returning the file.
 
 ### `BroadcastAudioRecorder(context)` — MediaProjection (was `BroadcastRecorderPlugin`)
 
@@ -96,8 +95,8 @@ Drives `RecordingService` with the service's own action strings:
 | `clearRecording()`          | `fun deleteRecording(): Boolean`                             |
 
 Drives `BroadcastRecordingService` with the service's own action strings + extras:
-- start → `BroadcastRecordingService.ACTION_START` = `com.wassup.meeting.ACTION_START_BROADCAST_RECORDING`, with extras `EXTRA_RESULT_CODE` (`"resultCode"`) and `EXTRA_RESULT_DATA` (`"resultData"`) carrying the MediaProjection consent result, via `startForegroundService`.
-- stop  → `BroadcastRecordingService.ACTION_STOP` = `com.wassup.meeting.ACTION_STOP_BROADCAST_RECORDING` via `startService`, then polls the service `state` to a terminal value before returning.
+- start → `BroadcastRecordingService.ACTION_START` = `com.algorythmos.algominutes.ACTION_START_BROADCAST_RECORDING`, with extras `EXTRA_RESULT_CODE` (`"resultCode"`) and `EXTRA_RESULT_DATA` (`"resultData"`) carrying the MediaProjection consent result, via `startForegroundService`.
+- stop  → `BroadcastRecordingService.ACTION_STOP` = `com.algorythmos.algominutes.ACTION_STOP_BROADCAST_RECORDING` via `startService`, then polls the service `state` to a terminal value before returning.
 
 ## What a caller (Track B2) must still wire
 

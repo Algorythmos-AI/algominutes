@@ -1,4 +1,4 @@
-package com.wassup.meeting
+package com.algorythmos.algominutes
 
 import android.Manifest
 import android.content.Context

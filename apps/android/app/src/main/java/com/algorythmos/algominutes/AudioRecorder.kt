@@ -1,4 +1,4 @@
-package com.wassup.meeting
+package com.algorythmos.algominutes
 
 import kotlinx.coroutines.flow.StateFlow
 
