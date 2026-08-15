@@ -14,6 +14,7 @@ function loadShared(name) {
 // The terminal-failure write started here and now lives in shared/, because the
 // transcoder needed the same thing and a second copy would have drifted.
 const sharedNoteTerminal = loadShared('note-terminal.cjs');
+const terminalHooks = require('./terminal-hooks');
 
 let _pool = null;
 function pool() {
@@ -85,7 +86,7 @@ async function markNoteFailed({ noteId, workspaceId, message, log }) {
 async function handle(payload, deps) {
   const { noteId, workspaceId, summaryGeneration, template } = payload || {};
   if (!noteId || !workspaceId) throw new Error('summarizer.handle: missing noteId/workspaceId');
-  const { log, env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall } = deps;
+  const { log, env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
 
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -252,6 +253,14 @@ async function handle(payload, deps) {
   }, { merge: true });
 
   log.info({ noteId, model, lines: lines.length }, 'summarizer_complete');
+
+  // A7.3: the summarizer is the last pipeline stage — the note is now `ready`.
+  // Notify the author (best-effort; a failed notify never rolls back the summary
+  // that just landed). uid is read from the note's author_uid via the same pool.
+  // Idempotency: a replayed task is already gated upstream (generation/ordering
+  // guard + empty-transcript check), so reaching here means this run produced
+  // the ready state; a duplicate push is cheap and harmless.
+  await terminalHooks.onReady({ pool: pool(), noteId, workspaceId, traceId, log });
 }
 
-module.exports = { handle, markNoteFailed };
+module.exports = { handle, markNoteFailed, pool };

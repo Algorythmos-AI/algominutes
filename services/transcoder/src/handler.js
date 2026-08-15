@@ -31,7 +31,7 @@ async function handle(payload, deps) {
 
 async function handleKickoff(payload, deps) {
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType } = payload;
-  const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env } = deps;
+  const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
 
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'chunking' });
 
@@ -50,6 +50,16 @@ async function handleKickoff(payload, deps) {
             noteId,
             errorMessage: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
           });
+          // A7.4 tail for a permanent (non-retryable) terminal failure — DLQ +
+          // refund + notify. Best-effort; never throws (guarded when the hooks
+          // aren't wired into deps).
+          if (terminalHooks) {
+            await terminalHooks.onTranscodeTerminalFailure({
+              pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+              payload: { kind: 'kickoff', type, noteId, workspaceId, sourceUrl },
+              log,
+            });
+          }
           return; // Stop retries
         }
         throw err;
@@ -165,7 +175,7 @@ const MAX_STT_POLLS = 120;
 
 async function handleSttPoll(payload, deps) {
   const { chunkId, noteId, workspaceId, jobId, poll = 0 } = payload;
-  const { db, stt, tasks, mirror, log, storage } = deps;
+  const { db, stt, tasks, mirror, log, storage, traceId, terminalHooks } = deps;
 
   const c = await db.pool().connect();
   let chunkRow;
@@ -206,6 +216,17 @@ async function handleSttPoll(payload, deps) {
         log,
         event: 'stt_poll_exhausted',
       });
+      // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
+      // never sees a final attempt here — DLQ/refund/notify must be driven from
+      // this terminal decision, not from the index.js final-attempt branch.
+      if (terminalHooks) {
+        await terminalHooks.onTranscodeTerminalFailure({
+          pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+          attempts: poll, traceId,
+          payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
+          log,
+        });
+      }
       return;
     }
     // jobId is carried through so the whole poll chain stays attributable in
@@ -231,6 +252,16 @@ async function handleSttPoll(payload, deps) {
       log,
       event: 'stt_operation_errored',
     });
+    // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
+    if (terminalHooks) {
+      await terminalHooks.onTranscodeTerminalFailure({
+        pool: db.pool(), noteId, workspaceId,
+        err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
+        log,
+      });
+    }
     return;
   }
 

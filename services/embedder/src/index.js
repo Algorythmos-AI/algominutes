@@ -14,6 +14,7 @@ function loadShared(name) {
 const sharedLogger = loadShared('logger.cjs');
 const sharedEmbeddings = loadShared('embeddings.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
+const terminalHooks = require('./terminal-hooks');
 
 let _pool = null;
 function pool() {
@@ -96,6 +97,19 @@ app.post('/', async (req, res) => {
         { noteId, workspaceId },
         'embedding_failed_permanently',
       );
+      // A7.4: DLQ only — no refund, no notify. The note stays 'ready' and
+      // readable; it is just absent from Search/Chat until the db-job backfill
+      // re-runs, and this dead-letter row is what the admin view / alert counts.
+      const attempts = Number((req.headers && req.headers['x-cloudtasks-taskretrycount']) || 0) + 1;
+      await terminalHooks.onEmbedTerminalFailure({
+        noteId,
+        workspaceId,
+        err,
+        attempts,
+        traceId,
+        payload: { kind: 'embed', noteId, workspaceId },
+        log,
+      });
     }
     return res.status(500).json({ error: 'task_failed' });
   }
