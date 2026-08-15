@@ -8,8 +8,11 @@
 crash.log
 crash.*.log
 
-# Plan output can also contain secret values.
+# Plan output can also contain secret values (e.g. the generated DB password).
+# Match both `*.tfplan` AND a bare `tfplan` (the runbook uses `plan -out=tfplan`).
 *.tfplan
+tfplan
+plan.out
 
 # The provider lock file IS committed on purpose: it pins provider hashes so
 # every operator resolves identical versions. (Only the two lines below keep it
