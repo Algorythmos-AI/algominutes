@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var showDeleteSheet = false
     @State private var confirmingSignOut = false
+    // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
+    @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
     private static let adminEmails: Set<String> = ["skalaliya@gmail.com"]
 
@@ -38,6 +40,23 @@ struct SettingsView: View {
                             Link(destination: LegalLinks.webApp) {
                                 linkRow(label: "Web version", icon: "macbook")
                             }
+                        }
+                    }
+
+                    // A7.2 (P1): Wi-Fi-only uploads. The uploader reads this via
+                    // UploadPreferences.wifiOnly at session creation.
+                    OwllCard {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(isOn: $wifiOnlyUploads) {
+                                Text("Upload on Wi-Fi only")
+                                    .font(Typography.body(15))
+                                    .foregroundStyle(Theme.body)
+                            }
+                            .tint(Theme.heading)
+                            Text("When on, recordings wait for Wi-Fi instead of using cellular data.")
+                                .font(Typography.body(12))
+                                .foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
 

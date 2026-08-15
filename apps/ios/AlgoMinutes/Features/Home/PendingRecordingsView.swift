@@ -89,9 +89,12 @@ struct PendingRecordingsView: View {
     private func row(_ item: RecordingStore.PendingRecording) -> some View {
         let isDamaged = damaged.contains(item.fileName)
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
-                .font(Typography.headline())
-                .foregroundStyle(Theme.heading)
+            HStack(spacing: Theme.Spacing.sm) {
+                Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(Typography.headline())
+                    .foregroundStyle(Theme.heading)
+                stateBadge(item, isDamaged: isDamaged)
+            }
             Text(subtitle(item, isDamaged: isDamaged))
                 .font(Typography.body(12))
                 .foregroundStyle(isDamaged ? Theme.outline : Theme.muted)
@@ -100,8 +103,12 @@ struct PendingRecordingsView: View {
                 if busy == item.fileName {
                     ProgressView().tint(Theme.heading)
                 } else if !isDamaged {
-                    Button("Upload") { Task { await upload(item) } }
-                        .font(Typography.body(13))
+                    // A failed upload gets an explicit "Retry"; a never-attempted
+                    // one gets "Upload". Both route through recoverRecording.
+                    Button(item.state == .failed ? "Retry" : "Upload") {
+                        Task { await upload(item) }
+                    }
+                    .font(Typography.body(13))
                 }
                 Spacer()
                 // Never a one-tap delete, and never offered as the easy way out
@@ -120,11 +127,49 @@ struct PendingRecordingsView: View {
         if let noteId = item.noteId, env.uploadProgress[noteId] != nil {
             return "Uploading \(env.uploadProgress[noteId] ?? 0)%"
         }
+        // A persisted failure explains itself in the user's words rather than
+        // leaving them to guess why the item is still here.
+        if item.state == .failed, let lastError = item.lastError, !lastError.isEmpty {
+            return lastError
+        }
         if let seconds = item.durationSeconds, seconds > 0 {
             let minutes = max(1, Int((Double(seconds) / 60).rounded()))
             return "About \(minutes) minute\(minutes == 1 ? "" : "s") · waiting to upload"
         }
         return "Waiting to upload"
+    }
+
+    /// Durable upload-lifecycle badge (A7.1). Hidden for the common "recorded,
+    /// waiting" case — the subtitle already says that — so the badge only draws
+    /// when it carries new information.
+    @ViewBuilder
+    private func stateBadge(_ item: RecordingStore.PendingRecording, isDamaged: Bool) -> some View {
+        if let label = badgeLabel(item, isDamaged: isDamaged) {
+            Text(label.text)
+                .font(Typography.label(10))
+                .kerning(0.8)
+                .foregroundStyle(label.tint)
+                .padding(.horizontal, Theme.Spacing.sm)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(label.tint.opacity(0.14)))
+        }
+    }
+
+    private func badgeLabel(
+        _ item: RecordingStore.PendingRecording, isDamaged: Bool
+    ) -> (text: String, tint: Color)? {
+        if isDamaged { return ("DAMAGED", Theme.outline) }
+        // A live upload takes precedence over any stale persisted state.
+        if let noteId = item.noteId, env.uploadProgress[noteId] != nil {
+            return ("UPLOADING", Theme.heading)
+        }
+        switch item.state {
+        case .recorded:   return nil
+        case .uploading:  return ("UPLOADING", Theme.heading)
+        case .processing: return ("PROCESSING", Theme.heading)
+        case .ready:      return ("READY", Theme.heading)
+        case .failed:     return ("FAILED", Theme.heading)
+        }
     }
 
     private func refresh() async {

@@ -71,6 +71,20 @@ final class APIClient: Sendable {
         return json ?? [:]
     }
 
+    /// `post` variant that decodes the body into a `Decodable` rather than a
+    /// dictionary — used by the typed A7.2 upload-session endpoints.
+    private func postDecoded<T: Decodable>(path: String, body: [String: Any]) async throws -> T {
+        let req = try await request(path: path, body: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+        }
+        do { return try JSONDecoder().decode(T.self, from: data) }
+        catch { throw APIError.invalidResponse }
+    }
+
     // MARK: - Endpoints
 
     struct ProcessAudioRequest {
@@ -95,6 +109,84 @@ final class APIClient: Sendable {
         if let m = r.mimeType { body["mimeType"] = m }
         if let a = r.retryAttempt { body["retryAttempt"] = a }
         return try await post(path: "api/process-audio", body: body)
+    }
+
+    // MARK: - Resumable upload session (A7.2)
+    //
+    // Mirrors CreateUploadSession{Request,Response}, UploadSessionStatus and
+    // CompleteUploadResponse in `packages/contracts/src/schemas/async.ts`. Field
+    // names match the contract exactly. The server creates a GCS resumable
+    // session; BackgroundUploadService PUTs chunks to `sessionUri` directly.
+    //
+    // TODO(A7.2): these endpoints are not built server-side yet — the paths below
+    // are provisional and the feature is gated OFF (see AppFeatureFlags). Confirm
+    // the routes when the backend lands.
+
+    struct CreateUploadSessionResponse: Decodable, Sendable {
+        let uploadId: String
+        /// Opaque resumable-session URI the client PUTs chunks to directly.
+        let sessionUri: String
+        let storagePath: String
+        let chunkSize: Int
+        let expiresAt: String
+    }
+
+    struct UploadSessionStatus: Decodable, Sendable {
+        let uploadId: String
+        let receivedBytes: Int64
+        let complete: Bool
+    }
+
+    struct CompleteUploadResponse: Decodable, Sendable {
+        let uploadId: String
+        let storagePath: String
+        let complete: Bool
+    }
+
+    func createUploadSession(
+        noteId: String,
+        workspaceId: String,
+        fileName: String,
+        contentType: String,
+        totalBytes: Int64,
+        sha256: String? = nil
+    ) async throws -> CreateUploadSessionResponse {
+        var body: [String: Any] = [
+            "noteId": noteId,
+            "workspaceId": workspaceId,
+            "fileName": fileName,
+            "contentType": contentType,
+            "totalBytes": totalBytes,
+        ]
+        if let sha256 { body["sha256"] = sha256 }
+        return try await postDecoded(path: "api/upload-session-create", body: body)
+    }
+
+    /// How many bytes the server already holds — the client's resume anchor.
+    func uploadSessionStatus(uploadId: String) async throws -> UploadSessionStatus {
+        try await postDecoded(path: "api/upload-session-status", body: ["uploadId": uploadId])
+    }
+
+    /// Finalise a fully-transferred session before kicking off processing.
+    @discardableResult
+    func completeUpload(uploadId: String) async throws -> CompleteUploadResponse {
+        try await postDecoded(path: "api/upload-session-complete", body: ["uploadId": uploadId])
+    }
+
+    // MARK: - Push registration (A7.3)
+    //
+    // Mirrors RegisterPushTokenRequest in the async contract. `platform` is fixed
+    // to "ios"; the token is an FCM registration token (APNs via FCM).
+    @discardableResult
+    func registerPushToken(
+        token: String,
+        platform: String = "ios",
+        appVersion: String? = nil
+    ) async throws -> [String: Any] {
+        var body: [String: Any] = ["token": token, "platform": platform]
+        if let appVersion { body["appVersion"] = appVersion }
+        // TODO(A7.3): confirm the route when the notifier service lands.
+        return try await post(path: "api/register-push-token", body: body)
     }
 
     func search(query: String, k: Int = 12) async throws -> [SearchHit] {
