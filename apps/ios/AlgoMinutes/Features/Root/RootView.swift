@@ -3,15 +3,43 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
+    /// A6.3: whether we've tried to establish the default anonymous identity, so
+    /// the login fallback only appears if that genuinely failed.
+    @State private var didAttemptGuest = false
 
     var body: some View {
         @Bindable var env = env
+        @Bindable var billing = env.billing
         Group {
             if env.auth.user != nil {
                 MainTabView()
+            } else if !didAttemptGuest || env.auth.isSigningIn {
+                // A6.3: bring up the anonymous guest identity before showing any
+                // account UI, so the very first session can record + summarize
+                // with no sign-in. LoginView is only the fallback if anon fails.
+                BootstrapSplash()
             } else {
                 LoginView()
             }
+        }
+        .task {
+            if env.auth.user == nil, !didAttemptGuest {
+                await env.auth.ensureAnonymousIdentity()
+                didAttemptGuest = true
+            }
+        }
+        // A9.5 paywall — presented from billing state (quota hit, metered gate,
+        // trial banner, Settings), never at launch.
+        .sheet(isPresented: $billing.isPaywallPresented) {
+            PaywallView()
+                .environment(env)
+                .algoMinutesSheet([.large])
+        }
+        // A6.3 account prompt — presented after the first summary, never at launch.
+        .sheet(isPresented: $billing.isAccountPromptPresented) {
+            AccountUpgradeSheet(onSeePlans: { env.billing.presentPaywall(.firstSummary) })
+                .environment(env)
+                .algoMinutesSheet([.large])
         }
         .background(OwllBackground())
         // Support Dynamic Type broadly, but clamp the largest accessibility
@@ -28,6 +56,9 @@ struct RootView: View {
             // Uploads killed while backgrounded resume from disk on return.
             if phase == .active, env.auth.user != nil {
                 Task { await env.resumePendingUploads() }
+                // Re-read entitlement: a subscription may have changed in the
+                // system Settings while we were backgrounded.
+                Task { await env.billing.refresh() }
             }
         }
         .alert("AlgoMinutes", isPresented: Binding(
@@ -37,6 +68,24 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(env.alertMessage ?? "")
+        }
+    }
+}
+
+/// Minimal launch gate shown while the anonymous guest identity is being
+/// established (A6.3). Brief; no account UI here by design.
+struct BootstrapSplash: View {
+    var body: some View {
+        ZStack {
+            OwllBackground()
+            VStack(spacing: Theme.Spacing.lg) {
+                Image("Logo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 96)
+                    .accessibilityHidden(true)
+                ProgressView().tint(Theme.heading)
+            }
         }
     }
 }

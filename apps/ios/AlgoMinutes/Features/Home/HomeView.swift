@@ -71,6 +71,8 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
                     header
                         .appearFade(index: 0)
+                    // A9.3 trial countdown; shows only while state == trialing.
+                    TrialBanner()
                     if pendingCount > 0 { pendingBanner }
                     captureActions
                 }
@@ -254,6 +256,9 @@ struct HomeView: View {
 
     private func featureCard(_ action: CaptureAction, style: OwllCardStyle, index: Int) -> some View {
         Button {
+            // A9.3: on the free floor (post-trial, unpaid) metered capture is
+            // gated behind the paywall; trial/active pass straight through.
+            guard env.billing.guardMeteredAction() else { return }
             activeSheet = action
         } label: {
             OwllCard(style: style) {

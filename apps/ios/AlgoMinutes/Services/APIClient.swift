@@ -19,12 +19,17 @@ enum APIError: LocalizedError {
     case notSignedIn
     case http(status: Int, message: String?)
     case invalidResponse
+    /// A9.4: the server refused a metered action because the user is out of
+    /// quota (HTTP 402, `error: "quota_exceeded"`). Modelled as its own case so
+    /// callers can present the paywall instead of surfacing a raw 402 alert.
+    case quotaExceeded
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Not signed in"
         case .http(let status, let message): return message ?? "Request failed (\(status))"
         case .invalidResponse: return "Invalid server response"
+        case .quotaExceeded: return "You've used up your included minutes. Upgrade to keep going."
         }
     }
 }
@@ -66,9 +71,18 @@ final class APIClient: Sendable {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard (200..<300).contains(http.statusCode) else {
+            if Self.isQuota(status: http.statusCode, error: json?["error"] as? String) {
+                throw APIError.quotaExceeded
+            }
             throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
         }
         return json ?? [:]
+    }
+
+    /// A9.4: the server signals an exhausted quota with 402 + `quota_exceeded`.
+    /// Centralised so every endpoint maps it to the same typed error.
+    private static func isQuota(status: Int, error: String?) -> Bool {
+        status == 402 && error == "quota_exceeded"
     }
 
     /// `post` variant that decodes the body into a `Decodable` rather than a
@@ -79,6 +93,9 @@ final class APIClient: Sendable {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            if Self.isQuota(status: http.statusCode, error: json?["error"] as? String) {
+                throw APIError.quotaExceeded
+            }
             throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
@@ -446,5 +463,47 @@ final class APIClient: Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    // MARK: - Billing (A9.4) + analytics (A9.6)
+    //
+    // Field names mirror packages/contracts/src/schemas/billing.ts exactly:
+    //   VerifyPurchaseRequest / VerifyPurchaseResponse, TrackEventRequest, and
+    //   async.ts EntitlementResponse. Entitlement is granted ONLY by the server
+    //   from a validated receipt — the client posts the StoreKit JWS and reads
+    //   back the resolved state; it never self-grants.
+    //
+    // TODO(A9-infra): confirm these routes when services/billing lands. Paths
+    // follow the existing `api/*` convention except `track`, which the plan
+    // pins to `/v1/events`.
+
+    /// Validate a StoreKit 2 signed transaction (JWS) server-side. On success the
+    /// server activates the entitlement keyed to the current user and echoes the
+    /// resolved state. Mirrors `VerifyPurchaseRequest` (rail: apple_storekit).
+    func verifyPurchase(jws: String) async throws -> VerifyPurchaseResponse {
+        try await postDecoded(
+            path: "api/verify-purchase",
+            body: ["rail": "apple_storekit", "jwsRepresentation": jws]
+        )
+    }
+
+    /// Read the server-resolved entitlement (A9.1). This is the ONLY source of
+    /// truth for trial/active/free_floor state and the trial countdown.
+    func fetchEntitlement() async throws -> EntitlementResponse {
+        try await postDecoded(path: "api/entitlement", body: [:])
+    }
+
+    /// A9.6 funnel event. Best-effort: analytics must never block a user action,
+    /// so callers wrap this in `try?`. Mirrors `TrackEventRequest`.
+    @discardableResult
+    func track(
+        event: AnalyticsEvent,
+        props: [String: Any]? = nil
+    ) async throws -> [String: Any] {
+        var body: [String: Any] = ["event": event.rawValue]
+        if let props, !props.isEmpty { body["props"] = props }
+        // Client stamps the moment; the server overrides if it prefers its clock.
+        body["occurredAt"] = ISO8601DateFormatter.entitlement.string(from: Date())
+        return try await post(path: "v1/events", body: body)
     }
 }
