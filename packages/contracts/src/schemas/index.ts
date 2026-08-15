@@ -12,3 +12,4 @@ export * from './share';
 export * from './updateNote';
 export * from './account';
 export * from './async';
+export * from './billing';
