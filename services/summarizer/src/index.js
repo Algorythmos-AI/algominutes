@@ -16,6 +16,7 @@ const sharedTemplates = loadShared('summary-templates.cjs');
 const sharedIntelligence = loadShared('intelligence.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
+const spendGuard = loadShared('spend-guard.cjs');
 const handler = require('./handler');
 
 const app = express();
@@ -32,6 +33,21 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 app.post('/', async (req, res) => {
   const traceId = sharedLogger.traceIdFrom(req.headers);
   const log = rootLog.child({ traceId, noteId: req.body && req.body.noteId });
+
+  // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
+  // spend hit the daily cap.
+  try {
+    await spendGuard.assertUnderDailyCap({ log });
+  } catch (err) {
+    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
+      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
+      // Ack (200) so Cloud Tasks does not retry-storm while capped.
+      // TODO(A9): mark the note 'deferred', re-drive on reset, refund minutes (A7.4).
+      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
+    }
+    throw err;
+  }
+
   try {
     await handler.handle(req.body || {}, {
       log,

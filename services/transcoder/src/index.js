@@ -17,6 +17,7 @@ function loadShared(name) {
 
 const sharedLogger = loadShared('logger.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
+const spendGuard = loadShared('spend-guard.cjs');
 const handler = require('./handler');
 const db = require('./db');
 const storage = require('./storage');
@@ -51,6 +52,22 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 app.post('/', async (req, res) => {
   const traceId = sharedLogger.traceIdFrom(req.headers);
   const log = rootLog.child({ traceId, kind: req.body && req.body.kind, jobId: req.body && req.body.jobId });
+
+  // §4.6 spend circuit breaker — this is the pipeline entry and the priciest
+  // stage (paid STT). Halt before spending if today's cost hit the daily cap.
+  try {
+    await spendGuard.assertUnderDailyCap({ log });
+  } catch (err) {
+    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
+      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
+      // Ack (200) so Cloud Tasks does not retry-storm while capped.
+      // TODO(A9): mark the note 'deferred', re-drive when spend resets, and
+      // refund metered minutes (A7.4) rather than silently dropping the task.
+      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
+    }
+    throw err;
+  }
+
   const tasks = tasksClient.makeClient({ env, log });
   const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env };
 
