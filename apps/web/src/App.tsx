@@ -30,7 +30,7 @@ import YouTubeImport from './components/YouTubeImport';
 import EqualizerBg from './components/EqualizerBg';
 import JobStatus from './components/JobStatus';
 import Waveform from './components/Waveform';
-import { authedFetch, setAuthExpiredHandler } from './lib/authedFetch';
+import { authedFetch, setAuthExpiredHandler, setQuotaExceededHandler } from './lib/authedFetch';
 import SurfaceBoundary from './components/SurfaceBoundary';
 import { markNoteError } from './lib/noteStatus';
 import { draftFromNote, saveNoteEdits, renameNote, type EditableNoteFields } from './lib/noteEdit';
@@ -48,13 +48,19 @@ import DeleteAccountConfirmation from './components/DeleteAccountConfirmation';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
 import SharedNote from './pages/SharedNote';
+import Paywall, { TrialBanner, type PaywallContext } from './components/Paywall';
+import AccountPrompt from './components/AccountPrompt';
 import { signInErrorMessage } from './lib/authErrors';
+import { reportCrash } from './lib/crashReport';
+import { fetchEntitlement, track } from './lib/billing';
+import { upgradeGuestWithGoogle, upgradeGuestWithApple } from './lib/guestAuth';
+import type { EntitlementResponse } from '@algominutes/contracts';
 import AdminCostsCard from './components/AdminCostsCard';
 import { isAdmin } from './lib/admin';
 import { recognizeText } from './lib/ocr';
 import { extractTextFromFile } from './lib/documentText';
 import { imagesToPdfBlob } from './lib/imagePdf';
-import { auth, db, storage } from './firebase';
+import { auth, db, storage, ensureAnonymousIdentity } from './firebase';
 import { ref, uploadBytes, uploadBytesResumable } from 'firebase/storage';
 import type { User } from 'firebase/auth';
 import {
@@ -228,6 +234,21 @@ export default function App() {
   // signInWith… popups before the disabled state propagates.
   const loginInFlightRef = useRef(false);
   const [signingIn, setSigningIn] = useState(false);
+
+  // ── A9 billing + A6.3 guest state ──────────────────────────────
+  const [entitlement, setEntitlement] = useState<EntitlementResponse | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallContext, setPaywallContext] = useState<PaywallContext>('manual');
+  const [showAccountPrompt, setShowAccountPrompt] = useState(false);
+  // Guard rails so once-per-session side effects don't re-fire on re-render or
+  // on Firestore echo: anonymous bootstrap, and the first-summary funnel event.
+  const anonAttemptedRef = useRef(false);
+  const firstSummaryFiredRef = useRef(false);
+  const openPaywall = (context: PaywallContext) => {
+    setPaywallContext(context);
+    setShowPaywall(true);
+  };
+
   const isBroadcasting = broadcastState === 'starting' || broadcastState === 'recording';
   const broadcastSeconds = Math.floor(broadcastDurationMs / 1000);
 
@@ -498,11 +519,92 @@ export default function App() {
     return () => setAuthExpiredHandler(null);
   }, []);
 
+  // A9.5: any metered call that returns 402 quota_exceeded surfaces the paywall
+  // with the server-returned entitlement. Wired here so the fetch layer stays
+  // UI-agnostic (mirrors the auth-expired handler above).
+  useEffect(() => {
+    setQuotaExceededHandler((ent) => {
+      if (ent) setEntitlement(ent);
+      void track('quota_hit', { state: ent?.state ?? 'unknown' });
+      openPaywall('quota');
+    });
+    return () => setQuotaExceededHandler(null);
+  }, []);
+
+  // A9.1: pull the server-resolved entitlement whenever the signed-in identity
+  // changes (including the anonymous guest — it still has a Firebase token).
+  // This is what the trial banner and free_floor gating read.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    fetchEntitlement(controller.signal)
+      .then((ent) => { if (!cancelled) setEntitlement(ent); })
+      .catch((err) => {
+        if ((err as { name?: string })?.name !== 'AbortError') {
+          reportCrash('entitlement_fetch_failed', err);
+        }
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [user]);
+
+  // A9.6: purchase / cancellation funnel events on return from Stripe. Checkout
+  // and the Billing Portal redirect back with a marker query param; emit the
+  // event, refresh entitlement, then strip the param so a reload can't re-fire.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get('checkout');
+    const billing = params.get('billing');
+    if (!checkout && !billing) return;
+
+    if (checkout === 'success') void track('purchase');
+    if (billing === 'cancelled') void track('cancellation');
+
+    // Re-resolve entitlement so UI reflects the new plan without a manual reload.
+    if (auth.currentUser) {
+      fetchEntitlement()
+        .then(setEntitlement)
+        .catch((err) => reportCrash('entitlement_refresh_failed', err));
+    }
+
+    params.delete('checkout');
+    params.delete('billing');
+    const qs = params.toString();
+    try {
+      window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    } catch (err) {
+      reportCrash('billing_return_url_cleanup_failed', err);
+    }
+  }, []);
+
   // Auth + workspace bootstrap
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setAuthResolved(true);
+
+      // A6.3 guest mode: never a login wall at launch. If nobody is signed in,
+      // open an anonymous session so the app is usable immediately; the account
+      // prompt comes later, after the first summary. If anonymous auth is not
+      // enabled for the project, signInAnonymously throws and we fall through to
+      // the existing login screen — so behaviour is preserved either way.
+      if (!u) {
+        if (!anonAttemptedRef.current) {
+          anonAttemptedRef.current = true;
+          try {
+            await ensureAnonymousIdentity();
+          } catch (err) {
+            reportCrash('anonymous_signin_failed', err);
+          }
+        }
+        return;
+      }
+
+      // A permanent (non-anonymous) user means either a direct sign-in or a
+      // successful guest upgrade — close the guest prompt if it was open.
+      if (!u.isAnonymous) setShowAccountPrompt(false);
+
       if (u) {
         // Uncaught, this rejected into nothing — and it is the first Firestore
         // call of the session, so it is exactly where a rules or connectivity
@@ -651,6 +753,39 @@ export default function App() {
     }
   }, [notes, selectedNote]);
 
+  // A9.6 + A6.3: the first time the user actually views a finished summary,
+  // emit `first_summary_viewed`, then show the post-first-summary prompt — the
+  // account prompt for a guest (A6.3), otherwise the paywall (A9.5). Never at
+  // launch: this only fires on a ready summary. Once per browser (localStorage)
+  // so it isn't nagged on every visit, plus a ref so a Firestore echo can't
+  // double-fire it within the session.
+  useEffect(() => {
+    if (!user || !selectedNote) return;
+    if (firstSummaryFiredRef.current) return;
+    if (selectedNote.status !== 'ready' || noteView !== 'summary') return;
+    if (!selectedNote.summary?.gist) return;
+
+    let alreadySeen = false;
+    try { alreadySeen = localStorage.getItem('first_summary_viewed') === '1'; } catch { /* ignore */ }
+    if (alreadySeen) { firstSummaryFiredRef.current = true; return; }
+
+    firstSummaryFiredRef.current = true;
+    try { localStorage.setItem('first_summary_viewed', '1'); } catch { /* ignore */ }
+    void track('first_summary_viewed', { noteType: selectedNote.type });
+
+    // Defer the prompt so the summary is on screen first, not covered instantly.
+    const t = setTimeout(() => {
+      if (!mountedRef.current) return;
+      if (auth.currentUser?.isAnonymous) {
+        setShowAccountPrompt(true);
+      } else if (entitlement?.state !== 'active') {
+        openPaywall('first_summary');
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, selectedNote, noteView]);
+
   // Leave edit mode whenever we navigate to a different note (or close the
   // detail view). Keyed on id only, so our own save — which keeps the same
   // id — doesn't yank the user out mid-edit; the explicit save handler exits.
@@ -797,6 +932,15 @@ export default function App() {
   };
 
   const startAction = (type: NoteType) => {
+    // A9.3 free floor: once the reverse trial has lapsed to the thin free tier
+    // (or the current period is over quota), gate the metered capture/import
+    // actions behind the paywall. Server-side enforcement (402) is the real
+    // guard; this just avoids a wasted round-trip and shows intent up front.
+    const meteredTypes: NoteType[] = ['recording', 'import_audio', 'online_meeting', 'youtube'];
+    if (meteredTypes.includes(type) && (entitlement?.state === 'free_floor' || entitlement?.overQuota)) {
+      openPaywall('free_floor');
+      return;
+    }
     setPendingNoteType(type);
     if (type === 'import_audio' || type === 'youtube') {
       setShowImportSheet(true);
@@ -1475,6 +1619,31 @@ export default function App() {
   const accentGrad = 'linear-gradient(135deg, #F2F7FF 0%, #DCEAFF 100%)';
   const accentShadow = '0 6px 24px rgba(91, 103, 240,0.45)';
 
+  // A9.5 paywall + A6.3 account prompt. Shared across the home and note-detail
+  // views because both triggers (first-summary, quota-hit) can fire while a note
+  // is open — and the note-detail view returns early, before the home tree.
+  const billingModals = (
+    <>
+      <Paywall
+        open={showPaywall}
+        context={paywallContext}
+        entitlement={entitlement}
+        onClose={() => setShowPaywall(false)}
+        onShowTerms={() => { setShowPaywall(false); showStaticPage('terms'); }}
+        onShowPrivacy={() => { setShowPaywall(false); showStaticPage('privacy'); }}
+      />
+      <AccountPrompt
+        open={showAccountPrompt}
+        platform={platform}
+        onDismiss={() => setShowAccountPrompt(false)}
+        onUpgradeGoogle={async () => { await upgradeGuestWithGoogle(); }}
+        onUpgradeApple={async () => { await upgradeGuestWithApple(); }}
+        onShowTerms={() => { setShowAccountPrompt(false); showStaticPage('terms'); }}
+        onShowPrivacy={() => { setShowAccountPrompt(false); showStaticPage('privacy'); }}
+      />
+    </>
+  );
+
   // ─────────────────────────────────────────────────────────────
   // STATIC LEGAL PAGES — before the auth gate, deliberately
   // ─────────────────────────────────────────────────────────────
@@ -1980,6 +2149,11 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* Paywall / account prompt can be triggered while a note is open
+            (first-summary view, or a 402 during processing), so they render
+            here too — the note-detail view returns before the home tree. */}
+        {billingModals}
       </div>
     );
   }
@@ -2028,10 +2202,19 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* UPGRADE button removed for the alpha — no IAP wired,
-                    Apple App Store rejects non-IAP paywall buttons. Re-add
-                    behind StoreKit/IAP integration when monetization is in
-                    scope. See plan v3.2 §ζ.minimal. */}
+                {/* A9.5 web upgrade entry point. Stripe on the web is not subject
+                    to the App Store IAP restriction that gated the native
+                    button, so the paywall is reachable here directly. Hidden
+                    once the user is already on Pro. */}
+              {platform === 'web' && entitlement?.state !== 'active' && (
+                <button
+                  onClick={() => openPaywall('manual')}
+                  className="px-4 py-2 rounded-xl text-xs font-bold"
+                  style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.35)', color: '#FFFFFF', fontFamily: 'Rajdhani, sans-serif' }}
+                >
+                  Upgrade
+                </button>
+              )}
               </div>
 
               {/* Greeting */}
@@ -2042,6 +2225,9 @@ export default function App() {
                 {user.displayName?.split(' ')[0] ?? 'there'}
               </h2>
             </div>
+
+            {/* ── A9.3 reverse-trial banner (countdown from trialEndsAt) ── */}
+            <TrialBanner entitlement={entitlement} onUpgrade={() => openPaywall('trial')} />
 
             {/* ── Broadcast active banner ── */}
             {isBroadcasting && (
@@ -2326,8 +2512,17 @@ export default function App() {
              <div className="owll-card p-5 space-y-4">
                <div className="flex justify-between items-center">
                  <span style={{ color: '#E5E0DF', fontFamily: 'Titillium Web, sans-serif' }}>Account</span>
-                 <span style={{ color: '#8C8684', fontSize: '0.85rem' }}>{user.email}</span>
+                 <span style={{ color: '#8C8684', fontSize: '0.85rem' }}>{user.isAnonymous ? 'Guest' : user.email}</span>
                </div>
+               {user.isAnonymous && (
+                 <button
+                   onClick={() => setShowAccountPrompt(true)}
+                   className="w-full py-3 mt-1 rounded-xl text-sm font-bold"
+                   style={{ background: accentGrad, boxShadow: accentShadow, color: '#0a0a0a', fontFamily: 'Rajdhani, sans-serif' }}
+                 >
+                   Create an account to save your work
+                 </button>
+               )}
                <div className="flex justify-between items-center pt-4" style={{ borderTop: '1px solid rgba(78,78,78,0.3)' }}>
                  <span style={{ color: '#E5E0DF', fontFamily: 'Titillium Web, sans-serif' }}>Workspace ID</span>
                  <span style={{ color: '#8C8684', fontSize: '0.75rem' }}>{workspaceId(user.uid)}</span>
@@ -2579,6 +2774,9 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ── A9.5 paywall + A6.3 account prompt ── */}
+      {billingModals}
     </div>
   );
 }
