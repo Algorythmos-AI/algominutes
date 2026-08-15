@@ -30,7 +30,7 @@ import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 // A9.2 metered-minutes gate — assert quota and charge the ledger BEFORE any paid
 // transcode work is queued. resolveEntitlement/assertCanMeter/meterMinutes all
 // live in the @algominutes/db repo layer (never trust the client for quota).
-import { assertCanMeter, meterMinutes, QuotaExceededError } from '@algominutes/db';
+import { assertCanMeter, meterMinutes, QuotaExceededError, ensureTrial } from '@algominutes/db';
 import { toEntitlementResponse } from './entitlement.js';
 
 const { MAX_AUDIO_BYTES, isValidId, publicErrorFor, enforceUsageBudget } = intelligenceModule;
@@ -212,6 +212,9 @@ export async function processIntelligenceRoute(req, res) {
     ? Math.ceil(durationSecEstimate / 60)
     : 0;
   try {
+    // A9.3 reverse trial auto-starts at first value (first metered action), not at
+    // install — idempotent, so a same-uid reinstall never restarts the 7 days.
+    await ensureTrial(callerUid);
     await assertCanMeter(callerUid, minutes);
     // Idempotent under Cloud Tasks / client retry: the UNIQUE idempotency_key
     // makes a replay a no-op, so we never double-charge a note's ingest.
