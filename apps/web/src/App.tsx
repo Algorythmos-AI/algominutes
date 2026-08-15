@@ -353,7 +353,7 @@ export default function App() {
 
   const startBroadcast = async () => {
     if (platform === 'web') {
-      alert('Online meeting recording is only available on iOS.');
+      alert('Online meeting recording is available in the AlgoMinutes mobile app.');
       return;
     }
     // If isSupported throws (e.g., method missing on an older build), err on
@@ -1992,7 +1992,11 @@ export default function App() {
     { type: 'import_audio',  title: 'Import Files',          sub: 'Import audio and YouTube links',           tags: ['Audio','YouTube'], Icon: Plus  },
     { type: 'online_meeting',title: 'Record Online Meeting', sub: 'Google Meet and Microsoft Teams',         Icon: Bot  },
     { type: 'scan_text',     title: 'Scan Text',             sub: 'Read images, PDF, Word and create PDFs', tags: ['Image','PDF','DOCX'], Icon: Scan },
-  ];
+  ].filter(
+    // The web client is read-only and cannot capture another app's system audio,
+    // so it must not advertise online-meeting recording (A6.6 / ADR 0002).
+    (a) => !(platform === 'web' && a.type === 'online_meeting'),
+  );
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#030303', fontFamily: 'Titillium Web, sans-serif' }}>

@@ -20,7 +20,7 @@ struct LoginView: View {
                 .foregroundStyle(Theme.heading)
                 .padding(.top, 18)
 
-            Text("Record, transcribe, and chat with every meeting.")
+            Text("Record, transcribe, and get the minutes.")
                 .font(Typography.body(15))
                 .foregroundStyle(Theme.muted)
                 .multilineTextAlignment(.center)

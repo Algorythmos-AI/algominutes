@@ -23,7 +23,17 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   same pattern as contracts models. The exhaustive per-file migration of every remaining hardcoded string
   is a tracked follow-up — the infra + a real shared catalog + web wiring are in place.
 - **A6.4 / A6.6 delivered as audits** (`docs/audits/`), not implementation — the user scoped these as the
-  audit passes. Onboarding/sample-note/permission-explainer building and copy fixes execute from the audits.
+  audit passes. Onboarding/sample-note/permission-explainer building executes from the A6.4 audit later.
+- **A6.6 safe copy fixes applied now** (the rest await A5/A8): (V1) the web "Record Online Meeting" card is
+  filtered out on `platform === 'web'` — the read-only web client can't capture system audio, so it must
+  not advertise it (ADR 0002); (V2) the web alert no longer claims online recording is "iOS only" (Android
+  does it too); (V3) the iOS login tagline "…chat with every meeting" → "Record, transcribe, and get the
+  minutes." (iOS ships mic-only). "Wassup Doc" naming left for A5.
+- **iOS broadcast extension stays re-homed but MUST NOT ship unwired** (A6.6 N1). It is bundled
+  (`apps/ios/BroadcastExtension`) yet no in-app UI triggers it (no `RPSystemBroadcastPickerView`), which a
+  reviewer will question. Safe default: keep it in the repo (§5 protected asset); before the iOS
+  submission build, EITHER wire it (`RPSystemBroadcastPickerView` + honest capture copy + the A4 App Group)
+  OR exclude it from that build. Recorded in BLOCKERS — a decision for you, not resolved here (needs A4).
 
 ## A3 — Port, consolidate, contract
 
