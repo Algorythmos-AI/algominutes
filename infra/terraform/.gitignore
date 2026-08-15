@@ -1,0 +1,17 @@
+# Terraform working dirs & provider plugins — never committed.
+.terraform/
+
+# State files — contain the DB password in plaintext. MUST live only in the
+# GCS remote backend, NEVER in git.
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Plan output can also contain secret values.
+*.tfplan
+
+# The provider lock file IS committed on purpose: it pins provider hashes so
+# every operator resolves identical versions. (Only the two lines below keep it
+# tracked despite broad ignore tools; do NOT add *.hcl to this ignore list.)
+!.terraform.lock.hcl
