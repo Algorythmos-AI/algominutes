@@ -5,7 +5,8 @@
   "description": "Phase 3 long-audio + STT v2 router. Cloud Run service for the AlgoMinutes pipeline.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.0.0",

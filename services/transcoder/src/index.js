@@ -44,6 +44,17 @@ const env = {
   EMBEDDER_URL: process.env.EMBEDDER_URL || '',
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   LANGUAGE_CODES: process.env.LANGUAGE_CODES || 'en-US,en-GB,en-AU',
+  // Long-path STT engine seam. Default 'google' keeps the legacy per-chunk path
+  // (shadow-eval baseline / a1 fallback). Flip to 'assemblyai' after the shadow
+  // eval clears cutover; 'deepgram' is the failover (⚠️ exceeds Pro net revenue
+  // at the cap — see docs/DECISIONS.md "Diarisation"). Keys come from Secret
+  // Manager, never the repo.
+  STT_PROVIDER: process.env.STT_PROVIDER || 'google',
+  ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY || '',
+  ASSEMBLYAI_BASE_URL: process.env.ASSEMBLYAI_BASE_URL || '',
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY || '',
+  DEEPGRAM_BASE_URL: process.env.DEEPGRAM_BASE_URL || '',
+  DEEPGRAM_MODEL: process.env.DEEPGRAM_MODEL || '',
 };
 
 const rootLog = sharedLogger.logger.child({ svc: 'transcoder' });

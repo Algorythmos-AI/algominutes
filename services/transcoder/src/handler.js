@@ -8,6 +8,22 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const route = require('./route');
+const sttProvider = require('./stt-provider');
+
+// Content types for the whole-file providers when we hand them the original
+// upload untouched (no per-chunk FLAC transcode on the whole-file path). Both
+// AssemblyAI and Deepgram sniff most formats, but Deepgram's byte-body API wants
+// a Content-Type; default to a permissive audio type when the ext is unknown.
+const AUDIO_CONTENT_TYPES = {
+  '.flac': 'audio/flac', '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg', '.opus': 'audio/opus', '.webm': 'audio/webm',
+};
+function audioContentType(localPath, mimeType) {
+  if (mimeType && /^audio\//.test(mimeType)) return mimeType;
+  const ext = path.extname(localPath || '').toLowerCase();
+  return AUDIO_CONTENT_TYPES[ext] || 'audio/*';
+}
 
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
@@ -91,9 +107,20 @@ async function handleKickoff(payload, deps) {
         noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps,
       });
     } else {
-      await runChunkedPath({
-        noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps,
-      });
+      // Long path. STT_PROVIDER decides the engine: Google (null) keeps the
+      // legacy per-chunk pipeline; AssemblyAI/Deepgram diarise the WHOLE file in
+      // one pass (globally-consistent speaker tags, no chunk-boundary problem —
+      // DIARISATION-PLAN §3). Fast-path for short clips is unaffected.
+      const provider = sttProvider.getProvider(env);
+      if (provider) {
+        await runWholeFilePath({
+          noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps,
+        });
+      } else {
+        await runChunkedPath({
+          noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps,
+        });
+      }
     }
   } catch (err) {
     log.error({ err, noteId }, 'kickoff_failed');
@@ -189,6 +216,14 @@ async function handleSttPoll(payload, deps) {
   if (chunkRow.status === 'done') {
     log.info({ chunkId }, 'stt_poll_already_done');
     return;
+  }
+
+  // Whole-file provider jobs store a provider-prefixed operation id
+  // (`assemblyai:<id>`). Route those to the whole-file poll; Google's opaque LRO
+  // names fall through to the legacy per-chunk path below.
+  const decoded = sttProvider.decodeOperationId(chunkRow.sttOperationId);
+  if (decoded.provider) {
+    return handleWholeFilePoll({ decoded, chunkRow, payload, deps });
   }
 
   const op = await stt.checkOperation(chunkRow.sttOperationId);
@@ -324,6 +359,17 @@ async function handleSttPoll(payload, deps) {
   }
 
   const lines = stt.wordsToLines(kept);
+  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+}
+
+// Shared completion tail for BOTH the Google per-chunk path and the whole-file
+// provider path: write lines (redacted inside the repo), run the atomic
+// completion gate, mirror progress, and — once every chunk is done — enqueue the
+// summariser + embedder and clean up intermediate GCS audio. Factored out so the
+// idempotency guarantees (markChunkDone, claim* exactly-once, ON CONFLICT line
+// writes) are identical no matter which engine produced the lines.
+async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps }) {
+  const { db, mirror, tasks, storage, log } = deps;
 
   const c4 = await db.pool().connect();
   try {
@@ -378,4 +424,149 @@ async function handleSttPoll(payload, deps) {
   }
 }
 
-module.exports = { handle, handleKickoff, handleSttPoll };
+// ── Whole-file provider path (AssemblyAI primary / Deepgram failover) ──────────
+//
+// One audio_chunks row (idx 0, spanning the whole file) carries the completion +
+// idempotency machinery, so the atomic gate, DLQ, refund, and terminal-failure
+// tails are reused unchanged. There is no ffmpeg chunking, no GCS chunk upload,
+// no per-chunk offset math, and no overlap dedup — the provider diarises the
+// whole file in one pass and returns absolute-ms lines with GLOBAL speaker tags.
+async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps }) {
+  const { db, mirror, tasks } = deps;
+  // Bind correlation fields so the low-level provider client's log lines carry
+  // noteId/workspaceId (CLAUDE.md §logging), which the generic client can't know.
+  const plog = log.child({ noteId, workspaceId, provider: provider.name });
+
+  const client = await db.pool().connect();
+  try {
+    await db.upsertNoteStatus(client, { noteId, status: 'transcribing', chunksTotal: 1 });
+  } finally {
+    client.release();
+  }
+  await mirror.mirrorStatus({ workspaceId, noteId, status: 'transcribing' });
+  await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: 1 });
+
+  let chunkId;
+  const c = await db.pool().connect();
+  try {
+    chunkId = await db.insertAudioChunkRow(c, {
+      noteId, idx: 0, startSec: 0, endSec: durationSec,
+      storagePath: `wholefile:${provider.name}`,
+    });
+  } finally { c.release(); }
+
+  const languageCodes = (env.LANGUAGE_CODES || 'en-US')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+
+  if (provider.mode === 'inline') {
+    // Deepgram: synchronous API — transcribe now, while the audio is still on
+    // local disk, then complete exactly like the poll path would.
+    const lines = await provider.transcribeInline({
+      audioPath: inputLocal,
+      languageCodes,
+      contentType: audioContentType(inputLocal, mimeType),
+      log: plog,
+    });
+    await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+    return;
+  }
+
+  // 'poll' (AssemblyAI): submit the whole file (uploads bytes to the vendor),
+  // store the job id prefixed with the provider name, and hand off to the
+  // existing STT poll loop. The local file is not needed after submit — the
+  // vendor already holds the audio.
+  const jobId = await provider.submit({ audioPath: inputLocal, languageCodes, log: plog });
+  const operationName = sttProvider.encodeOperationId(provider.name, jobId);
+
+  const c2 = await db.pool().connect();
+  try { await db.setChunkOperation(c2, { chunkId, operationName }); }
+  finally { c2.release(); }
+
+  await tasks.enqueue({
+    kind: STT_POLL,
+    jobId: payloadJobId(),
+    chunkId, noteId, workspaceId,
+  }, 60);
+}
+
+// Poll a whole-file provider job (AssemblyAI). Mirrors the Google poll loop's
+// bounded re-enqueue + terminal-failure handling, but the "done" branch maps the
+// provider's neutral lines straight through — no offset shift, no overlap dedup
+// (single whole-file chunk, globally-consistent tags) — then reuses
+// completeChunkAndAdvance.
+async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
+  const { chunkId, noteId, workspaceId, jobId, poll = 0 } = payload;
+  const { db, tasks, mirror, log, env, traceId, terminalHooks } = deps;
+  const provider = sttProvider.getProvider(env);
+  const plog = log.child({ noteId, workspaceId, chunkId, provider: provider && provider.name });
+
+  // Env changed out from under an in-flight job (STT_PROVIDER flipped): the
+  // operation id still names its origin provider, so fail loudly rather than
+  // poll the wrong engine.
+  if (!provider || provider.name !== decoded.provider) {
+    plog.error({ expected: decoded.provider, current: provider && provider.name }, 'stt_provider_mismatch');
+    throw new Error(`stt_provider_mismatch: op=${decoded.provider} current=${provider && provider.name}`);
+  }
+
+  const op = await provider.poll({ jobId: decoded.jobId, log: plog });
+
+  if (!op.done) {
+    if (poll >= MAX_STT_POLLS) {
+      plog.error({ polls: poll }, 'stt_poll_exhausted');
+      const c2 = await db.pool().connect();
+      try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
+      finally { c2.release(); }
+      await noteTerminal.markNoteFailed({
+        pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+        message: 'Transcription took too long and was stopped.',
+        log, event: 'stt_poll_exhausted',
+      });
+      if (terminalHooks) {
+        await terminalHooks.onTranscodeTerminalFailure({
+          pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+          attempts: poll, traceId,
+          payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
+          log,
+        });
+      }
+      return;
+    }
+    await tasks.enqueue(
+      { kind: STT_POLL, jobId, chunkId, noteId, workspaceId, poll: poll + 1 },
+      60,
+    );
+    return;
+  }
+
+  if (op.error) {
+    plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
+    const c2 = await db.pool().connect();
+    try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
+    finally { c2.release(); }
+    await noteTerminal.markNoteFailed({
+      pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+      message: 'Transcription failed for this recording.',
+      log, event: 'stt_operation_errored',
+    });
+    if (terminalHooks) {
+      await terminalHooks.onTranscodeTerminalFailure({
+        pool: db.pool(), noteId, workspaceId,
+        err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
+        log,
+      });
+    }
+    return;
+  }
+
+  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: op.lines, deps });
+
+  // The transcript is safe in Postgres; ask the vendor to drop its copy now
+  // rather than waiting out its retention TTL. Best-effort — never throws.
+  if (provider.deleteRemote) {
+    await provider.deleteRemote({ jobId: decoded.jobId, log: plog });
+  }
+}
+
+module.exports = { handle, handleKickoff, handleSttPoll, completeChunkAndAdvance, runWholeFilePath };
