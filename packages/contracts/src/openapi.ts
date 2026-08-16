@@ -87,6 +87,9 @@ export function buildRegistry(): OpenAPIRegistry {
     ['NoteEditSummary', S.NoteEditSummary],
     ['UpdateNoteRequest', S.UpdateNoteRequest],
     ['UpdateNoteResponse', S.UpdateNoteResponse],
+    ['NoteSpeaker', S.NoteSpeaker],
+    ['SetNoteSpeakersRequest', S.SetNoteSpeakersRequest],
+    ['SetNoteSpeakersResponse', S.SetNoteSpeakersResponse],
     ['DeleteAccountSummary', S.DeleteAccountSummary],
     ['DeleteAccountResponse', S.DeleteAccountResponse],
     ['DeleteAccountError', S.DeleteAccountError],
@@ -154,6 +157,24 @@ export function buildRegistry(): OpenAPIRegistry {
       403: errorResponse('Not your note / workspace mismatch.'),
       404: errorResponse('Note not found.'),
       500: errorResponse('Update failed.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: `${API_BASE_PATH}/notes/{id}/speakers`,
+    summary: 'Name the diarised speakers of a note (per-note, ADR 0005).',
+    tags: ['notes'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.SetNoteSpeakersRequest) },
+    responses: {
+      200: { description: 'Speaker map updated.', ...json(S.SetNoteSpeakersResponse) },
+      400: errorResponse('Invalid note id / no valid speaker entries.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('Note not found (or caller is not a member).'),
+      500: errorResponse('Failed to update speakers.'),
     },
   });
 

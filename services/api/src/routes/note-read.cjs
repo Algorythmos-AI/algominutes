@@ -228,10 +228,15 @@ async function fetchTranscriptPage({ noteId, uid, cursor, limit, log }) {
   // Row-wise comparison is index-friendly against
   // transcript_lines_note_keyset_idx (note_id, start_ms, id). Explicit casts
   // because start_ms is INTEGER and id is BIGINT.
+  // transcript_lines is aliased `tl` so we can LEFT JOIN the per-note speaker
+  // rename map (note_speakers) on (note_id, speaker_tag). ns.display_name, when
+  // present, is the name a user gave a diarised speaker (ADR 0005 §4) and
+  // resolves ahead of the "Speaker N" fallback. MEMBERSHIP_EXISTS references
+  // only $1/$2 and its own subquery tables, so it drops in unchanged.
   const where = cursor
-    ? `WHERE note_id = $1 AND ${MEMBERSHIP_EXISTS}
-              AND (start_ms, id) > ($3::int, $4::bigint)`
-    : `WHERE note_id = $1 AND ${MEMBERSHIP_EXISTS}`;
+    ? `WHERE tl.note_id = $1 AND ${MEMBERSHIP_EXISTS}
+              AND (tl.start_ms, tl.id) > ($3::int, $4::bigint)`
+    : `WHERE tl.note_id = $1 AND ${MEMBERSHIP_EXISTS}`;
   const values = cursor
     ? [noteId, uid, cursor.startMs, cursor.id, limit]
     : [noteId, uid, limit];
@@ -239,11 +244,14 @@ async function fetchTranscriptPage({ noteId, uid, cursor, limit, log }) {
 
   const r = await withQueryTimeout({
     timeoutMs: TIMEOUT_TRANSCRIPT_MS,
-    text: `SELECT id, chunk_id, speaker_tag, speaker_name, start_ms, end_ms,
-                  text, confidence
-             FROM transcript_lines
+    text: `SELECT tl.id, tl.chunk_id, tl.speaker_tag, tl.speaker_name,
+                  tl.start_ms, tl.end_ms, tl.text, tl.confidence,
+                  ns.display_name AS speaker_display_name
+             FROM transcript_lines tl
+             LEFT JOIN note_speakers ns
+               ON ns.note_id = tl.note_id AND ns.speaker_tag = tl.speaker_tag
             ${where}
-            ORDER BY start_ms ASC, id ASC
+            ORDER BY tl.start_ms ASC, tl.id ASC
             LIMIT ${limitParam}`,
     values,
     log,
@@ -255,6 +263,7 @@ async function fetchTranscriptPage({ noteId, uid, cursor, limit, log }) {
     const embedded = row.chunk_id === null || row.chunk_id === undefined;
     const split = embedded ? splitEmbeddedSpeaker(row.text) : { speaker: null, text: row.text || '' };
     const speaker = row.speaker_name
+      || row.speaker_display_name
       || split.speaker
       || (row.speaker_tag !== null && row.speaker_tag !== undefined ? `Speaker ${row.speaker_tag}` : null);
     return {

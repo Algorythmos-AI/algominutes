@@ -16,6 +16,7 @@ import { adminMiddleware } from '../middleware/admin.js';
 // server.ts-derived routes (ESM).
 import { processAudioRoute } from './process-audio.js';
 import { updateNoteRoute } from './update-note.js';
+import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
 // functions/index.js HTTP handlers, ported to services/api (ESM).
 import { processIntelligenceRoute } from './process-intelligence.js';
@@ -79,6 +80,9 @@ export function buildRouter() {
 
   // ── POST /v1/notes/update ── server.ts /api/update-note (updateNote twin) ─
   router.post('/notes/update', authMiddleware, wrap(updateNoteRoute));
+
+  // ── POST /v1/notes/:id/speakers ── name diarised speakers (ADR 0005) ────
+  router.post('/notes/:id/speakers', authMiddleware, wrap(setNoteSpeakersRoute));
 
   // ── POST /v1/notes/regenerate-summary ── functions/index.js regenerateSummary
   router.post('/notes/regenerate-summary', authMiddleware, wrap(regenerateSummaryRoute));
