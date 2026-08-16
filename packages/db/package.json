@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./db": "./src/db.ts",
     "./notes-repo": "./src/notes-repo.ts",
+    "./note-speakers-repo": "./src/note-speakers-repo.ts",
     "./search-repo": "./src/search-repo.ts",
     "./embeddings": "./src/embeddings.ts",
     "./*": "./src/*"
