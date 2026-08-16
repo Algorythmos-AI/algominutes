@@ -5,7 +5,7 @@ interface Props {
   onBack?: () => void;
 }
 
-const LAST_UPDATED = '13 August 2026';
+const LAST_UPDATED = '16 August 2026';
 const CONTACT_EMAIL = 'skalaliya@gmail.com';
 
 export default function PrivacyPolicy({ onBack }: Props) {
@@ -110,19 +110,25 @@ export default function PrivacyPolicy({ onBack }: Props) {
           </section>
 
           <section>
-            <h2 style={sectionHeading}>3. Where it is stored</h2>
+            <h2 style={sectionHeading}>3. Where it is stored and processed</h2>
             <p>
-              All data is stored in Google Cloud Platform regions in the United States
-              (primarily <code style={codeStyle}>us-central1</code>). Specifically:
+              Your data is <strong>stored</strong> in Google Cloud Platform in Australia
+              (<code style={codeStyle}>australia-southeast1</code>, Sydney). Some
+              <strong> processing</strong> happens in the United States &mdash; see
+              &ldquo;Third parties&rdquo; and &ldquo;Overseas processing&rdquo; below.
+              Specifically:
             </p>
             <ul style={listStyle}>
               <li>
                 <strong>Audio files</strong> live in a private Google Cloud Storage
-                bucket; no public links are created.
+                bucket in Australia; no public links are created. To transcribe a
+                recording, the audio is sent to our speech-to-text provider in the
+                United States (see section 4), which processes it and then deletes it.
               </li>
               <li>
                 <strong>Transcripts, summaries, embeddings, and search chunks</strong>{' '}
-                live in a private Cloud SQL Postgres database with vector indexing.
+                live in a private Cloud SQL Postgres database in Australia with vector
+                indexing.
               </li>
               <li>
                 <strong>Note metadata</strong> (titles, status, timestamps) is cached in
@@ -131,6 +137,11 @@ export default function PrivacyPolicy({ onBack }: Props) {
               <li>
                 <strong>Authentication state</strong> is managed by Firebase Auth.
               </li>
+              <li>
+                <strong>AI processing</strong> (summaries, chat, and text embeddings via
+                Google Vertex AI) currently runs in the United States. Only redacted
+                transcript text &mdash; not audio &mdash; is sent for this step.
+              </li>
             </ul>
           </section>
 
@@ -138,10 +149,21 @@ export default function PrivacyPolicy({ onBack }: Props) {
             <h2 style={sectionHeading}>4. Third parties we use</h2>
             <p>
               We use Google Cloud and Firebase for hosting, authentication, and storage.
-              We use Google&rsquo;s Vertex AI service (Gemini models) for speech-to-text
-              transcription, summarization, and text embeddings. These are sub-processors
-              under Google Cloud terms; data sent to them is governed by your project
-              configuration and is not used to train Google&rsquo;s general models.
+              We use Google&rsquo;s Vertex AI service (Gemini models) for summarization,
+              chat, and text embeddings; data sent to Vertex AI is governed by your
+              project configuration and is not used to train Google&rsquo;s general
+              models.
+            </p>
+            <p>
+              For <strong>speech-to-text transcription of longer recordings</strong> we
+              use <strong>AssemblyAI</strong>, a provider that processes audio in the
+              <strong> United States</strong>. Your recording is sent to AssemblyAI,
+              transcribed (including labelling who is speaking), and then deleted by the
+              provider after processing. We have opted out of the provider using your
+              content to train its models, and we ask the provider to delete each
+              transcript once we have stored it. Shorter recordings are transcribed by
+              Google&rsquo;s models instead. AssemblyAI is a sub-processor under a data
+              processing agreement.
             </p>
             <p>
               Before any transcript text is sent to Vertex AI for summarization, chat,
@@ -149,7 +171,10 @@ export default function PrivacyPolicy({ onBack }: Props) {
               identifiers with placeholder tags: Medicare and IHI numbers, credit card
               numbers, email addresses, phone numbers, bank account numbers and
               government identification numbers. The redaction layer is applied at the
-              application boundary, before the request leaves our backend.
+              application boundary, before the request leaves our backend.{' '}
+              <strong>Note:</strong> this redaction runs on transcript text, not on the
+              audio itself &mdash; the audio sent to the speech-to-text provider is
+              un-redacted, because it must be heard to be transcribed.
             </p>
             <p>
               This redaction works on patterns, so it does not remove everything that
@@ -199,6 +224,19 @@ export default function PrivacyPolicy({ onBack }: Props) {
               it, and to opt out of sale or sharing. We do not sell or share personal
               information, and we do not use it for cross-context behavioural
               advertising. The in-app account deletion satisfies the right to delete.
+            </p>
+            <p>
+              <strong>Australian users &mdash; overseas processing (APP 8):</strong> to
+              provide the service we disclose some personal information to overseas
+              recipients. Specifically, audio recordings are sent to our speech-to-text
+              provider (<strong>AssemblyAI</strong>) in the <strong>United States</strong>
+              {' '}for transcription, and transcript text is processed by Google Vertex
+              AI in the United States for summaries, chat, and search. Your data is
+              stored in Australia. We take reasonable steps to ensure these recipients
+              handle your information consistently with the Australian Privacy
+              Principles, including a data processing agreement with the provider and
+              provider commitments to delete audio after processing. By using the app to
+              transcribe a recording you consent to this cross-border disclosure.
             </p>
           </section>
 
