@@ -3,6 +3,51 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Diarisation — engine swap to AssemblyAI (ADR 0005, 2026-08-16)
+
+Scoped run against `docs/plans/DIARISATION-PLAN.md`. Fixes Bug 17 (0 of 4,253 lines carry a speaker tag).
+Approved build = plan option (c): **AssemblyAI primary, Deepgram as the failover seam**, Gemini fast-path
+for short clips untouched.
+
+- **Engine swap to a third-party whole-file diariser, NOT Google STT v1.** Chirp 3 (STT v2) diarisation is
+  `us`/`eu` multi-region only — **not `australia-southeast1`** — and can't return word-level timestamps with
+  diarisation on long audio; STT v1 gives diarisation+timings but is the most expensive tier and at
+  A$0.024/min the Pro cap loses money. AssemblyAI (~A$0.005/min) is the only option that clears the A9.3
+  pricing at the 1,500-min cap. The failover seam is **Deepgram**, not Google.
+- **⚠️ Deepgram EXCEEDS Pro net revenue.** ~A$0.0096/min → ~A$14.40 for a 1,500-min Pro cap vs ~A$12.75 net
+  revenue. Only AssemblyAI survives at the cap. Deepgram exists so a provider swap is a client change, not a
+  pipeline change — it must NOT be switched on for the Pro tier without a pricing change. Recorded as a known
+  failover cost per the plan.
+- **Whole-file diarisation in one pass.** The provider diarises the entire recording, so speaker tags are
+  GLOBALLY consistent (Speaker 1 = the same person start-to-end) and the old per-chunk chunk-boundary speaker
+  problem disappears by construction. This property and the pre-cutover shadow eval are the two things the
+  plan says must never be cut.
+- **STT engine lives behind a seam** (`services/transcoder/src/stt-provider.js`, env `STT_PROVIDER`).
+  Default stays **`google`** (legacy per-chunk path) as the shadow-eval baseline and the (a1) fallback until
+  AssemblyAI clears the shadow eval; cutover is flipping the env, not a code change. Whole-file lines map to
+  a neutral internal transcript shape so downstream (redaction → summariser → embedder) is provider-agnostic.
+- **AssemblyAI RETENTION FINDING (residency obligation #1 — verified 2026-08-16 from primary sources).**
+  Async audio is **processed-then-deleted by default** (deletion begins at 72h; TTL configurable down to 1h;
+  uploaded audio deleted within 24–48h) — defensible. BUT AssemblyAI **trains on customer data BY DEFAULT**
+  (opt-in default; you must opt out), and **free-tier accounts cannot opt out**. Two defences are wired in
+  code: (1) we DELETE each transcript on the vendor right after persisting it to Postgres
+  (`assemblyai.deleteRemote`), and (2) Deepgram requests set `mip_opt_out=true`. The **account-level
+  model-training opt-out on a PAID plan** and an **executed DPA** are hard preconditions, tracked in
+  BLOCKERS — not optional. Full evidence with quotes/URLs: `docs/audits/DIARISATION-VENDOR-RETENTION.md`.
+- **Data residency: US processing ACCEPTED; storage stays `australia-southeast1`.** Audio egresses to the US
+  for transcription (AssemblyAI primary US region; EU/Dublin exists as a seam but US is the decision). This
+  makes the A10 store declarations' AU-only implication FALSE unless corrected — privacy policy, Play Data
+  Safety, and Apple labels updated to state cross-border US processing + APP 8 overseas-disclosure wording.
+- **Per-note speaker names for v1.** New `note_speakers(note_id, speaker_tag, display_name)` map + rename
+  chip + `POST /v1/notes/:id/speakers`. Cross-note learned names are DEFERRED — they need voice embeddings
+  and a voiceprint privacy stance we're not taking at launch (fast-follow with its own privacy note).
+- **Cost figures are LIST prices.** A11 must measure the real blended COGS/min before `FREE_FLOOR_MINUTES`
+  and the Pro included-minutes cap are fixed (ties to the open A9.4 / A9.3 items).
+- **Operating cost of the change:** no new service (the engine swaps inside the existing transcoder Cloud Run
+  service). New external dependency = AssemblyAI (primary) with Deepgram as a configured-but-off failover;
+  both are per-minute usage, no standing cost. New egress surface (audio → US) requires the DPA + a VPC
+  egress path to `api.assemblyai.com` (BLOCKERS).
+
 ## A10 — Launch blockers (diarisation skipped — its own scoped run)
 
 - **Share links SHIP ON.** All four hardening requirements verified met: token stored as sha256 hash

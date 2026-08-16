@@ -65,6 +65,43 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       without them).
 - [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7).
 
+## Diarisation launch blockers — needs YOU (AssemblyAI go-live)
+
+The engine swap is built behind a seam (`STT_PROVIDER`, default `google`). Flipping to `assemblyai` in
+production is gated on these — none are code, all are ops/legal/infra. Evidence for the retention items is
+`docs/audits/DIARISATION-VENDOR-RETENTION.md`.
+
+**Ops (`TODO(ops)`) — blocks flipping `STT_PROVIDER=assemblyai`:**
+- [ ] **Opt out of AssemblyAI's model-improvement program on a PAID account.** AssemblyAI trains on customer
+      data BY DEFAULT and **free-tier accounts cannot opt out**. Opt out via the dashboard Data Controls page
+      or data-opt-out@assemblyai.com. Do NOT point `ASSEMBLYAI_API_KEY` at a free-tier key. (Code already
+      deletes each transcript after persist and Deepgram sets `mip_opt_out=true`, but the AssemblyAI training
+      opt-out is account-level and cannot be set per request.)
+- [ ] **Put `ASSEMBLYAI_API_KEY` (+ `DEEPGRAM_API_KEY` for the failover) in Secret Manager** and wire them to
+      the transcoder Cloud Run service. Never commit keys. Optionally set the account audio-retention TTL to
+      the 1-hour minimum.
+
+**Legal (`TODO(legal)`) — APP 8 cross-border:**
+- [ ] **Execute the AssemblyAI Data Processing Addendum** (effective 2026-01-22; SCCs + Data Privacy
+      Framework) before production audio flows to the US. Deepgram DPA/BAA only if/when Deepgram is enabled.
+- [ ] **Consent opinion must cover cross-border disclosure (APP 8).** The privacy-policy draft now states
+      US processing + APP 8 accountable-disclosure wording (`apps/web/src/pages/PrivacyPolicy.tsx`); legal
+      must confirm the wording and that reasonable steps + accountability (APP 8.1) are satisfied. This rides
+      alongside the existing recording-consent opinion item above.
+
+**Infra (`TODO(A11)`):**
+- [ ] **VPC egress to `api.assemblyai.com` (and `api.deepgram.com`).** Cloud Run runs behind the VPC
+      connector + private IP; confirm the audio-egress path to the vendor is allowed (Cloud NAT / egress
+      rule). The Vertex private-IP setup does not cover third-party public endpoints.
+- [ ] **A11 measures real blended COGS/min** (AssemblyAI + Gemini + storage) BEFORE `FREE_FLOOR_MINUTES` and
+      the Pro included-minutes cap are fixed. The plan's cost figures are list prices, not measured.
+
+**Cannot verify without the above:**
+- [ ] **Shadow eval old-Google vs AssemblyAI on a real 2-speaker >30-min file** (harness built —
+      `services/db-job/src/handlers/eval-diarisation.js`, fixtures in `evals/diarisation/`) needs a live
+      AssemblyAI key + a labelled real recording. Not run in this session (no key, no network to the vendor).
+      Must clear the DER/boundary gate before cutover — do NOT flip `STT_PROVIDER` without it.
+
 ## 3. Business/engineering decisions deferred (safe default applied)
 
 Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to revisit:
