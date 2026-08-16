@@ -83,10 +83,11 @@ struct TranscriptLineRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 3) {
-            // Speaker and timestamp are both optional. Diarization is off in
-            // production, so most lines carry no label; a chip reading
-            // "Speaker" on every row would imply an attribution the data does
-            // not support, so the row simply omits it.
+            // Speaker and timestamp are both optional. On the diarised long
+            // path (ADR 0005) a line carries a real "Speaker N" / renamed name;
+            // short fast-path and undiarised lines carry none, and the row then
+            // simply omits it rather than implying an attribution the data does
+            // not support. (Tap-to-rename is a fast-follow — see BLOCKERS.)
             if !line.speaker.isEmpty || !line.time.isEmpty {
                 HStack(spacing: 8) {
                     if !line.speaker.isEmpty {

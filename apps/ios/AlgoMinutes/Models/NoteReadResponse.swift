@@ -32,21 +32,31 @@ extension TranscriptPageResponse.Line {
     /// Convert to the app's line type, assigning the ordinal the caller has
     /// reached so identity stays positional and stable across pages.
     ///
-    /// The speaker degrades rather than pretending: diarization is disabled in
-    /// production, so most rows carry no label at all and rendering "Speaker"
-    /// everywhere would imply an attribution the data does not support.
+    /// The speaker resolves from the server first, then degrades rather than
+    /// pretending. With whole-file diarisation (ADR 0005) the long path now
+    /// carries real speaker tags, and note-read resolves the display name:
+    /// a note_speakers rename → "Speaker N" → the fast-path embedded name.
     func asTranscriptLine(index: Int) -> TranscriptLine {
-        // One rule for both pipelines — see SpeakerLabel. speaker_tag wins
-        // when STT actually diarized; otherwise fall back to whatever the
-        // fast path embedded in the text.
         let split = SpeakerLabel.split(speaker: speaker, text: text)
-        let label = speakerTag.map { "Speaker \($0)" } ?? split.label
+        // Honour a server-resolved CUSTOM name (a note_speakers rename) — the
+        // server already did the resolution, so a rename shows up on-device
+        // without the client rebuilding "Speaker N" from the tag and dropping
+        // it. When the server only sent the bare "Speaker N" it would synthesise
+        // anyway, keep the existing contract: tag wins, then embedded label.
+        let synthesized = speakerTag.map { "Speaker \($0)" }
+        let label: String
+        if let s = speaker, !s.isEmpty, s != "Speaker", s != synthesized {
+            label = s
+        } else {
+            label = synthesized ?? split.label
+        }
         return TranscriptLine(
             index: index,
             speaker: label,
             text: split.text,
             time: startMs.map { formatTimestamp(ms: $0) } ?? "",
-            startMs: startMs
+            startMs: startMs,
+            speakerTag: speakerTag
         )
     }
 }

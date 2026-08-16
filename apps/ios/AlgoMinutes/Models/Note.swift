@@ -64,6 +64,11 @@ struct TranscriptLine: Equatable, Sendable, Identifiable {
     /// `/api/note` returns the real `start_ms`, which is what makes
     /// tap-to-seek land on the word rather than near it.
     var startMs: Double?
+    /// The diarization speaker tag (1, 2, …) when the line came from the
+    /// diarised long path, else nil. Defaulted so existing construction sites
+    /// (mirror decode, tests, text notes) are unaffected. Carried so a future
+    /// rename UI knows which speaker a chip renames (ADR 0005).
+    var speakerTag: Int? = nil
 
     var id: Int { index }
 }

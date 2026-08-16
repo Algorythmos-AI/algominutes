@@ -96,6 +96,17 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
 - [ ] **A11 measures real blended COGS/min** (AssemblyAI + Gemini + storage) BEFORE `FREE_FLOOR_MINUTES` and
       the Pro included-minutes cap are fixed. The plan's cost figures are list prices, not measured.
 
+**Client follow-ups (diarisation rename UX — the plan's #2 cut):**
+- [ ] **iOS tap-to-rename chip.** The endpoint + map + `APIClient.setNoteSpeaker` + the decode fix (server
+      speaker now wins) are built and UNBUILT-in-session (no Xcode/simulator). Remaining: make the speaker
+      chip tappable → rename alert → call `setNoteSpeaker` → refresh the transcript (TranscriptRepository is
+      idempotent-per-note, so it needs a forced reload or an optimistic in-place label update keyed on the
+      new `TranscriptLine.speakerTag`). Compile + device-test all iOS edits before ship.
+- [ ] **Web rename is blocked by architecture.** The web renders the Firestore mirror preview
+      (`{speaker, time, text}`, no `speakerTag`), so it ships raw "Speaker N". To add a web chip, either
+      carry `speakerTag` through the mirror or move the web onto the API transcript read (iOS's `/api/note`),
+      then add the chip + `authedFetch('/v1/notes/:id/speakers')`.
+
 **Cannot verify without the above:**
 - [ ] **Shadow eval old-Google vs AssemblyAI on a real 2-speaker >30-min file** (harness built —
       `services/db-job/src/handlers/eval-diarisation.js`, fixtures in `evals/diarisation/`) needs a live
