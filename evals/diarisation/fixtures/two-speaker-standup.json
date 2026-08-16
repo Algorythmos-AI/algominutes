@@ -1,0 +1,43 @@
+{
+  "id": "two-speaker-standup",
+  "description": "13-min two-person standup. A single Alice turn (590s–610s) spans the 600s chunk seam — the exact case the whole-file engine must keep as ONE speaker and the old per-chunk path splits.",
+  "durationMs": 780000,
+  "chunkSeamsMs": [600000],
+  "speakers": { "1": "Alice", "2": "Bob" },
+  "reference": [
+    { "speaker": 1, "startMs": 0, "endMs": 20000, "text": "Morning. Yesterday I finished the auth migration and started on the rate limiter." },
+    { "speaker": 2, "startMs": 20500, "endMs": 42000, "text": "Nice. I was blocked on the staging DB but it's back up now, so I'll pick up the export job today." },
+    { "speaker": 1, "startMs": 42500, "endMs": 60000, "text": "Great. Any concerns on the timeline for the export job?" },
+    { "speaker": 2, "startMs": 60500, "endMs": 95000, "text": "Should be fine. Two days at most. I'll ping you if the schema surprises me." },
+    { "speaker": 1, "startMs": 300000, "endMs": 330000, "text": "Quick follow-up from earlier: the rate limiter needs a config flag before we ship." },
+    { "speaker": 2, "startMs": 330500, "endMs": 360000, "text": "Add it to the feature flags doc and I'll wire it up." },
+    { "speaker": 1, "startMs": 590000, "endMs": 610000, "text": "One more thing before we wrap, this is the important bit that runs across the chunk boundary so keep me as one speaker here." },
+    { "speaker": 2, "startMs": 610500, "endMs": 640000, "text": "Got it, sounds good, I'll take the action item." },
+    { "speaker": 1, "startMs": 760000, "endMs": 778000, "text": "Thanks everyone, that's a wrap." }
+  ],
+  "hypotheses": {
+    "assemblyai_whole_file": [
+      { "speakerTag": 1, "startMs": 0, "endMs": 20200, "text": "Morning. Yesterday I finished the auth migration and started on the rate limiter." },
+      { "speakerTag": 2, "startMs": 20600, "endMs": 42100, "text": "Nice. I was blocked on the staging DB but it's back up now, so I'll pick up the export job today." },
+      { "speakerTag": 1, "startMs": 42600, "endMs": 60000, "text": "Great. Any concerns on the timeline for the export job?" },
+      { "speakerTag": 2, "startMs": 60600, "endMs": 95200, "text": "Should be fine. Two days at most. I'll ping you if the schema surprises me." },
+      { "speakerTag": 1, "startMs": 300100, "endMs": 330000, "text": "Quick follow-up from earlier: the rate limiter needs a config flag before we ship." },
+      { "speakerTag": 2, "startMs": 330600, "endMs": 360100, "text": "Add it to the feature flags doc and I'll wire it up." },
+      { "speakerTag": 1, "startMs": 590100, "endMs": 610000, "text": "One more thing before we wrap, this is the important bit that runs across the chunk boundary so keep me as one speaker here." },
+      { "speakerTag": 2, "startMs": 610600, "endMs": 640000, "text": "Got it, sounds good, I'll take the action item." },
+      { "speakerTag": 1, "startMs": 760100, "endMs": 778000, "text": "Thanks everyone, that's a wrap." }
+    ],
+    "google_per_chunk": [
+      { "speakerTag": 1, "startMs": 0, "endMs": 20200, "text": "Morning. Yesterday I finished the auth migration and started on the rate limiter." },
+      { "speakerTag": 2, "startMs": 20600, "endMs": 42100, "text": "Nice. I was blocked on the staging DB but it's back up now, so I'll pick up the export job today." },
+      { "speakerTag": 1, "startMs": 42600, "endMs": 60000, "text": "Great. Any concerns on the timeline for the export job?" },
+      { "speakerTag": 2, "startMs": 60600, "endMs": 95200, "text": "Should be fine. Two days at most. I'll ping you if the schema surprises me." },
+      { "speakerTag": 1, "startMs": 300100, "endMs": 330000, "text": "Quick follow-up from earlier: the rate limiter needs a config flag before we ship." },
+      { "speakerTag": 2, "startMs": 330600, "endMs": 360100, "text": "Add it to the feature flags doc and I'll wire it up." },
+      { "speakerTag": 1, "startMs": 590100, "endMs": 600000, "text": "One more thing before we wrap, this is the important bit that runs across the chunk" },
+      { "speakerTag": 2, "startMs": 600000, "endMs": 610000, "text": "boundary so keep me as one speaker here." },
+      { "speakerTag": 1, "startMs": 610600, "endMs": 640000, "text": "Got it, sounds good, I'll take the action item." },
+      { "speakerTag": 2, "startMs": 760100, "endMs": 778000, "text": "Thanks everyone, that's a wrap." }
+    ]
+  }
+}
