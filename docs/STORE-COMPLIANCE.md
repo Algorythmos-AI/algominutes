@@ -17,7 +17,7 @@
 
 | # | Data collected | Why (purpose) | Where it goes | Linked to user? | Used for tracking? | Retention (see DATA-RETENTION) |
 |---|---|---|---|---|---|---|
-| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Uploaded to **Cloud Storage** (GCS); temporary intermediate FLAC chunks during processing | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload |
+| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Stored in **Cloud Storage** (GCS) in **Australia** (`australia-southeast1`). For transcription, longer recordings are sent to **AssemblyAI in the United States** (sub-processor under a DPA), which transcribes then deletes the audio; shorter clips go to Google's models. | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload; provider copy deleted after processing |
 | 2 | **Transcripts** (user content derived from audio) | Core function — the readable record + summaries/action items | **Postgres** (source of truth: `transcript_lines`, `summaries`, `action_items`, `key_decisions`, `embeddings`) + **Firestore** cache | Yes | No | Until user deletes / user-set retention |
 | 3 | **Account email + Firebase uid** | Account identity, auth, workspace membership | **Firebase Auth** + **Postgres** (`users`, `workspace_members`) + **Firestore** cache | Yes | No | Until account deletion |
 | 4 | **Device push token (FCM)** | Notify user when a recording is transcribed/ready | **FCM** + stored server-side to target the device | Yes | No | Until token rotates / account deletion |
@@ -30,6 +30,13 @@ Notes:
   tracking, no location.** This is what "tracking = NONE" means concretely.
 - Camera / Photo Library (see §4) are used for **on-device text scanning input** and the
   scanned image is treated as **user content** (same class as transcripts) if uploaded.
+- **Cross-border processing (diarisation / ADR 0005):** storage is in Australia, but audio
+  is **processed in the United States** by AssemblyAI (speech-to-text) and transcript text
+  by Google Vertex AI (summaries/chat/embeddings). This is disclosed in the Privacy Policy
+  under APP 8. ⚠️ **The "not shared / sub-processor" position below holds ONLY if we have
+  opted out of AssemblyAI using our content to train its models** — that opt-out is
+  account-level and requires a paid plan (see `docs/BLOCKERS.md`). Until it is in place, a
+  "no sharing" store declaration would be inaccurate.
 
 ---
 
@@ -62,7 +69,7 @@ Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the ac
 
 | Data category → type | Collected | Shared | Purpose | Processed ephemerally? | Optional? |
 |---|---|---|---|---|---|
-| **Audio → Voice or sound recordings** | Yes | No | App functionality | No (stored) | No (core) |
+| **Audio → Voice or sound recordings** | Yes | No¹ | App functionality | No (stored in AU; processed then deleted by the US STT sub-processor) | No (core) |
 | **Files & docs / User content → Other user-generated content** (transcripts, scanned text) | Yes | No | App functionality | No | No |
 | **Personal info → Email address** | Yes | No | Account management, App functionality | No | No |
 | **Personal info → User IDs** (uid) | Yes | No | App functionality | No | No |
@@ -72,10 +79,22 @@ Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the ac
 | **Financial info → Purchase history** | Yes | No | App functionality | No | No |
 | **Location** | **No** | — | — | — | — |
 
+¹ **Sharing = No, conditional on the training opt-out.** Under Play's Data Safety
+definition, transferring data to a *service provider that processes it on your behalf* is
+not "sharing." AssemblyAI (US) and Google Vertex AI are sub-processors under that carve-out
+— BUT only while they do **not** use our content for their own purposes. AssemblyAI trains
+on customer data by default, so this "No" is accurate **only once the account-level
+model-training opt-out is in place** (paid plan; see BLOCKERS). If that opt-out is not done,
+change this to "Yes (shared)".
+
 Play form global answers:
-- **Does your app collect or share any of the required user data types?** Yes (collect),
-  **No sharing** with third parties (Google-provided infra used as processors is not
-  "sharing").
+- **Does your app collect or share any of the required user data types?** Yes (collect).
+  **No sharing** with third parties — Google-provided infra AND the AssemblyAI speech-to-text
+  sub-processor are processors acting on our behalf under data processing agreements, not
+  recipients we "share" with (see footnote ¹ and the opt-out precondition).
+- **Cross-border:** audio is processed in the **United States** (AssemblyAI) and transcript
+  text in the United States (Vertex AI); storage is in Australia. Disclosed in the Privacy
+  Policy (APP 8).
 - **Is all collected data encrypted in transit?** Yes (HTTPS/TLS). State it.
 - **Do you provide a way for users to request that their data is deleted?** **Yes** — see
   §6 (in-app **and** a web-accessible deletion request URL — Play requires the URL).
