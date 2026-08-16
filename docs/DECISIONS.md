@@ -41,6 +41,16 @@ for short clips untouched.
 - **Per-note speaker names for v1.** New `note_speakers(note_id, speaker_tag, display_name)` map + rename
   chip + `POST /v1/notes/:id/speakers`. Cross-note learned names are DEFERRED — they need voice embeddings
   and a voiceprint privacy stance we're not taking at launch (fast-follow with its own privacy note).
+- **Rename UX cut to a fast-follow (plan's #2 cut); raw "Speaker N" ships now.** Diarisation itself is the
+  P0 and now renders real speaker labels on iOS: the fix was that `NoteReadResponse.asTranscriptLine`
+  rebuilt "Speaker N" from the tag and IGNORED the server-resolved `speaker` — so it now honours a
+  note_speakers rename. The rename ENDPOINT + map + iOS `APIClient.setNoteSpeaker` are built and reachable;
+  the interactive tap-to-rename chip (SwiftUI alert + optimistic reload) is deferred because it could not be
+  compiled/device-tested in this session (no Xcode/simulator), and the plan lists it as the first thing to
+  cut if time is short. **Web ships raw "Speaker N" with no rename**: the web transcript comes from the
+  Firestore mirror (`{speaker, time, text}`, capped 200 lines) which carries no `speakerTag`, so a web chip
+  needs the tags plumbed through the mirror or the web moved onto the API transcript read first — tracked in
+  BLOCKERS. All iOS/web client edits here are UNBUILT in this session (no toolchain); flagged for review.
 - **Cost figures are LIST prices.** A11 must measure the real blended COGS/min before `FREE_FLOOR_MINUTES`
   and the Pro included-minutes cap are fixed (ties to the open A9.4 / A9.3 items).
 - **Operating cost of the change:** no new service (the engine swaps inside the existing transcoder Cloud Run

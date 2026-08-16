@@ -287,6 +287,26 @@ final class APIClient: Sendable {
         return try await post(path: "api/note-feedback", body: body)
     }
 
+    /// Name a diarised speaker (ADR 0005). Renaming "Speaker 2" → a name updates
+    /// the per-note note_speakers map server-side; the next transcript read
+    /// resolves every line for that tag to the new name. An empty `name` clears
+    /// the mapping (reverts to "Speaker N"). The server gates the write by
+    /// workspace membership. Returns the raw JSON (`{ ok, noteId, speakers }`).
+    @discardableResult
+    func setNoteSpeaker(
+        noteId: String,
+        workspaceId: String,
+        speakerTag: Int,
+        name: String
+    ) async throws -> [String: Any] {
+        let body: [String: Any] = [
+            "workspaceId": workspaceId,
+            "speakerTag": speakerTag,
+            "name": name,
+        ]
+        return try await post(path: "v1/notes/\(noteId)/speakers", body: body)
+    }
+
     /// Why a regenerate was refused.
     ///
     /// The server answers 409 for two different reasons and the UI must not
