@@ -28,6 +28,7 @@ const HANDLERS = {
   'verify-phase-0': () => require('./handlers/verify-phase-0.js'),
   'backfill-pr-d':  () => require('./handlers/backfill-pr-d.js'),
   'eval-recall':    () => require('./handlers/eval-recall.js'),
+  'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
   'debug-corpus':   () => require('./handlers/debug-corpus.js'),
 };
 

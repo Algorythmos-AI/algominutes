@@ -1,0 +1,40 @@
+{
+  "id": "three-speaker-sales-call",
+  "description": "21-min three-person sales call, two chunk seams (600s, 1200s). Carol's turn spans the 1200s seam. Tests 3-speaker mapping + seam integrity + a per-chunk hypothesis that both relabels across the seam and confuses two speakers.",
+  "durationMs": 1260000,
+  "chunkSeamsMs": [600000, 1200000],
+  "speakers": { "1": "Rep", "2": "Buyer", "3": "Buyer-Manager" },
+  "reference": [
+    { "speaker": 1, "startMs": 0, "endMs": 30000, "text": "Thanks for making time. I'll walk through pricing and then open it up." },
+    { "speaker": 2, "startMs": 30500, "endMs": 70000, "text": "Sounds good. Our main concern is per-seat cost at our headcount." },
+    { "speaker": 3, "startMs": 70500, "endMs": 110000, "text": "And whether the annual plan includes the SSO add-on or it's separate." },
+    { "speaker": 1, "startMs": 110500, "endMs": 160000, "text": "SSO is included on annual. Per-seat drops at fifty seats." },
+    { "speaker": 2, "startMs": 400000, "endMs": 440000, "text": "Circling back, who owns the follow-up on the security review?" },
+    { "speaker": 1, "startMs": 440500, "endMs": 480000, "text": "I'll own it and loop in our security lead by Friday." },
+    { "speaker": 3, "startMs": 1190000, "endMs": 1215000, "text": "Before we close, let me restate our decision timeline, and this sentence deliberately runs past the second chunk seam." },
+    { "speaker": 1, "startMs": 1215500, "endMs": 1250000, "text": "Perfect, I'll send the recap and the order form this afternoon." }
+  ],
+  "hypotheses": {
+    "assemblyai_whole_file": [
+      { "speakerTag": 1, "startMs": 0, "endMs": 30100, "text": "Thanks for making time. I'll walk through pricing and then open it up." },
+      { "speakerTag": 2, "startMs": 30600, "endMs": 70100, "text": "Sounds good. Our main concern is per-seat cost at our headcount." },
+      { "speakerTag": 3, "startMs": 70600, "endMs": 110000, "text": "And whether the annual plan includes the SSO add-on or it's separate." },
+      { "speakerTag": 1, "startMs": 110600, "endMs": 160000, "text": "SSO is included on annual. Per-seat drops at fifty seats." },
+      { "speakerTag": 2, "startMs": 400100, "endMs": 440000, "text": "Circling back, who owns the follow-up on the security review?" },
+      { "speakerTag": 1, "startMs": 440600, "endMs": 480000, "text": "I'll own it and loop in our security lead by Friday." },
+      { "speakerTag": 3, "startMs": 1190100, "endMs": 1215000, "text": "Before we close, let me restate our decision timeline, and this sentence deliberately runs past the second chunk seam." },
+      { "speakerTag": 1, "startMs": 1215600, "endMs": 1250000, "text": "Perfect, I'll send the recap and the order form this afternoon." }
+    ],
+    "google_per_chunk": [
+      { "speakerTag": 1, "startMs": 0, "endMs": 30100, "text": "Thanks for making time. I'll walk through pricing and then open it up." },
+      { "speakerTag": 2, "startMs": 30600, "endMs": 70100, "text": "Sounds good. Our main concern is per-seat cost at our headcount." },
+      { "speakerTag": 2, "startMs": 70600, "endMs": 110000, "text": "And whether the annual plan includes the SSO add-on or it's separate." },
+      { "speakerTag": 1, "startMs": 110600, "endMs": 160000, "text": "SSO is included on annual. Per-seat drops at fifty seats." },
+      { "speakerTag": 3, "startMs": 400100, "endMs": 440000, "text": "Circling back, who owns the follow-up on the security review?" },
+      { "speakerTag": 1, "startMs": 440600, "endMs": 480000, "text": "I'll own it and loop in our security lead by Friday." },
+      { "speakerTag": 2, "startMs": 1190100, "endMs": 1200000, "text": "Before we close, let me restate our decision timeline, and this sentence" },
+      { "speakerTag": 1, "startMs": 1200000, "endMs": 1215000, "text": "deliberately runs past the second chunk seam." },
+      { "speakerTag": 3, "startMs": 1215600, "endMs": 1250000, "text": "Perfect, I'll send the recap and the order form this afternoon." }
+    ]
+  }
+}
