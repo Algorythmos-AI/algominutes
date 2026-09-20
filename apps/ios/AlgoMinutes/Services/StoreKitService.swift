@@ -38,7 +38,10 @@ final class StoreKitService {
     /// `BillingService`.
     var onEntitlementMayHaveChanged: (@MainActor () async -> Void)?
 
-    private var updatesListener: Task<Void, Never>?
+    // nonisolated(unsafe) so the nonisolated deinit can cancel it. A Task handle
+    // is Sendable and cancel() is safe from any context; the plain `nonisolated`
+    // the compiler suggests is rejected on an @Observable mutable stored property.
+    private nonisolated(unsafe) var updatesListener: Task<Void, Never>?
 
     init(api: APIClient) {
         self.api = api

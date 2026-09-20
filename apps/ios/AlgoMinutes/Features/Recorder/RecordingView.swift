@@ -58,18 +58,22 @@ struct RecordingView: View {
             // Pulsing rings + mic
             ZStack {
                 ForEach(0..<3, id: \.self) { i in
+                    // Sub-expressions pre-typed into locals: the fully-inline
+                    // modifier chain mixes Double/CGFloat/Int and took ~2s to
+                    // type-check (an error on Xcode 16.x / CI).
+                    let ringOpacity: Double = 0.25 - Double(i) * 0.06
+                    let ringSize = CGFloat(180 + i * 40)
+                    let ringScale: CGFloat = pulse && !reduceMotion ? 1.1 + CGFloat(i) * 0.05 : 1
+                    let ringAnimation: Animation? = reduceMotion ? nil :
+                        .easeInOut(duration: 2.4 + Double(i) * 0.3)
+                        .repeatForever(autoreverses: true)
+                        .delay(Double(i) * 0.2)
                     Circle()
-                        .strokeBorder(Color.white.opacity(0.25 - Double(i) * 0.06), lineWidth: 1.5)
-                        .frame(width: CGFloat(180 + i * 40), height: CGFloat(180 + i * 40))
-                        .scaleEffect(pulse && !reduceMotion ? 1.1 + CGFloat(i) * 0.05 : 1)
+                        .strokeBorder(Color.white.opacity(ringOpacity), lineWidth: 1.5)
+                        .frame(width: ringSize, height: ringSize)
+                        .scaleEffect(ringScale)
                         .opacity(pulse && !reduceMotion ? 0.4 : 1)
-                        .animation(
-                            reduceMotion ? nil :
-                                .easeInOut(duration: 2.4 + Double(i) * 0.3)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(i) * 0.2),
-                            value: pulse
-                        )
+                        .animation(ringAnimation, value: pulse)
                 }
                 Circle()
                     .fill(Theme.inverse)
