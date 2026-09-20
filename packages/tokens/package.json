@@ -9,5 +9,8 @@
     ".": "./src/index.ts",
     "./tokens.json": "./tokens.json",
     "./strings/en.json": "./strings/en.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
   }
 }

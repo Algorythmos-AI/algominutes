@@ -105,7 +105,10 @@ export function buildRegistry(): OpenAPIRegistry {
     content: { 'application/json': { schema: S.ErrorEnvelope } },
   });
   const authed = [{ [bearerAuth.name]: [] }];
-  const commonHeaders = [{ $ref: `#/components/parameters/${clientVersionHeader.name ?? 'ClientVersion'}` }];
+  // `clientVersionHeader` is the registered ZodString schema; the component name
+  // it was registered under is the literal 'ClientVersion' (first arg above).
+  void clientVersionHeader;
+  const commonHeaders = [{ $ref: `#/components/parameters/ClientVersion` }];
 
   // ── paths (representative subset, all under /v1) ─────────────────────────
 

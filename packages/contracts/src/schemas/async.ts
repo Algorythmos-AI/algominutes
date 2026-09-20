@@ -54,12 +54,15 @@ export const CompleteUploadResponse = z
   .openapi('CompleteUploadResponse');
 
 // ── A7.3 push registration + notification payload ────────────────────────────
-export const ClientPlatform = z.enum(['ios', 'android', 'web']).openapi('ClientPlatform');
+// Suffixed `Schema` to avoid clashing with the `ClientPlatform` *type* exported
+// by ./version when both are re-barrelled from ./index. `.openapi('ClientPlatform')`
+// keeps the generated OpenAPI/client model name unchanged.
+export const ClientPlatformSchema = z.enum(['ios', 'android', 'web']).openapi('ClientPlatform');
 
 export const RegisterPushTokenRequest = z
   .object({
     token: z.string(), // FCM registration token / APNs via FCM
-    platform: ClientPlatform,
+    platform: ClientPlatformSchema,
     appVersion: z.string().optional(),
   })
   .openapi('RegisterPushTokenRequest');
@@ -87,13 +90,16 @@ export function noteDeepLink(noteId: string): string {
 }
 
 // ── A9.1 entitlement response (server-resolved, never trust the client) ───────
-export const EntitlementState = z
+// Suffixed `Schema` to avoid clashing with the `EntitlementState` *type* exported
+// by ./limits when both are re-barrelled from ./index. `.openapi('EntitlementState')`
+// keeps the generated OpenAPI/client model name unchanged.
+export const EntitlementStateSchema = z
   .enum(['trialing', 'active', 'expired', 'free_floor'])
   .openapi('EntitlementState');
 
 export const EntitlementResponse = z
   .object({
-    state: EntitlementState, // A9.3 reverse-trial state
+    state: EntitlementStateSchema, // A9.3 reverse-trial state
     plan: z.enum(['free', 'pro', 'team']),
     billingPeriod: z.string(), // YYYY-MM
     includedMinutes: z.number().nullable(), // null = per-seat/unmetered
