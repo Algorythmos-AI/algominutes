@@ -11,6 +11,17 @@ function loadShared(name) {
 }
 
 const sharedLogger = loadShared('logger.cjs');
+const { requireEnv } = loadShared('require-env.cjs');
+requireEnv(
+  'summarizer',
+  {
+    oneOf: [
+      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
+      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
+    ],
+  },
+  { logger: sharedLogger.logger },
+);
 const sharedRedaction = loadShared('redaction.cjs');
 const sharedTemplates = loadShared('summary-templates.cjs');
 const sharedIntelligence = loadShared('intelligence.cjs');

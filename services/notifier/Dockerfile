@@ -1,26 +1,34 @@
-# services/notifier — A7.3 FCM push fan-out.
+# services/notifier — FCM push fan-out on note ready/failed (firebase-admin multicast) (Cloud Run, Node 24).
 #
-# Deploy via services/deploy.sh notifier, which copies the repo-level
-# workspace packages into ./node_modules/@algominutes before docker build
-# (Cloud Run --source can't walk up the tree). Build context is the repo root.
-#
-# Node 24: the @algominutes/db repo layer ships TypeScript source, resolved at
-# runtime by Node's type-stripping + .js→.ts resolution (>=24). TODO(build):
-# wire full npm workspaces install (A11).
+# BUILD CONTEXT = REPO ROOT (npm links the @algominutes/* workspaces). Runs
+# under tsx because it imports @algominutes/db TypeScript source and there is
+# no build step.
+#   docker build -f services/notifier/Dockerfile -t algominutes-notifier .
 FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json package-lock.json ./
+COPY packages/ai/package.json ./packages/ai/
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/db/package.json ./packages/db/
+COPY services/notifier/package.json ./services/notifier/
 
-# Monorepo port: shared/ became @algominutes/ai + @algominutes/db workspaces.
-COPY packages/ai ./node_modules/@algominutes/ai
-COPY packages/db ./node_modules/@algominutes/db
-COPY src ./src
+RUN npm install \
+      -w @algominutes/notifier \
+      -w @algominutes/db \
+      -w @algominutes/ai \
+      -w @algominutes/contracts \
+      --omit=dev --no-audit --no-fund
+
+COPY packages/ai ./packages/ai
+COPY packages/contracts ./packages/contracts
+COPY packages/db ./packages/db
+COPY services/notifier ./services/notifier
 
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["node", "src/index.js"]
+WORKDIR /app/services/notifier
+CMD ["npx", "tsx", "src/index.js"]

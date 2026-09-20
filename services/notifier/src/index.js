@@ -32,6 +32,12 @@ const pushTokensRepo = require('@algominutes/db/push-tokens-repo');
 const { tokensForUser, deletePushToken } = pushTokensRepo;
 
 const sharedLogger = loadShared('logger.cjs');
+const { requireEnv } = loadShared('require-env.cjs');
+requireEnv(
+  'notifier',
+  { oneOf: [{ label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] }] },
+  { logger: sharedLogger.logger },
+);
 const { noteDeepLink } = require('./deep-link');
 
 const app = express();

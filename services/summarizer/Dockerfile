@@ -1,22 +1,34 @@
-# services/summarizer — chunked-pipeline post-processor.
-# Reads transcript_lines from Postgres, redacts PII, calls Gemini with
-# prompt-caching enabled, writes summaries/action_items/key_decisions,
-# mirrors status:'ready' to Firestore.
-FROM node:22-bookworm-slim AS runtime
+# services/summarizer — generates the note summary (gist, action items, decisions) via Vertex Gemini (Cloud Run, Node 24).
+#
+# BUILD CONTEXT = REPO ROOT (npm links the @algominutes/* workspaces). Runs
+# under tsx because it imports @algominutes/db TypeScript source and there is
+# no build step.
+#   docker build -f services/summarizer/Dockerfile -t algominutes-summarizer .
+FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json package-lock.json ./
+COPY packages/ai/package.json ./packages/ai/
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/db/package.json ./packages/db/
+COPY services/summarizer/package.json ./services/summarizer/
 
-# Monorepo port: shared/ became @algominutes/ai + @algominutes/db workspaces.
-# Build context is the repo root. TODO(build): wire full npm workspaces install (A11).
-COPY packages/ai ./node_modules/@algominutes/ai
-COPY packages/db ./node_modules/@algominutes/db
-COPY src ./src
+RUN npm install \
+      -w @algominutes/summarizer \
+      -w @algominutes/db \
+      -w @algominutes/ai \
+      -w @algominutes/contracts \
+      --omit=dev --no-audit --no-fund
+
+COPY packages/ai ./packages/ai
+COPY packages/contracts ./packages/contracts
+COPY packages/db ./packages/db
+COPY services/summarizer ./services/summarizer
 
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["node", "src/index.js"]
+WORKDIR /app/services/summarizer
+CMD ["npx", "tsx", "src/index.js"]
