@@ -3,6 +3,40 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A11 — release engineering plan of record (2026-09-20)
+
+The A11 plan is `docs/plans/A11-release.md`: a **strictly serial PR train** (one open PR at a time, one
+concern each, evidence in every PR description) from first build to App Store. Decisions it rests on:
+
+- **Apple identifiers and ASC key handling.** Team ID `NY9MS8GSBK` (ALGORYTHMOS PTY LTD., Organization).
+  Release uploads authenticate with the App Store Connect API **team key** `457BNN593G`, issuer
+  `6f9e67b0-fb28-401d-b347-2bd4ce854e2c`. Key id and issuer id are identifiers, not secrets; the `.p8`
+  private key lives only at `~/.appstoreconnect/private_keys/` on the release machine (and later in a CI
+  secret) and **never enters the repo**. Tooling reads `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH`
+  from env. Signing stays `Automatic` with `-allowProvisioningUpdates` — four bundle ids make manual
+  profiles (the wasssup approach) not worth the upkeep.
+- **Release tooling is ported from `wasssup-meeting`, not fastlane.** Its scripted `xcodebuild` +
+  `asc-setup.mjs` flow shipped TestFlight builds 6→25; zero new dependencies, already debugged.
+- **Build number resets to `1`.** `CURRENT_PROJECT_VERSION = 14` was inherited from the client app.
+  AlgoMinutes gets a new ASC app record (`com.algorythmos.algominutes`), so there is no collision and no
+  reason to carry another product's lineage. The release script refuses a build number ASC already has.
+- **Broadcast extension ships wired in v1** (owner decision; supersedes the wire-or-exclude item in
+  BLOCKERS §3). It is the top App Review risk, so `project.yml` keeps a switch that drops the targets.
+- **Real IAP in sandbox from the first external beta** (owner decision). Internal builds hide paywall
+  entry points behind a flag until Apple JWS verification is real. Production billing must honour
+  `environment=Sandbox` transactions — TestFlight *and App Review* purchase in sandbox against the
+  production build.
+- **Staging for internal TestFlight; prod provisioned before any external tester** (owner decision), so
+  real users' recordings never live in staging.
+- **Recording cap is the plan entitlement (up to 4 h), delivered by crash-safe segmented capture.** The
+  hardcoded 2 h cap and the single-`.m4a`-finalised-on-stop design are both replaced (plan PR-18); a
+  crash may cost at most one segment, never the meeting. Recording is never blocked by being offline.
+- **Never hold a recording hostage.** A recording that turns out to exceed remaining quota is still
+  processed and readable; the *next* recording is what gets blocked, with an upgrade prompt. Metering
+  reserves on the client's duration and reconciles to the server-probed duration.
+- **Cloud NAT (third-party STT egress) is declared but off until diarisation go-live** (plan PR-28); its
+  monthly cost is recorded here when enabled, per the "no service without its operating cost" rule.
+
 ## Staging paused to stop idle spend (2026-08-27)
 
 Owner not working on the project; staging was billing 24/7 with no Cloud Run service deployed and no
