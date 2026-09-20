@@ -19,7 +19,7 @@ code currently assumes.
   developer.apple.com/programs, ~A$149/yr, D-U-N-S number needed for an organisation.)
 - **Format:** 10 chars, uppercase alphanumeric, e.g. `AB12CD34EF`.
 - **Default assumed:** none.
-- **VALUE:** `__________`
+- **VALUE:** `NY9MS8GSBK` (ALGORYTHMOS PTY LTD., enrolled as Organization; confirmed 2026-09-20)
 
 ### 2. iOS bundle IDs (app + two extensions)
 - **What:** The app's bundle identifier and the two broadcast-extension identifiers.
@@ -29,7 +29,8 @@ code currently assumes.
   `com.algorythmos.algominutes.BroadcastExtensionSetupUI`.
 - **Default assumed:** exactly those three (currently the code still says `com.wassup.meeting*` — A5
   renames to whatever you confirm here).
-- **VALUE (app):** `__________`  **(extension):** `__________`  **(setup UI):** `__________`
+- **VALUE (app):** `com.algorythmos.algominutes`  **(extension):** `com.algorythmos.algominutes.BroadcastExtension`  **(setup UI):** `com.algorythmos.algominutes.BroadcastExtensionSetupUI`
+  (a 4th id, `com.algorythmos.algominutes.LiveActivity`, is added by PR-23 — see `docs/plans/A11-release.md`)
 
 ### 3. iOS provisioning profiles
 - **What:** Distribution provisioning profile name(s) for the app (and extensions if using manual signing).
@@ -37,7 +38,7 @@ code currently assumes.
   the bundle IDs (#2). Or use Xcode **Automatic signing** and skip named profiles.
 - **Format:** a name string, e.g. `AlgoMinutes App Store` (replaces `"Wassup App Store"`).
 - **Default assumed:** Automatic signing (project.yml currently `CODE_SIGN_STYLE: Automatic`, no profile).
-- **VALUE:** `__________`  (or write "automatic")
+- **VALUE:** automatic (`-allowProvisioningUpdates` with the App Store Connect API team key; see DECISIONS "Apple identifiers and ASC key handling")
 
 ### 4. App Group identifier
 - **What:** The App Group that carries the ReplayKit broadcast-extension → app audio handoff. **Get this
@@ -46,7 +47,7 @@ code currently assumes.
   extension identifiers under their **Capabilities**.
 - **Format:** `group.` + reverse-DNS, e.g. `group.com.algorythmos.algominutes`.
 - **Default assumed:** `group.com.algorythmos.algominutes` (currently `group.com.wassup.meeting`).
-- **VALUE:** `__________`
+- **VALUE:** `group.com.algorythmos.algominutes`
 
 ---
 
@@ -141,7 +142,7 @@ code currently assumes.
   - **Play Console:** play.google.com/console (one-time US$25). 15% applies to first US$1M automatically.
   - **Stripe:** dashboard.stripe.com → create the account for Algorythmos Pty Ltd (ABN needed).
 - **Format:** account exists / IDs. Do NOT paste secret keys here — store in Secret Manager.
-- **VALUE:** App Store Connect `☐`  (Small Business applied `☐`) · Play Console `☐` · Stripe `☐`
+- **VALUE:** App Store Connect `☑` (team key `457BNN593G`, Admin)  (Small Business applied `☐`) · Play Console `☐` · Stripe `☐`
 
 ---
 
