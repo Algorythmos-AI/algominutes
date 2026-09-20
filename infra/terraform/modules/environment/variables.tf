@@ -60,6 +60,50 @@ variable "deletion_protection" {
   type        = bool
 }
 
+variable "db_activation_policy" {
+  description = "Cloud SQL run state. ALWAYS = running (normal). NEVER = stopped (pause via Terraform instead of an out-of-band gcloud patch — see the 2026-08-27 staging pause in docs/DECISIONS.md)."
+  type        = string
+  default     = "ALWAYS"
+  validation {
+    condition     = contains(["ALWAYS", "NEVER"], var.db_activation_policy)
+    error_message = "db_activation_policy must be ALWAYS or NEVER."
+  }
+}
+
+# --- Cloud Tasks -------------------------------------------------------------
+
+variable "task_max_attempts" {
+  description = "Max Cloud Tasks delivery attempts per queue. Single source of truth: services are deployed with MAX_TASK_ATTEMPTS set to this same value so the DLQ write fires on the true last attempt."
+  type        = number
+  default     = 5
+}
+
+# --- Cloud Run ---------------------------------------------------------------
+
+variable "cloud_run_max_instances" {
+  description = "Upper bound on Cloud Run instances per service — a cost guard so a runaway loop can't scale without limit."
+  type        = number
+  default     = 4
+}
+
+variable "allowed_origins" {
+  description = "Comma-separated CORS allowlist for services/api (ALLOWED_ORIGINS). Set per env in tfvars once the web origin is confirmed; empty falls back to the api's baked-in localhost/capacitor allowlist."
+  type        = string
+  default     = ""
+}
+
+variable "enable_nat" {
+  description = "Provision Cloud NAT so Cloud Run can reach third-party STT endpoints (AssemblyAI/Deepgram) over the connector. Off until diarisation go-live (PR-28); its monthly cost is recorded in docs/DECISIONS.md when enabled."
+  type        = bool
+  default     = false
+}
+
+variable "github_repo" {
+  description = "owner/repo allowed to mint deploy tokens via Workload Identity Federation (keyless CI deploys). Only this repo's Actions can impersonate the deployer SA."
+  type        = string
+  default     = "Algorythmos-AI/algominutes"
+}
+
 # --- Cloud Storage -----------------------------------------------------------
 
 variable "recordings_lifecycle_days" {
