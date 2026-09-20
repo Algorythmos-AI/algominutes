@@ -60,6 +60,19 @@ async function main() {
     return;
   }
 
+  // Every db-job handler connects to Postgres; fail loudly here rather than let
+  // a handler default to a wrong/missing target mid-run.
+  const { requireEnv } = loadShared('require-env.cjs');
+  requireEnv(
+    'db-job',
+    {
+      oneOf: [
+        { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
+      ],
+    },
+    { logger: log, exit: false },
+  );
+
   log.info({ mode: process.env.MODE || null }, 'job_starting');
   const startMs = Date.now();
   try {

@@ -217,8 +217,27 @@ A4 credentials + A11 build wiring.
 - **No `npm install` / build / deploy** anywhere: services, web, contracts codegen, iOS, Android are
   unbuilt. Full compilation + runtime import resolution (`@algominutes/*` workspace links, `@algominutes/db`
   TS via `tsx`, exports maps) is unverified until deps are installed.
-- **Service Dockerfiles** vendor workspace packages via `COPY packages/* …`; full npm-workspaces build is
-  `TODO(build A11)`. **`functions/`** Firebase deploy must vendor `@algominutes/ai` — `TODO(build A11)`.
+- ~~**Service Dockerfiles** vendor workspace packages via `COPY packages/* …`; full npm-workspaces build is
+  `TODO(build A11)`.~~ **Done (PR-03):** all 8 service Dockerfiles rewritten to one canonical
+  repo-root-context pattern (`npm install -w <svc> -w db -w ai -w contracts`); `.dockerignore` added.
+  Fixed along the way: (a) 6 services launched with `node` but import `@algominutes/db` (TS source) →
+  now run under **tsx** (added as a runtime dep); (b) `@algominutes/db` imported **`firebase-admin`**
+  without declaring it (every repo-layer boot would have crashed) and `@algominutes/ai` used
+  `google-auth-library`/`pg` undeclared → all now declared; (c) api/billing never copied
+  `packages/contracts` (a `db` dep) → now vendored. **Boot-time env validation** added
+  (`packages/ai/src/require-env.cjs`, wired into all 8) — a service with missing infra env now exits
+  `78` with a structured `env_validation_failed` line instead of silently defaulting (the wasssup
+  deploy trap). Verified locally: embedder/summarizer/extractor fail-fast on missing env and boot to
+  `/healthz` with it. **Local `docker build` is blocked** by a full host disk (94%, Docker VM
+  containerd I/O error) — CI (`.github/workflows/docker-build.yml`, matrix over all 8) is the
+  authoritative build evidence. **`functions/`** Firebase deploy vendoring `@algominutes/ai` is still
+  `TODO(build A11)`.
+- **Hard-invariant violation in dead code (defer to embedder PR-11/12):** `packages/db/src/embeddings.ts`
+  imports `@google/generative-ai` (the public Gemini client CLAUDE.md §1 forbids in Cloud Run). It is
+  imported by **no one** (the embedder uses the Vertex `packages/ai/src/embeddings.cjs`), so no image
+  breaks and the forbidden dep is left undeclared so any future import fails loudly. `check-no-genai-import.sh`
+  does **not** scope `packages/db`, which is why it slipped past CI — extend the checker to cover
+  `packages/db` and delete/rewrite the dead file when the embedder is worked on.
 - **iOS:** `xcodegen generate` succeeds, but a clean **build** needs A4 signing + SPM resolution (network).
   The re-homed **broadcast extension** is declared + embedded but its full runtime wiring
   (`RPSystemBroadcastPickerView`, App-Group handoff) needs a real App Group (A4) + a device (A11).

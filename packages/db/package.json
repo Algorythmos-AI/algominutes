@@ -22,7 +22,8 @@
     "@algominutes/ai": "*",
     "@algominutes/contracts": "*",
     "pg": "^8.13.0",
-    "pgvector": "^0.2.0"
+    "pgvector": "^0.2.0",
+    "firebase-admin": "^13.0.2"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10"
