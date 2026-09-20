@@ -65,9 +65,10 @@ const ISO_NOW = () => new Date().toISOString();
 function timeStrToMs(t: string): number {
   if (!t) return 0;
   const parts = t.split(':').map((n) => Number(n) || 0);
-  if (parts.length === 3) return ((parts[0] * 60 + parts[1]) * 60 + parts[2]) * 1000;
-  if (parts.length === 2) return (parts[0] * 60 + parts[1]) * 1000;
-  return parts[0] * 1000;
+  const [a = 0, b = 0, c = 0] = parts;
+  if (parts.length === 3) return ((a * 60 + b) * 60 + c) * 1000;
+  if (parts.length === 2) return (a * 60 + b) * 1000;
+  return a * 1000;
 }
 
 async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {

@@ -15,11 +15,16 @@
     "./*": "./src/*"
   },
   "scripts": {
-    "migrate": "tsx ../../scripts/migrate.ts"
+    "migrate": "tsx ../../scripts/migrate.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@algominutes/ai": "*",
     "@algominutes/contracts": "*",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "pgvector": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
   }
 }

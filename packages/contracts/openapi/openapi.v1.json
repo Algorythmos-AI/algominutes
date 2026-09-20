@@ -3,279 +3,18 @@
   "info": {
     "title": "AlgoMinutes API",
     "version": "1.0.0-v1",
-    "description": "The AlgoMinutes API contract, generated from the zod schemas in @algominutes/contracts. Do not hand-edit the emitted JSON — edit the schemas and regenerate with `npm run openapi`."
+    "description": "The AlgoMinutes API contract, generated from the zod schemas in @algominutes/contracts. Do not hand-edit the emitted JSON — edit the schemas and regenerate."
   },
   "servers": [
     {
       "url": "{origin}",
-      "variables": { "origin": { "default": "https://api.algominutes.app" } }
+      "variables": {
+        "origin": {
+          "default": "https://api.algominutes.app"
+        }
+      }
     }
   ],
-  "paths": {
-    "/v1/health": {
-      "get": {
-        "summary": "Liveness probe.",
-        "tags": ["system"],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": { "ok": { "type": "boolean" } },
-                  "required": ["ok"]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/note": {
-      "post": {
-        "summary": "Full note + paginated transcript from Postgres.",
-        "tags": ["notes"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/NoteReadRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Note read (first page) or transcript page.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/NoteReadResponse" } }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "401": { "$ref": "#/components/responses/Error" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "426": { "$ref": "#/components/responses/Error" },
-          "503": { "$ref": "#/components/responses/Error" },
-          "504": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/update-note": {
-      "post": {
-        "summary": "Persist a manual note edit (title + summary) to Postgres.",
-        "tags": ["notes"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/UpdateNoteRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Edit applied.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/UpdateNoteResponse" } }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "401": { "$ref": "#/components/responses/Error" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "500": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/export-note": {
-      "post": {
-        "summary": "Server-rendered DOCX export. Returns raw bytes on success.",
-        "tags": ["notes"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ExportNoteRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "DOCX document bytes.",
-            "content": {
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
-                "schema": { "type": "string", "format": "binary" }
-              }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "401": { "$ref": "#/components/responses/Error" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "413": {
-            "description": "Transcript too large for DOCX.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ExportTooLargeError" } }
-            }
-          },
-          "503": { "$ref": "#/components/responses/Error" },
-          "504": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/search": {
-      "post": {
-        "summary": "Hybrid (vector + trigram) retrieval across a member's notes.",
-        "tags": ["search"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/SearchRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Ranked hits.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "500": { "$ref": "#/components/responses/Error" },
-          "503": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/chat": {
-      "post": {
-        "summary": "Grounded chat over meetings. Streams Server-Sent Events.",
-        "description": "Response is text/event-stream: an `event: citations` frame ({ hits }), then `data: { text }` frames, then `event: done` ({}). Failures emit `event: error` ({ error }). See ChatCitationsEvent / ChatTextEvent / ChatErrorEvent.",
-        "tags": ["search"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ChatRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "SSE stream. See ChatCitationsEvent / ChatTextEvent / ChatErrorEvent for frame payloads.",
-            "content": { "text/event-stream": { "schema": { "type": "string" } } }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "503": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/share-create": {
-      "post": {
-        "summary": "Mint a public read link. The raw token is returned here and nowhere else.",
-        "tags": ["share"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ShareCreateRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Link minted.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ShareCreateResponse" } }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "401": { "$ref": "#/components/responses/Error" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "503": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/share-revoke": {
-      "post": {
-        "summary": "Revoke a link (idempotent).",
-        "tags": ["share"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ShareRevokeRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Revoke result.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ShareRevokeResponse" } }
-            }
-          },
-          "400": { "$ref": "#/components/responses/Error" },
-          "401": { "$ref": "#/components/responses/Error" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "503": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/shared-note": {
-      "post": {
-        "summary": "PUBLIC read of a shared note. No bearer token — the link token is the credential.",
-        "tags": ["share"],
-        "security": [],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/SharedNoteRequest" } }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Redacted share view.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/SharedNoteResponse" } }
-            }
-          },
-          "404": { "$ref": "#/components/responses/Error" },
-          "429": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/v1/delete-account": {
-      "post": {
-        "summary": "Delete the caller's account and all owned data (App Store + GDPR).",
-        "tags": ["account"],
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/ClientVersion" }],
-        "responses": {
-          "200": {
-            "description": "Deletion summary.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/DeleteAccountResponse" } }
-            }
-          },
-          "401": { "$ref": "#/components/responses/Error" },
-          "405": { "$ref": "#/components/responses/Error" },
-          "500": {
-            "description": "Partial failure with progress summary.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/DeleteAccountError" } }
-            }
-          }
-        }
-      }
-    }
-  },
   "components": {
     "securitySchemes": {
       "bearerAuth": {
@@ -285,45 +24,54 @@
         "description": "Firebase Auth ID token. Absent only on POST /v1/shared-note."
       }
     },
-    "parameters": {
-      "ClientVersion": {
-        "name": "X-AlgoMinutes-Client",
-        "in": "header",
-        "required": true,
-        "description": "Client build identifier, \"<platform>/<semver>\" e.g. ios/1.4.0. The server refuses unsupported builds with 426.",
-        "schema": { "type": "string", "example": "ios/1.4.0" }
-      }
-    },
-    "responses": {
-      "Error": {
-        "description": "Error envelope.",
-        "content": {
-          "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } }
-        }
-      }
-    },
     "schemas": {
-      "Id": { "type": "string", "minLength": 1, "example": "note_abc123" },
+      "Id": {
+        "type": "string",
+        "minLength": 1,
+        "example": "note_abc123"
+      },
       "IsoDateTime": {
         "type": "string",
         "format": "date-time",
         "example": "2026-08-15T09:41:07.123Z"
       },
-      "DateOnly": { "type": "string", "format": "date", "example": "2026-08-20" },
+      "DateOnly": {
+        "type": "string",
+        "format": "date",
+        "example": "2026-08-20"
+      },
       "RedactionMeta": {
         "type": "object",
         "properties": {
-          "applied": { "type": "boolean" },
-          "scheme": { "type": "string" }
+          "applied": {
+            "type": "boolean"
+          },
+          "scheme": {
+            "type": "string"
+          }
         },
-        "required": ["applied", "scheme"],
-        "example": { "applied": true, "scheme": "shared/redaction.cjs" }
+        "required": [
+          "applied",
+          "scheme"
+        ],
+        "example": {
+          "applied": true,
+          "scheme": "shared/redaction.cjs"
+        }
       },
       "ErrorEnvelope": {
         "type": "object",
-        "properties": { "error": { "type": "string" } },
-        "required": ["error"],
-        "example": { "error": "Note not found" }
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "example": {
+          "error": "Note not found"
+        }
       },
       "NoteStatus": {
         "type": "string",
@@ -340,68 +88,170 @@
       },
       "NoteType": {
         "type": "string",
-        "enum": ["recording", "import_audio", "import_pdf", "youtube", "scan_text", "online_meeting"]
+        "enum": [
+          "recording",
+          "import_audio",
+          "import_pdf",
+          "youtube",
+          "scan_text",
+          "online_meeting"
+        ]
       },
       "Summary": {
         "type": "object",
         "properties": {
-          "gist": { "type": "string" },
-          "actionItems": { "type": "array", "items": { "type": "string" } },
-          "keyDecisions": { "type": "array", "items": { "type": "string" } },
-          "keyPoints": { "type": "array", "items": { "type": "string" } }
+          "gist": {
+            "type": "string"
+          },
+          "actionItems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keyDecisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keyPoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["gist", "actionItems", "keyDecisions"]
+        "required": [
+          "gist",
+          "actionItems",
+          "keyDecisions"
+        ]
       },
       "FirestoreTranscriptLine": {
         "type": "object",
         "properties": {
-          "speaker": { "type": "string" },
-          "text": { "type": "string" },
-          "time": { "type": "string" }
+          "speaker": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          }
         },
-        "required": ["speaker", "text", "time"]
+        "required": [
+          "speaker",
+          "text",
+          "time"
+        ]
       },
       "NoteProgress": {
         "type": "object",
         "properties": {
-          "done": { "type": "integer" },
-          "total": { "type": "integer" }
+          "done": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
         },
-        "required": ["done", "total"]
+        "required": [
+          "done",
+          "total"
+        ]
       },
       "Note": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "authorId": { "type": "string" },
-          "status": { "$ref": "#/components/schemas/NoteStatus" },
-          "type": { "$ref": "#/components/schemas/NoteType" },
-          "audioUrl": { "type": "string" },
-          "fileUrl": { "type": "string" },
-          "sourceUrl": { "type": "string" },
-          "duration": { "type": "number" },
-          "language": { "type": "string" },
-          "wordCount": { "type": "number" },
-          "createdAt": { "type": "string" },
-          "updatedAt": { "type": "string" },
-          "summary": { "$ref": "#/components/schemas/Summary" },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "authorId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NoteStatus"
+          },
+          "type": {
+            "$ref": "#/components/schemas/NoteType"
+          },
+          "audioUrl": {
+            "type": "string"
+          },
+          "fileUrl": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "language": {
+            "type": "string"
+          },
+          "wordCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
           "transcript": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/FirestoreTranscriptLine" }
+            "items": {
+              "$ref": "#/components/schemas/FirestoreTranscriptLine"
+            }
           },
-          "transcriptTruncated": { "type": "boolean" },
-          "rawText": { "type": "string" },
-          "tags": { "type": "array", "items": { "type": "string" } },
-          "errorMessage": { "type": "string" },
-          "diagnosticCode": { "type": "string" },
-          "storagePath": { "type": "string" },
-          "mimeType": { "type": "string" },
-          "jobId": { "type": "string" },
-          "progress": { "$ref": "#/components/schemas/NoteProgress" },
-          "retryAttempt": { "type": "integer" },
-          "lastProgressAt": { "type": "string" }
+          "transcriptTruncated": {
+            "type": "boolean"
+          },
+          "rawText": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "errorMessage": {
+            "type": "string"
+          },
+          "diagnosticCode": {
+            "type": "string"
+          },
+          "storagePath": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/NoteProgress"
+          },
+          "retryAttempt": {
+            "type": "integer"
+          },
+          "lastProgressAt": {
+            "type": "string"
+          }
         },
         "required": [
           "id",
@@ -417,83 +267,249 @@
       "TranscriptLine": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "speaker": { "type": "string", "nullable": true },
-          "speakerTag": { "type": "integer", "nullable": true },
-          "startMs": { "type": "number" },
-          "endMs": { "type": "number" },
-          "text": { "type": "string" },
-          "confidence": { "type": "number", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "speaker": {
+            "type": "string",
+            "nullable": true
+          },
+          "speakerTag": {
+            "type": "integer",
+            "nullable": true
+          },
+          "startMs": {
+            "type": "number"
+          },
+          "endMs": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          }
         },
-        "required": ["id", "speaker", "speakerTag", "startMs", "endMs", "text", "confidence"]
+        "required": [
+          "id",
+          "speaker",
+          "speakerTag",
+          "startMs",
+          "endMs",
+          "text",
+          "confidence"
+        ]
       },
       "TranscriptPage": {
         "type": "object",
         "properties": {
-          "lines": { "type": "array", "items": { "$ref": "#/components/schemas/TranscriptLine" } },
-          "totalLines": { "type": "integer" },
-          "nextCursor": { "type": "string", "nullable": true },
-          "truncated": { "type": "boolean" }
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptLine"
+            }
+          },
+          "totalLines": {
+            "type": "integer"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "truncated": {
+            "type": "boolean"
+          }
         },
-        "required": ["lines", "nextCursor", "truncated"]
+        "required": [
+          "lines",
+          "nextCursor",
+          "truncated"
+        ]
       },
       "SharedTranscriptLine": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" },
-          "speakerTag": { "type": "integer", "nullable": true },
-          "speakerName": { "type": "string", "nullable": true },
-          "startMs": { "type": "number", "nullable": true },
-          "text": { "type": "string" }
+          "id": {
+            "type": "integer"
+          },
+          "speakerTag": {
+            "type": "integer",
+            "nullable": true
+          },
+          "speakerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "startMs": {
+            "type": "number",
+            "nullable": true
+          },
+          "text": {
+            "type": "string"
+          }
         },
-        "required": ["id", "speakerTag", "speakerName", "startMs", "text"]
+        "required": [
+          "id",
+          "speakerTag",
+          "speakerName",
+          "startMs",
+          "text"
+        ]
       },
       "SummaryTemplateId": {
         "type": "string",
-        "enum": ["general", "actions_only", "standup", "interview", "sales_call", "lecture", "one_on_one", "board_meeting", "client_meeting"]
+        "enum": [
+          "general",
+          "actions_only",
+          "standup",
+          "interview",
+          "sales_call",
+          "lecture",
+          "one_on_one",
+          "board_meeting",
+          "client_meeting"
+        ]
       },
       "SummaryTemplate": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "#/components/schemas/SummaryTemplateId" },
-          "label": { "type": "string" },
-          "blurb": { "type": "string" },
-          "icon": { "type": "string" },
-          "version": { "type": "integer" }
+          "id": {
+            "$ref": "#/components/schemas/SummaryTemplateId"
+          },
+          "label": {
+            "type": "string"
+          },
+          "blurb": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
         },
-        "required": ["id", "label", "blurb", "icon", "version"]
+        "required": [
+          "id",
+          "label",
+          "blurb",
+          "icon",
+          "version"
+        ]
       },
       "NoteReadRequest": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "cursor": { "type": "string" },
-          "limit": { "type": "integer", "minimum": 1, "maximum": 2000 }
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
         },
-        "required": ["noteId", "workspaceId"]
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
       },
       "NoteReadMeta": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "title": { "type": "string" },
-          "status": { "$ref": "#/components/schemas/NoteStatus" },
-          "sourceType": { "$ref": "#/components/schemas/NoteType" },
-          "sourceUrl": { "type": "string", "nullable": true },
-          "storagePath": { "type": "string", "nullable": true },
-          "mimeType": { "type": "string", "nullable": true },
-          "durationSec": { "type": "number", "nullable": true },
-          "language": { "type": "string", "nullable": true },
-          "wordCount": { "type": "number", "nullable": true },
-          "participants": { "type": "string", "nullable": true },
-          "meetingAt": { "type": "string", "format": "date-time", "nullable": true },
-          "errorMessage": { "type": "string", "nullable": true },
-          "chunksDone": { "type": "integer", "nullable": true },
-          "chunksTotal": { "type": "integer", "nullable": true },
-          "createdAt": { "type": "string", "format": "date-time", "nullable": true },
-          "updatedAt": { "type": "string", "format": "date-time", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NoteStatus"
+          },
+          "sourceType": {
+            "$ref": "#/components/schemas/NoteType"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "storagePath": {
+            "type": "string",
+            "nullable": true
+          },
+          "mimeType": {
+            "type": "string",
+            "nullable": true
+          },
+          "durationSec": {
+            "type": "number",
+            "nullable": true
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "wordCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "participants": {
+            "type": "string",
+            "nullable": true
+          },
+          "meetingAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "chunksDone": {
+            "type": "integer",
+            "nullable": true
+          },
+          "chunksTotal": {
+            "type": "integer",
+            "nullable": true
+          },
+          "createdAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "updatedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          }
         },
         "required": [
           "id",
@@ -519,45 +535,137 @@
       "ActionItem": {
         "type": "object",
         "properties": {
-          "id": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-          "text": { "type": "string" },
-          "status": { "type": "string" },
-          "assigneeName": { "type": "string", "nullable": true },
-          "dueDate": { "type": "string", "format": "date", "nullable": true }
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "assigneeName": {
+            "type": "string",
+            "nullable": true
+          },
+          "dueDate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DateOnly"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          }
         },
-        "required": ["id", "text", "status", "assigneeName", "dueDate"]
+        "required": [
+          "id",
+          "text",
+          "status",
+          "assigneeName",
+          "dueDate"
+        ]
       },
       "KeyDecision": {
         "type": "object",
         "properties": {
-          "id": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-          "text": { "type": "string" }
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
         },
-        "required": ["id", "text"]
+        "required": [
+          "id",
+          "text"
+        ]
       },
       "NoteReadSummary": {
         "type": "object",
         "properties": {
-          "gist": { "type": "string" },
-          "model": { "type": "string", "nullable": true },
-          "generatedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "actionItems": { "type": "array", "items": { "$ref": "#/components/schemas/ActionItem" } },
-          "keyDecisions": { "type": "array", "items": { "$ref": "#/components/schemas/KeyDecision" } }
+          "gist": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "generatedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "actionItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionItem"
+            }
+          },
+          "keyDecisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyDecision"
+            }
+          }
         },
-        "required": ["gist", "model", "generatedAt", "actionItems", "keyDecisions"]
+        "required": [
+          "gist",
+          "model",
+          "generatedAt",
+          "actionItems",
+          "keyDecisions"
+        ]
       },
       "NoteReadResponse": {
         "type": "object",
         "properties": {
-          "note": { "$ref": "#/components/schemas/NoteReadMeta" },
-          "summary": {
-            "nullable": true,
-            "allOf": [{ "$ref": "#/components/schemas/NoteReadSummary" }]
+          "note": {
+            "$ref": "#/components/schemas/NoteReadMeta"
           },
-          "transcript": { "$ref": "#/components/schemas/TranscriptPage" },
-          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+          "summary": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NoteReadSummary"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "transcript": {
+            "$ref": "#/components/schemas/TranscriptPage"
+          },
+          "redaction": {
+            "$ref": "#/components/schemas/RedactionMeta"
+          }
         },
-        "required": ["note", "summary", "transcript", "redaction"]
+        "required": [
+          "note",
+          "summary",
+          "transcript",
+          "redaction"
+        ]
       },
       "NoteReadPageResponse": {
         "type": "object",
@@ -567,144 +675,344 @@
             "properties": {
               "lines": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/TranscriptLine" }
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptLine"
+                }
               },
-              "nextCursor": { "type": "string", "nullable": true },
-              "truncated": { "type": "boolean" }
+              "nextCursor": {
+                "type": "string",
+                "nullable": true
+              },
+              "truncated": {
+                "type": "boolean"
+              }
             },
-            "required": ["lines", "nextCursor", "truncated"]
+            "required": [
+              "lines",
+              "nextCursor",
+              "truncated"
+            ]
           },
-          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+          "redaction": {
+            "$ref": "#/components/schemas/RedactionMeta"
+          }
         },
-        "required": ["transcript", "redaction"]
+        "required": [
+          "transcript",
+          "redaction"
+        ]
       },
       "SearchRequest": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "minLength": 1 },
-          "k": { "type": "integer", "minimum": 1, "maximum": 50 },
-          "noteId": { "type": "string" }
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "noteId": {
+            "type": "string"
+          }
         },
-        "required": ["query"]
+        "required": [
+          "query"
+        ]
       },
       "SearchHit": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "noteTitle": { "type": "string", "nullable": true },
-          "chunkText": { "type": "string" },
-          "startMs": { "type": "number" },
-          "endMs": { "type": "number" },
-          "score": { "type": "number" },
-          "source": { "type": "string", "enum": ["vector", "keyword", "fused"] }
+          "noteId": {
+            "type": "string"
+          },
+          "noteTitle": {
+            "type": "string",
+            "nullable": true
+          },
+          "chunkText": {
+            "type": "string"
+          },
+          "startMs": {
+            "type": "number"
+          },
+          "endMs": {
+            "type": "number"
+          },
+          "score": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "vector",
+              "keyword",
+              "fused"
+            ]
+          }
         },
-        "required": ["noteId", "noteTitle", "chunkText", "startMs", "endMs"]
+        "required": [
+          "noteId",
+          "noteTitle",
+          "chunkText",
+          "startMs",
+          "endMs"
+        ]
       },
       "SearchResponse": {
         "type": "object",
         "properties": {
-          "hits": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } }
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          }
         },
-        "required": ["hits"]
+        "required": [
+          "hits"
+        ]
       },
       "ChatRequest": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "minLength": 1 },
-          "noteId": { "type": "string" }
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "noteId": {
+            "type": "string"
+          }
         },
-        "required": ["query"]
+        "required": [
+          "query"
+        ]
       },
       "ChatCitationsEvent": {
         "type": "object",
         "properties": {
-          "hits": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } }
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          }
         },
-        "required": ["hits"]
+        "required": [
+          "hits"
+        ]
       },
       "ChatTextEvent": {
         "type": "object",
-        "properties": { "text": { "type": "string" } },
-        "required": ["text"]
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
       },
       "ChatErrorEvent": {
         "type": "object",
-        "properties": { "error": { "type": "string" } },
-        "required": ["error"]
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "ExportScope": {
         "type": "string",
-        "enum": ["summary", "transcript", "both"]
+        "enum": [
+          "summary",
+          "transcript",
+          "both"
+        ]
       },
       "ExportNoteRequest": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "scope": { "$ref": "#/components/schemas/ExportScope" },
-          "format": { "type": "string", "enum": ["docx"] }
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExportScope"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "docx"
+            ]
+          }
         },
-        "required": ["noteId", "workspaceId"]
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
       },
       "ExportTooLargeError": {
         "type": "object",
         "properties": {
-          "error": { "type": "string", "enum": ["transcript_too_large_for_docx"] },
-          "totalLines": { "type": "integer" }
+          "error": {
+            "type": "string",
+            "enum": [
+              "transcript_too_large_for_docx"
+            ]
+          },
+          "totalLines": {
+            "type": "integer"
+          }
         },
-        "required": ["error", "totalLines"]
+        "required": [
+          "error",
+          "totalLines"
+        ]
       },
       "ShareCreateRequest": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "scope": { "$ref": "#/components/schemas/ExportScope" },
-          "expiresInHours": { "type": "integer", "minimum": 1, "maximum": 720 }
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExportScope"
+          },
+          "expiresInHours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          }
         },
-        "required": ["noteId", "workspaceId"]
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
       },
       "ShareCreateResponse": {
         "type": "object",
         "properties": {
-          "shareId": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-          "token": { "type": "string" },
-          "url": { "type": "string" },
-          "scope": { "$ref": "#/components/schemas/ExportScope" },
-          "expiresAt": { "$ref": "#/components/schemas/IsoDateTime" }
+          "shareId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExportScope"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          }
         },
-        "required": ["shareId", "token", "url", "scope", "expiresAt"]
+        "required": [
+          "shareId",
+          "token",
+          "url",
+          "scope",
+          "expiresAt"
+        ]
       },
       "ShareRevokeRequest": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "shareId": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "shareId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
         },
-        "required": ["noteId", "workspaceId", "shareId"]
+        "required": [
+          "noteId",
+          "workspaceId",
+          "shareId"
+        ]
       },
       "ShareRevokeResponse": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean", "enum": [true] },
-          "revoked": { "type": "boolean" }
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "revoked": {
+            "type": "boolean"
+          }
         },
-        "required": ["ok", "revoked"]
+        "required": [
+          "ok",
+          "revoked"
+        ]
       },
       "SharedNoteRequest": {
         "type": "object",
-        "properties": { "token": { "type": "string" } },
-        "required": ["token"]
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ]
       },
       "SharedSummary": {
         "type": "object",
         "properties": {
-          "gist": { "type": "string", "nullable": true },
-          "actionItems": { "type": "array", "items": { "type": "string" } },
-          "keyDecisions": { "type": "array", "items": { "type": "string" } }
+          "gist": {
+            "type": "string",
+            "nullable": true
+          },
+          "actionItems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keyDecisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["gist", "actionItems", "keyDecisions"]
+        "required": [
+          "gist",
+          "actionItems",
+          "keyDecisions"
+        ]
       },
       "SharedNoteResponse": {
         "type": "object",
@@ -712,15 +1020,32 @@
           "note": {
             "type": "object",
             "properties": {
-              "title": { "type": "string", "nullable": true },
-              "createdAt": { "$ref": "#/components/schemas/IsoDateTime" },
-              "scope": { "type": "string" }
+              "title": {
+                "type": "string",
+                "nullable": true
+              },
+              "createdAt": {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              "scope": {
+                "type": "string"
+              }
             },
-            "required": ["title", "createdAt", "scope"]
+            "required": [
+              "title",
+              "createdAt",
+              "scope"
+            ]
           },
           "summary": {
-            "nullable": true,
-            "allOf": [{ "$ref": "#/components/schemas/SharedSummary" }]
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SharedSummary"
+              },
+              {
+                "nullable": true
+              }
+            ]
           },
           "transcript": {
             "type": "object",
@@ -728,63 +1053,201 @@
             "properties": {
               "lines": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/SharedTranscriptLine" }
+                "items": {
+                  "$ref": "#/components/schemas/SharedTranscriptLine"
+                }
               },
-              "truncated": { "type": "boolean" }
+              "truncated": {
+                "type": "boolean"
+              }
             },
-            "required": ["lines", "truncated"]
+            "required": [
+              "lines",
+              "truncated"
+            ]
           },
-          "expiresAt": { "$ref": "#/components/schemas/IsoDateTime" },
-          "redaction": { "$ref": "#/components/schemas/RedactionMeta" }
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          },
+          "redaction": {
+            "$ref": "#/components/schemas/RedactionMeta"
+          }
         },
-        "required": ["note", "summary", "transcript", "expiresAt", "redaction"]
+        "required": [
+          "note",
+          "summary",
+          "transcript",
+          "expiresAt",
+          "redaction"
+        ]
       },
       "NoteEditSummary": {
         "type": "object",
         "properties": {
-          "gist": { "type": "string", "maxLength": 20000 },
+          "gist": {
+            "type": "string",
+            "maxLength": 20000
+          },
           "actionItems": {
             "type": "array",
-            "maxItems": 200,
-            "items": { "type": "string", "maxLength": 2000 }
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "maxItems": 200
           },
           "keyDecisions": {
             "type": "array",
-            "maxItems": 200,
-            "items": { "type": "string", "maxLength": 2000 }
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "maxItems": 200
           },
-          "keyPoints": { "type": "array", "maxItems": 200, "items": { "type": "string" } }
+          "keyPoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200
+          }
         }
       },
       "UpdateNoteRequest": {
         "type": "object",
         "properties": {
-          "noteId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "title": { "type": "string", "maxLength": 300 },
-          "summary": { "$ref": "#/components/schemas/NoteEditSummary" }
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "summary": {
+            "$ref": "#/components/schemas/NoteEditSummary"
+          }
         },
-        "required": ["noteId", "workspaceId"]
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
       },
       "UpdateNoteResponse": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean", "enum": [true] },
-          "noteId": { "type": "string" },
-          "pgWritten": { "type": "boolean" }
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "noteId": {
+            "type": "string"
+          },
+          "pgWritten": {
+            "type": "boolean"
+          }
         },
-        "required": ["ok", "noteId", "pgWritten"]
+        "required": [
+          "ok",
+          "noteId",
+          "pgWritten"
+        ]
+      },
+      "NoteSpeaker": {
+        "type": "object",
+        "properties": {
+          "speakerTag": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "speakerTag",
+          "name"
+        ]
+      },
+      "SetNoteSpeakersRequest": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "speakerTag": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "speakers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NoteSpeaker"
+            },
+            "maxItems": 32
+          }
+        }
+      },
+      "SetNoteSpeakersResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "noteId": {
+            "type": "string"
+          },
+          "speakers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NoteSpeaker"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "noteId",
+          "speakers"
+        ]
       },
       "DeleteAccountSummary": {
         "type": "object",
         "properties": {
-          "workspacesAffected": { "type": "integer" },
-          "notesDeleted": { "type": "integer" },
-          "notesNotFound": { "type": "integer" },
-          "pgMembershipsDeleted": { "type": "integer" },
-          "firestoreErrors": { "type": "integer" },
-          "pgErrors": { "type": "integer" },
-          "authDeleted": { "type": "boolean" }
+          "workspacesAffected": {
+            "type": "integer"
+          },
+          "notesDeleted": {
+            "type": "integer"
+          },
+          "notesNotFound": {
+            "type": "integer"
+          },
+          "pgMembershipsDeleted": {
+            "type": "integer"
+          },
+          "firestoreErrors": {
+            "type": "integer"
+          },
+          "pgErrors": {
+            "type": "integer"
+          },
+          "authDeleted": {
+            "type": "boolean"
+          }
         },
         "required": [
           "workspacesAffected",
@@ -799,26 +1262,909 @@
       "DeleteAccountResponse": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean", "enum": [true] },
-          "summary": { "$ref": "#/components/schemas/DeleteAccountSummary" }
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/DeleteAccountSummary"
+          }
         },
-        "required": ["ok", "summary"]
+        "required": [
+          "ok",
+          "summary"
+        ]
       },
       "DeleteAccountError": {
         "type": "object",
         "properties": {
-          "error": { "type": "string" },
-          "summary": { "$ref": "#/components/schemas/DeleteAccountSummary" }
+          "error": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/DeleteAccountSummary"
+          }
         },
-        "required": ["error"]
+        "required": [
+          "error"
+        ]
+      },
+      "ClientVersion": {
+        "type": "string",
+        "example": "ios/1.4.0"
+      }
+    },
+    "parameters": {
+      "ClientVersion": {
+        "schema": {
+          "$ref": "#/components/schemas/ClientVersion"
+        },
+        "required": true,
+        "name": "X-AlgoMinutes-Client",
+        "in": "header",
+        "description": "Client build identifier, \"<platform>/<semver>\" e.g. ios/1.4.0. The server refuses unsupported builds with 426."
       }
     }
   },
-  "tags": [
-    { "name": "system" },
-    { "name": "notes" },
-    { "name": "search" },
-    { "name": "share" },
-    { "name": "account" }
-  ]
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "summary": "Liveness probe.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/note": {
+      "post": {
+        "summary": "Full note + paginated transcript from Postgres.",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteReadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Note read (first page) or transcript page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteReadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid noteId / workspaceId / cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Note not found (or caller is not a member).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Query timeout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/update-note": {
+      "post": {
+        "summary": "Persist a manual note edit (title + summary) to Postgres.",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Edit applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateNoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No editable fields / invalid fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not your note / workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Note not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Update failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes/{id}/speakers": {
+      "post": {
+        "summary": "Name the diarised speakers of a note (per-note, ADR 0005).",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetNoteSpeakersRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Speaker map updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetNoteSpeakersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid note id / no valid speaker entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Note not found (or caller is not a member).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to update speakers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/export-note": {
+      "post": {
+        "summary": "Server-rendered DOCX export. Returns raw bytes on success.",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "DOCX document bytes.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scope/format/ids.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Note not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Transcript too large for DOCX.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportTooLargeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Export timeout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/search": {
+      "post": {
+        "summary": "Hybrid (vector + trigram) retrieval across a member’s notes.",
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ranked hits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "query is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scoped note not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Search failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat": {
+      "post": {
+        "summary": "Grounded chat over meetings. Streams Server-Sent Events.",
+        "description": "Response is text/event-stream: an `event: citations` frame ({ hits }), then `data: { text }` frames, then `event: done` ({}). Failures emit `event: error` ({ error }).",
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream. See ChatCitationsEvent / ChatTextEvent / ChatErrorEvent for frame payloads.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "query is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scoped note not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/share-create": {
+      "post": {
+        "summary": "Mint a public read link. The raw token is returned here and nowhere else.",
+        "tags": [
+          "share"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Link minted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids / scope / expiresInHours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Note not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/share-revoke": {
+      "post": {
+        "summary": "Revoke a link (idempotent).",
+        "tags": [
+          "share"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareRevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoke result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareRevokeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shared-note": {
+      "post": {
+        "summary": "PUBLIC read of a shared note. No bearer token — the link token is the credential.",
+        "tags": [
+          "share"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharedNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redacted share view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedNoteResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (indistinguishable from expired/revoked/malformed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (per-IP limiter).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/delete-account": {
+      "post": {
+        "summary": "Delete the caller’s account and all owned data (App Store + GDPR).",
+        "tags": [
+          "account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed (POST or DELETE only).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Partial failure with progress summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
