@@ -1,0 +1,27 @@
+name: ci
+
+# Typecheck + unit tests on every PR and push to main. The gate is real now:
+# the root `typecheck` covers the shared TS libraries, `npm test` runs the
+# vitest suites, and `test:node` runs the two node:test suites (transcoder
+# providers, diarisation DER). No network, no DB, no credentials.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck (shared TS libraries)
+        run: npm run typecheck
+      - name: Unit tests (vitest)
+        run: npm test
+      - name: Unit tests (node:test suites)
+        run: npm run test:node
