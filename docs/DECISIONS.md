@@ -3,6 +3,64 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Staging paused to stop idle spend (2026-08-27)
+
+Owner not working on the project; staging was billing 24/7 with no Cloud Run service deployed and no
+traffic. Chosen action: **pause, keep all data** — explicitly *not* `terraform destroy`.
+
+- **The VPC connector was DELETED, not scaled down.** `min_instances` floors at 2 e2-micro instances
+  (`modules/environment/variables.tf`), which bill continuously regardless of traffic — the largest
+  single idle line item. Deletion is the only lever that reaches zero. Safe because no Cloud Run
+  service was attached (verified: `gcloud run services list` returned empty).
+- **Cloud SQL stopped via `--activation-policy=NEVER`**, not deleted. Disk and existing automated
+  backups still bill (single-digit dollars); compute does not.
+- **Kept deliberately:** VPC, subnet, PSA range `algominutes-staging-psa` (INTERNAL/VPC_PEERING
+  addresses incur no unattached-IP charge), buckets, Firestore, Secret Manager, service accounts.
+  These are free-or-cents and make resuming fast.
+- **Pre-pause export taken** to `gs://algominutes-staging-imports/backups/pg-pause-20260827-100654.sql.gz`
+  — written to the *imports* bucket, never *recordings*, which has a 7-day delete lifecycle rule.
+  **The dump is 450 bytes because the database is genuinely empty** (0 tables, 0 rows — verified by
+  decompressing and reading it). Migrations were never run, consistent with Cloud Run never having
+  been deployed. A byte-size threshold is therefore the WRONG validity check for this dump; check
+  that it is a structurally complete `pg_dump` instead.
+- **Cloud SQL service agent `p627101926311-q4gahs@gcp-sa-cloud-sql.iam.gserviceaccount.com` was
+  granted `roles/storage.objectAdmin`** on the imports bucket to allow the export. Bucket IAM uses
+  `google_storage_bucket_iam_member` (non-authoritative), so `terraform apply` will not strip it.
+  The first export attempt failed with `storage.objects.create` denied — IAM propagation lag, not a
+  misconfiguration; the retry succeeded.
+
+### ⚠️ This is out-of-band drift — `terraform apply` resumes the spend
+
+The connector is a declared resource, so a plan will show it must be recreated. `activation_policy`
+is **not set anywhere in the module**, so whether the provider reverts the stopped database is
+**unverified** — `terraform plan` could not be run because the Google provider authenticates via
+Application Default Credentials (a separate store from `gcloud auth login`), and ADC on the build
+machine is `skalaliya@gmail.com`, which lacks `storage.objects.get` on the state bucket. Capturing
+the real drift requires `gcloud auth application-default login` as `gcp-admin@algorythmos.com`.
+**TODO: run the plan and record the actual output here.**
+
+### Resume
+
+```
+gcloud sql instances patch algominutes-staging-pg --activation-policy=ALWAYS
+gcloud compute networks vpc-access connectors create algominutes-staging-vpc \
+  --region=australia-southeast1 --network=algominutes-staging-vpc \
+  --range=10.8.1.0/28 --machine-type=e2-micro --min-instances=2 --max-instances=3
+```
+
+`--range` + `--network`, **not** `--subnet`: the resource is declared with `ip_cidr_range`
+(`modules/environment/main.tf`), and recreating it against a subnet leaves a permanent diff.
+
+### Related: three other projects were also stopped
+
+Not part of algominutes, but found running during this work and stopped with the owner's approval via
+the existing `~/.local/bin/gcp-schedule.sh --force-down`: `wassup-meeting-pg` (wassup-meeting),
+`voxtable-stg-postgres` (bp-voxtable-stg), `core-central-vm` (vocotable-497209, already TERMINATED).
+The `com.sam.gcp-schedule.plist` launchd job was **unloaded** — it carries `StartInterval 1800` on top
+of its weekday triggers, so it reconciles every 30 minutes and would otherwise have restarted
+everything. **Re-loading that job, or running `gcp-schedule.sh` without `--force-down`, brings all of
+it back up.**
+
 ## Diarisation — engine swap to AssemblyAI (ADR 0005, 2026-08-16)
 
 Scoped run against `docs/plans/DIARISATION-PLAN.md`. Fixes Bug 17 (0 of 4,253 lines carry a speaker tag).

@@ -167,7 +167,7 @@ expensive AI pipeline while leaving the API serving.
 same region, same IAM shape — at the **smallest viable tier** of each. It is not a capacity test of
 production. Record tier differences in `docs/DECISIONS.md`.
 
-### 4.5 Services (A4) — ✅ STAGING live · ⏳ prod authored, not applied
+### 4.5 Services (A4) — ⏸️ STAGING PAUSED · ⏳ prod authored, not applied
 
 **Status (15 Aug 2026):** infrastructure is authored as **Terraform** in `infra/terraform/`
 (modules/environment + envs/{staging,prod}); `terraform validate` passes both envs. Apply steps:
@@ -176,6 +176,14 @@ production. Record tier differences in `docs/DECISIONS.md`.
 - **`algominutes-staging`: ✅ APPLIED — 111 resources live** (`terraform apply` succeeded; Cloud SQL
   `edition = ENTERPRISE`, see DECISIONS A4).
 - **`algominutes-prod`: ⏳ not yet applied.** Same Terraform, run from a `gcp-admin@algorythmos.com` shell.
+
+> ⏸️ **PAUSED 27 Aug 2026 to stop idle spend — out-of-band, NOT reflected in Terraform.**
+> `algominutes-staging-pg` is `activation-policy=NEVER` (STOPPED) and the Serverless VPC Access
+> connector `algominutes-staging-vpc` has been **deleted** (a connector cannot scale below
+> `min_instances = 2`, so deletion is the only way to reach zero). Everything else — VPC, subnet, PSA
+> range, buckets, Firestore, secrets, service accounts — is untouched.
+> **`terraform apply` will recreate the connector and resume the spend.** See DECISIONS
+> "Staging paused to stop idle spend" for the resume commands.
 
 **Firebase — staging** (`algominutes-staging`):
 - Firebase enabled, **Blaze** (pay-as-you-go) plan.
