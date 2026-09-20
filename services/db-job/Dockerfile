@@ -1,31 +1,32 @@
-# services/db-job — Cloud Run Job for programmatic DB ops
-# (verification queries, corpus backfill, etc).
+# services/db-job — one-shot DB jobs dispatcher (Cloud Run Job, Node 24).
 #
-# Runs inside the project VPC with native private-IP access to
-# ${GCP_PROJECT}-pg. Per CLAUDE.md §2 invariants:
-#   - imports shared/redaction.cjs for any text reaching Gemini/embedder
-#   - uses Postgres as source of truth
-#   - no console.* — uses pino-style structured logger from shared/
-#   - traceId/userId/noteId/workspaceId in every log line
-FROM node:22-bookworm-slim AS runtime
+# Not an HTTP server: invoked as a Cloud Run Job with JOB_NAME set, runs once,
+# exits. BUILD CONTEXT = REPO ROOT. Runs under tsx (imports @algominutes/db
+# TypeScript source via the repo layer).
+#   docker build -f services/db-job/Dockerfile -t algominutes-db-job .
+FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json package-lock.json ./
+COPY packages/ai/package.json ./packages/ai/
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/db/package.json ./packages/db/
+COPY services/db-job/package.json ./services/db-job/
 
-# `services/deploy.sh` (or services/deploy-image-only.sh per Phase δ.2)
-# copies repo's shared/ into ./shared before `gcloud builds submit`.
-# Monorepo port: shared/ became @algominutes/ai + @algominutes/db workspaces.
-# Build context is the repo root. TODO(build): wire full npm workspaces install (A11).
-COPY packages/ai ./node_modules/@algominutes/ai
-COPY packages/db ./node_modules/@algominutes/db
-# evals/ — used by eval-recall handler (PR-G recall@k)
-COPY evals ./evals
-COPY src ./src
+RUN npm install \
+      -w @algominutes/db-job \
+      -w @algominutes/db \
+      -w @algominutes/ai \
+      -w @algominutes/contracts \
+      --omit=dev --no-audit --no-fund
+
+COPY packages/ai ./packages/ai
+COPY packages/contracts ./packages/contracts
+COPY packages/db ./packages/db
+COPY services/db-job ./services/db-job
 
 ENV NODE_ENV=production
 
-# Cloud Run Jobs don't take HTTP traffic — no PORT, no EXPOSE.
-# Job runs `index.js` once per execution, exits 0 on success, non-zero on failure.
-CMD ["node", "src/index.js"]
+WORKDIR /app/services/db-job
+CMD ["npx", "tsx", "src/index.js"]

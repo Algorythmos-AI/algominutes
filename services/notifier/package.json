@@ -5,13 +5,14 @@
   "description": "A7.3 push fan-out. Cloud Run service: Cloud Tasks pushes note_ready/note_failed jobs; we fan out FCM to the recipient's devices and prune dead tokens.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "tsx src/index.js"
   },
   "dependencies": {
     "express": "^4.21.2",
     "firebase-admin": "^13.8.0",
     "@algominutes/ai": "*",
-    "@algominutes/db": "*"
+    "@algominutes/db": "*",
+    "tsx": "^4.23.15"
   },
   "engines": {
     "node": ">=24"
