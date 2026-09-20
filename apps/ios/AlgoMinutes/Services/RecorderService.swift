@@ -97,9 +97,13 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     /// touching `start()`. See `docs/CONSENT.md`.
     let consentGate: ConsentGate
 
-    init(store: RecordingStore, consentGate: ConsentGate = SessionConsentGate()) {
+    // consentGate defaults to a fresh SessionConsentGate. It is constructed in
+    // the (MainActor-isolated) init body rather than as a default argument
+    // because Swift 5.10 evaluates default-argument expressions in a nonisolated
+    // context, where calling the @MainActor SessionConsentGate() init is illegal.
+    init(store: RecordingStore, consentGate: ConsentGate? = nil) {
         self.store = store
-        self.consentGate = consentGate
+        self.consentGate = consentGate ?? SessionConsentGate()
         super.init()
     }
 

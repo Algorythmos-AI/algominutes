@@ -101,8 +101,28 @@ enum FirebaseBootstrap {
     static func configureIfNeeded() {
         guard !configured else { return }
         configured = true
-        if FirebaseApp.app() == nil {
+        guard FirebaseApp.app() == nil else { return }
+        // GoogleService-Info.plist is git-ignored and injected per environment at
+        // build time (A4). When it is present, configure normally. When it is
+        // absent (CI / app-hosted unit tests), configure with placeholder
+        // options so FirebaseApp — and the lazily-constructed Auth/Firestore
+        // instances the app touches at launch — exist rather than trapping.
+        // No live Firebase calls are made in that mode.
+        if Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil {
             FirebaseApp.configure()
+        } else {
+            let options = FirebaseOptions(
+                googleAppID: "1:000000000000:ios:0000000000000000",
+                gcmSenderID: "000000000000",
+            )
+            // Firebase (FIRInstallations) validates the API key's shape at
+            // configure time. Assemble a format-valid but obviously-fake key at
+            // runtime (fragments so the raw shape isn't a source literal); no
+            // live Firebase call is ever made with it.
+            options.apiKey = "AIza" + "SyDUMMY" + String(repeating: "0", count: 28)
+            options.projectID = "algominutes-ci"
+            FirebaseApp.configure(options: options)
+            AppLog.error("firebase_config_missing: configured with placeholder options (no GoogleService-Info.plist)")
         }
         if let clientID = FirebaseApp.app()?.options.clientID {
             GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)

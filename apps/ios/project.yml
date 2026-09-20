@@ -23,6 +23,9 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
+    # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic
+    # (-allowProvisioningUpdates registers ids/profiles at archive; see A4/PR-25).
+    DEVELOPMENT_TEAM: NY9MS8GSBK
 
 targets:
   AlgoMinutes:
@@ -37,8 +40,7 @@ targets:
         INFOPLIST_FILE: AlgoMinutes/Info.plist
         CODE_SIGN_ENTITLEMENTS: AlgoMinutes/AlgoMinutes.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        # TODO(signing A4): set Algorythmos DEVELOPMENT_TEAM + provisioning profile.
-        # Client signing identity (team HX9DZ34625, old App Store profile) stripped.
+        # DEVELOPMENT_TEAM (NY9MS8GSBK) is set globally in settings.base.
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
     dependencies:
