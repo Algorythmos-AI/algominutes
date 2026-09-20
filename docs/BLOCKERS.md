@@ -251,6 +251,14 @@ A4 credentials + A11 build wiring.
 - **extractor:** Docker image needs `poppler-utils` + `yt-dlp`; OCR image pre-processing (`sharp`) dropped
   for P0; captionless YouTube returns a permanent 422 (STT is the transcoder's job).
 - **`check-migrations.sh`** compares against `origin/main`; only meaningful in CI after the first push.
+- **Test suite (PR-04):** vitest + `ci.yml` (typecheck + vitest + node:test) are wired and green. Seeded
+  with tests written against algominutes' *actual* modules — PII redaction (invariant-critical), the
+  boot-time `require-env` helper, and contract-schema/OpenAPI round-trips — plus the pre-existing
+  transcoder-provider and diarisation-DER node:test suites. The 61 `.test.ts` files in
+  `wasssup-meeting/tests` were **not** bulk-ported: the shared code diverged (e.g. `redaction.cjs` is
+  337 vs 172 lines), so a verbatim port would fail. Growing coverage of the diverged pipeline
+  (gemini-call ladder, note-terminal/idempotency, cloud-tasks-deadline, summarizer map-reduce,
+  embedder) belongs with the PRs that touch each area — each such PR adds tests for its own change.
 - **Client identifiers + `wassup`/`clinical` naming still present throughout** — by design. The global
   rename is **A5**; identifier replacement is **A4/A5**. So the BUILD-PLAN "Verify" grep for
   `wassup|clinical` will NOT be clean until A5 — expected at this stage.
