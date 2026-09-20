@@ -4,14 +4,15 @@
   "private": true,
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "tsx src/index.js"
   },
   "dependencies": {
     "express": "^4.21.2",
     "google-auth-library": "^9.15.0",
     "pg": "^8.20.0",
     "@algominutes/ai": "*",
-    "@algominutes/db": "*"
+    "@algominutes/db": "*",
+    "tsx": "^4.23.15"
   },
   "engines": {
     "node": ">=22"

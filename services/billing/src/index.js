@@ -9,9 +9,22 @@
 import { initFirebase } from './firebase.js';
 import { buildApp } from './app.js';
 import { rootLogger } from './middleware/trace.js';
+import requireEnvMod from '@algominutes/ai/require-env.cjs';
+
+const { requireEnv } = requireEnvMod;
 
 // Cloud Run injects PORT (8080 by convention); default for local runs.
 const PORT = Number(process.env.PORT) || 8080;
+
+// Only the GCP project is required to boot. The Stripe/Apple/Play secrets and
+// product ids are still A11 stubs (services/billing/README) and become required
+// when real verification lands (PR-27); validating them here now would block
+// boot before that work exists.
+requireEnv(
+  'billing',
+  { oneOf: [{ label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] }] },
+  { logger: rootLogger },
+);
 
 // Needed to verify the client's Firebase ID token on the authed endpoints.
 initFirebase();
