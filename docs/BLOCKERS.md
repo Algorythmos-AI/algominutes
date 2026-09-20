@@ -200,6 +200,20 @@ Everything below was structurally verified (files parse via `node --check` / `xc
 invariant checkers pass, gitleaks clean) but **nothing was installed, built, or deployed** — that needs
 A4 credentials + A11 build wiring.
 
+> **A11 progress (PR-02, 2026-09-20):** `npm install` now succeeds (`package-lock.json` committed);
+> the four shared TS libraries (`contracts`, `db`, `ai`, `tokens`) typecheck clean under a real root
+> `npm run typecheck`; `npm run contracts:openapi` runs and is deterministic (regenerated
+> `openapi.v1.json`, 46→50 schemas, zero dropped). **Still open, deferred to their own PRs:**
+> - **`apps/web` typecheck** — 14 `strictNullChecks` errors remain (missing `./plugins/BackgroundRecorder`
+>   + `./plugins/BroadcastRecorder` modules, `import.meta.env` needs `vite/client` types, `BillingPeriod`
+>   used as a type, a `NoteType` assignment, `authedFetch` arg count) **plus** the deliberately-deferred
+>   `noImplicitAny` (1181) / `noUncheckedIndexedAccess` (91) from `apps/web/tsconfig.json`. Not on the
+>   TestFlight path; belongs with the A8/web PR. `npm run typecheck` deliberately excludes `apps/web`.
+> - **Swift/Kotlin model codegen** (`npm run contracts:models`) needs a real JDK (only the macOS `java`
+>   stub is present) **and** the generated `generated/{swift,kotlin}` are not yet consumed by any client
+>   — wire when a client first imports them (PR-15 onward). The internal PR-02 schema rename kept every
+>   `.openapi()` name, so the OpenAPI output names are unchanged and no client-visible contract moved.
+
 - **No `npm install` / build / deploy** anywhere: services, web, contracts codegen, iOS, Android are
   unbuilt. Full compilation + runtime import resolution (`@algominutes/*` workspace links, `@algominutes/db`
   TS via `tsx`, exports maps) is unverified until deps are installed.
