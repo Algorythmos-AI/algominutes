@@ -48,7 +48,10 @@ const env = {
   STT_RECOGNIZER: process.env.STT_RECOGNIZER || '',
   TASKS_PROJECT: process.env.TASKS_PROJECT || '',
   TASKS_LOCATION: process.env.TASKS_LOCATION || 'us-central1',
-  TASKS_QUEUE: process.env.TASKS_QUEUE || 'audio-jobs',
+  // Per-stage queues (Terraform-created names). Defaults match the module.
+  TRANSCODE_QUEUE: process.env.TRANSCODE_QUEUE || 'transcode',
+  SUMMARIZE_QUEUE: process.env.SUMMARIZE_QUEUE || 'summarize',
+  EMBED_QUEUE: process.env.EMBED_QUEUE || 'embed',
   JOBS_SA_EMAIL: process.env.JOBS_SA_EMAIL || '',
   TRANSCODER_URL: process.env.TRANSCODER_URL || '',
   SUMMARIZER_URL: process.env.SUMMARIZER_URL || '',

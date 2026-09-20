@@ -280,7 +280,9 @@ export async function processIntelligenceRoute(req, res) {
   const jobsSa = process.env.JOBS_SA_EMAIL || '';
   const tasksProject = process.env.TASKS_PROJECT || '';
   const tasksLocation = process.env.TASKS_LOCATION || 'us-central1';
-  const tasksQueue = process.env.TASKS_QUEUE || 'audio-jobs';
+  // The kickoff targets the transcoder, so it goes on the transcode queue
+  // (Terraform-created name); TASKS_QUEUE kept as a legacy override.
+  const tasksQueue = process.env.TRANSCODE_QUEUE || process.env.TASKS_QUEUE || 'transcode';
   if (!transcoderUrl || !jobsSa || !tasksProject) {
     log.error({ transcoderUrl: !!transcoderUrl, jobsSa: !!jobsSa, tasksProject: !!tasksProject }, 'kickoff_misconfigured');
     const userMsg = 'Service is being upgraded. Please try again shortly.';

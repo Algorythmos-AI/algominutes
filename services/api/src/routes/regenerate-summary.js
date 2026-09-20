@@ -121,7 +121,7 @@ export async function regenerateSummaryRoute(req, res) {
     await enqueueTask({
       projectId: process.env.TASKS_PROJECT || '',
       location: process.env.TASKS_LOCATION || 'us-central1',
-      queue: process.env.TASKS_QUEUE || 'audio-jobs',
+      queue: process.env.SUMMARIZE_QUEUE || process.env.TASKS_QUEUE || 'summarize',
       targetUrl: summarizerUrl,
       oidcServiceAccount: jobsSa,
       payload: {

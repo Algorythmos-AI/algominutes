@@ -19,7 +19,7 @@ const PORT = Number(process.env.PORT) || 8080;
 requireEnv(
   'api',
   {
-    required: ['STORAGE_BUCKET', 'TASKS_QUEUE', 'TASKS_LOCATION', 'TRANSCODER_URL', 'SUMMARIZER_URL', 'ALLOWED_ORIGINS'],
+    required: ['STORAGE_BUCKET', 'TRANSCODE_QUEUE', 'TASKS_LOCATION', 'TRANSCODER_URL', 'SUMMARIZER_URL', 'ALLOWED_ORIGINS'],
     oneOf: [{ label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] }],
   },
   { logger: rootLogger },
