@@ -391,13 +391,20 @@ struct HeroWaveform: View {
         }
     }
 
+    // Height kept in an explicit CGFloat helper: the inline
+    // `8 + Self.base[i] * 12 + wobble` mixes CGFloat and Double, which older
+    // Swift compilers (Xcode 16.x on CI) cannot type-check in reasonable time.
+    private func barHeight(_ i: Int, at t: TimeInterval) -> CGFloat {
+        let wobble: CGFloat = reduceMotion ? 0 : CGFloat(sin(t * 2 + Double(i) * 1.1) * 3)
+        return 8 + Self.base[i] * 12 + wobble
+    }
+
     private func bars(at t: TimeInterval) -> some View {
         HStack(spacing: 5) {
             ForEach(0..<5, id: \.self) { i in
-                let wobble = reduceMotion ? 0 : sin(t * 2 + Double(i) * 1.1) * 3
                 Capsule()
                     .fill(Theme.outline.opacity(0.7))
-                    .frame(width: 3, height: 8 + Self.base[i] * 12 + wobble)
+                    .frame(width: 3, height: barHeight(i, at: t))
             }
         }
         .frame(height: 26, alignment: .center)
