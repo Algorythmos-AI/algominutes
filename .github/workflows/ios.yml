@@ -1,0 +1,36 @@
+name: ios
+
+# iOS build + unit tests on a macOS runner. Path-filtered to apps/ios/** because
+# macOS minutes bill ~10x. Unsigned simulator build (CODE_SIGNING_ALLOWED=NO) —
+# signing/archive is the release pipeline's job (PR-25). No GoogleService-Info.plist
+# is present here; the app configures Firebase with placeholder options so the
+# app-hosted unit tests run (see AlgoMinutesApp.FirebaseBootstrap).
+on:
+  push:
+    branches: [main]
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+      - name: Build & test (unsigned, iPhone simulator)
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          # Use whichever iPhone simulator the runner image provides.
+          DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+( Pro)?' | head -1)
+          echo "Testing on: ${DEVICE}"
+          xcodebuild test \
+            -scheme AlgoMinutes \
+            -destination "platform=iOS Simulator,name=${DEVICE}" \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO

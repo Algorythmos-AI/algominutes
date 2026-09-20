@@ -238,9 +238,17 @@ A4 credentials + A11 build wiring.
   breaks and the forbidden dep is left undeclared so any future import fails loudly. `check-no-genai-import.sh`
   does **not** scope `packages/db`, which is why it slipped past CI — extend the checker to cover
   `packages/db` and delete/rewrite the dead file when the embedder is worked on.
-- **iOS:** `xcodegen generate` succeeds, but a clean **build** needs A4 signing + SPM resolution (network).
-  The re-homed **broadcast extension** is declared + embedded but its full runtime wiring
-  (`RPSystemBroadcastPickerView`, App-Group handoff) needs a real App Group (A4) + a device (A11).
+- ~~**iOS:** `xcodegen generate` succeeds, but a clean **build** needs A4 signing + SPM resolution.~~
+  **Done (PR-05):** the iOS app **compiles for the first time** and all **161 unit tests pass** on the
+  simulator (`xcodebuild test`, unsigned). `DEVELOPMENT_TEAM: NY9MS8GSBK` wired in `project.yml`. Fixed
+  to compile: two Swift 5.10 strict-concurrency errors (a default-arg `@MainActor` init in
+  `RecorderService`, and a `deinit` touching a `@MainActor` Task in `StoreKitService`), and both
+  broadcast-extension `Info.plist`s were missing every standard `CFBundle*` key (embedded-binary bundle
+  id resolved to `(null)`). `FirebaseApp.configure()` traps without `GoogleService-Info.plist`, so the
+  app now configures Firebase with **placeholder options** when the plist is absent (CI / app-hosted
+  tests) — no live calls, no committed config. CI: `.github/workflows/ios.yml` (macOS runner,
+  path-filtered, unsigned). The re-homed **broadcast extension** still needs its full runtime wiring
+  (`RPSystemBroadcastPickerView`, App-Group handoff) — a real App Group (A4) + a device (PR-27/29).
 - **Android:** no gradle build run; A3 delivered only the audio layer + interface (the full Compose app,
   permission/consent flow, launcher Activity are **B2**).
 - **Web:** no `vite build`; `App.tsx` still has native branches behind web-safe shims — full de-Capacitor +
