@@ -3,6 +3,22 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Branch model: `integration` = staging (default), `main` = production (2026-09-23)
+
+Owner decision. Every change lands on **`integration`** (the default branch) through a
+feature-branch PR; **`main`** only moves by a promotion PR from `integration`, so production is
+always a state that already ran on staging.
+
+- `deploy-staging.yml` deploys on pushes to `integration`; prod deploys from `main` arrive with the
+  prod environment (plan PR-35).
+- `promotion-guard.yml` fails any PR into `main` whose head is not this repo's `integration`
+  (make it a required check on `main`).
+- ci / docker-build / gitleaks / invariants / ios run on pushes to both branches and on every PR.
+- `scripts/check-migrations.sh` now diffs against the PR's base (`GITHUB_BASE_REF`, default
+  `integration`), so an edit to a migration already merged to `integration` is caught before it
+  can reach `main`.
+- Same flow the source repo used (feature → `integration` → promotion → `main`).
+
 ## A11 — release engineering plan of record (2026-09-20)
 
 The A11 plan is `docs/plans/A11-release.md`: a **strictly serial PR train** (one open PR at a time, one
