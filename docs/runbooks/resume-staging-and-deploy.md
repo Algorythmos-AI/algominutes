@@ -87,7 +87,7 @@ gh run watch
 The workflow's `smoke` job runs `scripts/smoke-staging.sh`. It must pass. It
 checks that every `*_URL` env is a URL the target service really serves, that
 `api` (`/v1/health`) and `billing` (`/health`) answer 200 without auth, and
-that every worker answers 403 without auth. After that, each merge to `main`
+that every worker answers 403 without auth. After that, each merge to `integration` (the staging branch)
 that touches a service redeploys only the services it affects.
 
 > Health paths: Cloud Run's front end reserves request paths ending in `z`, so
