@@ -52,7 +52,7 @@ tests *before* refactors; Xcode pinned early; macOS-minute budget; disk space.
 
 ## Rules (unchanged + two additions)
 
-Strictly serial; one concern per PR (≤ ~600 lines); evidence in every PR; audit shared code first;
+Strictly serial; one concern per PR (≤ ~600 lines); feature PRs target `integration` (staging) and are promoted to `main` (production) via an `integration → main` PR; evidence in every PR; audit shared code first;
 sub-agents after writes; new migrations only; contract changes regenerate models and update web + android.
 **New:** (a) every refactor PR is preceded by characterization tests that pin behaviour; (b) every iOS PR
 builds on **both** CI Xcode (pinned, PR-17) and local Xcode 26.x with `-warn-long-expression-type-checking=300` = 0.

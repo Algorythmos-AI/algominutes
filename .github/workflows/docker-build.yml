@@ -6,7 +6,7 @@ name: docker-build
 # workflow's job (PR-07).
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
   pull_request:
 
 jobs:

@@ -6,7 +6,7 @@ name: ci
 # providers, diarisation DER). No network, no DB, no credentials.
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
   pull_request:
 
 jobs:

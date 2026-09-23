@@ -7,7 +7,7 @@ name: ios
 # app-hosted unit tests run (see AlgoMinutesApp.FirebaseBootstrap).
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
   pull_request:
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
