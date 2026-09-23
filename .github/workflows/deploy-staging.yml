@@ -1,7 +1,10 @@
 name: deploy-staging
 
-# Builds and deploys changed services to the STAGING Cloud Run services that
+# Builds and deploys changed services to the STAGING Cloud Run services
 # Terraform created (infra/terraform/modules/environment/cloud-run.tf).
+# Branch model: `integration` (default) = staging, `main` =
+# production — so this runs on pushes to `integration`; prod deploys from
+# `main` arrive with the prod environment (plan PR-35).
 #
 # - Keyless: authenticates via Workload Identity Federation as gha-deployer.
 # - Image-only: `gcloud run services update --image` changes ONLY the image;
@@ -14,7 +17,7 @@ name: deploy-staging
 # - Prod deploys are added with the prod environment (plan PR-35).
 on:
   push:
-    branches: [main]
+    branches: [integration]
     paths:
       - 'services/**'
       - 'packages/ai/**'

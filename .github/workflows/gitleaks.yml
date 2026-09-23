@@ -2,7 +2,7 @@ name: gitleaks
 
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
   pull_request:
 
 # Runs the gitleaks binary directly rather than gitleaks/gitleaks-action@v2.
