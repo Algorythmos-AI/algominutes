@@ -50,7 +50,13 @@ export function buildApp() {
   app.use(traceMiddleware);
 
   // ── health ── (no auth — infra probes it without an app identity) ──────
-  app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+  // Cloud Run's front end reserves request paths ending in "z", so an external
+  // GET /healthz is answered 404 by Google before it reaches this container.
+  // /health is the externally reachable probe; /healthz is kept for callers
+  // that already use it from inside the platform.
+  const health = (_req, res) => res.status(200).send('ok');
+  app.get('/health', health);
+  app.get('/healthz', health);
 
   // ── PUBLIC webhook: Stripe ── RAW body BEFORE express.json ──────────────
   // Signature is verified over these exact bytes (see lib/stripe.js).

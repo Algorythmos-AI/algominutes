@@ -1,0 +1,142 @@
+name: deploy-staging
+
+# Builds and deploys changed services to the STAGING Cloud Run services that
+# Terraform created (infra/terraform/modules/environment/cloud-run.tf).
+#
+# - Keyless: authenticates via Workload Identity Federation as gha-deployer.
+# - Image-only: `gcloud run services update --image` changes ONLY the image;
+#   env, service account, VPC and limits stay owned by Terraform (which ignores
+#   the image field, so the two never fight).
+# - Gated: does nothing until the repo variable DEPLOY_STAGING == 'true'
+#   (set it after the staging `terraform apply`; see
+#   docs/runbooks/resume-staging-and-deploy.md). Required repo variables:
+#   GCP_PROJECT_ID, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA.
+# - Prod deploys are added with the prod environment (plan PR-35).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - 'packages/ai/**'
+      - 'packages/db/**'
+      - 'packages/contracts/**'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-staging.yml'
+      - 'scripts/smoke-staging.sh'
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Comma-separated services to deploy, or "all"'
+        default: all
+        required: true
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  REGION: australia-southeast1
+
+jobs:
+  changes:
+    if: vars.DEPLOY_STAGING == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        with:
+          # A change to a shared package or the lockfile redeploys everything
+          # that bundles it.
+          filters: |
+            api:        ['services/api/**', 'packages/**', 'package-lock.json']
+            billing:    ['services/billing/**', 'packages/**', 'package-lock.json']
+            transcoder: ['services/transcoder/**', 'packages/**', 'package-lock.json']
+            summarizer: ['services/summarizer/**', 'packages/**', 'package-lock.json']
+            embedder:   ['services/embedder/**', 'packages/**', 'package-lock.json']
+            extractor:  ['services/extractor/**', 'packages/ai/**', 'package-lock.json']
+            notifier:   ['services/notifier/**', 'packages/**', 'package-lock.json']
+            db-job:     ['services/db-job/**', 'packages/**', 'package-lock.json']
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          REQUESTED: ${{ github.event.inputs.services }}
+        run: |
+          set -euo pipefail
+          all='["api","billing","transcoder","summarizer","embedder","extractor","notifier","db-job"]'
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$REQUESTED" = "all" ]; then out="$all"
+            else out=$(printf '%s' "$REQUESTED" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')
+            fi
+          else
+            out="${CHANGED:-[]}"
+          fi
+          echo "services=$out" >> "$GITHUB_OUTPUT"
+          echo "Deploying: $out"
+
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Artifact Registry auth
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Roll out image
+        env:
+          SERVICE: ${{ matrix.service }}
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/${{ matrix.service }}:${{ github.sha }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$SERVICE" = "db-job" ]; then
+            gcloud run jobs update db-job --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+          else
+            gcloud run services update "$SERVICE" --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+          fi
+
+  smoke:
+    needs: [changes, deploy]
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Reachability + URL-assumption smoke
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: bash scripts/smoke-staging.sh
