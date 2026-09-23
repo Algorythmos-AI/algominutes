@@ -62,15 +62,37 @@ psql "$DATABASE_URL" -c '\dt'   # expect the notes/transcript_lines/… tables
 node scripts/check-migrations-applied.mjs
 ```
 
-## 3. Wire the deploy pipeline (PR-07)
+## 3. Turn on the deploy pipeline (`.github/workflows/deploy-staging.yml`)
 
-`terraform output` gives the values the deploy workflow needs:
+The workflow is keyless (WIF) and does nothing until it is enabled. Set four
+**repository variables** (not secrets — none of these is sensitive) from the
+Terraform outputs:
 
 ```bash
-terraform output deployer_service_account_email   # WIF impersonation target
-terraform output wif_provider_name                # workload_identity_provider
-terraform output cloud_run_service_names          # what to `gcloud run deploy`
+cd infra/terraform/envs/staging
+gh variable set GCP_PROJECT_ID   --body algominutes-staging
+gh variable set GCP_WIF_PROVIDER --body "$(terraform output -raw wif_provider_name)"
+gh variable set GCP_DEPLOYER_SA  --body "$(terraform output -raw deployer_service_account_email)"
+gh variable set DEPLOY_STAGING   --body true
 ```
+
+Then run the first full deploy by hand (every service still has the
+placeholder image):
+
+```bash
+gh workflow run deploy-staging.yml -f services=all
+gh run watch
+```
+
+The workflow's `smoke` job runs `scripts/smoke-staging.sh`. It must pass. It
+checks that every `*_URL` env is a URL the target service really serves, that
+`api` (`/v1/health`) and `billing` (`/health`) answer 200 without auth, and
+that every worker answers 403 without auth. After that, each merge to `main`
+that touches a service redeploys only the services it affects.
+
+> Health paths: Cloud Run's front end reserves request paths ending in `z`, so
+> an external `GET /healthz` returns a Google 404 before reaching the container.
+> Probe `/health` from outside.
 
 ## Pausing again (cost control)
 
