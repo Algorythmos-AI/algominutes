@@ -15,10 +15,15 @@ function loadShared(name) {
 const sharedTasks = loadShared('cloud-tasks.cjs');
 
 function makeClient({ env, log }) {
+  // Each stage enqueues to its OWN queue (the names Terraform creates). The
+  // transcoder re-enqueues its own stt-poll work to the transcode queue, and
+  // hands off to the summarize / embed queues.
   const cfg = {
     projectId: env.TASKS_PROJECT,
     location: env.TASKS_LOCATION || 'us-central1',
-    queue: env.TASKS_QUEUE || 'audio-jobs',
+    transcodeQueue: env.TRANSCODE_QUEUE || 'transcode',
+    summarizeQueue: env.SUMMARIZE_QUEUE || 'summarize',
+    embedQueue: env.EMBED_QUEUE || 'embed',
     oidcServiceAccount: env.JOBS_SA_EMAIL,
     transcoderUrl: env.TRANSCODER_URL,
     summarizerUrl: env.SUMMARIZER_URL,
@@ -29,7 +34,7 @@ function makeClient({ env, log }) {
     return sharedTasks.enqueueTask({
       projectId: cfg.projectId,
       location: cfg.location,
-      queue: cfg.queue,
+      queue: cfg.transcodeQueue,
       targetUrl: cfg.transcoderUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,
@@ -42,7 +47,7 @@ function makeClient({ env, log }) {
     return sharedTasks.enqueueTask({
       projectId: cfg.projectId,
       location: cfg.location,
-      queue: cfg.queue,
+      queue: cfg.summarizeQueue,
       targetUrl: cfg.summarizerUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,
@@ -54,7 +59,7 @@ function makeClient({ env, log }) {
     return sharedTasks.enqueueTask({
       projectId: cfg.projectId,
       location: cfg.location,
-      queue: cfg.queue,
+      queue: cfg.embedQueue,
       targetUrl: cfg.embedderUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,

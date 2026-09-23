@@ -150,7 +150,13 @@ resource "google_sql_database_instance" "pg" {
     # Google now defaults new Postgres instances to ENTERPRISE_PLUS, which
     # rejects shared-core tiers (db-f1-micro / db-g1-small). Pin the edition
     # explicitly so the chosen tier is valid. See docs/DECISIONS.md (A4).
-    edition                     = var.db_edition
+    edition = var.db_edition
+    # Managed explicitly so `terraform apply` has a defined intent for the
+    # instance's run state. The 2026-08-27 cost pause set this to NEVER out of
+    # band (docs/DECISIONS.md); leaving it unmanaged meant apply's effect on a
+    # stopped instance was undefined. ALWAYS = running; set to NEVER in tfvars
+    # to pause via Terraform instead of an out-of-band gcloud patch.
+    activation_policy           = var.db_activation_policy
     availability_type           = "ZONAL"
     disk_type                   = "PD_SSD"
     disk_size                   = var.db_disk_size_gb
@@ -281,7 +287,11 @@ resource "google_cloud_tasks_queue" "queues" {
   }
 
   retry_config {
-    max_attempts       = 10
+    # Single source of truth for the attempt budget: every service is deployed
+    # with MAX_TASK_ATTEMPTS set to this SAME value so the terminal-failure/DLQ
+    # write (packages/ai/note-terminal.cjs isFinalAttempt) fires on the queue's
+    # genuine last attempt — not before, not after.
+    max_attempts       = var.task_max_attempts
     min_backoff        = "5s"
     max_backoff        = "300s"
     max_doublings      = 4
@@ -332,6 +342,11 @@ locals {
     "run-extractor"  = "AlgoMinutes Extractor (Cloud Run runtime SA)"
     "run-billing"    = "AlgoMinutes Billing (Cloud Run runtime SA)"
     "run-notifier"   = "AlgoMinutes Notifier (Cloud Run runtime SA)"
+    "run-db-job"     = "AlgoMinutes db-job (Cloud Run Job runtime SA)"
+    # Identity that Cloud Tasks HTTP tasks carry (OIDC) and that invokes the
+    # private Cloud Run services. Enqueuing services actAs this SA; it holds
+    # run.invoker on each service (resource-level, in cloud-run.tf).
+    "run-jobs" = "AlgoMinutes Cloud Tasks OIDC + invoker identity"
   }
 
   # Roles common to every service.
@@ -398,6 +413,14 @@ locals {
       # is console-only; sdkAdminServiceAgent is the correct programmatic grant.
       "roles/firebase.sdkAdminServiceAgent",
     ])
+    "run-db-job" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor",
+      "roles/datastore.user",
+    ])
+    # run-jobs is purely an invocation identity: common logging/trace roles only.
+    # Its run.invoker grants are resource-level (per service, in cloud-run.tf).
+    "run-jobs" = local.common_roles
   }
 
   # Services that read/write objects — get storage.objectAdmin on the buckets

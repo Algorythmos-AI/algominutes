@@ -1,10 +1,16 @@
 'use strict';
 
-// Cloud Tasks enqueue helper. One queue (audio-jobs) carries all four
-// task kinds (kickoff, stt-poll, summarize, embed) discriminated by
-// `payload.kind`. Tasks reach Cloud Run via OIDC tokens issued for the
-// jobs service account; the receiving service must verify the OIDC
+// Cloud Tasks enqueue helper. Each async stage has its OWN queue
+// (transcode / summarize / embed / extract / notify — the names Terraform
+// creates in infra/terraform/modules/environment/main.tf); the caller passes
+// the stage queue and target URL. Tasks reach Cloud Run via OIDC tokens issued
+// for the jobs service account; the receiving service must verify the OIDC
 // audience matches its own URL.
+//
+// dispatchDeadline caps how long a single HTTP dispatch may run before Cloud
+// Tasks considers it failed and retries. Cloud Run's own request timeout is set
+// separately (Terraform, per service). Cloud Tasks allows 15s–1800s; we default
+// to the 1800s max so a long-audio handler is never cut off by the queue.
 
 let _client = null;
 function getClient() {
@@ -14,6 +20,15 @@ function getClient() {
   return _client;
 }
 
+// Cloud Tasks HTTP dispatch-deadline bounds (seconds).
+const MIN_DISPATCH_DEADLINE = 15;
+const MAX_DISPATCH_DEADLINE = 1800;
+
+function resolveDispatchDeadline(explicit) {
+  const raw = explicit ?? (Number(process.env.TASK_DISPATCH_DEADLINE_SECONDS) || MAX_DISPATCH_DEADLINE);
+  return Math.min(MAX_DISPATCH_DEADLINE, Math.max(MIN_DISPATCH_DEADLINE, Math.floor(raw)));
+}
+
 async function enqueueTask({
   projectId,
   location,
@@ -21,6 +36,7 @@ async function enqueueTask({
   targetUrl,
   payload,
   scheduleSeconds,
+  dispatchDeadlineSeconds,
   oidcServiceAccount,
   log,
 }) {
@@ -31,6 +47,7 @@ async function enqueueTask({
   const parent = client.queuePath(projectId, location, queue);
 
   const task = {
+    dispatchDeadline: { seconds: resolveDispatchDeadline(dispatchDeadlineSeconds) },
     httpRequest: {
       httpMethod: 'POST',
       url: targetUrl,
@@ -52,4 +69,4 @@ async function enqueueTask({
   return response.name;
 }
 
-module.exports = { enqueueTask };
+module.exports = { enqueueTask, resolveDispatchDeadline };

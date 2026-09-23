@@ -37,6 +37,48 @@ concern each, evidence in every PR description) from first build to App Store. D
 - **Cloud NAT (third-party STT egress) is declared but off until diarisation go-live** (plan PR-28); its
   monthly cost is recorded here when enabled, per the "no service without its operating cost" rule.
 
+## Cloud Run + Scheduler + WIF in Terraform; async config reconciled (2026-09-20, PR-06)
+
+Terraform now creates the runtime, not just the platform:
+
+- **7 Cloud Run services + a `db-job` Cloud Run Job**, each with a placeholder
+  image and `ignore_changes` on the image tag so `terraform apply` stands them
+  up before any image exists and the deploy pipeline owns the tag thereafter.
+  Explicit per-service limits (transcoder `3600s / 2 GiB / 2 cpu / concurrency 1`
+  for long audio; others modest), a `cloud_run_max_instances` cost cap, private
+  VPC egress via the connector, and env wired from Terraform (project, buckets,
+  per-stage queues, DB via a Secret Manager `PGPASSWORD` ref, and downstream
+  service URLs via Cloud Run's deterministic `SERVICE-PROJECTNUMBER.REGION.run.app`
+  hostname — which avoids a resource cycle between services).
+- **Task-invocation identity `run-jobs`**: the OIDC SA Cloud Tasks carries; holds
+  `run.invoker` on each service; api/transcoder/summarizer `actAs` it.
+- **Keyless CI deploys**: a GitHub **Workload Identity Federation** pool scoped to
+  `Algorythmos-AI/algominutes` + a `gha-deployer` SA — no JSON key ever created.
+- **`activation_policy` is now managed** (default `ALWAYS`) — closes the
+  2026-08-27 drift TODO: apply's effect on the paused DB is defined, and pausing
+  is `db_activation_policy = "NEVER"` + apply rather than an out-of-band patch.
+- **Cloud NAT** is declared behind `enable_nat` (default off); it turns on at
+  diarisation go-live (PR-28) for third-party STT egress, cost recorded then.
+- **Cloud Scheduler triggers are deferred to PR-13** (their handlers — retention
+  enforcer, stuck-note sweeper — don't exist yet; creating cron for a missing
+  handler would just fail).
+
+Async config reconciled so code and infra agree (was: one `audio-jobs` queue in
+code vs five stage queues in Terraform; DLQ write at attempt 5 vs queue
+`max_attempts = 10`):
+
+- Code enqueues to the **per-stage queues** (`transcode`/`summarize`/`embed`/
+  `notify`) Terraform creates.
+- **`task_max_attempts` (default 5) is the single source**: it sets the queue
+  `max_attempts` and each service's `MAX_TASK_ATTEMPTS` env, which drives
+  `isFinalAttempt` — so the DLQ write fires on the true last attempt.
+- Every task gets a **1800s dispatch deadline** (the Cloud Tasks max) so a
+  long-audio handler is never cut off by the queue.
+
+Apply is gated on `gcp-admin` ADC and is a money-spending op — see the runbook
+`docs/runbooks/resume-staging-and-deploy.md`. The module is `terraform validate`
+clean; the recorded `plan` is produced by that authenticated apply.
+
 ## Staging paused to stop idle spend (2026-08-27)
 
 Owner not working on the project; staging was billing 24/7 with no Cloud Run service deployed and no

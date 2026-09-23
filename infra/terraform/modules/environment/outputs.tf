@@ -71,3 +71,30 @@ output "firestore_database" {
   description = "Firestore database name."
   value       = google_firestore_database.db.name
 }
+
+# --- Cloud Run / deploy (A11) ------------------------------------------------
+
+output "cloud_run_service_urls" {
+  description = "Map of service name -> Cloud Run URL."
+  value       = { for k, s in google_cloud_run_v2_service.services : k => s.uri }
+}
+
+output "cloud_run_service_names" {
+  description = "List of Cloud Run service names the deploy pipeline updates."
+  value       = [for s in google_cloud_run_v2_service.services : s.name]
+}
+
+output "db_job_name" {
+  description = "Cloud Run Job name for db-job."
+  value       = google_cloud_run_v2_job.db_job.name
+}
+
+output "deployer_service_account_email" {
+  description = "GitHub Actions deployer SA the CI workflow impersonates via WIF."
+  value       = google_service_account.deployer.email
+}
+
+output "wif_provider_name" {
+  description = "Full resource name of the GitHub WIF provider — set as workload_identity_provider in the deploy workflow."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}

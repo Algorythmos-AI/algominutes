@@ -18,11 +18,14 @@
 
 /**
  * Cloud Tasks reports the attempt in `X-CloudTasks-TaskRetryCount`, 0-based.
- * The queue is created with `--max-attempts=5` (scripts/gcp-bootstrap.sh), so
- * attempt 4 is the last one. Marking earlier would turn a transient blip into a
- * permanent failure the doctor has to act on.
+ * The queues are created with `max_attempts = var.task_max_attempts` (Terraform,
+ * infra/terraform/modules/environment/main.tf), and every service is deployed
+ * with `MAX_TASK_ATTEMPTS` set to that SAME value — so the terminal-failure /
+ * DLQ write fires on the queue's genuine last attempt, not before (which would
+ * turn a transient blip into a permanent failure) and not after (wasted retries
+ * against an already-errored note). Default 5 if the env is unset.
  */
-function isFinalAttempt(headers, maxAttempts = 5) {
+function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEMPTS) || 5) {
   const raw = headers && headers['x-cloudtasks-taskretrycount'];
   const attempt = Number(raw || 0);
   if (!Number.isFinite(attempt)) return false;
