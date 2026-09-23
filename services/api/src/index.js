@@ -20,7 +20,10 @@ requireEnv(
   'api',
   {
     required: ['STORAGE_BUCKET', 'TRANSCODE_QUEUE', 'TASKS_LOCATION', 'TRANSCODER_URL', 'SUMMARIZER_URL', 'ALLOWED_ORIGINS'],
-    oneOf: [{ label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] }],
+    oneOf: [
+      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
+      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
+    ],
   },
   { logger: rootLogger },
 );

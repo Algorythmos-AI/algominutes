@@ -16,13 +16,18 @@ const { requireEnv } = requireEnvMod;
 // Cloud Run injects PORT (8080 by convention); default for local runs.
 const PORT = Number(process.env.PORT) || 8080;
 
-// Only the GCP project is required to boot. The Stripe/Apple/Play secrets and
+// Boot needs Postgres (subscriptions repo) and the GCP project. The Stripe/Apple/Play secrets and
 // product ids are still A11 stubs (services/billing/README) and become required
 // when real verification lands (PR-27); validating them here now would block
 // boot before that work exists.
 requireEnv(
   'billing',
-  { oneOf: [{ label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] }] },
+  {
+    oneOf: [
+      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
+      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
+    ],
+  },
   { logger: rootLogger },
 );
 
