@@ -17,7 +17,7 @@
     "@algominutes/ai": "*",
     "@algominutes/contracts": "*",
     "@algominutes/db": "*",
-    "@google/genai": "^1.29.0",
+    "@google/genai": "^2.23.0",
     "cors": "^2.8.6",
     "docx": "^9.7.1",
     "express": "^4.21.2",
