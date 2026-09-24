@@ -37,7 +37,12 @@ export function getPool(): Pool {
 }
 
 /** Run `fn` in a transaction; auto-rollback on throw. */
-export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withTx<T>(
+  fn: (client: PoolClient) => Promise<T>,
+  // Optional: the caller's request logger + correlation fields, so a rollback
+  // failure carries traceId/noteId/workspaceId (CLAUDE.md §1 Logging).
+  opts: { log?: { error: (o: any, m?: string) => void }; fields?: Record<string, unknown> } = {},
+): Promise<T> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
@@ -47,7 +52,7 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise
   } catch (err) {
     await client
       .query('ROLLBACK')
-      .catch((rollbackErr) => log.error({ err: rollbackErr }, 'pg_rollback_failed'));
+      .catch((rollbackErr) => (opts.log ?? log).error({ err: rollbackErr, ...opts.fields }, 'pg_rollback_failed'));
     throw err;
   } finally {
     client.release();

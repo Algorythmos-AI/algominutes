@@ -11,9 +11,13 @@
 #
 # ALLOWLIST (legitimate repo + mirror writers):
 #   - packages/db/src/notes-repo.ts             (the repo layer)
-#   - services/api/src/routes/process-intelligence.js (ported error-state Firestore mirror)
 #   - services/transcoder/src/firestore-mirror.js
 #   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
+#
+# (services/api/src/routes/process-intelligence.js was allowlisted here as a
+#  "ported mirror" and hid six direct note-status writes plus an unguarded
+#  cross-tenant Postgres upsert. It now goes through notes-repo; never
+#  allowlist a whole route file again.)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +32,7 @@ PATTERNS=(
   'noteRef\.(set|update|delete)\('
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/api/src/routes/process-intelligence\.js|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do
