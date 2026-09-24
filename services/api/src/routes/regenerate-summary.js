@@ -8,7 +8,7 @@
 // double-tap guard — a second tap cannot match because the first flipped
 // status.
 //
-// Repointed: the local pg-pool factory → @algominutes/db pg-query.cjs `pool()`
+// Note writes (claim / release / mirror) go through @algominutes/db notes-repo.
 // (the claim/probe/unclaim SQL has no repo function and stays here, but runs on
 // the SHARED pool); enqueueTask → @algominutes/ai cloud-tasks.cjs; intelligence
 // + summary-templates helpers → @algominutes/ai. SUMMARIZER_URL / JOBS_SA_EMAIL
@@ -20,11 +20,12 @@ import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import summaryTemplatesModule from '@algominutes/ai/summary-templates.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
+import { claimSummaryRegeneration, releaseSummaryClaim, mirrorSummarizing } from '@algominutes/db';
 
 const { isValidId, enforceUsageBudget } = intelligenceModule;
 const { isValidTemplateId } = summaryTemplatesModule;
 const { enqueueTask } = cloudTasksModule;
-const { pool, postgresEnabled } = pgQueryModule;
+const { postgresEnabled } = pgQueryModule;
 
 export async function regenerateSummaryRoute(req, res) {
   const baseLog = req.log;
@@ -64,55 +65,22 @@ export async function regenerateSummaryRoute(req, res) {
     throw err;
   }
 
-  const client = await pool().connect();
-  let claimed;
-  try {
-    // One conditional UPDATE is both the claim and the double-tap guard.
-    // The 15-minute arm is stale-lock takeover, so a summarizer that dies
-    // mid-run cannot strand the note in 'summarizing' forever.
-    const { rows } = await client.query(
-      `UPDATE notes
-          SET summary_generation = summary_generation + 1,
-              summary_template = COALESCE($3, summary_template),
-              summary_requested_at = NOW(),
-              status = 'summarizing',
-              updated_at = NOW()
-        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
-          AND (status IN ('ready', 'error')
-               OR (status = 'summarizing'
-                   AND summary_requested_at < NOW() - INTERVAL '15 minutes'))
-          AND ($4::boolean IS TRUE OR summary_manually_edited_at IS NULL)
-        RETURNING summary_generation, summary_template, summary_manually_edited_at`,
-      [noteId, workspaceId, template ? String(template) : null, confirmOverwrite === true],
-    );
-    claimed = rows[0];
-  } finally {
-    client.release();
-  }
-
-  if (!claimed) {
-    // Distinguish the two reasons the claim failed, so the client can offer
-    // the right next step rather than a generic error.
-    const probe = await pool().query(
-      `SELECT status, summary_manually_edited_at FROM notes
-        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
-      [noteId, workspaceId],
-    );
-    const row = probe.rows[0];
-    if (!row) {
+  // Claim, double-tap guard and "why not" probe: all in the repo layer
+  // (CLAUDE.md §1: note mutations go through @algominutes/db).
+  const claim = await claimSummaryRegeneration({ noteId, workspaceId, template, confirmOverwrite });
+  if (!claim.claimed) {
+    if (claim.reason === 'not_found') {
       log.info({}, 'regenerate_summary_not_found');
       return res.status(404).json({ error: 'Note not found' });
     }
-    if (row.summary_manually_edited_at && confirmOverwrite !== true) {
-      log.info({ editedAt: row.summary_manually_edited_at }, 'regenerate_summary_manual_edits');
-      return res.status(409).json({
-        error: 'manual_edits_present',
-        editedAt: row.summary_manually_edited_at,
-      });
+    if (claim.reason === 'manual_edits_present') {
+      log.info({ editedAt: claim.editedAt }, 'regenerate_summary_manual_edits');
+      return res.status(409).json({ error: 'manual_edits_present', editedAt: claim.editedAt });
     }
-    log.info({ status: row.status }, 'regenerate_summary_conflict');
-    return res.status(409).json({ error: 'already_regenerating', status: row.status });
+    log.info({ status: claim.status }, 'regenerate_summary_conflict');
+    return res.status(409).json({ error: 'already_regenerating', status: claim.status });
   }
+  const claimed = { summary_generation: claim.generation, summary_template: claim.template };
 
   // Enqueue AFTER the claim commits — Cloud Tasks is not transactional, and
   // a task that arrives before the row is updated would read a stale
@@ -136,15 +104,12 @@ export async function regenerateSummaryRoute(req, res) {
     log.error({ err }, 'regenerate_summary_enqueue_failed');
     // Hand the note back rather than leaving it stuck in 'summarizing'
     // waiting for a task that will never arrive.
-    await pool().query(
-      `UPDATE notes SET status = 'ready', updated_at = NOW() WHERE id = $1 AND status = 'summarizing'`,
-      [noteId],
-    ).catch((rbErr) => log.error({ err: rbErr }, 'regenerate_summary_unclaim_failed'));
+    await releaseSummaryClaim({ noteId, workspaceId })
+      .catch((rbErr) => log.error({ err: rbErr }, 'regenerate_summary_unclaim_failed'));
     return res.status(500).json({ error: "Couldn't queue the summary. Please try again." });
   }
 
-  await db.doc(`workspaces/${workspaceId}/notes/${noteId}`)
-    .set({ status: 'summarizing', updatedAt: new Date().toISOString() }, { merge: true })
+  await mirrorSummarizing(db, { noteId, workspaceId })
     .catch((err) => log.error({ err }, 'firestore_write_failed:regenerate'));
 
   log.info(

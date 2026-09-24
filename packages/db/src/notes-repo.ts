@@ -331,6 +331,87 @@ export async function markQueued(
   return { queued: true, status: 'queued' };
 }
 
+export type SummaryClaim =
+  | { claimed: true; generation: number; template: string }
+  | { claimed: false; reason: 'not_found' }
+  | { claimed: false; reason: 'manual_edits_present'; editedAt: string }
+  | { claimed: false; reason: 'already_regenerating'; status: string };
+
+/**
+ * Claim a note for summary regeneration (POST /v1/notes/regenerate-summary).
+ * One conditional UPDATE is both the claim and the double-tap guard: it only
+ * matches a note in the caller's workspace that is 'ready' or 'error', or one
+ * stuck in 'summarizing' for more than 15 minutes (stale-lock takeover, so a
+ * summarizer that dies mid-run can't strand it). Manual edits block the claim
+ * unless the caller confirmed overwriting them. When the claim fails, a probe
+ * says why, so the client can offer the right next step.
+ */
+export async function claimSummaryRegeneration(input: {
+  noteId: string;
+  workspaceId: string;
+  template?: string | null;
+  confirmOverwrite?: boolean;
+}): Promise<SummaryClaim> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `UPDATE notes
+        SET summary_generation = summary_generation + 1,
+            summary_template = COALESCE($3, summary_template),
+            summary_requested_at = NOW(),
+            status = 'summarizing',
+            updated_at = NOW()
+      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+        AND (status IN ('ready', 'error')
+             OR (status = 'summarizing'
+                 AND summary_requested_at < NOW() - INTERVAL '15 minutes'))
+        AND ($4::boolean IS TRUE OR summary_manually_edited_at IS NULL)
+      RETURNING summary_generation, summary_template`,
+    [input.noteId, input.workspaceId, input.template ? String(input.template) : null, input.confirmOverwrite === true],
+  );
+  if (rows[0]) {
+    return { claimed: true, generation: rows[0].summary_generation, template: rows[0].summary_template };
+  }
+  const probe = await pool.query(
+    `SELECT status, summary_manually_edited_at FROM notes
+      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+    [input.noteId, input.workspaceId],
+  );
+  const row = probe.rows[0];
+  if (!row) return { claimed: false, reason: 'not_found' };
+  if (row.summary_manually_edited_at && input.confirmOverwrite !== true) {
+    return {
+      claimed: false,
+      reason: 'manual_edits_present',
+      editedAt: new Date(row.summary_manually_edited_at).toISOString(),
+    };
+  }
+  return { claimed: false, reason: 'already_regenerating', status: row.status };
+}
+
+/**
+ * Hand a claimed note back (the regenerate task could not be enqueued), so it
+ * is not stuck in 'summarizing' waiting for a task that will never arrive.
+ * Scoped to the caller's workspace, and only if it is still in 'summarizing'.
+ */
+export async function releaseSummaryClaim(input: { noteId: string; workspaceId: string }): Promise<void> {
+  await getPool().query(
+    `UPDATE notes SET status = 'ready', updated_at = NOW()
+      WHERE id = $1 AND workspace_id = $2 AND status = 'summarizing'`,
+    [input.noteId, input.workspaceId],
+  );
+}
+
+/**
+ * Firestore half of a regeneration: Postgres was set to 'summarizing' by
+ * claimSummaryRegeneration. Called once the task is enqueued, so the live UI
+ * shows the note regenerating.
+ */
+export async function mirrorSummarizing(firestore: Firestore, input: { noteId: string; workspaceId: string }): Promise<void> {
+  await firestore
+    .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
+    .set({ status: 'summarizing', updatedAt: ISO_NOW() }, { merge: true });
+}
+
 /**
  * Persist a successful AI run. Postgres write happens first (when
  * enabled) so a failure leaves the Firestore note in 'processing' for
