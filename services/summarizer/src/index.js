@@ -44,8 +44,9 @@ const rootLog = sharedLogger.logger.child({ svc: 'summarizer' });
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const traceId = sharedLogger.traceIdFrom(req.headers);
-  const log = rootLog.child({ traceId, noteId: req.body && req.body.noteId });
+  // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
+  const log = rootLog.child({ traceId, noteId: req.body && req.body.noteId, workspaceId: req.body && req.body.workspaceId });
 
   // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
   // spend hit the daily cap.

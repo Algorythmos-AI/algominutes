@@ -45,8 +45,9 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
   const { noteId, workspaceId } = req.body || {};
-  const traceId = sharedLogger.traceIdFrom(req.headers);
-  const log = rootLog.child({ traceId, noteId });
+  // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
+  const log = rootLog.child({ traceId, noteId, workspaceId });
   if (!noteId || !workspaceId) return res.status(400).json({ error: 'missing noteId/workspaceId' });
 
   try {

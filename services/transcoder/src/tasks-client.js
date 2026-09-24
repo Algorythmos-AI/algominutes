@@ -14,10 +14,11 @@ function loadShared(name) {
 
 const sharedTasks = loadShared('cloud-tasks.cjs');
 
-function makeClient({ env, log }) {
+function makeClient({ env, log, traceId }) {
   // Each stage enqueues to its OWN queue (the names Terraform creates). The
   // transcoder re-enqueues its own stt-poll work to the transcode queue, and
-  // hands off to the summarize / embed queues.
+  // hands off to the summarize / embed queues. Every task carries this
+  // request's traceId, so the whole recording logs under one id.
   const cfg = {
     projectId: env.TASKS_PROJECT,
     location: env.TASKS_LOCATION || 'us-central1',
@@ -39,6 +40,7 @@ function makeClient({ env, log }) {
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,
       scheduleSeconds,
+      traceId,
       log,
     });
   }
@@ -51,6 +53,7 @@ function makeClient({ env, log }) {
       targetUrl: cfg.summarizerUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,
+      traceId,
       log,
     });
   }
@@ -63,6 +66,7 @@ function makeClient({ env, log }) {
       targetUrl: cfg.embedderUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
       payload,
+      traceId,
       log,
     });
   }

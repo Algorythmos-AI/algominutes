@@ -7,10 +7,17 @@
 // for the jobs service account; the receiving service must verify the OIDC
 // audience matches its own URL.
 //
+// Every task carries the enqueuer's traceId in its body, and each worker logs
+// under it (logger.cjs traceIdFromTask), so one recording is followable end to
+// end across services (CLAUDE.md §1). enqueueTask refuses to enqueue without
+// one.
+//
 // dispatchDeadline caps how long a single HTTP dispatch may run before Cloud
 // Tasks considers it failed and retries. Cloud Run's own request timeout is set
 // separately (Terraform, per service). Cloud Tasks allows 15s–1800s; we default
 // to the 1800s max so a long-audio handler is never cut off by the queue.
+
+const { isTraceId } = require('./logger.cjs');
 
 let _client = null;
 function getClient() {
@@ -38,12 +45,16 @@ async function enqueueTask({
   scheduleSeconds,
   dispatchDeadlineSeconds,
   oidcServiceAccount,
+  traceId,
   log,
+  client = getClient(),
 }) {
   if (!projectId || !location || !queue || !targetUrl || !oidcServiceAccount) {
     throw new Error('enqueueTask: missing required arg');
   }
-  const client = getClient();
+  if (!isTraceId(traceId)) {
+    throw new Error('enqueueTask: missing traceId (it must cross every async hop, CLAUDE.md §1)');
+  }
   const parent = client.queuePath(projectId, location, queue);
 
   const task = {
@@ -52,7 +63,7 @@ async function enqueueTask({
       httpMethod: 'POST',
       url: targetUrl,
       headers: { 'Content-Type': 'application/json' },
-      body: Buffer.from(JSON.stringify(payload || {})).toString('base64'),
+      body: Buffer.from(JSON.stringify({ ...(payload || {}), traceId })).toString('base64'),
       oidcToken: {
         serviceAccountEmail: oidcServiceAccount,
         audience: targetUrl,
@@ -65,7 +76,7 @@ async function enqueueTask({
   }
 
   const [response] = await client.createTask({ parent, task });
-  if (log) log.info({ kind: payload && payload.kind, name: response.name }, 'task_enqueued');
+  if (log) log.info({ kind: payload && payload.kind, name: response.name, queue, traceId }, 'task_enqueued');
   return response.name;
 }
 

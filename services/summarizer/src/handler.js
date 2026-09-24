@@ -71,7 +71,8 @@ async function markNoteFailed({ noteId, workspaceId, message, log }) {
 async function handle(payload, deps) {
   const { noteId, workspaceId, summaryGeneration, template } = payload || {};
   if (!noteId || !workspaceId) throw new Error('summarizer.handle: missing noteId/workspaceId');
-  const { log, env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
+  const { env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
+  let log = deps.log;
 
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -86,7 +87,7 @@ async function handle(payload, deps) {
     // (deleted mid-pipeline) or not in this workspace is acknowledged, not
     // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template FROM notes
+      `SELECT summary_generation, summary_template, author_uid FROM notes
         WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
       [noteId, workspaceId],
     );
@@ -95,6 +96,8 @@ async function handle(payload, deps) {
       log.warn({ noteId, workspaceId }, 'summarizer_note_not_found');
       return;
     }
+    // Every later line carries the note's owner and workspace (CLAUDE.md §1).
+    log = log.child({ userId: noteRow.author_uid, workspaceId });
 
     const { rows } = await client.query(
       `SELECT speaker_tag AS "speakerTag", speaker_name AS "speakerName",
