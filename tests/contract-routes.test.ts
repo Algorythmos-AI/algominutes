@@ -33,40 +33,25 @@ function specRoutes(): Set<string> {
   );
 }
 
-// In the spec under a name the router does not serve (renamed routes).
-const KNOWN_SPEC_ONLY = [
-  'POST /v1/delete-account',
-  'POST /v1/export-note',
-  'POST /v1/note',
-  'POST /v1/share-create',
-  'POST /v1/share-revoke',
-  'POST /v1/shared-note',
-  'POST /v1/update-note',
-];
+// In the spec under a name the router does not serve. Zero since the renames were
+// reconciled; keep it that way.
+const KNOWN_SPEC_ONLY: string[] = [];
 
 // Served by the router but missing from the spec.
 const KNOWN_ROUTER_ONLY = [
-  'DELETE /v1/account/delete',
   'GET /v1/admin/dead-letters',
   'GET /v1/entitlement',
   'GET /v1/uploads/{uploadId}',
   'POST /v1/account/accept-terms',
-  'POST /v1/account/delete',
   'POST /v1/account/retention',
   'POST /v1/admin/dead-letters/{id}/resolve',
   'POST /v1/client-error',
   'POST /v1/events',
-  'POST /v1/export',
   'POST /v1/notes/feedback',
-  'POST /v1/notes/read',
   'POST /v1/notes/regenerate-summary',
-  'POST /v1/notes/update',
   'POST /v1/process',
   'POST /v1/process-audio',
   'POST /v1/push/register',
-  'POST /v1/shares/create',
-  'POST /v1/shares/read',
-  'POST /v1/shares/revoke',
   'POST /v1/support',
   'POST /v1/uploads',
   'POST /v1/uploads/{uploadId}/complete',
