@@ -2,8 +2,9 @@
 //
 // App Store Server Notifications V2. The body is { signedPayload }, a JWS whose
 // decoded payload carries { notificationType, subtype, data:{ signedTransactionInfo } }.
-// The signed payload IS the credential — TODO(A4-apple) full x5c-chain
-// verification (see lib/apple.js). We decode the transaction to the durable
+// The signed payload IS the credential. Until full x5c-chain verification lands
+// (PR-32, lib/apple.js), verifyAndDecodeJws refuses and this answers 503, so
+// Apple retries and no forged notification is ever trusted. We decode the transaction to the durable
 // `originalTransactionId`, resolve it to a uid, and drive the state machine:
 //
 //   DID_RENEW              → renew (activate with new expiresDate)
