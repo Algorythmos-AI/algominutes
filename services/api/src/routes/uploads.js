@@ -18,6 +18,13 @@ import { getStorage } from 'firebase-admin/storage';
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import { CreateUploadSessionRequest } from '@algominutes/contracts/schemas';
+import {
+  createUploadSession,
+  getUploadSession,
+  isPostgresEnabled,
+  UploadSessionsUnavailableError,
+  WorkspaceBoundaryError,
+} from '@algominutes/db';
 
 const { isValidId } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
@@ -30,30 +37,28 @@ const CHUNK_SIZE = 8 * 1024 * 1024;
 // that so a client can decide whether to resume or start a fresh session.
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// The uploadId is a self-describing, opaque handle: base64url(JSON) carrying the
-// session URI, storage path, and total size, so the status/complete handlers are
-// stateless (no upload-sessions table). It is opaque to clients — they treat it
-// as a token and PUT their chunks to `sessionUri`, not to uploadId.
-// TODO(A11): if audit requires server-visible upload state, persist these in a
-// repo table instead of encoding them in the handle.
-function encodeUploadId(payload) {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+// The uploadId is an opaque random id for a server-side session row
+// (@algominutes/db upload-sessions-repo, migration 013). It used to be
+// base64 JSON of the session itself, and the server trusted the URI and path
+// inside it: an SSRF, plus a cross-workspace "does this object exist" oracle.
+// Now nothing a client sends is used as a URL or a path.
+
+// Defense in depth: the session URI is minted by GCS and read from our own
+// database, but only a GCS resumable-upload URL is ever contacted.
+function isGcsSessionUri(uri) {
+  try {
+    const u = new URL(uri);
+    return u.protocol === 'https:' && u.hostname === 'storage.googleapis.com';
+  } catch {
+    // silent-catch-ok: an unparseable URI is simply not a GCS session URI
+    return false;
+  }
 }
 
-function decodeUploadId(raw) {
-  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 4096) return null;
-  let decoded;
-  try {
-    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    // silent-catch-ok: a malformed handle is a client bug (a truncated/garbled token), not a
-    // server error — decode failure maps to a 400 at the call site.
-    return null;
-  }
-  if (!decoded || typeof decoded.sessionUri !== 'string' || typeof decoded.storagePath !== 'string') {
-    return null;
-  }
-  return decoded;
+// One answer for malformed, unknown, someone else's and expired ids, so a
+// guess learns nothing.
+function notFound(res) {
+  return res.status(404).json({ error: 'Upload not found' });
 }
 
 // recordings/{workspaceId}/{noteId}.{ext} — the path convention shared with the
@@ -92,6 +97,12 @@ export async function createUploadSessionRoute(req, res) {
   }
 
   const log = req.log.child({ noteId, workspaceId });
+  // Before asking GCS for a session: without Postgres there is nowhere to
+  // record it, and a minted-then-dropped session would just be orphaned.
+  if (!isPostgresEnabled()) {
+    log.error({}, 'upload_sessions_unavailable');
+    return res.status(503).json({ error: 'Uploads are unavailable until Postgres is provisioned.' });
+  }
   let sessionUri;
   try {
     const bucket = getStorage().bucket();
@@ -106,23 +117,54 @@ export async function createUploadSessionRoute(req, res) {
     return res.status(502).json({ error: "We couldn't start your upload. Please try again." });
   }
 
-  const uploadId = encodeUploadId({ sessionUri, storagePath, totalBytes });
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  let uploadId;
+  try {
+    uploadId = await createUploadSession({
+      uid: req.uid, email: req.authEmail, name: req.authName,
+      workspaceId, noteId, storagePath, sessionUri, totalBytes, expiresAt,
+    }, log);
+  } catch (err) {
+    if (err instanceof WorkspaceBoundaryError || err?.code === 'WORKSPACE_BOUNDARY') {
+      log.warn({ err }, 'upload_workspace_boundary');
+      return res.status(403).json({ error: 'Workspace mismatch' });
+    }
+    if (err instanceof UploadSessionsUnavailableError) {
+      log.error({ err }, 'upload_sessions_unavailable');
+      return res.status(503).json({ error: 'Uploads are unavailable until Postgres is provisioned.' });
+    }
+    log.error({ err, storagePath }, 'upload_session_record_failed');
+    return res.status(502).json({ error: "We couldn't start your upload. Please try again." });
+  }
   log.info({ storagePath, totalBytes }, 'upload_session_created');
   return res.json({
     uploadId,
     sessionUri,
     storagePath,
     chunkSize: CHUNK_SIZE,
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+    expiresAt: expiresAt.toISOString(),
   });
 }
 
+async function loadSession(req) {
+  return getUploadSession({ id: req.params.uploadId, uid: req.uid });
+}
+
 export async function getUploadStatusRoute(req, res) {
-  const session = decodeUploadId(req.params.uploadId);
-  if (!session) {
-    return res.status(400).json({ error: 'Invalid uploadId' });
+  let session;
+  try {
+    session = await loadSession(req);
+  } catch (err) {
+    req.log.error({ err }, 'upload_session_lookup_failed');
+    return res.status(502).json({ error: "We couldn't check your upload. Please try again." });
   }
+  if (!session) return notFound(res);
+  const log = req.log.child({ noteId: session.noteId, workspaceId: session.workspaceId, uploadId: session.id });
   const { sessionUri, totalBytes } = session;
+  if (!isGcsSessionUri(sessionUri)) {
+    log.error({}, 'upload_session_uri_not_gcs');
+    return res.status(500).json({ error: "We couldn't check your upload. Please try again." });
+  }
   const total = Number(totalBytes);
 
   // GCS resumable protocol: an empty PUT with `Content-Range: bytes */<total>`
@@ -139,12 +181,12 @@ export async function getUploadStatusRoute(req, res) {
       },
     });
   } catch (err) {
-    req.log.error({ err }, 'upload_status_probe_failed');
+    log.error({ err }, 'upload_status_probe_failed');
     return res.status(502).json({ error: "We couldn't check your upload. Please try again." });
   }
 
   if (resp.status === 200 || resp.status === 201) {
-    return res.json({ uploadId: req.params.uploadId, receivedBytes: Number.isFinite(total) ? total : 0, complete: true });
+    return res.json({ uploadId: session.id, receivedBytes: Number.isFinite(total) ? total : 0, complete: true });
   }
   // 308 Resume Incomplete — parse the acknowledged byte range.
   let receivedBytes = 0;
@@ -153,15 +195,20 @@ export async function getUploadStatusRoute(req, res) {
     const m = /bytes=0-(\d+)/.exec(range);
     if (m) receivedBytes = Number(m[1]) + 1; // Range is inclusive of the last byte.
   }
-  return res.json({ uploadId: req.params.uploadId, receivedBytes, complete: false });
+  return res.json({ uploadId: session.id, receivedBytes, complete: false });
 }
 
 export async function completeUploadRoute(req, res) {
-  const session = decodeUploadId(req.params.uploadId);
-  if (!session) {
-    return res.status(400).json({ error: 'Invalid uploadId' });
+  let session;
+  try {
+    session = await loadSession(req);
+  } catch (err) {
+    req.log.error({ err }, 'upload_session_lookup_failed');
+    return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
-  const { storagePath } = session;
+  if (!session) return notFound(res);
+  const log = req.log.child({ noteId: session.noteId, workspaceId: session.workspaceId, uploadId: session.id });
+  const { storagePath } = session; // the caller's own path, from our database
 
   // The bytes were PUT directly to GCS by the client; there is no server-side
   // upload state to flip. We confirm the finalized object exists rather than
@@ -171,14 +218,14 @@ export async function completeUploadRoute(req, res) {
     const bucket = getStorage().bucket();
     const [exists] = await bucket.file(storagePath).exists();
     if (!exists) {
-      req.log.warn({ storagePath }, 'complete_upload_object_missing');
+      log.warn({ storagePath }, 'complete_upload_object_missing');
       return res.status(409).json({ error: 'Upload is not complete yet.' });
     }
   } catch (err) {
-    req.log.error({ err, storagePath }, 'complete_upload_check_failed');
+    log.error({ err, storagePath }, 'complete_upload_check_failed');
     return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
 
-  req.log.info({ storagePath }, 'upload_completed');
-  return res.json({ uploadId: req.params.uploadId, storagePath, complete: true });
+  log.info({ storagePath }, 'upload_completed');
+  return res.json({ uploadId: session.id, storagePath, complete: true });
 }
