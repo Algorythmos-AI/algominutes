@@ -60,9 +60,9 @@ function makeLogger(base = {}) {
 function traceIdFrom(headers) {
   const raw = headers && (headers['x-cloud-trace-context'] || headers['X-Cloud-Trace-Context']);
   if (typeof raw === 'string' && raw.length) return raw.split('/')[0];
-  // Node >= 24 everywhere (package.json engines), so randomUUID always exists.
-  // (The old Math.random() fallback was dead code, and CodeQL rightly flags it
-  // once the id travels in a task body.)
+  // node:crypto randomUUID exists on every runtime we ship (Node 22+). The old
+  // Math.random() fallback was dead code, and CodeQL rightly flags it once the
+  // id travels in a task body.
   return randomUUID();
 }
 
