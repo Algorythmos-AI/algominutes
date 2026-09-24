@@ -13,7 +13,7 @@
     "@google-cloud/storage": "^7.16.0",
     "@google-cloud/tasks": "^5.5.2",
     "express": "^4.21.2",
-    "firebase-admin": "^13.8.0",
+    "firebase-admin": "^14.4.0",
     "google-auth-library": "^9.15.0",
     "pg": "^8.20.0",
     "@algominutes/ai": "*",
