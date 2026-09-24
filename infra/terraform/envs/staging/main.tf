@@ -92,6 +92,11 @@ module "environment" {
   # Idle staging (db-f1-micro + a 2-instance VPC connector) is well under this;
   # 50% is the "someone left something running" signal, forecast-100% the
   # early warning. Gross cost, so it fires while the trial credit burns.
+  # Keyless deploys: only the integration branch's jobs in the `staging`
+  # GitHub Environment may impersonate gha-deployer (public repo).
+  wif_allowed_refs       = ["refs/heads/integration"]
+  wif_github_environment = "staging"
+
   billing_account = var.billing_account
   monthly_budget  = 100
 }

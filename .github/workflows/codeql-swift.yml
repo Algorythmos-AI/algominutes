@@ -1,0 +1,50 @@
+name: codeql-swift
+
+# CodeQL for the native iOS app. Swift is a compiled language: CodeQL traces a
+# real build, so this needs macOS + Xcode (free for a public repo) and several
+# minutes. It runs on iOS changes, on pushes, and weekly, not on every PR, and
+# it is not a required check (path-filtered checks can't be; plan rev 7 #4).
+on:
+  pull_request:
+    paths: ['apps/ios/**', '.github/workflows/codeql-swift.yml']
+  push:
+    branches: [integration, main]
+    paths: ['apps/ios/**', '.github/workflows/codeql-swift.yml']
+  schedule:
+    - cron: '41 17 * * 0' # weekly (Mon 03:41 Sydney)
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (swift)
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-extended
+      - name: Build (traced, unsigned, simulator)
+        working-directory: apps/ios
+        run: |
+          xcodebuild build \
+            -scheme AlgoMinutes \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:swift

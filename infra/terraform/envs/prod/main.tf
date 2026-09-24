@@ -91,6 +91,11 @@ module "environment" {
 
   # Placeholder until prod is provisioned (plan PR-35): set it from staging's
   # measured gross cost plus expected traffic, and record the figure in DECISIONS.
+  # Keyless deploys: only the main branch's jobs in the `production`
+  # GitHub Environment may impersonate gha-deployer (public repo).
+  wif_allowed_refs       = ["refs/heads/main"]
+  wif_github_environment = "production"
+
   billing_account = var.billing_account
   monthly_budget  = 300
 }

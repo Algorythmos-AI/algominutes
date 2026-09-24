@@ -1,0 +1,69 @@
+# Dependabot version updates (plan PR-09). PRs target `integration` (the
+# default branch) and go through the same CI as any other PR. Grouped, and
+# with low open-PR limits, so they arrive as a few reviewable PRs a week
+# rather than a flood that fights the serial PR train. Majors come one at a time.
+#
+# Not covered: Swift packages. The iOS app declares SPM packages in XcodeGen's
+# project.yml, which Dependabot's `swift` ecosystem can't read (it needs a
+# Package.swift). Firebase/GoogleSignIn are bumped by hand, in iOS PRs.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 4
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+      runtime-minor-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directories: ['/services/*']
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: build(deps)
+    groups:
+      base-images:
+        patterns: ['*']
+
+  - package-ecosystem: terraform
+    directories: ['/infra/terraform/envs/*', '/infra/terraform/modules/*']
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: build(deps)
+    groups:
+      providers:
+        patterns: ['*']

@@ -203,3 +203,28 @@ variable "budget_notification_channels" {
   type        = list(string)
   default     = []
 }
+
+# ---------------------------------------------------------------------------
+# Keyless deploy (WIF) scope — which GitHub workflow runs may impersonate
+# gha-deployer. The repo is public: a repository-only condition lets ANY
+# workflow on ANY branch (or PR ref) of it mint a deploy token.
+# ---------------------------------------------------------------------------
+variable "wif_allowed_refs" {
+  description = "Git refs whose workflow runs may deploy this environment (staging: refs/heads/integration, prod: refs/heads/main)."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.wif_allowed_refs) > 0 && alltrue([for r in var.wif_allowed_refs : can(regex("^refs/heads/[A-Za-z0-9._/-]+$", r))])
+    error_message = "wif_allowed_refs must be one or more refs/heads/<branch> refs (no wildcards)."
+  }
+}
+
+variable "wif_github_environment" {
+  description = "GitHub Environment the deploy jobs run in (its protection rules gate the token). staging | production."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]+$", var.wif_github_environment))
+    error_message = "wif_github_environment must be a plain GitHub Environment name."
+  }
+}

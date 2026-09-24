@@ -3,6 +3,40 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Security baseline for a public repo (2026-09-24, PR-09)
+
+The repo is public (free CI), so anything a workflow can do, a stranger's PR
+branch might try.
+
+- **Keyless deploy is scoped to branch + environment, not just the repo.** The
+  WIF provider condition was `repository == Algorythmos-AI/algominutes`, so any
+  workflow on any branch or PR ref could mint a token for `gha-deployer`
+  (`run.admin`). Now it also requires `ref == refs/heads/integration` (staging)
+  or `refs/heads/main` (prod), plus the GitHub Environment claim
+  (`staging` / `production`). Every deploy job runs in that environment. A token
+  therefore needs both Google's check and GitHub's environment gate:
+  - staging deploys only from `integration`;
+  - production deploys only from `main`, and the owner approves each run.
+- **CodeQL** (`security-extended`):
+  - JS/TS and the workflows themselves (`actions`) run on every PR;
+  - Swift traces a real Xcode build on macOS, so it runs on iOS changes, on
+    pushes and weekly.
+  - Android/Kotlin is deferred with the Android track.
+- **Dependency review** blocks a PR that *adds* a high or critical advisory.
+  **Dependabot** is grouped, weekly, with low PR limits, covering npm, actions,
+  the Docker base images and the Terraform providers. The iOS SPM packages are
+  not covered: Dependabot can't read XcodeGen's `project.yml`.
+- **Repo settings are code** (`scripts/github-settings.sh`: dry run by default,
+  `--apply` needs the owner's go-ahead):
+  - merge methods: squash for features, merge commit for promotions;
+  - Environments with branch policies, and a reviewer on `production`;
+  - branch protection with only the always-run checks required;
+  - Dependabot security updates.
+- **Already on:** secret scanning and push protection.
+- **Operating cost:** $0. GitHub security features and Actions (including macOS)
+  are free for public repos. If the repo goes private, CodeQL and dependency
+  review need GitHub Advanced Security; record that when it happens.
+
 ## Every environment has a gross-cost budget with alerts (2026-09-24, PR-08c)
 
 - **`google_billing_budget` per environment** (`modules/environment/budget.tf`):
