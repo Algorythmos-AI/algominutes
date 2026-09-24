@@ -168,3 +168,38 @@ variable "connector_cidr" {
   type        = string
   default     = "10.8.1.0/28"
 }
+
+# ---------------------------------------------------------------------------
+# Budget + alerts (budget.tf)
+# ---------------------------------------------------------------------------
+variable "billing_account" {
+  description = "Billing account ID the project bills to (XXXXXX-XXXXXX-XXXXXX). Required: every environment gets a budget. Not committed; pass TF_VAR_billing_account (runbook)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$", var.billing_account))
+    error_message = "billing_account must look like XXXXXX-XXXXXX-XXXXXX (see the runbook: derive it with gcloud billing projects describe)."
+  }
+}
+
+variable "monthly_budget" {
+  description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
+  type        = number
+
+  validation {
+    condition     = var.monthly_budget > 0 && floor(var.monthly_budget) == var.monthly_budget
+    error_message = "monthly_budget must be a positive whole number (the budget amount is whole currency units)."
+  }
+}
+
+variable "budget_alert_thresholds" {
+  description = "Fractions of monthly_budget (actual spend) that trigger an alert. A 100% forecast alert is always added."
+  type        = list(number)
+  default     = [0.5, 0.9, 1.0]
+}
+
+variable "budget_notification_channels" {
+  description = "Extra Cloud Monitoring notification channel IDs for budget alerts (billing admins are always emailed)."
+  type        = list(string)
+  default     = []
+}

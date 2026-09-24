@@ -3,6 +3,31 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Every environment has a gross-cost budget with alerts (2026-09-24, PR-08c)
+
+- **`google_billing_budget` per environment** (`modules/environment/budget.tf`):
+  - scoped to the project;
+  - monthly; staging is **A$100**;
+  - alerts at 50/90/100% of actual spend, plus a forecast-100% alert;
+  - emails go to the billing account admins (default IAM recipients), plus any
+    Cloud Monitoring channels passed in.
+  - `billing_account` is a **required** module input, so an environment cannot
+    forget its budget.
+- **Gross cost (`EXCLUDE_ALL_CREDITS`).** The trial credit (A$431, expires
+  14 Nov 2026) makes the net bill $0, so a net-cost budget would stay silent
+  until the credit ran out. Gross cost is also the post-trial monthly cost.
+- **The billing account ID is not committed** (the repo is public). The runbook
+  derives it at plan time into `TF_VAR_billing_account`.
+- **Quota project:** the Budgets API rejects user ADC without one. The override
+  (`user_project_override` + `billing_project`) lives on a `google.billing`
+  provider alias used only by the budget, so no other resource changes behaviour.
+- **The trial end is a dated decision:** upgrade to paid billing, or pause. It is
+  in the runbook, and the outcome is recorded here before 14 Nov.
+- **Operating cost:** budgets and budget emails are free. There is no new service.
+- **Not done:** automatic shutdown at 100% (a Pub/Sub budget topic → a function
+  that pauses the DB). Alerts plus a human decision are enough for staging;
+  revisit for prod (PR-35) if needed.
+
 ## Migrations run inside the VPC before every rollout (2026-09-24, PR-08b)
 
 Migrations were run by hand from a laptop over the Auth Proxy. Nothing ran them

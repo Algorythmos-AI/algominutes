@@ -15,6 +15,8 @@ terraform {
     google = {
       source  = "hashicorp/google"
       version = "~> 6.0"
+      # google.billing: user_project_override for the Budgets API (budget.tf).
+      configuration_aliases = [google.billing]
     }
     google-beta = {
       source  = "hashicorp/google-beta"
@@ -58,6 +60,7 @@ locals {
     "logging.googleapis.com",              # Cloud Logging
     "monitoring.googleapis.com",           # Cloud Monitoring
     "cloudresourcemanager.googleapis.com", # Resource Manager (IAM bindings)
+    "billingbudgets.googleapis.com",       # Budgets + alerts (budget.tf)
   ]
 }
 
