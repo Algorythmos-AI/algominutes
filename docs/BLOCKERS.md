@@ -362,8 +362,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   expiry, and the stored URI must be `https://storage.googleapis.com`.
 - [x] **Fixed (regenerate-via-repo PR):** regenerate-summary's claim, release and mirror now go
   through notes-repo (`claimSummaryRegeneration` / `releaseSummaryClaim` / `mirrorSummarizing`), and
-  the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Still allowlisted,
-  with reasons: `process-audio.js` (retired in PR-16) and `summarizer/handler.js` (tracked TODO). Was:
+  the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Since then,
+  process-audio was retired (#51) and the summarizer's final write moved to `markSummaryReady`, so the
+  only allowlisted writers are the repo layer, the terminal-failure writer and the transcoder mirror. Was:
   **`regenerate-summary.js:146` writes Firestore directly**.
 - [x] **Fixed (entitlement-contract PR):** the shaper now sends `state` and `trialEndsAt` (the resolver
   already computed `state`). A contract test parses the live body for every state (brand-new, trialing,
