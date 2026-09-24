@@ -454,10 +454,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - **R2:** the web client's `setDoc(…, { merge: true })` writes (`apps/web/src/lib/noteStatus.ts:4`,
         `App.tsx`) can re-create a doc deleted from another device. That's fixed by the web's `/v1`
         migration.
-      - **R3:** a YouTube permanent failure (`transcoder/handler.js`) mirrors `error` to Firestore only and
-        acknowledges the task. Postgres stays `queued`, so the idempotent kickoff treats the note as in flight
-        for 3 h and the user can't retry. It should call `noteTerminal.markNoteFailed` (Postgres first).
-        Also, `chunking` and `summarizing` are mirrored with no matching Postgres status write.
+      - **R3:** ~~a YouTube permanent failure mirrors `error` to Firestore only~~ **fixed
+        (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
+        retry isn't refused for 3 h. Still open: `chunking` and `summarizing` are mirrored with no matching
+        Postgres status write.
     - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
       server-side upload session is gone, so it can't be completed or processed, but the object lands. The
       PR-15 sweeper should also remove objects of notes that don't exist.

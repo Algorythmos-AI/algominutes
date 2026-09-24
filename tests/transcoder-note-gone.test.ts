@@ -131,3 +131,39 @@ describe('transcoder kickoff for a deleted note', () => {
     expect(d.calls).toContain('mirrorError');
   });
 });
+
+// A permanent YouTube failure must fail the note in Postgres too. A
+// Firestore-only error mirror left Postgres at 'queued', which the idempotent
+// kickoff reads as "in flight", so a retry was refused for 3 h.
+describe('transcoder kickoff: a permanent YouTube failure', () => {
+  it('marks the note failed in Postgres (then the mirror), runs the terminal hooks, and acknowledges', async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      release: () => {},
+      query: async (sql: string, params: unknown[]) => { queries.push({ sql, params }); return { rows: [], rowCount: 1 }; },
+    };
+    const mirrored: any[] = [];
+    const hooks: string[] = [];
+    const deps = {
+      log: { info: () => {}, error: () => {}, warn: () => {} },
+      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true },
+      mirror: {
+        mirrorStatus: async () => {},
+        mirrorError: async () => { throw new Error('the Firestore-only error mirror must not be used here'); },
+        db: () => ({ doc: (path: string) => ({ update: async (data: any) => void mirrored.push({ path, data }) }) }),
+      },
+      youtube: {
+        fetchAudio: async () => { throw Object.assign(new Error('private video'), { isPermanent: true, publicMessage: 'This video is private.' }); },
+      },
+      ffmpeg: { ensureTempDir: () => '/tmp/x', cleanupTempDir: () => {} },
+      terminalHooks: { onTranscodeTerminalFailure: async () => void hooks.push('terminal') },
+      env: {}, stt: {}, storage: {}, fastPath: {}, tasks: {}, traceId: 't',
+    };
+    await expect(handler.handle({ kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'youtube', sourceUrl: 'https://youtu.be/x' }, deps))
+      .resolves.toBeUndefined();
+    const failed = queries.find((q) => /UPDATE notes SET status = 'error'/.test(q.sql));
+    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1']);
+    expect(mirrored).toEqual([{ path: 'workspaces/w1/notes/n1', data: expect.objectContaining({ status: 'error', errorMessage: 'This video is private.' }) }]);
+    expect(hooks).toEqual(['terminal']);
+  });
+});
