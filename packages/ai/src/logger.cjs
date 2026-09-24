@@ -10,6 +10,8 @@
  * to surface the right log level in the console.
  */
 
+const { randomUUID } = require('node:crypto');
+
 const SEVERITY = {
   trace: 'DEBUG',
   debug: 'DEBUG',
@@ -55,17 +57,42 @@ function makeLogger(base = {}) {
   };
 }
 
+// A traceId we accept, from a header or a task body: Cloud Trace ids (32 hex), UUIDs, and
+// the like. Anything else (wrong type, oversized, odd characters) is ignored,
+// so a body can't smuggle arbitrary text into every log line.
+const TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+function isTraceId(value) {
+  return typeof value === 'string' && TRACE_ID.test(value);
+}
+
 function traceIdFrom(headers) {
+  // X-Cloud-Trace-Context is TRACE_ID/SPAN_ID;o=OPTIONS, and the span and
+  // options are optional. Only a well-formed id is taken: enqueueTask refuses
+  // anything else, so a malformed header must never become the request's id.
   const raw = headers && (headers['x-cloud-trace-context'] || headers['X-Cloud-Trace-Context']);
-  if (typeof raw === 'string' && raw.length) return raw.split('/')[0];
-  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const id = typeof raw === 'string' ? raw.split(/[/;]/)[0] : '';
+  if (isTraceId(id)) return id;
+  // node:crypto randomUUID exists on every runtime we ship (Node 22+). The old
+  // Math.random() fallback was dead code, and CodeQL rightly flags it once the
+  // id travels in a task body.
+  return randomUUID();
+}
+
+/**
+ * The traceId for a Cloud Tasks handler. It is the one the enqueuer carried in
+ * the task body (cloud-tasks.cjs enqueueTask puts it there), so a recording is
+ * followable under one traceId from the api through every worker (CLAUDE.md
+ * §1). It falls back to the request's own trace header, or a fresh id.
+ */
+function traceIdFromTask(body, headers) {
+  const carried = body && body.traceId;
+  return isTraceId(carried) ? carried : traceIdFrom(headers);
 }
 
 module.exports = {
   logger: makeLogger({ service: 'algominutes' }),
   makeLogger,
   traceIdFrom,
+  traceIdFromTask,
+  isTraceId,
 };

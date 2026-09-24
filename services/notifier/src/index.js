@@ -95,11 +95,11 @@ function defaultCopy(type, title, body) {
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const { type, noteId, workspaceId, uid, title, body, traceId: bodyTraceId } = req.body || {};
-  // Prefer the traceId carried in the task body so one recording stays
-  // followable across the enqueue → notify hop (CLAUDE.md §2 propagation);
-  // fall back to the request/Cloud Trace header otherwise.
-  const traceId = bodyTraceId || sharedLogger.traceIdFrom(req.headers);
+  const { type, noteId, workspaceId, uid, title, body } = req.body || {};
+  // The traceId carried in the task body, so one recording stays followable
+  // across the enqueue → notify hop (CLAUDE.md §1); validated, and falling back
+  // to the request/Cloud Trace header otherwise.
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
   const log = rootLog.child({ traceId, type, noteId, workspaceId, userId: uid });
 
   if (!VALID_TYPES.has(type) || !noteId || !uid) {

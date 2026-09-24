@@ -42,7 +42,7 @@ app.get('/health', (_req, res) => res.status(200).send('ok'));
 // One handler shape for every kind. `run` returns { text, meta }.
 function makeRoute(kind, run) {
   return async (req, res) => {
-    const traceId = sharedLogger.traceIdFrom(req.headers);
+    const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
     // Carry any caller-supplied correlation ids through the logs, exactly as
     // the transcoder threads noteId/workspaceId. Extraction itself needs none
     // of them, but a request that came from a Cloud Task should stay

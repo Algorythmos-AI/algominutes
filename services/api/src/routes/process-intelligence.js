@@ -272,6 +272,7 @@ export async function processIntelligenceRoute(req, res) {
         sourceUrl,
         mimeType: clientMime,
       },
+      traceId: req.traceId,
       log,
     });
   } catch (err) {
