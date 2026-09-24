@@ -215,3 +215,51 @@ describe('redactLines (a key across lines)', () => {
     expect(lines[0].speaker).toBe('A');
   });
 });
+
+// Leaks the second PII audit measured on the line path.
+describe('redactLines: blank lines, CRLF, and keys stored across chunks', () => {
+  const b64a = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7';
+  const b64b = 'k3lPq9ZxYt8vN2mR4sW1aB6cD0eF7gH8iJ9kL2mN5oP==';
+  const TAG = '<<REDACTED:PRIVATE_KEY>>';
+
+  it('a blank line inside a key (after PEM/PGP headers) keeps it open', () => {
+    const r = redactLines([BEGIN('RSA '), 'Proc-Type: 4,ENCRYPTED', 'DEK-Info: AES-128-CBC,0A1B', '', b64a, b64b, END('RSA '), 'done']);
+    expect(r.texts).toEqual([TAG, TAG, TAG, '', TAG, TAG, TAG, 'done']);
+    const pgp = redactLines([BEGIN('PGP ', ' BLOCK'), 'Version: GnuPG v2', '', b64a, 'that was it']);
+    expect(pgp.texts).toEqual([TAG, TAG, '', TAG, 'that was it']);
+  });
+
+  it('CRLF text split on newlines (each line ends in \\r) stays redacted', () => {
+    const r = redactLines([`${BEGIN()}\r`, `${b64a}\r`, `${b64b}\r`, `${END()}\r`, 'after\r']);
+    expect(r.texts.slice(0, 4).every((t: string) => t.startsWith(TAG))).toBe(true);
+    expect(r.texts.join('')).not.toContain('MIIEvQ');
+    expect(r.texts[4]).toBe('after\r');
+  });
+
+  // The transcoder stores each audio chunk's lines separately, so a key whose
+  // BEGIN was stored (as the tag) in one chunk continues raw in the next.
+  it('a line stored ending in the tag reopens the key for the lines after it', () => {
+    const r = redactLines([`and here ${TAG}`, b64a, b64b, 'thanks all']);
+    expect(r.texts).toEqual([`and here ${TAG}`, TAG, TAG, 'thanks all']);
+  });
+});
+
+describe('embeddings chunking scrubs lines before adding speaker labels', () => {
+  const { chunkTranscript } = require('@algominutes/ai/embeddings.cjs') as { chunkTranscript: (l: unknown[]) => Array<{ text: string }> };
+  const b64 = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7';
+  const rowsOf = (texts: string[]) => texts.map((text, i) => ({ speakerTag: 1, startMs: i * 1000, endMs: i * 1000 + 900, text }));
+  const embedText = (texts: string[]) => chunkTranscript(rowsOf(texts)).map((c) => c.text).join('\n');
+
+  // "Speaker 1: " prefixes break a key body apart, so a key with no END (or
+  // whose BEGIN was stored as the tag in an earlier audio chunk) leaked to
+  // Vertex when only the whole chunk was scrubbed.
+  it.each([
+    ['a complete key', [BEGIN(), b64, b64, END(), 'now the roadmap']],
+    ['a key with no END', [BEGIN(), b64, b64, 'now the roadmap']],
+    ['a key continued from a stored tag', ['here it is <<REDACTED:PRIVATE_KEY>>', b64, b64, 'now the roadmap']],
+  ])("%s across transcript rows doesn't reach the embedding text", (_name, texts) => {
+    const all = embedText(texts as string[]);
+    expect(all).not.toContain('MIIEvQ');
+    expect(all).toContain('now the roadmap');
+  });
+});

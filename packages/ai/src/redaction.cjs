@@ -28,7 +28,8 @@ const PK_END_AT = /-----END (?:[A-Z0-9]{1,16} ){0,3}PRIVATE KEY(?: BLOCK)?-----/
 // ordinary words are shorter than 16 characters. Each token is non-empty, the
 // count is bounded, and nothing follows the group, so the engine never
 // backtracks into it (keep it that way): linear time.
-const PK_BODY = /(?:\r?\n|[ \t]+|[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/]{2,15}={1,2}|=[A-Za-z0-9+/]{4}|(?:Proc-Type|DEK-Info|Comment|Version|Charset|Hash):[^\n]{0,200}){0,4096}/y;
+const PK_BODY = /(?:\r?\n|\r|[ \t]+|[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/]{2,15}={1,2}|=[A-Za-z0-9+/]{4}|(?:Proc-Type|DEK-Info|Comment|Version|Charset|Hash|MessageID):[^\n]{0,200}){0,4096}/y;
+const PK_TAG = '<<REDACTED:PRIVATE_KEY>>';
 const PK_MAX_BODY = 32 * 1024; // the largest real PEM key is well under this
 const JWT = /\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/g;
 const CARD_CANDIDATE = /\b(?:\d[ -]?){12,18}\d\b/g;
@@ -180,7 +181,9 @@ function redactPII(input) {
  * key body is redacted too.
  */
 function scrub(input, continuingKey) {
-  if (typeof input !== 'string' || !input) return { text: input || '', counts: {}, keyOpen: false };
+  // A blank line inside a key (PGP and encrypted PEM put one after their
+  // headers) keeps it open.
+  if (typeof input !== 'string' || !input) return { text: input || '', counts: {}, keyOpen: !!continuingKey && input === '' };
   const counts = {};
   const inc = (key) => { counts[key] = (counts[key] || 0) + 1; };
 
@@ -235,6 +238,11 @@ function scrub(input, continuingKey) {
  * an unterminated private key from one line into the next. Scrubbing each line
  * alone would redact a key's BEGIN line but let its later base64 lines
  * through. Returns the same number of lines, in order.
+ *
+ * A line that ALREADY ends in the private-key tag (redacted when it was
+ * stored, e.g. a key whose body continued into the next audio chunk's lines)
+ * reopens the key for the lines after it. That can over-redact a following
+ * line's leading 16+-character word, never under-redact.
  */
 function redactLines(texts) {
   if (!Array.isArray(texts)) return { texts: [], counts: {} };
@@ -243,7 +251,7 @@ function redactLines(texts) {
   const out = texts.map((t) => {
     if (typeof t !== 'string') return t;
     const r = scrub(t, open);
-    open = r.keyOpen;
+    open = r.keyOpen || t.trimEnd().endsWith(PK_TAG);
     for (const [k, v] of Object.entries(r.counts)) totalCounts[k] = (totalCounts[k] || 0) + v;
     return r.text;
   });
