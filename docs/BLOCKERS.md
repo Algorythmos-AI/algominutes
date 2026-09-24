@@ -536,7 +536,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **The note-delete cascade hop has no traceId.** `functions/index.js onNoteDeleted` is a Firestore
   trigger, so there's nowhere to carry the api's id. It gets fixed with plan PR-34 (the single deletion
   path): the api enqueues the cascade as a Cloud Task, which carries the id like every other hop.
-- [ ] **Workers can't log `userId`: no task payload carries `uid`.** The api has `req.uid` at kickoff, so
+- [x] **Fixed (uid-across-task-hops PR):** the api's kickoff and regenerate tasks carry the caller's `uid`.
+  The transcoder passes it on every hop (self, summarize, embed), and the transcoder, summarizer and embedder
+  loggers bind it as `userId`. Was: **Workers can't log `userId`: no task payload carries `uid`.** The api has `req.uid` at kickoff, so
   add `uid` to the kickoff payload, and have the transcoder pass it on to the summarize and embed payloads.
   Then the transcoder, embedder and summarizer entry loggers can bind it. (Task payloads are internal and
   aren't in `packages/contracts`.) Small; queued.

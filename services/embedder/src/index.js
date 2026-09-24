@@ -44,10 +44,10 @@ const rootLog = sharedLogger.logger.child({ svc: 'embedder' });
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const { noteId, workspaceId } = req.body || {};
-  // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
+  const { noteId, workspaceId, uid } = req.body || {};
+  // The enqueuer's traceId and the caller's uid, carried in the task body (CLAUDE.md §1).
   const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
-  const log = rootLog.child({ traceId, noteId, workspaceId });
+  const log = rootLog.child({ traceId, noteId, workspaceId, userId: uid });
   if (!noteId || !workspaceId) return res.status(400).json({ error: 'missing noteId/workspaceId' });
 
   try {

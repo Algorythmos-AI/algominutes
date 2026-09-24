@@ -103,6 +103,28 @@ describe("the transcoder's tasks client", () => {
     await tasks.enqueueEmbedder({ noteId: 'n' });
     expect(calls.map((c) => c.traceId)).toEqual(['trace-3', 'trace-3', 'trace-3']);
   });
+
+  // The kickoff's uid rides along too, so every worker's logs can name the user.
+  it('carries the uid on every hop, and leaves payloads alone without one', async () => {
+    const calls: any[] = [];
+    cloudTasks.enqueueTask = async (args: any) => { calls.push(args); return 'task'; };
+    const { makeClient } = require('../services/transcoder/src/tasks-client.js');
+    const tasks = makeClient({ env: {}, log: null, traceId: 't', uid: 'u-1' });
+    await tasks.enqueue({ kind: 'stt-poll', noteId: 'n' });
+    await tasks.enqueueSummarizer({ noteId: 'n' });
+    await tasks.enqueueEmbedder({ noteId: 'n' });
+    expect(calls.map((c) => c.payload.uid)).toEqual(['u-1', 'u-1', 'u-1']);
+    calls.length = 0;
+    await makeClient({ env: {}, log: null, traceId: 't' }).enqueueSummarizer({ noteId: 'n' });
+    expect(calls[0].payload).toEqual({ noteId: 'n' });
+  });
+
+  it('the api puts the caller uid on the tasks it starts', () => {
+    const kickoff = fs.readFileSync('services/api/src/routes/process-intelligence.js', 'utf8');
+    const regen = fs.readFileSync('services/api/src/routes/regenerate-summary.js', 'utf8');
+    expect(kickoff).toMatch(/kind: 'kickoff',[\s\S]*?uid: callerUid,/);
+    expect(regen).toMatch(/summaryGeneration: claimed\.summary_generation,[\s\S]*?uid: req\.uid,/);
+  });
 });
 
 describe('the notify hooks', () => {

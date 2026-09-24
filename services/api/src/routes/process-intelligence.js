@@ -276,6 +276,9 @@ export async function processIntelligenceRoute(req, res) {
         storagePath,
         sourceUrl,
         mimeType: clientMime,
+        // The caller, carried through every worker hop so their logs name the
+        // user (CLAUDE.md §1: userId where it exists).
+        uid: callerUid,
       },
       traceId: req.traceId,
       log,

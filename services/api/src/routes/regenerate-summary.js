@@ -96,6 +96,7 @@ export async function regenerateSummaryRoute(req, res) {
         workspaceId,
         summaryGeneration: claimed.summary_generation,
         template: claimed.summary_template,
+        uid: req.uid, // for the summarizer's logs
       },
       traceId: req.traceId,
       log,

@@ -46,7 +46,12 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 app.post('/', async (req, res) => {
   // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
   const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
-  const log = rootLog.child({ traceId, noteId: req.body && req.body.noteId, workspaceId: req.body && req.body.workspaceId });
+  const log = rootLog.child({
+    traceId,
+    noteId: req.body && req.body.noteId,
+    workspaceId: req.body && req.body.workspaceId,
+    userId: req.body && req.body.uid,
+  });
 
   // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
   // spend hit the daily cap.
