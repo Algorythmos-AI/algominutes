@@ -19,6 +19,14 @@ import { buildRouter } from './routes/index.js';
 
 const API_PREFIX = '/v1';
 
+// A JSON API needs no content sources at all. See docs/DECISIONS.md.
+export const STRICT_CSP = {
+  defaultSrc: ["'none'"],
+  baseUri: ["'none'"],
+  formAction: ["'none'"],
+  frameAncestors: ["'none'"],
+};
+
 // The version gate does not apply to the health probe (infra calls it without
 // an app identity), the public share read (the stranger surface, kept
 // maximally reachable), or the crash beacon (a crashing client must be able to
@@ -35,9 +43,10 @@ export function buildApp() {
   const app = express();
 
   app.disable('x-powered-by');
-  // API serves JSON and binary, never HTML, so the SPA-oriented CSP from
-  // server.ts is not meaningful here — keep helmet's other protections.
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // The API serves JSON and file downloads, never HTML, so the strictest CSP
+  // costs nothing: nothing may load, run or frame a response. (It used to be
+  // disabled outright, which CLAUDE.md forbids without a recorded decision.)
+  app.use(helmet({ contentSecurityPolicy: { useDefaults: false, directives: STRICT_CSP } }));
 
   // Trust exactly the proxy hops in front of the service, so req.ip is the
   // address Cloud Run's front end appended (the rightmost X-Forwarded-For

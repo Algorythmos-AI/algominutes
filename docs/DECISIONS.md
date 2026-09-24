@@ -3,6 +3,14 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The JSON services send the strictest CSP, not none (2026-09-25)
+
+`services/api` and `services/billing` serve JSON (and file downloads), never HTML. Both had helmet's CSP
+**disabled**, which CLAUDE.md forbids without a recorded decision, and which CodeQL flags
+(`js/insecure-helmet-configuration`). A JSON API needs no content sources at all, so both now send
+`default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. That costs nothing
+and makes a response inert if a browser ever renders one. `tests/security-headers.test.ts` pins it.
+
 ## Deleting from versioned buckets deletes every generation; noncurrent versions expire in 7 days (2026-09-25)
 
 The recordings, imports and scans buckets are versioned (a guard against accidental overwrite or
