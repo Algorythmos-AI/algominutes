@@ -104,6 +104,7 @@ async function handleDeleteAccount({ req, res, pgPool, applyCors, traceId, log: 
       const batch = fs.batch();
       const slice = noteRefs.slice(i, i + 400);
       for (const { id, workspaceId } of slice) {
+        // firestore-write-ok: account-deletion cascade (tracked exception); becomes the repo's single deletion path in PR-34 (BLOCKERS)
         batch.delete(fs.doc(`workspaces/${workspaceId}/notes/${id}`));
       }
       try {
