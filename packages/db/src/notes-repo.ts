@@ -234,10 +234,13 @@ async function upsertCoreToPostgres(
 /** Pipeline statuses between kickoff and a terminal 'ready' / 'error'. */
 export const IN_FLIGHT_STATUSES = ['queued', 'chunking', 'transcribing', 'summarizing'] as const;
 /**
- * An in-flight note untouched for this long is treated as stuck, and may be
- * re-queued. The pipeline doesn't bump updated_at as it works, so this is
- * measured from the kickoff. 3 h covers a 4 h recording end to end. The
- * stuck-note sweeper (plan PR-15) replaces this heuristic.
+ * An in-flight note whose status hasn't changed for this long is treated as
+ * stuck, and may be re-queued. updated_at is bumped on every status change
+ * (transcoder upsertNoteStatus), so this measures time in the CURRENT status.
+ * It must exceed the longest a live job can dwell in one status: STT polling is
+ * capped at MAX_STT_POLLS x 60 s = 2 h, and then the transcoder fails the note
+ * itself (pinned by tests/pipeline-timeouts.test.ts). The stuck-note sweeper
+ * (plan PR-15) replaces this heuristic.
  */
 export const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000;
 
