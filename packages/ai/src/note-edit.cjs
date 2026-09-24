@@ -84,7 +84,11 @@ function sanitizeNoteEdit(body) {
 // (legacy or not-yet-processed note). The caller then relies on the Firestore
 // mirror alone and skips the child-table writes that would FK-violate.
 async function writeNoteEditWithinTx(client, edit) {
-  const { noteId, title, summary } = edit;
+  const { noteId, workspaceId, title, summary } = edit;
+  // CLAUDE.md §1 multi-tenancy: the UPDATE is scoped to the caller's workspace,
+  // so an id from another workspace matches no row (pgRowPresent: false)
+  // instead of being edited. Required — an unscoped edit is never valid.
+  if (!workspaceId) throw new Error('writeNoteEditWithinTx: workspaceId is required');
   const hasTitle = typeof title === 'string';
 
   // summary_manually_edited_at is stamped here and nowhere else, so both
@@ -97,15 +101,15 @@ async function writeNoteEditWithinTx(client, edit) {
   const upd = hasTitle
     ? await client.query(
         hasSummary
-          ? 'UPDATE notes SET title = $2, summary_manually_edited_at = NOW(), updated_at = NOW() WHERE id = $1'
-          : 'UPDATE notes SET title = $2, updated_at = NOW() WHERE id = $1',
-        [noteId, title],
+          ? 'UPDATE notes SET title = $3, summary_manually_edited_at = NOW(), updated_at = NOW() WHERE id = $1 AND workspace_id = $2'
+          : 'UPDATE notes SET title = $3, updated_at = NOW() WHERE id = $1 AND workspace_id = $2',
+        [noteId, workspaceId, title],
       )
     : await client.query(
         hasSummary
-          ? 'UPDATE notes SET summary_manually_edited_at = NOW(), updated_at = NOW() WHERE id = $1'
-          : 'UPDATE notes SET updated_at = NOW() WHERE id = $1',
-        [noteId],
+          ? 'UPDATE notes SET summary_manually_edited_at = NOW(), updated_at = NOW() WHERE id = $1 AND workspace_id = $2'
+          : 'UPDATE notes SET updated_at = NOW() WHERE id = $1 AND workspace_id = $2',
+        [noteId, workspaceId],
       );
 
   if (!upd.rowCount) return { pgRowPresent: false };
