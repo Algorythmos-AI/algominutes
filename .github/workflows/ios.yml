@@ -12,6 +12,9 @@ on:
   pull_request:
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
 
+permissions:
+  contents: read
+
 jobs:
   # Unique name: ci.yml also has a `test` job, and branch protection matches
   # required checks by NAME, so a shared name would be ambiguous.
