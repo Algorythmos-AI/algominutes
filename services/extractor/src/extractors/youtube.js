@@ -221,10 +221,24 @@ function parseVtt(raw) {
     if (/^\d+$/.test(line)) continue;                 // SRT cue index
     if (line.includes('-->')) continue;                // timing line
     if (/^(NOTE|Kind:|Language:)/i.test(line)) continue;
-    const clean = line.replace(/<[^>]*>/g, '').trim(); // inline <c>/<00:00:00> tags
+    const clean = stripTags(line).trim(); // inline <c>/<00:00:00> tags
     if (clean) out.push(clean);
   }
   return dedupeConsecutive(out).join('\n');
+}
+
+// Remove markup until none is left, then any stray angle bracket. One pass of
+// /<[^>]*>/ can leave a tag behind (`<scr<script>ipt>` becomes `<script>`;
+// CodeQL js/incomplete-multi-character-sanitization). Captions are spoken
+// text, so a literal < or > is never needed.
+function stripTags(s) {
+  let prev;
+  let out = s;
+  do {
+    prev = out;
+    out = out.replace(/<[^<>]*>/g, '');
+  } while (out !== prev);
+  return out.replace(/[<>]/g, '');
 }
 
 // Auto-captions repeat each line as it "rolls up"; collapse adjacent dupes.
