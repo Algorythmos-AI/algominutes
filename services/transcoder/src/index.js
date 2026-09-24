@@ -85,6 +85,7 @@ app.post('/', async (req, res) => {
     jobId: req.body && req.body.jobId,
     noteId: req.body && req.body.noteId,
     workspaceId: req.body && req.body.workspaceId,
+    userId: req.body && req.body.uid,
   });
 
   // §4.6 spend circuit breaker — this is the pipeline entry and the priciest
@@ -102,7 +103,7 @@ app.post('/', async (req, res) => {
     throw err;
   }
 
-  const tasks = tasksClient.makeClient({ env, log, traceId });
+  const tasks = tasksClient.makeClient({ env, log, traceId, uid: req.body && req.body.uid });
   // traceId is threaded into deps so the in-handler terminal paths (STT
   // exhaustion / errors, YouTube permanent failures) can propagate it across
   // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
