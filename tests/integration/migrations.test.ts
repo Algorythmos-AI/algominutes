@@ -20,7 +20,9 @@ describe('migrations on a real Postgres 16', () => {
 
   it('is idempotent: a second run applies nothing', async () => {
     const out = execFileSync('npx', ['tsx', join('scripts', 'migrate.ts')], { env: process.env }).toString();
-    expect(out).not.toMatch(/^APPLY/m);
+    const events = out.trim().split('\n').map((l) => JSON.parse(l) as { msg: string; applied?: string[] });
+    expect(events.filter((e) => e.msg === 'migration_applied')).toEqual([]);
+    expect(events.find((e) => e.msg === 'migrate_at_head')?.applied).toEqual([]);
     const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM schema_migrations');
     expect(rows[0].n).toBe(MIGRATIONS.length);
   });
