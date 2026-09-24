@@ -51,16 +51,12 @@ app.post('/', async (req, res) => {
   if (!noteId || !workspaceId) return res.status(400).json({ error: 'missing noteId/workspaceId' });
 
   try {
-    const client = await pool().connect();
-    let transcript;
-    try {
-      const { rows } = await client.query(
-        `SELECT speaker_tag AS "speakerTag", start_ms AS "startMs", end_ms AS "endMs", text
-           FROM transcript_lines WHERE note_id = $1 ORDER BY start_ms ASC`,
-        [noteId],
-      );
-      transcript = rows;
-    } finally { client.release(); }
+    const transcript = await sharedEmbeddings.loadTranscriptForEmbedding(pool(), { noteId, workspaceId });
+    if (transcript === null) {
+      // Deleted (or not in this workspace): nothing to index, nothing to retry.
+      log.warn({}, 'embedder_note_gone');
+      return res.status(200).json({ ok: true, skipped: 'note_gone' });
+    }
 
     // Vertex AI embeddings: ADC from the bound service account; no API key.
     const result = await sharedEmbeddings.indexEmbeddings({
@@ -76,6 +72,11 @@ app.post('/', async (req, res) => {
     log.info({ chunkCount: result.chunkCount }, 'embedder_complete');
     return res.status(200).json({ ok: true, chunkCount: result.chunkCount });
   } catch (err) {
+    // Deleted mid-run: the embeddings INSERT hits the notes foreign key.
+    if (err && err.code === '23503') {
+      log.warn({ constraint: err.constraint }, 'embedder_note_gone');
+      return res.status(200).json({ ok: true, skipped: 'note_gone' });
+    }
     log.error({ err }, 'embedder_task_failed');
     // Deliberately NOT marked as a failed note, unlike the transcoder and
     // summarizer. By the time embedding runs the transcript and summary exist

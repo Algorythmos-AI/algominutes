@@ -19,10 +19,22 @@ afterAll(async () => {
   await getPool().end();
 });
 
-function fsStub() {
-  const writes: Array<{ path: string; data: any; opts: any }> = [];
+function fsStub({ missing = false, deleteNoteFirst = false } = {}) {
+  const writes: Array<{ path: string; data: any }> = [];
+  const update = async (path: string, data: any) => {
+    // A delete (POST /v1/notes/delete) landing between the commit and the mirror.
+    if (deleteNoteFirst) await pool.query(`DELETE FROM notes WHERE id = 'note-a'`);
+    // What Firestore does for update() on a missing doc.
+    if (missing) throw Object.assign(new Error('5 NOT_FOUND: No document to update'), { code: 5 });
+    writes.push({ path, data });
+  };
   return {
-    fs: { doc: (path: string) => ({ set: async (data: any, opts: any) => void writes.push({ path, data, opts }) }) } as never,
+    fs: {
+      doc: (path: string) => ({
+        update: (data: any) => update(path, data),
+        set: async () => { throw new Error('set() would re-create a deleted note'); },
+      }),
+    } as never,
     writes,
   };
 }
@@ -48,14 +60,16 @@ describe('markSummaryReady (summarizer final write)', () => {
     expect((await pool.query(`SELECT gist, model FROM summaries WHERE note_id = 'note-a'`)).rows[0]).toEqual({ gist: 'We agreed to ship.', model: 'gemini-3.5-flash' });
     expect(await count(`SELECT 1 FROM action_items WHERE note_id = 'note-a'`)).toBe(2);
     expect(await count(`SELECT 1 FROM key_decisions WHERE note_id = 'note-a'`)).toBe(1);
-    // A merge (never a replace), with the document shape the clients read.
+    // An update (never a set, which would re-create a deleted note), with the
+    // summary by field path so a Firestore-only summary.keyPoints survives.
     expect(writes).toEqual([{
       path: 'workspaces/ws-a/notes/note-a',
-      opts: { merge: true },
       data: {
         status: 'ready',
         updatedAt: expect.any(String),
-        summary: { gist: 'We agreed to ship.', actionItems: ['Ship it', 'Tell sales'], keyDecisions: ['Ship Friday'] },
+        'summary.gist': 'We agreed to ship.',
+        'summary.actionItems': ['Ship it', 'Tell sales'],
+        'summary.keyDecisions': ['Ship Friday'],
         transcript: [{ speaker: 'Alice', text: 'hi', time: '00:01' }],
         transcriptTruncated: false,
       },
@@ -102,5 +116,19 @@ describe('markSummaryReady (summarizer final write)', () => {
     await expectUntouched(writes);
     // ...and the run that owns generation 1 still lands.
     expect(await markSummaryReady(fs, input({ expectedGeneration: 1 }), quietLog)).toEqual({ written: true });
+  });
+
+  // Deleted (POST /v1/notes/delete) between this write's commit and its
+  // mirror: the doc is gone, and must stay gone. No "ready" push either.
+  it("doesn't re-create the doc of a note deleted between the commit and the mirror", async () => {
+    const { fs } = fsStub({ missing: true, deleteNoteFirst: true });
+    expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: false, reason: 'not_found' });
+  });
+
+  // NOT_FOUND also means a wrong project/database. A note still live in
+  // Postgres must fail loudly (the summarizer retries, then dead-letters).
+  it('throws when the doc is missing but the note is still live in Postgres', async () => {
+    const { fs } = fsStub({ missing: true });
+    await expect(markSummaryReady(fs, input(), quietLog)).rejects.toThrow(/NOT_FOUND/);
   });
 });

@@ -320,7 +320,7 @@ describe('markError (notes-repo)', () => {
 
 describe('markNoteFailed (packages/ai note-terminal) — terminal-failure writer', () => {
   let sets: string[] = [];
-  const fsStub = { doc: (path: string) => ({ set: async () => void sets.push(path) }) };
+  const fsStub = { doc: (path: string) => ({ update: async () => void sets.push(path) }) }; // update(): never re-creates a deleted doc
   beforeEach(() => {
     sets = [];
   });

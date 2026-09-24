@@ -76,13 +76,25 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let mirrorOk = false;
   if (shouldMirror) {
     try {
-      await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).set(
+      // update(), never set(): if the Postgres write errored because the note
+      // was just deleted, set({ merge: true }) would re-create its doc as a
+      // phantom 'error' note. update() fails on a missing doc instead.
+      await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).update(
         { status: 'error', errorMessage: message, updatedAt: new Date().toISOString() },
-        { merge: true },
       );
       mirrorOk = true;
     } catch (err) {
-      log.error({ err, noteId, workspaceId }, `${name}_mirror_failed`);
+      const notFound = err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message || '')));
+      if (notFound && !pgOk) {
+        // Postgres errored, so it can't say; most likely the note was deleted.
+        log.warn({ noteId, workspaceId }, `${name}_note_gone`);
+      } else if (notFound) {
+        // Postgres just marked this LIVE note failed, yet its doc is missing: a
+        // wrong project/database or a half-done deletion, not a deleted note.
+        log.error({ err, noteId, workspaceId }, `${name}_mirror_doc_missing`);
+      } else {
+        log.error({ err, noteId, workspaceId }, `${name}_mirror_failed`);
+      }
     }
   }
 

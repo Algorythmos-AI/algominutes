@@ -71,7 +71,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   const client = await db.pool().connect();
   try {
     await client.query('BEGIN');
-    await db.upsertNoteStatus(client, { noteId, status: 'ready' });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'ready' });
     await db.deleteTranscriptLinesForNote(client, noteId);
     for (let i = 0; i < redacted.length; i++) {
       const l = redacted[i];
