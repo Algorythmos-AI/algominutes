@@ -252,6 +252,25 @@ where testable so the fix PR proves itself:
       other names and 24 routes are undocumented. Pinned by the ratchet `tests/contract-routes.test.ts`
       (fails on any new drift). Reconcile to zero before the iOS `/v1` client (plan PR-17).
 
+## Found while patching dependency advisories (2026-09-24) — queued
+
+- [ ] **The web build is broken under the workspace install (pre-existing).**
+  `apps/web/vite.config.ts`'s `copy-tesseract-assets` plugin copies from
+  `apps/web/node_modules/tesseract.js…`, but npm hoists `tesseract.js` and
+  `tesseract.js-core` to the repo-root `node_modules`. `npm run build -w apps/web`
+  therefore fails with ENOENT on `worker.min.js`. Both the old and the new lockfile
+  hoist them, so this predates the vitest bump. CI never builds the web app, which
+  is why nobody saw it. Fix: resolve each file with
+  `createRequire(import.meta.url).resolve('tesseract.js/dist/worker.min.js')`, and so
+  on, instead of a fixed relative path; then add a `web build` job to CI.
+- [ ] **Dependabot alert #5, `uuid < 11.1.1`: owner decision.** It only reaches us
+  through Google's client libraries (gaxios, google-gax, teeny-request,
+  googleapis-common), which pin `uuid@^9`. Their only calls are `uuid.v4()` with no
+  arguments, and the advisory needs `v3`/`v5`/`v6` called with a `buf`, so the
+  vulnerable path is unreachable. Proposed: dismiss it as "vulnerable code not
+  actually used" (your call: it changes alert state), and let Google's own bump
+  retire it. Don't force-override `uuid` under their libraries.
+
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
 Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all
