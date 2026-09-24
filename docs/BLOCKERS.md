@@ -381,6 +381,22 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
   Validate with the schemas in the contract-documentation PR.
 - [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
+- [ ] **The summarizer's generation guard is checked before Gemini, not at the write** (found by the
+  dual-write audit of the summarizer-via-repo PR). The run reads `summary_generation`, spends minutes in
+  Gemini, then `markSummaryReady` writes without re-checking it. If a newer regenerate claims the note in
+  that window, the older run can still land its summary and clear `summary_requested_at`. The fix is to pass
+  the task's generation to `markSummaryReady` and add it to the workspace-scoped `UPDATE … RETURNING id`, so
+  a stale run writes nothing. Queued as the next small PR.
+- [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
+  repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
+  it with PR-13 (map-reduce), which rewrites this handler anyway.
+- [ ] **Postgres connections vs `db-f1-micro` (staging).** That tier allows about 25 connections. Each
+  service's pools are lazy, and real use is bounded by request concurrency (the summarizer holds at most one
+  repo connection per request: 4 instances × concurrency 4 = 16). But the sum across services at max scale
+  is well over 25: api alone is 4 instances × (api-read 10 + repo 8). At low traffic this is fine. Under a
+  burst it fails with "remaining connection slots are reserved". Decide before external TestFlight: give
+  each service a connection budget (pool max × max instances ≤ the tier's limit), or move to a larger tier
+  (a cost decision, yours). The staging proof should watch `pg_stat_activity` under the e2e run.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

@@ -20,8 +20,11 @@ afterAll(async () => {
 });
 
 function fsStub() {
-  const writes: Array<{ path: string; data: any }> = [];
-  return { fs: { doc: (path: string) => ({ set: async (data: any) => void writes.push({ path, data }) }) } as never, writes };
+  const writes: Array<{ path: string; data: any; opts: any }> = [];
+  return {
+    fs: { doc: (path: string) => ({ set: async (data: any, opts: any) => void writes.push({ path, data, opts }) }) } as never,
+    writes,
+  };
 }
 const input = (over: Record<string, unknown> = {}) => ({
   noteId: 'note-a',
@@ -44,7 +47,18 @@ describe('markSummaryReady (summarizer final write)', () => {
     expect((await pool.query(`SELECT gist, model FROM summaries WHERE note_id = 'note-a'`)).rows[0]).toEqual({ gist: 'We agreed to ship.', model: 'gemini-3.5-flash' });
     expect(await count(`SELECT 1 FROM action_items WHERE note_id = 'note-a'`)).toBe(2);
     expect(await count(`SELECT 1 FROM key_decisions WHERE note_id = 'note-a'`)).toBe(1);
-    expect(writes).toEqual([{ path: 'workspaces/ws-a/notes/note-a', data: expect.objectContaining({ status: 'ready' }) }]);
+    // A merge (never a replace), with the document shape the clients read.
+    expect(writes).toEqual([{
+      path: 'workspaces/ws-a/notes/note-a',
+      opts: { merge: true },
+      data: {
+        status: 'ready',
+        updatedAt: expect.any(String),
+        summary: { gist: 'We agreed to ship.', actionItems: ['Ship it', 'Tell sales'], keyDecisions: ['Ship Friday'] },
+        transcript: [{ speaker: 'Alice', text: 'hi', time: '00:01' }],
+        transcriptTruncated: false,
+      },
+    }]);
   });
 
   it('is idempotent on a replayed task (no duplicate rows)', async () => {
