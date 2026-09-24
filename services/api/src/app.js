@@ -14,8 +14,13 @@ import helmet from 'helmet';
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { buildCorsMiddleware } from './middleware/cors.js';
 import { clientVersionMiddleware } from './middleware/client-version.js';
-import { clientRateLimit, trustProxyHops } from './middleware/rate-limit.js';
+// Imported straight from the shared module, as billing does: CodeQL
+// (js/missing-rate-limiting) can't follow a destructured re-export to the
+// express-rate-limit call, and flagged every /v1 route.
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 import { buildRouter } from './routes/index.js';
+
+const { clientRateLimit, trustProxyHops } = rateLimitModule;
 
 const API_PREFIX = '/v1';
 
