@@ -30,6 +30,14 @@ function timeStrToMs(t) {
 
 function chunkTranscript(lines, log) {
   if (!Array.isArray(lines) || lines.length === 0) return [];
+  // Scrub the line texts in order FIRST, carrying a private key across lines
+  // (redactLines). The "Speaker N: " prefix added below would otherwise break
+  // a key body into pieces the chunk-level scrub can't join, and the overlap
+  // carried into the next chunk would be cut from unredacted text.
+  const { texts: scrubbed, counts: lineCounts } = _redaction.redactLines(lines.map((l) => (l && l.text) || ''));
+  if (log && lineCounts && Object.keys(lineCounts).length > 0) {
+    log.info({ redactionCounts: lineCounts }, 'embed_lines_redacted');
+  }
   const out = [];
   let buffer = '';
   let bufferStart = null;
@@ -47,11 +55,13 @@ function chunkTranscript(lines, log) {
     buffer = buffer.length > OVERLAP_CHARS ? buffer.slice(-OVERLAP_CHARS) : '';
     bufferStart = bufferEnd;
   };
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const text = scrubbed[i];
     const startMs = typeof line.startMs === 'number' ? line.startMs : timeStrToMs(line.time);
     const endMs = typeof line.endMs === 'number' ? line.endMs : startMs;
     const speakerLabel = line.speaker || (line.speakerTag != null ? `Speaker ${line.speakerTag}` : '');
-    const formatted = speakerLabel ? `${speakerLabel}: ${line.text}` : (line.text || '');
+    const formatted = speakerLabel ? `${speakerLabel}: ${text}` : text;
     if (bufferStart === null) bufferStart = startMs;
     if (buffer.length + formatted.length + 1 > TARGET_CHARS) flush();
     if (bufferStart === null) bufferStart = startMs;
