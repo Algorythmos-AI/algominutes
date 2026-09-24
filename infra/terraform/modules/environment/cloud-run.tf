@@ -206,8 +206,7 @@ resource "google_cloud_run_v2_job" "db_job" {
           limits = { cpu = "1", memory = "1Gi" }
         }
         dynamic "env" {
-          # STORAGE_BUCKET: the sweep's purges (JOB_NAME=sweep, scheduler.tf).
-          for_each = merge(local.common_env, local.db_env, { STORAGE_BUCKET = local.region_bucket["recordings"] })
+          for_each = merge(local.common_env, local.db_env)
           content {
             name  = env.key
             value = env.value

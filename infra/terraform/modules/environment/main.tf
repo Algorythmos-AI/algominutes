@@ -371,9 +371,11 @@ locals {
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
     # run.invoker on each service (resource-level, in cloud-run.tf).
     "run-jobs" = "AlgoMinutes Cloud Tasks OIDC + invoker identity"
-    # Identity Cloud Scheduler uses to start the db-job sweep (scheduler.tf).
-    # It can only run that one job, with overrides.
-    "run-scheduler" = "AlgoMinutes Cloud Scheduler invoker (db-job sweep)"
+    # The sweep (scheduler.tf): its own runtime SA, with only what the sweep
+    # does, and the identity Cloud Scheduler uses to start it, which may run
+    # that one job and nothing else.
+    "run-sweep"     = "AlgoMinutes db-sweep (Cloud Run Job runtime SA)"
+    "run-scheduler" = "AlgoMinutes Cloud Scheduler invoker (db-sweep only)"
   }
 
   # Roles common to every service.
@@ -444,8 +446,14 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
-      "roles/aiplatform.user",    # vertex-smoke (deploy preflight), eval-recall, debug-corpus
-      "roles/firebaseauth.admin", # sweep: finishes an abandoned account deletion (deletes the Auth user)
+      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall, debug-corpus
+    ])
+    "run-sweep" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor",
+      "roles/datastore.user",
+      # + a custom role for firebaseauth.users.delete, and objectAdmin on the
+      # recordings bucket only (scheduler.tf)
     ])
     "run-scheduler" = local.common_roles
     # run-jobs is purely an invocation identity: common logging/trace roles only.
@@ -456,8 +464,7 @@ locals {
   # Services that read/write objects — get storage.objectAdmin on the buckets
   # (resource-level, tighter than a project grant). billing + notifier do not
   # touch object storage.
-  # run-db-job: the sweep retries storage purges (deleted notes' and accounts' audio).
-  storage_sas = ["run-api", "run-transcoder", "run-summarizer", "run-embedder", "run-extractor", "run-db-job"]
+  storage_sas = ["run-api", "run-transcoder", "run-summarizer", "run-embedder", "run-extractor"]
 
   # Flatten { sa => [roles] } into { "sa|role" => {sa, role} } for for_each.
   sa_role_pairs = merge([

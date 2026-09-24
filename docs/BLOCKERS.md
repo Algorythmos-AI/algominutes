@@ -499,11 +499,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - Firestore rules (PR-11) should stop a signed-in client re-creating `workspaces/{ws}` docs after
         deletion. The web app does that at sign-in (`App.tsx:648`).
       - ~~The sweeper should prune tombstones and drain `storage_purges`~~ **done (sweeper PR):**
-        `db-job` `JOB_NAME=sweep`, run by Cloud Scheduler every 15 min (Terraform, pending your apply).
-        It retries purges (capped at 10 attempts, then `storage_purge_stuck`), fails notes stuck in flight
-        past `IN_FLIGHT_STALE_MS` + 30 min (Postgres first, dead letter, refund), drops expired upload
-        sessions, **finishes account deletions a client abandoned**, and prunes tombstones completed more
-        than 30 days ago.
+        a dedicated `db-sweep` Cloud Run Job (the db-job image with `JOB_NAME=sweep` baked in, its own
+        least-privilege SA), run by Cloud Scheduler every 15 min (Terraform, pending your apply). It:
+        - retries purges, capped at 10 attempts; stuck ones are listed apart, so they never crowd out
+          newer ones;
+        - fails notes stuck in flight past `IN_FLIGHT_STALE_MS` + 30 min. `failStuckNote` re-checks at the
+          UPDATE, and the dead letter and refund happen only on a match;
+        - drops expired upload sessions;
+        - **finishes account deletions a client abandoned**;
+        - prunes tombstones completed more than 30 days ago.
+
+        An advisory lock stops runs overlapping.
+      - Found by the sweeper's audit (pre-existing): `run-api` had no Firebase Auth grant, so account
+        deletion's Auth step would have failed in every deployed environment. Both the api and the sweep now
+        get a custom role with only `firebaseauth.users.delete`.
       - `process-intelligence.js` also writes root Firestore `analytics` docs. `analytics_events` exists in
         Postgres, so stop writing them.
     - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.

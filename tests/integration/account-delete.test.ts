@@ -258,4 +258,22 @@ describe('POST /v1/account/delete', () => {
     expect(f.objects.has('transcoder/old-note/chunk-000.flac')).toBe(false);
     expect(await count(`SELECT 1 FROM storage_purges WHERE note_id = 'old-note'`)).toBe(0);
   });
+
+  // The account is gone once Auth is deleted. A failure to mark the tombstone
+  // complete must not turn that into a 500 (the sweeper completes it later).
+  it('answers 200 even if marking the tombstone complete fails after Auth is deleted', async () => {
+    await pool.query(`CREATE OR REPLACE FUNCTION test_block_complete() RETURNS trigger AS $$
+      BEGIN IF NEW.completed_at IS NOT NULL THEN RAISE EXCEPTION 'tombstone update refused'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+    await pool.query(`CREATE TRIGGER test_block_complete BEFORE UPDATE ON account_deletions FOR EACH ROW EXECUTE FUNCTION test_block_complete()`);
+    try {
+      const f = fakes();
+      const out = await call(f.deps);
+      expect(out.status).toBe(200);
+      expect(f.order.at(-1)).toBe('auth');
+      expect(await count(`SELECT 1 FROM account_deletions WHERE uid = 'alice' AND completed_at IS NULL`)).toBe(1);
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS test_block_complete ON account_deletions`);
+      await pool.query(`DROP FUNCTION IF EXISTS test_block_complete()`);
+    }
+  });
 });

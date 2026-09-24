@@ -82,6 +82,19 @@ describe('sweep', () => {
     expect(errors).toContainEqual(expect.objectContaining({ m: 'storage_purge_stuck', o: expect.objectContaining({ noteId: 'stuck' }) }));
   });
 
+  it('a stuck purge is logged under its account and original trace', async () => {
+    const f = fakes();
+    await pool.query(
+      `INSERT INTO storage_purges (note_id, workspace_id, include_scratch, created_at, attempts, uid, trace_id)
+         VALUES ('stuck2', 'ws-a', TRUE, $1, 10, 'alice', 'trace-orig')`,
+      [ago(HOUR)],
+    );
+    await runSweep(f.deps);
+    expect(errors).toContainEqual(expect.objectContaining({
+      m: 'storage_purge_stuck', o: expect.objectContaining({ noteId: 'stuck2', userId: 'alice', traceId: 'trace-orig' }),
+    }));
+  });
+
   it('fails notes stuck in flight (Postgres, then the mirror), with a dead letter; leaves healthy and finished ones', async () => {
     const f = fakes();
     await seedNote('stuck', 'ws-a', 'alice');
@@ -160,5 +173,70 @@ describe('sweep', () => {
     await expect(sweep.run({ log, env: {}, traceId: 't', deps: f.deps, repo: broken, noteTerminal })).rejects.toThrow(/stuck_notes/);
     expect(await count(`SELECT 1 FROM upload_sessions`)).toBe(0); // a later step still ran
     expect(errors).toContainEqual(expect.objectContaining({ m: 'sweep_step_failed', o: expect.objectContaining({ step: 'stuck_notes' }) }));
+  });
+
+  // One account's failure (a throw, not just "incomplete") must not skip the rest.
+  it("one abandoned deletion that throws doesn't stop the next one being finished", async () => {
+    const f = fakes();
+    await seedUser('bob');
+    await deleteAccountData({ uid: 'alice' }, quietLog);
+    await deleteAccountData({ uid: 'bob' }, quietLog);
+    await pool.query(`UPDATE account_deletions SET requested_at = $1`, [ago(HOUR)]);
+    const flaky = {
+      ...repo,
+      finishAccountDeletion: async (deps: any, d: any, l: any) => {
+        if (d.uid === 'alice') throw new Error('listing failed');
+        return repo.finishAccountDeletion(deps, d, l);
+      },
+    };
+    await expect(sweep.run({ log, env: {}, traceId: 't', deps: f.deps, repo: flaky, noteTerminal })).rejects.toThrow(/account_deletions/);
+    expect(f.deletedUsers).toEqual(['bob']);
+    expect(errors).toContainEqual(expect.objectContaining({ m: 'sweep_account_deletion_failed' }));
+  });
+
+  // Found by the sweeper's dual-write audit: the note was listed as stuck, then
+  // moved on (a chunk finished) before the sweeper reached it. The UPDATE
+  // re-checks, so it is left alone, with no dead letter and no refund.
+  it("doesn't fail, dead-letter or refund a note that moved on after it was listed", async () => {
+    const f = fakes();
+    await seedNote('moved', 'ws-a', 'alice');
+    await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = NOW() WHERE id = 'moved'`);
+    f.docs.set('workspaces/ws-a/notes/moved', {});
+    const staleListing = {
+      ...repo,
+      listStuckNotes: async () => [{ noteId: 'moved', workspaceId: 'ws-a', authorUid: 'alice', status: 'transcribing', updatedAt: new Date(Date.now() - 4 * HOUR) }],
+    };
+    const counts = await sweep.run({ log, env: {}, traceId: 't', deps: f.deps, repo: staleListing, noteTerminal });
+    expect(counts.stuck_notes).toBe(0);
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'moved'`)).rows[0].status).toBe('transcribing');
+    expect(f.updates).toEqual([]);
+    expect(await count(`SELECT 1 FROM dead_letter WHERE note_id = 'moved'`)).toBe(0);
+  });
+
+  it('two sweeps never overlap (advisory lock)', async () => {
+    const f = fakes();
+    const holder = await pool.connect();
+    try {
+      await holder.query(`SELECT pg_advisory_lock(hashtext('algominutes:sweep'))`);
+      expect(await runSweep(f.deps)).toEqual({ skipped: 'already_running' });
+    } finally {
+      await holder.query(`SELECT pg_advisory_unlock(hashtext('algominutes:sweep'))`);
+      holder.release();
+    }
+    expect(await runSweep(f.deps)).not.toEqual({ skipped: 'already_running' });
+  });
+
+  it('stuck purges never crowd out newer ones', async () => {
+    const f = fakes();
+    await pool.query(
+      `INSERT INTO storage_purges (note_id, workspace_id, include_scratch, created_at, attempts)
+         SELECT 'stuck-' || g, 'ws-a', TRUE, $1, 10 FROM generate_series(1, 205) g`,
+      [ago(2 * HOUR)],
+    );
+    await pool.query(`INSERT INTO storage_purges (note_id, workspace_id, include_scratch, created_at) VALUES ('newer', 'ws-a', TRUE, $1)`, [ago(HOUR)]);
+    f.objects.add('recordings/ws-a/newer.m4a');
+    const counts = await runSweep(f.deps);
+    expect(counts.storage_purges.done).toBe(1);
+    expect(f.objects.has('recordings/ws-a/newer.m4a')).toBe(false);
   });
 });

@@ -1,15 +1,18 @@
 // services/db-job/src/handlers/sweep.js — the periodic sweeper (plan PR-15).
 //
-// Cloud Scheduler runs `db-job` with JOB_NAME=sweep every 15 minutes. Each
-// step is bounded, idempotent and isolated: one failing step is logged and
-// the rest still run, then the job exits non-zero so the failure is visible.
+// Cloud Scheduler runs the `db-sweep` Cloud Run Job (the db-job image with
+// JOB_NAME=sweep baked in) every 15 minutes. Each step is bounded, idempotent
+// and isolated: one failing step is logged and the rest still run, then the
+// job exits non-zero so the failure is visible. An advisory lock keeps two
+// runs from overlapping (a slow run plus the next tick, or a job retry).
 //
 //   1. storage purges    retry what note/account deletion couldn't finish
 //                        (each note's mirror doc and every object version).
 //                        After MAX_PURGE_ATTEMPTS a purge is left and logged as
 //                        stuck, for a human (the alert counts it).
 //   2. stuck notes       a note in flight with no progress for STUCK_NOTE_MS is
-//                        failed, Postgres first (note-terminal), then gets a dead
+//                        failed (notes-repo failStuckNote re-checks that at the
+//                        UPDATE, Postgres first), and only then gets a dead
 //                        letter and its minutes refunded. The user sees an error
 //                        and can retry instead of an endless spinner.
 //   3. upload sessions   expired rows are deleted (GCS expires the sessions).
@@ -31,6 +34,7 @@ const MAX_PURGE_ATTEMPTS = 10;
 const STUCK_NOTE_MS = IN_FLIGHT_STALE_MS + 30 * 60 * 1000; // after a client re-queue's chance
 const ACCOUNT_DELETION_GRACE_MS = 15 * 60 * 1000; // the client's own retry goes first
 const TOMBSTONE_DAYS = 30;
+const LOCK_KEY = 'algominutes:sweep';
 
 function firebaseDeps(env) {
   const { getApps, initializeApp } = require('firebase-admin/app');
@@ -45,83 +49,121 @@ function firebaseDeps(env) {
 async function run({ log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal() }) {
   const deps = injected || firebaseDeps(env);
   const {
-    getPool, listPendingStoragePurges, runStoragePurge, listStuckNotes, recordDeadLetter, reverseUsageForNote,
-    deleteExpiredUploadSessions, listIncompleteAccountDeletions, finishAccountDeletion, pruneCompletedAccountDeletions,
+    getPool, listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
+    recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
+    finishAccountDeletion, pruneCompletedAccountDeletions,
   } = repo;
-  const { markNoteFailed } = noteTerminal;
-  const counts = {};
-  const failures = [];
-  const step = async (name, fn) => {
+  void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
+
+  // One sweep at a time. A session-level advisory lock on its own connection,
+  // released when the run ends (or the connection drops).
+  const lockClient = await getPool().connect();
+  try {
+    const { rows } = await lockClient.query('SELECT pg_try_advisory_lock(hashtext($1)) AS got', [LOCK_KEY]);
+    if (!rows[0].got) {
+      log.info({}, 'sweep_already_running');
+      return { skipped: 'already_running' };
+    }
     try {
-      counts[name] = await fn();
-    } catch (err) {
-      failures.push(name);
-      log.error({ err, step: name }, 'sweep_step_failed');
+      return await sweepOnce();
+    } finally {
+      await lockClient.query('SELECT pg_advisory_unlock(hashtext($1))', [LOCK_KEY])
+        .catch((err) => log.error({ err }, 'sweep_unlock_failed'));
     }
-  };
+  } finally {
+    lockClient.release();
+  }
 
-  await step('storage_purges', async () => {
-    let done = 0;
-    let stuck = 0;
-    for (const p of await listPendingStoragePurges(200)) {
-      if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
-      if (p.attempts >= MAX_PURGE_ATTEMPTS) {
-        stuck += 1;
-        log.error({ purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId, attempts: p.attempts, lastError: p.lastError }, 'storage_purge_stuck');
-        continue;
+  async function sweepOnce() {
+    const counts = {};
+    const failures = [];
+    const step = async (name, fn) => {
+      try {
+        counts[name] = await fn();
+      } catch (err) {
+        failures.push(name);
+        log.error({ err, step: name }, 'sweep_step_failed');
       }
-      if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
-    }
-    return { done, stuck };
-  });
+    };
 
-  await step('stuck_notes', async () => {
-    const stuck = await listStuckNotes({ olderThanMs: STUCK_NOTE_MS, limit: 100 });
-    for (const n of stuck) {
-      const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
-      await markNoteFailed({
-        pool: getPool(),
-        firestore: deps.firestore,
-        noteId: n.noteId,
-        workspaceId: n.workspaceId,
-        message: 'Processing took too long and was stopped. Please try again.',
-        log,
-        event: 'sweep_stuck_note',
-      });
-      await recordDeadLetter({
-        queue: 'sweep',
-        noteId: n.noteId,
-        workspaceId: n.workspaceId,
-        payload: { reason: 'stuck_in_flight', status: n.status, updatedAt: n.updatedAt.toISOString() },
-        error: 'stuck_in_flight',
-        attempts: null,
-        traceId,
-      }).catch((err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'));
-      await reverseUsageForNote({ noteId: n.noteId, reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` })
-        .catch((err) => log.error({ err, ...fields }, 'sweep_refund_failed'));
-    }
-    return stuck.length;
-  });
+    await step('storage_purges', async () => {
+      let done = 0;
+      // Stuck ones are listed separately, so they can never crowd out newer purges.
+      for (const p of await listPendingStoragePurges(200, MAX_PURGE_ATTEMPTS)) {
+        if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
+        if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
+      }
+      const stuck = await listStuckStoragePurges(50, MAX_PURGE_ATTEMPTS);
+      for (const p of stuck) {
+        log.error({
+          purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId,
+          ...(p.uid ? { userId: p.uid } : {}), ...(p.traceId ? { traceId: p.traceId } : {}),
+          attempts: p.attempts, lastError: p.lastError,
+        }, 'storage_purge_stuck');
+      }
+      return { done, stuck: stuck.length };
+    });
 
-  await step('upload_sessions', () => deleteExpiredUploadSessions(now));
+    await step('stuck_notes', async () => {
+      const stuck = await listStuckNotes({ olderThanMs: STUCK_NOTE_MS, limit: 100 });
+      let failed = 0;
+      for (const n of stuck) {
+        const fields = { noteId: n.noteId, workspaceId: n.workspaceId, userId: n.authorUid };
+        const noteLog = log.child({ userId: n.authorUid });
+        // Re-checked at the UPDATE: a note that moved on since the listing is left
+        // alone, with no dead letter and no refund.
+        const r = await failStuckNote(deps.firestore, {
+          noteId: n.noteId,
+          workspaceId: n.workspaceId,
+          olderThanMs: STUCK_NOTE_MS,
+          message: 'Processing took too long and was stopped. Please try again.',
+        }, noteLog);
+        if (!r.failed) continue;
+        failed += 1;
+        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status }, 'note_failed_stuck');
+        await recordDeadLetter({
+          queue: 'sweep',
+          noteId: n.noteId,
+          workspaceId: n.workspaceId,
+          payload: { reason: 'stuck_in_flight', status: n.status, updatedAt: n.updatedAt.toISOString() },
+          error: 'stuck_in_flight',
+          attempts: null,
+          traceId,
+        }).catch((err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'));
+        await reverseUsageForNote({ noteId: n.noteId, reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` })
+          .catch((err) => log.error({ err, ...fields }, 'sweep_refund_failed'));
+      }
+      return failed;
+    });
 
-  await step('account_deletions', async () => {
-    let finished = 0;
-    let incomplete = 0;
-    for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
-      const r = await finishAccountDeletion(deps, d, log.child({ userId: d.uid }));
-      if (r.complete) finished += 1;
-      else incomplete += 1;
-    }
-    if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
-    return finished;
-  });
+    await step('upload_sessions', () => deleteExpiredUploadSessions(now));
 
-  await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
+    await step('account_deletions', async () => {
+      let finished = 0;
+      let incomplete = 0;
+      for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
+        // Logged under the original request's traceId, so the finish traces back to it.
+        const accountLog = log.child({ userId: d.uid, ...(d.traceId ? { traceId: d.traceId } : {}) });
+        try {
+          const r = await finishAccountDeletion(deps, d, accountLog);
+          if (r.complete) finished += 1;
+          else incomplete += 1;
+        } catch (err) {
+          // One account's failure must not skip the rest of the batch.
+          incomplete += 1;
+          accountLog.error({ err }, 'sweep_account_deletion_failed');
+        }
+      }
+      if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
+      return finished;
+    });
 
-  log.info({ counts, failures }, 'sweep_done');
-  if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);
-  return counts;
+    await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
+
+    log.info({ counts, failures }, 'sweep_done');
+    if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);
+    return counts;
+  }
 }
 
 module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS };

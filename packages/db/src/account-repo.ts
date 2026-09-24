@@ -214,7 +214,7 @@ export async function finishAccountDeletion(
     await deleteAccountMirror(deps.firestore, { uid, workspaceIds: ownWorkspaces });
   } catch (err) {
     errors += 1;
-    log.error({ err, userId: uid }, 'delete_account_mirror_failed');
+    log.error({ err, userId: uid, workspaceIds: ownWorkspaces }, 'delete_account_mirror_failed');
   }
   for (const workspaceId of ownWorkspaces) {
     try {
@@ -240,21 +240,27 @@ export async function finishAccountDeletion(
     }
     // An earlier attempt already did it.
   }
-  await completeAccountDeletion(uid);
+  // The account is gone. Failing to mark the tombstone complete must not
+  // turn that into a 500 for the user: log it, and the sweeper (which re-runs
+  // open tombstones, idempotently) marks it later.
+  await completeAccountDeletion(uid)
+    .catch((err) => log.error({ err, userId: uid }, 'delete_account_tombstone_complete_failed'));
   return { complete: true, errors: 0, authDeleted: true, authFailed: false };
 }
 
 /** Deletions whose tombstone is still open after `olderThanMs` (the client gave up, or crashed). */
 export async function listIncompleteAccountDeletions(
   input: { olderThanMs: number; limit?: number },
-): Promise<Array<{ uid: string; workspaceIds: string[]; uploadSessionUris: string[] }>> {
+): Promise<Array<{ uid: string; workspaceIds: string[]; uploadSessionUris: string[]; traceId: string | null }>> {
   const { rows } = await getPool().query(
-    `SELECT uid, workspace_ids, pending_upload_sessions FROM account_deletions
+    `SELECT uid, workspace_ids, pending_upload_sessions, trace_id FROM account_deletions
       WHERE completed_at IS NULL AND requested_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
       ORDER BY requested_at ASC LIMIT $2`,
     [input.olderThanMs, input.limit ?? 50],
   );
-  return rows.map((r) => ({ uid: r.uid, workspaceIds: r.workspace_ids, uploadSessionUris: r.pending_upload_sessions }));
+  return rows.map((r) => ({
+    uid: r.uid, workspaceIds: r.workspace_ids, uploadSessionUris: r.pending_upload_sessions, traceId: r.trace_id,
+  }));
 }
 
 /** Drop tombstones completed more than `olderThanDays` ago (no token issued before then is still valid). */

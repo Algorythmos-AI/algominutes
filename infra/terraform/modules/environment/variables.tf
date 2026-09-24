@@ -255,13 +255,13 @@ variable "noncurrent_version_retention_days" {
 }
 
 variable "enable_sweeper" {
-  description = "Create the Cloud Scheduler job that runs the db-job sweep (scheduler.tf)."
+  description = "Create the db-sweep Cloud Run Job and the Cloud Scheduler job that runs it (scheduler.tf)."
   type        = bool
   default     = true
 }
 
 variable "sweep_schedule" {
-  description = "Cron schedule (UTC) for the db-job sweep."
+  description = "Cron schedule (UTC) for the db-sweep job."
   type        = string
   default     = "*/15 * * * *"
 }

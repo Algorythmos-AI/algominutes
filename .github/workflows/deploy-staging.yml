@@ -155,7 +155,13 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/db-job:${{ github.sha }}
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
-        run: gcloud run jobs update db-job --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+        run: |
+          gcloud run jobs update db-job --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+          # The sweeper runs the same image as its own job (Terraform scheduler.tf,
+          # enable_sweeper). Keep it on this commit's image too, when it exists.
+          if gcloud run jobs describe db-sweep --region "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+            gcloud run jobs update db-sweep --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+          fi
       - name: Apply migrations (inside the VPC) and verify head
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
