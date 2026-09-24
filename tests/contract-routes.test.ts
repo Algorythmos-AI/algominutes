@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 // The contract is authored once (packages/contracts) and generated into three
 // clients, so the api's real routes and the OpenAPI document must agree.
-// Today they do NOT — this test is a RATCHET: it pins the current drift exactly,
+// This test is a RATCHET: it pins the remaining drift exactly,
 // so any NEW drift fails CI, and each reconciliation must shrink these lists
 // (the test fails until the list is updated to match, keeping it honest).
 // Reconciling to zero is scheduled before the iOS /v1 client work (plan PR-17).
@@ -39,22 +39,8 @@ const KNOWN_SPEC_ONLY: string[] = [];
 
 // Served by the router but missing from the spec.
 const KNOWN_ROUTER_ONLY = [
-  'GET /v1/admin/dead-letters',
-  'GET /v1/entitlement',
-  'GET /v1/uploads/{uploadId}',
-  'POST /v1/account/accept-terms',
-  'POST /v1/account/retention',
-  'POST /v1/admin/dead-letters/{id}/resolve',
-  'POST /v1/client-error',
-  'POST /v1/events',
-  'POST /v1/notes/feedback',
-  'POST /v1/notes/regenerate-summary',
-  'POST /v1/process',
+  // The legacy synchronous route, retired (not documented) in plan PR-16.
   'POST /v1/process-audio',
-  'POST /v1/push/register',
-  'POST /v1/support',
-  'POST /v1/uploads',
-  'POST /v1/uploads/{uploadId}/complete',
 ];
 
 describe('api routes vs OpenAPI contract (ratchet)', () => {

@@ -22,7 +22,7 @@ export function buildRegistry(): OpenAPIRegistry {
     type: 'http',
     scheme: 'bearer',
     bearerFormat: 'Firebase ID token',
-    description: 'Firebase Auth ID token. Absent only on POST /v1/shared-note.',
+    description: 'Firebase Auth ID token. Absent only on the public routes: POST /v1/shares/read and POST /v1/client-error.',
   });
 
   // ── shared header parameter (every client must send it) ─────────────────
@@ -345,6 +345,206 @@ export function buildRegistry(): OpenAPIRegistry {
       401: errorResponse('Missing or invalid token.'),
       405: errorResponse('Method not allowed (POST or DELETE only).'),
       500: { description: 'Partial failure with progress summary.', ...json(S.DeleteAccountError) },
+    },
+  });
+
+
+  // ── Routes reconciled before the iOS /v1 client (plan PR-17) ─────────────
+  // Shapes extracted from the handlers (services/api/src/routes/*).
+  const idPath = (name: string) => ({ name, in: 'path' as const, required: true, schema: { type: 'string' as const } });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/process`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Queue a recording or import for processing (async kickoff). Idempotent for a note already in flight.',
+    request: { body: json(S.ProcessRequest) },
+    responses: {
+      200: { description: 'Queued (or already ready: `cached`).', content: { 'application/json': { schema: z.union([S.ProcessQueuedResponse, S.ProcessCachedResponse]) } } },
+      202: { description: 'Already being processed: nothing was changed or charged.', ...json(S.ProcessInFlightResponse) },
+      400: errorResponse('Missing or invalid fields, storagePath, or sourceUrl.'),
+      401: errorResponse('Missing or invalid token.'),
+      402: { description: 'Over the plan quota.', ...json(S.QuotaExceededResponse) },
+      403: errorResponse('Workspace mismatch, or not your note.'),
+      404: errorResponse('Note or audio not found.'),
+      413: errorResponse('Recording over the size limit.'),
+      429: errorResponse('Hourly processing or upload limit reached.'),
+      500: errorResponse('Could not queue the audio.'),
+      503: errorResponse('Service is being upgraded.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/notes/feedback`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Rate a note’s transcription or summary (1–5), optionally with a comment. Upserts per (note, user, kind).',
+    request: { body: json(S.NoteFeedbackRequest) },
+    responses: {
+      200: { description: 'Saved.', ...json(S.NoteFeedbackResponse) },
+      400: errorResponse('Invalid fields, rating, kind or comment.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('Note not found.'),
+      500: errorResponse('Could not save the rating.'),
+      503: errorResponse('Unavailable until Postgres is provisioned.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/notes/regenerate-summary`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Regenerate a note’s summary, optionally with another template. Manual edits need confirmOverwrite.',
+    request: { body: json(S.RegenerateSummaryRequest) },
+    responses: {
+      200: { description: 'Claimed and queued.', ...json(S.RegenerateSummaryResponse) },
+      400: errorResponse('Invalid fields or unknown template.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('Note not found.'),
+      409: { description: 'Manual edits present (confirm to overwrite), or already regenerating.', ...json(S.RegenerateConflict) },
+      429: errorResponse('Too many requests.'),
+      500: errorResponse('Could not queue the summary.'),
+      503: errorResponse('Unavailable until Postgres is provisioned, or being upgraded.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/uploads`, tags: ['uploads'], security: authed, parameters: commonHeaders,
+    summary: 'Start a resumable upload. The client PUTs chunks straight to `sessionUri` (GCS).',
+    request: { body: json(S.CreateUploadSessionRequest) },
+    responses: {
+      200: { description: 'Session created. `uploadId` is opaque.', ...json(S.CreateUploadSessionResponse) },
+      400: errorResponse('Invalid fields or storage path.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      502: errorResponse('Could not start the upload.'),
+      503: errorResponse('Unavailable until Postgres is provisioned.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/uploads/{uploadId}`, tags: ['uploads'], security: authed,
+    parameters: [...commonHeaders, idPath('uploadId')],
+    summary: 'How many bytes GCS has received for the caller’s upload.',
+    responses: {
+      200: { description: 'Progress.', ...json(S.UploadSessionStatus) },
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('Unknown, someone else’s, or expired upload.'),
+      500: errorResponse('Stored session is invalid.'),
+      502: errorResponse('Could not check the upload.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/uploads/{uploadId}/complete`, tags: ['uploads'], security: authed,
+    parameters: [...commonHeaders, idPath('uploadId')],
+    summary: 'Confirm the upload finished (the object exists in storage).',
+    responses: {
+      200: { description: 'Complete.', ...json(S.CompleteUploadResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('Unknown, someone else’s, or expired upload.'),
+      409: errorResponse('Upload is not complete yet.'),
+      502: errorResponse('Could not finalize the upload.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/entitlement`, tags: ['billing'], security: authed, parameters: commonHeaders,
+    summary: 'Server-resolved plan, reverse-trial state and metered usage. The only source of truth for quota.',
+    responses: {
+      200: { description: 'Entitlement.', ...json(S.EntitlementResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      500: errorResponse('Internal error.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/events`, tags: ['billing'], security: authed, parameters: commonHeaders,
+    summary: 'Record a conversion-funnel event (best-effort; a storage failure still answers 202).',
+    request: { body: json(S.TrackEventRequest) },
+    responses: {
+      202: { description: 'Accepted.', ...json(S.OkResponse) },
+      400: errorResponse('invalid_event'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/push/register`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: 'Register (upsert) this device’s push token.',
+    request: { body: json(S.RegisterPushTokenRequest) },
+    responses: {
+      200: { description: 'Registered.', ...json(S.OkResponse) },
+      400: errorResponse('Missing or invalid fields.'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/account/retention`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: 'Set how long notes are kept (days), or null to keep until deleted.',
+    request: { body: json(S.SetRetentionRequest) },
+    responses: {
+      200: { description: 'Saved.', ...json(S.OkResponse) },
+      400: errorResponse('invalid_retention'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/account/accept-terms`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: 'Record a timestamped, versioned Terms + Privacy acceptance.',
+    request: { body: json(S.AcceptTermsRequest) },
+    responses: {
+      200: { description: 'Recorded.', ...json(S.OkResponse) },
+      400: errorResponse('version_required'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/support`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: 'Contact support or report a bad transcript/summary (diagnostic context only, never content).',
+    request: { body: json(S.SupportRequest) },
+    responses: {
+      201: { description: 'Created; `id` is a reference number.', ...json(S.SupportCreatedResponse) },
+      400: errorResponse('invalid_kind'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/client-error`, tags: ['system'], security: [],
+    summary: 'PUBLIC crash beacon. No auth and no client-version gate, so a crashing client can always report.',
+    request: { body: json(S.ClientErrorReport) },
+    responses: {
+      204: { description: 'Accepted (always).' },
+      400: errorResponse('Unparseable body.'),
+      413: errorResponse('Body too large.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/admin/dead-letters`, tags: ['admin'], security: authed,
+    parameters: [
+      ...commonHeaders,
+      { name: 'queue', in: 'query', required: false, schema: { type: 'string' } },
+      { name: 'includeResolved', in: 'query', required: false, schema: { type: 'string', enum: ['true', '1'] } },
+      { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 1000, default: 200 } },
+    ],
+    summary: 'Operator view of dead-lettered tasks (ADMIN_UIDS only), newest first.',
+    responses: {
+      200: { description: 'Entries.', ...json(S.DeadLettersResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Not an admin.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/admin/dead-letters/{id}/resolve`, tags: ['admin'], security: authed,
+    parameters: [...commonHeaders, { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+    summary: 'Mark a dead letter resolved (idempotent).',
+    responses: {
+      200: { description: 'Resolved (or already was).', ...json(S.ResolveDeadLetterResponse) },
+      400: errorResponse('Invalid id.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Not an admin.'),
     },
   });
 
