@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@algominutes/ai": "*",
-    "@google-cloud/storage": "^7.16.0",
+    "@google-cloud/storage": "^8.2.0",
     "express": "^4.21.2",
     "mammoth": "^1.9.1",
     "pdfjs-dist": "^4.10.38",
