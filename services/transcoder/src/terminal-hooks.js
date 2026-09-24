@@ -124,7 +124,8 @@ async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log }) {
       queue,
       targetUrl,
       oidcServiceAccount,
-      payload: { type, noteId, workspaceId, uid, traceId },
+      payload: { type, noteId, workspaceId, uid },
+      traceId,
       log,
     });
     log.info({ type, noteId }, 'notify_enqueued');

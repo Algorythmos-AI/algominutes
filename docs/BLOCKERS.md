@@ -409,6 +409,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   (flag `batch|tx|transaction .set/.update/.delete/.create` whose first argument is a `.doc(...)` or
   `*Ref`), then allowlist the account-deletion cascade with its reason (or move it into the repo, which is
   plan PR-34, the single deletion path).
+- [x] **Fixed (trace-across-task-hops PR): traceId did not cross the Cloud Tasks hops** (found by the log
+  auditor of the generation-at-write PR). `enqueueTask` sent only the payload, and every worker made a
+  fresh traceId from its own request header, so one recording logged under a different id in each service.
+  This broke the CLAUDE.md §1 invariant and the M1 evidence item "one `traceId` end to end". Now
+  `enqueueTask` requires a traceId and writes it into the task body. Every worker logs under
+  `traceIdFromTask(body, headers)` (validated; falls back to the header). A syntax-aware test fails if any
+  `enqueueTask({...})` call omits it. The summarizer's lines also gain `userId`, and the worker loggers
+  gain `workspaceId`.
 - [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
   repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
   it with PR-13 (map-reduce), which rewrites this handler anyway.

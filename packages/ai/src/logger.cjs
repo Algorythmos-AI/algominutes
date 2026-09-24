@@ -64,8 +64,29 @@ function traceIdFrom(headers) {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
+// A traceId we accept from a task body: Cloud Trace ids (32 hex), UUIDs, and
+// the like. Anything else (wrong type, oversized, odd characters) is ignored,
+// so a body can't smuggle arbitrary text into every log line.
+const TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+function isTraceId(value) {
+  return typeof value === 'string' && TRACE_ID.test(value);
+}
+
+/**
+ * The traceId for a Cloud Tasks handler. It is the one the enqueuer carried in
+ * the task body (cloud-tasks.cjs enqueueTask puts it there), so a recording is
+ * followable under one traceId from the api through every worker (CLAUDE.md
+ * §1). It falls back to the request's own trace header, or a fresh id.
+ */
+function traceIdFromTask(body, headers) {
+  const carried = body && body.traceId;
+  return isTraceId(carried) ? carried : traceIdFrom(headers);
+}
+
 module.exports = {
   logger: makeLogger({ service: 'algominutes' }),
   makeLogger,
   traceIdFrom,
+  traceIdFromTask,
+  isTraceId,
 };

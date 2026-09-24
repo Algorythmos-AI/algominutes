@@ -97,6 +97,7 @@ export async function regenerateSummaryRoute(req, res) {
         summaryGeneration: claimed.summary_generation,
         template: claimed.summary_template,
       },
+      traceId: req.traceId,
       log,
     });
   } catch (err) {
