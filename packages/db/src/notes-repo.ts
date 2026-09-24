@@ -231,6 +231,56 @@ async function upsertCoreToPostgres(
   }
 }
 
+/** Pipeline statuses between kickoff and a terminal 'ready' / 'error'. */
+export const IN_FLIGHT_STATUSES = ['queued', 'chunking', 'transcribing', 'summarizing'] as const;
+/**
+ * An in-flight note whose status hasn't changed for this long is treated as
+ * stuck, and may be re-queued. updated_at is bumped on every status change
+ * (transcoder upsertNoteStatus), so this measures time in the CURRENT status.
+ * It must exceed the longest a live job can dwell in one status: STT polling is
+ * capped at MAX_STT_POLLS x 60 s = 2 h, and then the transcoder fails the note
+ * itself (pinned by tests/pipeline-timeouts.test.ts). The stuck-note sweeper
+ * (plan PR-15) replaces this heuristic.
+ */
+export const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000;
+
+export interface NoteQueueState {
+  /** The id exists in ANOTHER workspace (Postgres note ids are global). */
+  foreign: boolean;
+  /** Already being processed (and not stale): a duplicate kickoff must not reset it. */
+  inFlight: boolean;
+  status: string | null;
+}
+
+function queueStateOf(
+  row: { workspace_id: string; status: string; updated_at: Date } | undefined,
+  workspaceId: string,
+  now: Date,
+): NoteQueueState {
+  if (!row) return { foreign: false, inFlight: false, status: null };
+  if (row.workspace_id !== workspaceId) return { foreign: true, inFlight: false, status: null };
+  const fresh = now.getTime() - new Date(row.updated_at).getTime() < IN_FLIGHT_STALE_MS;
+  const inFlight = (IN_FLIGHT_STATUSES as readonly string[]).includes(row.status) && fresh;
+  return { foreign: false, inFlight, status: row.status };
+}
+
+/**
+ * Read-only pre-check for POST /v1/process, run before rate limits and
+ * metering, so a foreign or duplicate request costs the caller nothing.
+ * markQueued re-checks atomically; this one only saves the work.
+ */
+export async function getNoteQueueState(
+  input: { noteId: string; workspaceId: string },
+  now: Date = new Date(),
+): Promise<NoteQueueState> {
+  if (!isPostgresEnabled()) return { foreign: false, inFlight: false, status: null };
+  const { rows } = await getPool().query(
+    'SELECT workspace_id, status, updated_at FROM notes WHERE id = $1',
+    [input.noteId],
+  );
+  return queueStateOf(rows[0], input.workspaceId, now);
+}
+
 /**
  * Queue a note for processing (POST /v1/process). Postgres first (system of
  * record), then the Firestore 'queued' mirror.
@@ -252,10 +302,29 @@ export async function markQueued(
   firestore: Firestore,
   input: MarkQueuedInput,
   log: { error: (o: any, m?: string) => void },
-): Promise<void> {
+  now: Date = new Date(),
+): Promise<{ queued: boolean; status: string | null }> {
   if (isPostgresEnabled()) {
-    await withTx(
+    const outcome = await withTx(
       async (client) => {
+        // Serialize kickoffs for this note id, including a brand-new note with
+        // no row to lock yet: the second of two concurrent duplicates waits
+        // here, then sees the first's 'queued' row and backs off.
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`note-queue:${input.noteId}`]);
+        const existing = await client.query(
+          'SELECT workspace_id, status, updated_at FROM notes WHERE id = $1 FOR UPDATE',
+          [input.noteId],
+        );
+        const state = queueStateOf(existing.rows[0], input.workspaceId, now);
+        if (state.foreign) {
+          throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
+        }
+        if (state.inFlight) {
+          // Idempotent: a duplicate kickoff (e.g. a client retry after a
+          // timeout) must not reset the running job or delete its chunks.
+          return { queued: false, status: state.status };
+        }
+
         // users.email is NOT NULL, and Postgres enforces that while forming the
         // row, before ON CONFLICT. A caller with no email claim (anonymous
         // sign-in) therefore needs the same placeholder markReady uses; a real
@@ -308,14 +377,17 @@ export async function markQueued(
         }
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
+        return { queued: true, status: 'queued' };
       },
       { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
     );
+    if (!outcome.queued) return outcome;
   }
 
   await firestore
     .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
     .set({ status: 'queued', updatedAt: ISO_NOW() }, { merge: true });
+  return { queued: true, status: 'queued' };
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   ensureTrial,
   markQueued,
   markError,
+  getNoteQueueState,
   WorkspaceBoundaryError,
 } from '@algominutes/db';
 import { toEntitlementResponse } from './entitlement.js';
@@ -102,6 +103,26 @@ export async function processIntelligenceRoute(req, res) {
   } catch (err) {
     log.error({ err }, 'ownership_check_failed');
     return res.status(500).json({ error: 'Ownership check failed' });
+  }
+
+  // ── Postgres pre-check: foreign or already in flight? ─────
+  // Before the size probe, rate limit and metering, so a duplicate kickoff (a
+  // client retry after a timeout) or a foreign note id costs nothing and
+  // changes nothing. markQueued repeats this check atomically.
+  let queueState;
+  try {
+    queueState = await getNoteQueueState({ noteId, workspaceId });
+  } catch (err) {
+    log.error({ err }, 'note_queue_state_failed');
+    return res.status(500).json({ error: "We couldn't queue your audio. Please try again." });
+  }
+  if (queueState.foreign) {
+    log.warn({}, 'process_note_workspace_boundary');
+    return res.status(404).json({ error: 'Note not found' });
+  }
+  if (queueState.inFlight) {
+    log.info({ status: queueState.status }, 'process_already_in_flight');
+    return res.status(202).json({ success: true, noteId, status: queueState.status, inFlight: true });
   }
 
   // ── Probe audio size (drives bytes budget; storagePath only) ─
@@ -189,8 +210,9 @@ export async function processIntelligenceRoute(req, res) {
   }
 
   // ── Persist queued state: Postgres, then the Firestore mirror ──
+  let queued;
   try {
-    await markQueued(db, {
+    queued = await markQueued(db, {
       noteId, workspaceId,
       authorUid: callerUid, authorEmail: callerEmail, authorName: callerName,
       sourceType: type, storagePath, sourceUrl, mimeType: clientMime,
@@ -206,6 +228,12 @@ export async function processIntelligenceRoute(req, res) {
     const userMsg = "We couldn't queue your audio. Please try again.";
     await failNote(db, { noteId, workspaceId, userMsg, log, event: 'queue' });
     return res.status(500).json({ error: userMsg });
+  }
+  if (!queued.queued) {
+    // Lost the race to a concurrent duplicate that queued first: that run owns
+    // the note. Don't enqueue a second kickoff.
+    log.info({ status: queued.status }, 'process_already_in_flight');
+    return res.status(202).json({ success: true, noteId, status: queued.status, inFlight: true });
   }
 
   // ── Enqueue Cloud Task ────────────────────────────────────
