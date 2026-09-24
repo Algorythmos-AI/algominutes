@@ -285,7 +285,8 @@ where testable so the fix PR proves itself:
       (embedder "Bug 16"). Terraform does not set `ssl_mode`. Unify into one pool-config builder, set
       `ssl_mode` explicitly in Terraform, and add a deep health check that proves each service can
       query Postgres after deploy — before the first staging deploy relies on it.
-- [ ] **`db.ts` used `console.error`** (fixed here → structured logger); `check-no-console.sh` should
+- [x] **Done:** `check-no-console.sh` already scans `packages/db` + `packages/ai`; its stale `db.ts`
+      allowlist entry is removed (db.ts moved to the structured logger in #15). Was: **`db.ts` used `console.error`** (fixed here → structured logger); `check-no-console.sh` should
       also scan `packages/db` + `packages/ai` — widen it.
 - [ ] **Contract drift**: only 4 api routes match `openapi.v1.json`; 7 spec paths are served under
       other names and 24 routes are undocumented. Pinned by the ratchet `tests/contract-routes.test.ts`
