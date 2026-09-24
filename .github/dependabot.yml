@@ -18,6 +18,11 @@ updates:
     open-pull-requests-limit: 4
     commit-message:
       prefix: chore(deps)
+    ignore:
+      # Express 5 changes routing syntax, promise handling and req/res APIs across
+      # all 7 services. It is a planned migration (BLOCKERS), not a weekly bump.
+      - dependency-name: express
+        update-types: ['version-update:semver-major']
     groups:
       dev-tooling:
         dependency-type: development
@@ -50,6 +55,12 @@ updates:
     open-pull-requests-limit: 2
     commit-message:
       prefix: build(deps)
+    ignore:
+      # Production runs Node LTS only. Majors are planned moves between EVEN
+      # releases: odd majors are never LTS and are short-lived (Dependabot
+      # proposed node:25, already EOL). Minor/patch/digest updates still flow.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
     groups:
       base-images:
         patterns: ['*']
