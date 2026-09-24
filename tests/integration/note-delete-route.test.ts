@@ -14,7 +14,13 @@ vi.mock('firebase-admin/storage', () => ({
   getStorage: () => ({
     bucket: () => ({
       getFiles: async ({ prefix }: { prefix: string }) =>
-        [[...bucketState.present].filter((n) => n.startsWith(prefix)).map((name) => ({ name }))],
+        [[...bucketState.present].filter((n) => n.startsWith(prefix)).map((name) => ({
+          name,
+          delete: async () => {
+            if (name === bucketState.failOn) throw new Error('storage 503');
+            bucketState.present.delete(name);
+          },
+        }))],
       file: (name: string) => ({
         delete: async () => {
           if (name === bucketState.failOn) throw new Error('storage 503');

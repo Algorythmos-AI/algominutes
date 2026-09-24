@@ -3,6 +3,23 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Deleting from versioned buckets deletes every generation; noncurrent versions expire in 7 days (2026-09-25)
+
+The recordings, imports and scans buckets are versioned (a guard against accidental overwrite or
+delete). But deleting an object by name only makes its live version noncurrent: the bytes stay. So
+a "deleted" note's or account's audio survived indefinitely, which contradicts
+docs/DATA-RETENTION.md ("removed from all systems … within 30 days"). The account-deletion audit
+found this.
+
+- **The app deletes every generation.** The purges (`note-storage.cjs`) list with
+  `versions: true` and delete each generation, so note and account deletion remove the bytes
+  immediately.
+- **Backstop:** a lifecycle rule on every bucket deletes noncurrent versions after
+  `noncurrent_version_retention_days` (default **7**, validated 1–30). That keeps a short undo
+  window for accidental overwrites and never outlives the 30-day promise.
+- **Versioning stays on.** Turning it off would remove the overwrite guard; the two rules above
+  make it compatible with deletion.
+
 ## Primary GCP identity: algorythmos.france@gmail.com; billing is a full account (2026-09-25)
 
 Owner decision: **`algorythmos.france@gmail.com` is the official working account for

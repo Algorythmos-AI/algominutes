@@ -135,15 +135,17 @@ describe('deleteNote (the single deletion path)', () => {
 
 function fakeBucket(names: string[], { failOn }: { failOn?: string } = {}) {
   const present = new Set(names);
+  const file = (name: string) => ({
+    name,
+    delete: async () => {
+      if (name === failOn) throw new Error('storage 503');
+      present.delete(name);
+    },
+  });
   return {
     present,
-    getFiles: async ({ prefix }: { prefix: string }) => [[...present].filter((n) => n.startsWith(prefix)).map((name) => ({ name }))],
-    file: (name: string) => ({
-      delete: async () => {
-        if (name === failOn) throw new Error('storage 503');
-        present.delete(name);
-      },
-    }),
+    getFiles: async ({ prefix }: { prefix: string }) => [[...present].filter((n) => n.startsWith(prefix)).map(file)],
+    file,
   };
 }
 
