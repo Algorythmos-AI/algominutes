@@ -1,0 +1,39 @@
+name: codeql
+
+# Static security analysis (public repo). JS/TS and the workflows themselves
+# (`actions`: script injection, over-broad tokens) need no build, so they run
+# on every PR. Swift needs a real Xcode build and lives in codeql-swift.yml.
+# Results: Security → Code scanning. security-extended = more queries than
+# the default suite, still low-noise.
+on:
+  pull_request:
+  push:
+    branches: [integration, main]
+  schedule:
+    - cron: '27 17 * * 0' # weekly (Mon 03:27 Sydney): new queries find old bugs
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

@@ -88,6 +88,15 @@ gh variable set GCP_DEPLOYER_SA  --body "$(terraform output -raw deployer_servic
 gh variable set DEPLOY_STAGING   --body true
 ```
 
+The deploy jobs run in the `staging` GitHub Environment, and the WIF provider
+rejects tokens from any other ref or environment. Apply the repo settings once,
+so the environment's branch policy exists before the first deploy
+(`bash scripts/github-settings.sh` shows exactly what will change):
+
+```bash
+bash scripts/github-settings.sh --apply
+```
+
 Then run the first full deploy by hand (every service still has the
 placeholder image). It runs build → migrate → rollout → smoke:
 

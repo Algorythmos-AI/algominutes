@@ -314,8 +314,16 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
   }
-  # Only tokens from our repo are accepted at all.
-  attribute_condition = "assertion.repository == \"${var.github_repo}\""
+  # Fail-closed: a token is accepted only from THIS repo, on this environment's
+  # branch(es), in a job running in its GitHub Environment (whose protection
+  # rules apply). A workflow on any other branch, a PR ref (refs/pull/N/merge),
+  # or a job without the environment is rejected: a missing claim cannot
+  # satisfy the expression.
+  attribute_condition = join(" && ", [
+    "assertion.repository == \"${var.github_repo}\"",
+    "(${join(" || ", [for r in var.wif_allowed_refs : "assertion.ref == \"${r}\""])})",
+    "assertion.environment == \"${var.wif_github_environment}\"",
+  ])
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
