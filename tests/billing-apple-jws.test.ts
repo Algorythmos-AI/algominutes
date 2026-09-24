@@ -61,11 +61,11 @@ describe('Apple JWS: fail closed until verification exists', () => {
   it('no infrastructure or workflow sets the dev flag', () => {
     const hits: string[] = [];
     const walk = (dir: string) => {
-      for (const name of fs.readdirSync(dir)) {
-        const p = path.join(dir, name);
-        if (name === 'node_modules' || name === '.terraform') continue;
-        if (fs.statSync(p).isDirectory()) walk(p);
-        else if (/\.(tf|tfvars|ya?ml|json|sh)$/.test(name) && fs.readFileSync(p, 'utf8').includes('APPLE_JWS_TRUST_UNVERIFIED')) hits.push(p);
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.name === 'node_modules' || entry.name === '.terraform') continue;
+        if (entry.isDirectory()) walk(p);
+        else if (/\.(tf|tfvars|ya?ml|json|sh)$/.test(entry.name) && fs.readFileSync(p, 'utf8').includes('APPLE_JWS_TRUST_UNVERIFIED')) hits.push(p);
       }
     };
     for (const d of ['infra', '.github', 'services/billing']) if (fs.existsSync(d)) walk(d);
