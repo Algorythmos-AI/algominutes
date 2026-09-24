@@ -94,3 +94,12 @@ export async function getUploadSession(input: { id: string; uid: string }, now: 
     expiresAt: new Date(r.expires_at),
   };
 }
+
+/**
+ * Delete upload sessions past their expiry. GCS resumable sessions expire on
+ * their own (a week), so an expired row is only a record of nothing.
+ */
+export async function deleteExpiredUploadSessions(now: Date = new Date()): Promise<number> {
+  const { rowCount } = await getPool().query('DELETE FROM upload_sessions WHERE expires_at < $1', [now]);
+  return rowCount ?? 0;
+}

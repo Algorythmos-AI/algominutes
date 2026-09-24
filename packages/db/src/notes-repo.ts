@@ -731,3 +731,58 @@ export async function deleteNote(
   await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).delete();
   return outcome;
 }
+
+/**
+ * Notes stuck in an in-flight status (no progress written) for longer than
+ * `olderThanMs`, oldest first: what the sweeper fails, so the user sees an
+ * error and can retry instead of a spinner that never ends. The threshold
+ * must exceed IN_FLIGHT_STALE_MS, so a client re-queue gets its chance first.
+ */
+export async function listStuckNotes(
+  input: { olderThanMs: number; limit?: number },
+): Promise<Array<{ noteId: string; workspaceId: string; authorUid: string; status: string; updatedAt: Date }>> {
+  const { rows } = await getPool().query(
+    `SELECT id, workspace_id, author_uid, status, updated_at FROM notes
+      WHERE status = ANY($1::text[]) AND deleted_at IS NULL
+        AND updated_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')
+      ORDER BY updated_at ASC LIMIT $3`,
+    [IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs, input.limit ?? 100],
+  );
+  return rows.map((r) => ({
+    noteId: r.id, workspaceId: r.workspace_id, authorUid: r.author_uid, status: r.status, updatedAt: new Date(r.updated_at),
+  }));
+}
+
+/**
+ * Fail a note the sweeper found stuck, only if it is STILL stuck. The UPDATE
+ * repeats the selection condition (in flight, unchanged for olderThanMs, same
+ * workspace, not deleted), so a note that moved on since the listing (a chunk
+ * finished, it became ready, the client re-queued it, it was deleted) is left
+ * alone. The mirror, and the caller's dead letter and refund, happen only when
+ * a row matched. Postgres first; the mirror uses update(), so a deleted note's
+ * doc is never re-created.
+ */
+export async function failStuckNote(
+  firestore: Firestore,
+  input: { noteId: string; workspaceId: string; olderThanMs: number; message: string },
+  log: { error: (o: any, m?: string) => void },
+): Promise<{ failed: boolean }> {
+  const { rowCount } = await getPool().query(
+    `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
+      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+        AND status = ANY($4::text[])
+        AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
+    [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
+  );
+  if (!rowCount) return { failed: false };
+  try {
+    await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({
+      status: 'error', errorMessage: input.message, updatedAt: ISO_NOW(),
+    });
+  } catch (err) {
+    // Postgres (the source of truth) has it; the doc may be gone (deleted
+    // note) or briefly unavailable. The next read path reconciles from Postgres.
+    log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'stuck_note_mirror_failed');
+  }
+  return { failed: true };
+}

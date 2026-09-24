@@ -253,3 +253,15 @@ variable "noncurrent_version_retention_days" {
     error_message = "noncurrent_version_retention_days must be 1-30 (the deletion window is 30 days)."
   }
 }
+
+variable "enable_sweeper" {
+  description = "Create the db-sweep Cloud Run Job and the Cloud Scheduler job that runs it (scheduler.tf)."
+  type        = bool
+  default     = true
+}
+
+variable "sweep_schedule" {
+  description = "Cron schedule (UTC) for the db-sweep job."
+  type        = string
+  default     = "*/15 * * * *"
+}
