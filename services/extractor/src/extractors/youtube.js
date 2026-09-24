@@ -97,6 +97,17 @@ function badRequest(reason) {
   return err;
 }
 
+// Captions exist but can't be parsed. Not the same as "no captions", which is
+// what the user was told before (the parse failure was swallowed as '').
+function captionsMalformed(cause) {
+  const err = new Error(`youtube_captions_malformed: ${cause.message}`);
+  err.status = 422;
+  err.isPermanent = true;
+  err.code = 'YOUTUBE_CAPTIONS_MALFORMED';
+  err.cause = cause;
+  return err;
+}
+
 function noCaptions() {
   const err = new Error('youtube_no_captions');
   err.status = 422;
@@ -190,7 +201,7 @@ function parseSubtitles(file, raw) {
 function parseJson3(raw) {
   let doc;
   try { doc = JSON.parse(raw); }
-  catch { return ''; }
+  catch (err) { throw captionsMalformed(err); }
   const lines = [];
   for (const ev of doc.events || []) {
     if (!ev.segs) continue;

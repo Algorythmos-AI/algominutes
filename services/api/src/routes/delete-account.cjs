@@ -53,7 +53,9 @@ async function handleDeleteAccount({ req, res, pgPool, applyCors, traceId, log: 
     const decoded = await getAuth().verifyIdToken(token);
     uid = decoded.uid;
     email = decoded.email || null;
-  } catch {
+  } catch (err) {
+    // Routine (expired/forged tokens), so warn, not error, but never silent.
+    baseLog.warn({ err }, 'delete_account_token_invalid');
     return res.status(401).json({ error: 'Invalid token' });
   }
 
