@@ -362,7 +362,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Still allowlisted,
   with reasons: `process-audio.js` (retired in PR-16) and `summarizer/handler.js` (tracked TODO). Was:
   **`regenerate-summary.js:146` writes Firestore directly**.
-- [ ] **`EntitlementResponse` requires `state`, but `/v1/entitlement` (and `/v1/process`'s 402) never
+- [x] **Fixed (entitlement-contract PR):** the shaper now sends `state` and `trialEndsAt` (the resolver
+  already computed `state`). A contract test parses the live body for every state (brand-new, trialing,
+  active, free floor). Was: **`EntitlementResponse` requires `state`, but `/v1/entitlement` (and `/v1/process`'s 402) never
   send it,** nor `trialEndsAt`. Live bodies fail `EntitlementResponse.parse`. This is a three-client
   contract change: decide whether the handler adds them or the schema drops them.
 - [ ] **Four handlers ignore stricter schemas that already exist:**
