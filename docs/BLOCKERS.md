@@ -568,8 +568,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - `js/polynomial-redos` in `redaction.cjs` (the PII pre-scrub runs over whole 2–4 h transcripts);
   - `js/log-injection` in `client-error.js`;
   - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
-  - `js/insecure-helmet-configuration` ×2 (the api disables CSP by design, since it serves JSON only);
-    dismissing needs your yes;
+  - ~~`js/insecure-helmet-configuration` ×2~~ **fixed (strict-csp PR):** both JSON services send
+    `default-src 'none'` instead of disabling CSP (DECISIONS);
   - `js/missing-rate-limiting` ×6 on billing (its webhooks need provider-aware limits);
   - ~~`actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14~~ **fixed
     (harden-workflows PR):** every workflow has a least-privilege top-level `permissions` block
