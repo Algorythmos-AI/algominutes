@@ -101,7 +101,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     }
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ rollbackErr, noteId }, 'fast_path_rollback_failed'));
+    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
     throw err;
   } finally {
     client.release();

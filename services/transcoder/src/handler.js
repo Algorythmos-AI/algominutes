@@ -129,7 +129,7 @@ async function handleKickoff(payload, deps) {
   } finally {
     // Best-effort cleanup. Do not fail the task on cleanup errors.
     try { ffmpeg.cleanupTempDir(noteId); }
-    catch (cleanupErr) { log.warn({ cleanupErr, noteId }, 'tmp_cleanup_failed'); }
+    catch (cleanupErr) { log.warn({ err: cleanupErr, noteId, workspaceId }, 'tmp_cleanup_failed'); }
   }
 }
 

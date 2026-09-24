@@ -116,8 +116,7 @@ function isUnsupportedDiarizationError(err) {
     && /invalid[_ ]argument|3|unsupported fields/i.test(haystack);
 }
 
-async function checkOperation(operationName) {
-  const client = getClient();
+async function checkOperation(operationName, client = getClient()) {
   // `checkBatchRecognizeProgress` returns a single LROperation instance,
   // NOT a tuple. The previous `const [op] = await ...` destructure threw
   // "(intermediate value) is not iterable" on every poll, exhausting
@@ -132,20 +131,25 @@ async function checkOperation(operationName) {
   // to a {type_url, value} pair; we deserialize via the operation's
   // descriptor on the speech client.
   let result = null;
+  let decodeError = null;
   if (op.done && op.response && op.response.value) {
     try {
       const proto = require('@google-cloud/speech/build/protos/protos').google
         .cloud.speech.v2.BatchRecognizeResponse;
       result = proto.decode(op.response.value);
     } catch (decodeErr) {
-      // Fall back to raw — flattenWords will get nothing and the chunk
-      // ends up with 0 lines but the pipeline doesn't crash.
-      result = null;
+      // A response we can't decode is a failed chunk, not an empty one. (It
+      // used to fall back to null, so the chunk saved 0 lines and up to 10
+      // minutes of the meeting vanished with nothing logged.) Reported as the
+      // operation's error, so the caller's existing terminal path runs: chunk
+      // -> error, note failed, dead-letter. Retrying can't help, because the
+      // same bytes decode the same way.
+      decodeError = { code: 'DECODE_FAILED', message: `stt_response_decode_failed: ${decodeErr.message}` };
     }
   }
   return {
     done: op.done === true,
-    error: op.error || null,
+    error: op.error || decodeError,
     result,
     metadata: op.metadata || null,
   };
