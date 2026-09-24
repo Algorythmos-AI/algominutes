@@ -2,7 +2,7 @@
 
 Staging (`algominutes-staging`) is provisioned and its Firebase configs are wired. Production is the **same
 steps against `algominutes-prod`** — with **separate config values that must never reuse staging's**. Run
-from a shell authed as `gcp-admin@algorythmos.com`.
+from a shell authed as `algorythmos.france@gmail.com` (primary working account).
 
 > ⚠️ **Never copy staging's config into prod.** Different project → different `apiKey`, `appId`,
 > `messagingSenderId` (= prod project number `758033737651`), `authDomain`, `storageBucket`,

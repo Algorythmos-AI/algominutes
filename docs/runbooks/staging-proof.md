@@ -26,7 +26,8 @@ checks readiness over TLS, URL wiring and that workers are private.
 
 ## Run it
 
-Prerequisites: signed in as `gcp-admin@algorythmos.com`, and staging applied with
+Prerequisites: signed in as `algorythmos.france@gmail.com` (the primary working account;
+add `--account=algorythmos.france@gmail.com` to the `gcloud` commands), and staging applied with
 `enable_bastion = true` (`terraform output bastion_ssh_command`).
 
 ```bash

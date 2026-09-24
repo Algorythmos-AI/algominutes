@@ -11,9 +11,9 @@ to the org projects. Run it from a shell authenticated as the org admin.
 ## 0. Prerequisites
 
 ```bash
-gcloud auth login gcp-admin@algorythmos.com      # org admin — owns both projects
-gcloud auth application-default login gcp-admin@algorythmos.com   # ADC for Terraform
-gcloud config set account gcp-admin@algorythmos.com
+gcloud auth login algorythmos.france@gmail.com --no-activate   # primary working account (owner decision 2026-09-25)
+export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token --account=algorythmos.france@gmail.com)   # Terraform auth, ~1 h
+# org-level work (Cloud Identity, org policies) still needs gcp-admin@algorythmos.com
 terraform version   # >= 1.9 ;  gcloud >= 500 ;  firebase --version >= 15
 ```
 Confirm access: `gcloud projects describe algominutes-staging` should succeed.
