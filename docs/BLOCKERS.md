@@ -194,6 +194,32 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   has no first-run/empty state; iOS notes-listener failure is silent (`NotesRepository.swift:74`). See
   `docs/audits/A6.4-STATES-AUDIT.md` punch list.
 
+## Found by the backend integration harness (PR-08, 2026-09-24) — fix next
+
+First run of all 13 migrations on a real Postgres 16 + pgvector: **clean + idempotent**. The harness
+(`tests/integration/**`, `npm run test:integration`) then surfaced these; each is pinned by a test
+where testable so the fix PR proves itself:
+
+- [ ] **Membership escalation in `markReady`** (`packages/db/src/notes-repo.ts` `upsertCoreToPostgres`):
+      it inserts `(workspaceId, authorUid)` into `workspace_members` as **`owner`** with
+      `ON CONFLICT DO NOTHING`, never checking the author already belongs. A mismatched worker payload
+      makes the author an owner of someone else's workspace. Pinned: `tenant-isolation.test.ts`
+      (`it.fails`, verified to fail on the escalation itself).
+- [ ] **`markReady` inverts the source of truth**: on a Postgres failure it logs, then still marks the
+      Firestore note `ready` ("background reconciliation" referenced in the comment does not exist).
+      Postgres must win: fail the task so it retries instead.
+- [ ] **`applyNoteEdit` has no Postgres membership check** — `UPDATE notes WHERE id=$1`; the route
+      (`services/api/src/routes/update-note.js`) only checks the Firestore doc's `authorId`.
+- [ ] **Silent catch** `ROLLBACK … .catch(() => undefined)` in `notes-repo.ts`, and
+      `scripts/check-no-silent-catch.sh` only matches `() => {}`, so `() => undefined` / `() => null`
+      slip through — widen the checker.
+- [ ] **`scripts/migrate.ts` mislabels failures**: every `CREATE EXTENSION` error (including
+      *connection refused*) is printed as "lacks CREATE privilege; expected" — misleading on an
+      outage. Only swallow `42501 insufficient_privilege`; rethrow the rest.
+- [ ] **Contract drift**: only 4 api routes match `openapi.v1.json`; 7 spec paths are served under
+      other names and 24 routes are undocumented. Pinned by the ratchet `tests/contract-routes.test.ts`
+      (fails on any new drift). Reconcile to zero before the iOS `/v1` client (plan PR-17).
+
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
 Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all

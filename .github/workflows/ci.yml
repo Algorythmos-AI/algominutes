@@ -1,6 +1,6 @@
 name: ci
 
-# Typecheck + unit tests on every PR and push to main. The gate is real now:
+# Typecheck + unit + integration tests on every PR and push. The gate is real:
 # the root `typecheck` covers the shared TS libraries, `npm test` runs the
 # vitest suites, and `test:node` runs the two node:test suites (transcoder
 # providers, diarisation DER). No network, no DB, no credentials.
@@ -25,3 +25,31 @@ jobs:
         run: npm test
       - name: Unit tests (node:test suites)
         run: npm run test:node
+
+  # Integration tests against a REAL Postgres 16 + pgvector (never mocked):
+  # migrations apply on a real server, replay idempotency, PII-before-storage,
+  # and cross-workspace isolation. Always runs, so it can be a required check.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: algominutes
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d algominutes"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/algominutes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Integration tests (real Postgres)
+        run: npm run test:integration
