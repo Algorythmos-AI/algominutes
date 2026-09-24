@@ -32,7 +32,7 @@ afterAll(async () => {
 describe('deleteAccountData (Postgres, first)', () => {
   it("deletes the account and everything it owns, leaves others' data, queues every note's purge, and leaves a tombstone", async () => {
     const r = await deleteAccountData({ uid: 'alice', traceId: 't1' }, quietLog);
-    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], notesQueued: 3, membershipsDeleted: 2 });
+    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 3, membershipsDeleted: 2 });
     expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(0);
     expect(await count(`SELECT 1 FROM workspaces WHERE id = 'ws-a'`)).toBe(0);
     expect(await count(`SELECT 1 FROM notes WHERE id IN ('a1', 'a2', 'a-in-b')`)).toBe(0);
@@ -56,7 +56,32 @@ describe('deleteAccountData (Postgres, first)', () => {
   it('a retry is a no-op that still knows the owned workspaces (from the tombstone)', async () => {
     await deleteAccountData({ uid: 'alice' }, quietLog);
     expect(await deleteAccountData({ uid: 'alice' }, quietLog))
-      .toEqual({ deleted: false, workspaceIds: ['ws-a'], notesQueued: 0, membershipsDeleted: 0 });
+      .toEqual({ deleted: false, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0 });
+  });
+
+  // The race the second audit found: a request that checked before the
+  // deletion committed, then re-created the row once the deletion released its
+  // lock. The check now runs after the upsert, in the same transaction.
+  it('a write racing the deletion transaction does not re-create the account', async () => {
+    const del = await pool.connect();
+    try {
+      await del.query('BEGIN');
+      await del.query(`SELECT 1 FROM users WHERE uid = 'alice' FOR UPDATE`);
+      await del.query(`INSERT INTO account_deletions (uid) VALUES ('alice')`);
+      await del.query(`DELETE FROM users WHERE uid = 'alice'`);
+      // The racing write starts while the deletion holds the lock, and blocks on it.
+      const racing = createUploadSession({
+        uid: 'alice', workspaceId: 'workspace_alice', noteId: 'n9', storagePath: 'recordings/workspace_alice/n9.m4a',
+        sessionUri: 'https://storage.googleapis.com/x', totalBytes: 1, expiresAt: new Date(Date.now() + 86_400_000),
+      }, quietLog).then(() => 'created', (e) => e);
+      await new Promise((r) => setTimeout(r, 300));
+      await del.query('COMMIT');
+      expect(await racing).toBeInstanceOf(AccountDeletedError);
+    } finally {
+      del.release();
+    }
+    expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM upload_sessions WHERE uid = 'alice'`)).toBe(0);
   });
 
   // A deleted account's ID token can still verify for up to an hour. Its first
@@ -73,7 +98,7 @@ describe('deleteAccountData (Postgres, first)', () => {
 
 // A stateful fake of the Firestore surface the path uses: docs by path,
 // subcollections by prefix, recursiveDelete, and the analytics query.
-function fakes({ firestoreFails = false, authFails = false, storageFailsOn = '' } = {}) {
+function fakes({ firestoreFails = false, authFails = false, storageFailsOn = '', cancelFails = false } = {}) {
   const docs = new Map<string, Record<string, unknown>>([
     ['workspaces/ws-a', { ownerId: 'alice' }],
     ['workspaces/ws-a/notes/a1', {}], ['workspaces/ws-a/notes/a2', {}],
@@ -90,7 +115,7 @@ function fakes({ firestoreFails = false, authFails = false, storageFailsOn = '' 
     'recordings/ws-b/b1.m4a', 'recordings/ws-a0/x.m4a', // someone else's
   ]);
   const order: string[] = [];
-  const state = { firestoreFails, authFails, storageFailsOn };
+  const state = { firestoreFails, authFails, storageFailsOn, cancelFails };
   const guard = () => { if (state.firestoreFails) throw new Error('firestore unavailable'); };
   const ref = (p: string) => ({
     path: p,
@@ -126,7 +151,13 @@ function fakes({ firestoreFails = false, authFails = false, storageFailsOn = '' 
       order.push('auth');
     },
   };
-  return { deps: { auth, firestore, bucket }, docs, objects, order, state };
+  const cancelled: string[] = [];
+  const fetch = async (url: string, init: { method: string }) => {
+    if (state.cancelFails) return { status: 503 };
+    if (init.method === 'DELETE') cancelled.push(url);
+    return { status: 499 };
+  };
+  return { deps: { auth, firestore, bucket, fetch }, docs, objects, order, state, cancelled };
 }
 const BOBS_DOCS = ['analytics/e2', 'workspaces/ws-b', 'workspaces/ws-b/notes/b1'];
 const BOBS_OBJECTS = ['recordings/ws-a0/x.m4a', 'recordings/ws-b/b1.m4a'];
@@ -198,5 +229,33 @@ describe('POST /v1/account/delete', () => {
     const f = fakes();
     expect((await call(f.deps, 'forged')).status).toBe(401);
     expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(1);
+  });
+
+  // An open GCS upload session stays usable for a week; it's cancelled, and a
+  // failed cancel keeps Auth so the retry (reading the tombstone) cancels it.
+  it("cancels the account's open upload sessions, retrying a failed cancel", async () => {
+    await pool.query(
+      `INSERT INTO upload_sessions (uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at)
+         VALUES ('alice', 'ws-a', 'a1', 'recordings/ws-a/a1.m4a', 'https://storage.googleapis.com/upload/s1', 1, NOW() + INTERVAL '1 day')`,
+    );
+    const f = fakes({ cancelFails: true });
+    expect((await call(f.deps)).status).toBe(500);
+    expect(f.order).not.toContain('auth');
+    f.state.cancelFails = false;
+    expect((await call(f.deps)).status).toBe(200);
+    expect(f.cancelled).toEqual(['https://storage.googleapis.com/upload/s1']);
+    expect((await pool.query(`SELECT pending_upload_sessions FROM account_deletions WHERE uid = 'alice'`)).rows[0].pending_upload_sessions).toEqual([]);
+  });
+
+  // A purge left in the account's workspace by an earlier single-note delete
+  // that never finished (no uid on it) is run too.
+  it('runs purges left in its workspaces by earlier note deletions', async () => {
+    await pool.query(`INSERT INTO storage_purges (note_id, workspace_id, include_scratch) VALUES ('old-note', 'ws-a', TRUE)`);
+    const f = fakes();
+    f.docs.set('workspaces/ws-a/notes/old-note', {});
+    f.objects.add('transcoder/old-note/chunk-000.flac');
+    expect((await call(f.deps)).status).toBe(200);
+    expect(f.objects.has('transcoder/old-note/chunk-000.flac')).toBe(false);
+    expect(await count(`SELECT 1 FROM storage_purges WHERE note_id = 'old-note'`)).toBe(0);
   });
 });

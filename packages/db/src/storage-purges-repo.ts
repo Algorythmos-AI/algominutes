@@ -65,11 +65,17 @@ export async function listPendingStoragePurges(limit = 50): Promise<StoragePurge
   return rows.map(toPurge);
 }
 
-/** An account's purges still pending, oldest first (what an account-deletion retry runs). */
-export async function listStoragePurgesForUid(uid: string): Promise<StoragePurge[]> {
+/**
+ * An account's purges still pending, oldest first: the ones its deletion
+ * queued (tagged with the uid), plus any left in its workspaces by earlier
+ * single-note deletions that never finished.
+ */
+export async function listStoragePurgesForAccount(input: { uid: string; workspaceIds: string[] }): Promise<StoragePurge[]> {
   const { rows } = await getPool().query(
-    `SELECT ${COLUMNS} FROM storage_purges WHERE uid = $1 ORDER BY created_at ASC, id ASC`,
-    [uid],
+    `SELECT ${COLUMNS} FROM storage_purges
+      WHERE uid = $1 OR workspace_id = ANY($2::text[])
+      ORDER BY created_at ASC, id ASC`,
+    [input.uid, input.workspaceIds],
   );
   return rows.map(toPurge);
 }

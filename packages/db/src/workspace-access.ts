@@ -35,10 +35,6 @@ export async function ensureUser(
   client: PoolClient,
   user: { uid: string; email?: string | null; name?: string | null },
 ): Promise<void> {
-  // A deleted account stays deleted. Its ID token can still verify for up to
-  // an hour, and this upsert would otherwise quietly bring the account back.
-  const tomb = await client.query('SELECT 1 FROM account_deletions WHERE uid = $1', [user.uid]);
-  if (tomb.rowCount) throw new AccountDeletedError(user.uid);
   await client.query(
     `INSERT INTO users (uid, email, display_name)
        VALUES ($1, COALESCE($2::text, $1 || '@firebase.local'), $3)
@@ -47,6 +43,14 @@ export async function ensureUser(
        display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
     [user.uid, user.email || null, user.name || null],
   );
+  // A deleted account stays deleted: its ID token can still verify for up to
+  // an hour. The check comes AFTER the upsert, on purpose. If a deletion was in
+  // flight, the upsert waited for its row lock, and in READ COMMITTED this next
+  // statement sees the tombstone it committed. Throwing rolls the upsert back.
+  // (Checked first, a request racing the deletion would pass, then re-create
+  // the row once the deletion released its lock.)
+  const tomb = await client.query('SELECT 1 FROM account_deletions WHERE uid = $1', [user.uid]);
+  if (tomb.rowCount) throw new AccountDeletedError(user.uid);
 }
 
 /**

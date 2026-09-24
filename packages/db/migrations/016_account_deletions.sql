@@ -13,6 +13,9 @@
 CREATE TABLE IF NOT EXISTS account_deletions (
   uid            TEXT PRIMARY KEY,
   workspace_ids  TEXT[] NOT NULL DEFAULT '{}',
+  -- GCS resumable-upload session URIs the account still held. They stay
+  -- valid for a week, so each is cancelled, and removed from here once it is.
+  pending_upload_sessions TEXT[] NOT NULL DEFAULT '{}',
   trace_id       TEXT,
   requested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at   TIMESTAMPTZ

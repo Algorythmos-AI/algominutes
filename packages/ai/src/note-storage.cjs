@@ -91,4 +91,22 @@ async function purgeWorkspaceObjects({ bucket, workspaceId }, log) {
   return n;
 }
 
-module.exports = { purgeNoteObjects, purgeWorkspaceObjects, noteObjectSets, ownedStoragePath };
+/**
+ * Cancel a GCS resumable-upload session, so nothing more can be uploaded
+ * through its URI. GCS answers 499 to the cancel, and 404/410 once it's already
+ * gone; all three are success. Only a storage.googleapis.com URI is ever
+ * contacted (the same rule as the upload routes). Throws on anything else.
+ */
+async function cancelResumableUpload(sessionUri, fetchImpl = fetch) {
+  let url;
+  try { url = new URL(sessionUri); } catch (err) { throw new Error(`not a session uri: ${err.message}`); }
+  if (url.protocol !== 'https:' || url.hostname !== 'storage.googleapis.com') {
+    throw new Error('refusing to cancel a non-GCS session uri');
+  }
+  const res = await fetchImpl(url.href, { method: 'DELETE', headers: { 'Content-Length': '0' } });
+  if (![499, 404, 410, 200, 204].includes(res.status)) {
+    throw new Error(`cancel resumable upload failed: HTTP ${res.status}`);
+  }
+}
+
+module.exports = { purgeNoteObjects, purgeWorkspaceObjects, cancelResumableUpload, noteObjectSets, ownedStoragePath };

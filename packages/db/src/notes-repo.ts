@@ -97,14 +97,10 @@ async function upsertCoreToPostgres(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // Ensure user + workspace exist (best-effort; Firebase Auth is the
-    // source of identity, but we want FK targets here).
-    await client.query(
-      `INSERT INTO users (uid, email)
-         VALUES ($1, $2)
-         ON CONFLICT (uid) DO NOTHING`,
-      [input.authorUid, `${input.authorUid}@firebase.local`],
-    );
+    // Ensure user + workspace exist (Firebase Auth is the source of identity,
+    // but we want FK targets here). Through ensureUser, so a deleted account is
+    // refused rather than re-created.
+    await ensureUser(client, { uid: input.authorUid });
     // Bootstrap a brand-new workspace with the author as owner, but NEVER add
     // the author to a workspace that already exists unless they are already a
     // member (pinned in tests/integration/tenant-isolation.test.ts).
@@ -263,6 +259,10 @@ export async function markQueued(
         // no row to lock yet: the second of two concurrent duplicates waits
         // here, then sees the first's 'queued' row and backs off.
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`note-queue:${input.noteId}`]);
+        // The user row first, then the note row: the same order account
+        // deletion takes them (users FOR UPDATE, then the cascade to notes), so
+        // the two can't deadlock. It also refuses a deleted account.
+        await ensureUser(client, { uid: input.authorUid, email: input.authorEmail, name: input.authorName });
         const existing = await client.query(
           'SELECT workspace_id, status, updated_at FROM notes WHERE id = $1 FOR UPDATE',
           [input.noteId],
@@ -277,7 +277,6 @@ export async function markQueued(
           return { queued: false, status: state.status };
         }
 
-        await ensureUser(client, { uid: input.authorUid, email: input.authorEmail, name: input.authorName });
         await ensureWorkspaceAccess(
           client,
           input.workspaceId,

@@ -37,6 +37,8 @@ export interface AccountDeletion {
   deleted: boolean;
   /** Every workspace the account owned (from the tombstone, so also on a retry). */
   workspaceIds: string[];
+  /** Upload session URIs still to cancel (from the tombstone, so also on a retry). */
+  uploadSessionUris: string[];
   notesQueued: number;
   membershipsDeleted: number;
 }
@@ -54,14 +56,24 @@ export async function deleteAccountData(
         [input.uid],
       );
       const ownedIds = owned.rows.map((r) => r.id);
-      const tomb = await client.query<{ workspace_ids: string[] }>(
-        `INSERT INTO account_deletions (uid, workspace_ids, trace_id) VALUES ($1, $2, $3)
-         ON CONFLICT (uid) DO UPDATE SET workspace_ids = ARRAY(
-           SELECT DISTINCT w FROM unnest(account_deletions.workspace_ids || EXCLUDED.workspace_ids) AS w)
-         RETURNING workspace_ids`,
-        [input.uid, ownedIds, input.traceId ?? null],
+      // Open GCS upload sessions: the rows cascade away below, but the URIs stay
+      // valid for a week, so they're kept on the tombstone until cancelled.
+      const sessions = await client.query<{ session_uri: string }>(
+        'SELECT session_uri FROM upload_sessions WHERE uid = $1',
+        [input.uid],
+      );
+      const tomb = await client.query<{ workspace_ids: string[]; pending_upload_sessions: string[] }>(
+        `INSERT INTO account_deletions (uid, workspace_ids, pending_upload_sessions, trace_id) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (uid) DO UPDATE SET
+           workspace_ids = ARRAY(
+             SELECT DISTINCT w FROM unnest(account_deletions.workspace_ids || EXCLUDED.workspace_ids) AS w),
+           pending_upload_sessions = ARRAY(
+             SELECT DISTINCT u FROM unnest(account_deletions.pending_upload_sessions || EXCLUDED.pending_upload_sessions) AS u)
+         RETURNING workspace_ids, pending_upload_sessions`,
+        [input.uid, ownedIds, sessions.rows.map((r) => r.session_uri), input.traceId ?? null],
       );
       const workspaceIds = tomb.rows[0]!.workspace_ids;
+      const uploadSessionUris = tomb.rows[0]!.pending_upload_sessions;
 
       const notes = await client.query<{ id: string; workspace_id: string; storage_path: string | null }>(
         `SELECT id, workspace_id, storage_path FROM notes
@@ -86,6 +98,7 @@ export async function deleteAccountData(
       return {
         deleted: (gone.rowCount ?? 0) > 0,
         workspaceIds,
+        uploadSessionUris,
         notesQueued: notes.rows.length,
         membershipsDeleted: members.rowCount ?? 0,
       };
@@ -128,4 +141,12 @@ export async function completeAccountDeletion(uid: string): Promise<void> {
 export async function isAccountDeleted(uid: string): Promise<boolean> {
   const { rowCount } = await getPool().query('SELECT 1 FROM account_deletions WHERE uid = $1', [uid]);
   return (rowCount ?? 0) > 0;
+}
+
+/** An upload session was cancelled: take it off the tombstone. */
+export async function clearCancelledUploadSession(uid: string, sessionUri: string): Promise<void> {
+  await getPool().query(
+    'UPDATE account_deletions SET pending_upload_sessions = array_remove(pending_upload_sessions, $2) WHERE uid = $1',
+    [uid, sessionUri],
+  );
 }

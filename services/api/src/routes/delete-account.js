@@ -25,18 +25,19 @@
 // failed, so the user could never retry.
 //
 // Self-authenticating (verifyIdToken) rather than behind authMiddleware, as
-// before. `deps` lets tests supply Auth, Firestore, the bucket and (to force a
-// Postgres failure) the repo call.
+// before. `deps` lets tests supply Auth, Firestore, the bucket, fetch (for the
+// upload-session cancel) and, to force a Postgres failure, the repo call.
 
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import noteStorageModule from '@algominutes/ai/note-storage.cjs';
 import {
-  deleteAccountData, deleteAccountMirror, completeAccountDeletion, listStoragePurgesForUid, runStoragePurge,
+  deleteAccountData, deleteAccountMirror, completeAccountDeletion, clearCancelledUploadSession,
+  listStoragePurgesForAccount, runStoragePurge,
 } from '@algominutes/db';
 
-const { purgeWorkspaceObjects } = noteStorageModule;
+const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorageModule;
 
 export async function deleteAccountRoute(req, res, deps = {}) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
@@ -81,17 +82,30 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   summary.notesDeleted = pg.notesQueued;
   summary.pgMembershipsDeleted = pg.membershipsDeleted;
 
-  // 2. Each note's mirror doc and audio, including purges left by an earlier attempt.
-  const purges = await listStoragePurgesForUid(uid);
+  // The owned workspaces come from the tombstone (also on a retry). The
+  // personal id is added in case its workspace doc exists in Firestore without
+  // ever reaching Postgres.
+  const ownWorkspaces = [...new Set([...pg.workspaceIds, `workspace_${uid}`])];
+  summary.workspacesAffected = pg.workspaceIds.length;
+
+  // 2. Cancel the account's open GCS upload sessions first, so nothing lands
+  // after the sweep below. Then each note's mirror doc and audio, including
+  // purges left by an earlier attempt or an earlier single-note deletion.
+  for (const sessionUri of pg.uploadSessionUris) {
+    try {
+      await cancelResumableUpload(sessionUri, deps.fetch);
+      await clearCancelledUploadSession(uid, sessionUri);
+    } catch (err) {
+      summary.firestoreErrors += 1;
+      log.error({ err }, 'delete_account_upload_cancel_failed');
+    }
+  }
+  const purges = await listStoragePurgesForAccount({ uid, workspaceIds: ownWorkspaces });
   for (const p of purges) {
     if (!(await runStoragePurge({ bucket, firestore }, p, log))) summary.firestoreErrors += 1;
   }
 
-  // 3. The account's own docs and storage. The owned workspaces come from the
-  // tombstone (also on a retry). The personal id is added in case its
-  // workspace doc exists in Firestore without ever reaching Postgres.
-  const ownWorkspaces = [...new Set([...pg.workspaceIds, `workspace_${uid}`])];
-  summary.workspacesAffected = pg.workspaceIds.length;
+  // 3. The account's own docs and storage.
   try {
     await deleteAccountMirror(firestore, { uid, workspaceIds: ownWorkspaces });
   } catch (err) {

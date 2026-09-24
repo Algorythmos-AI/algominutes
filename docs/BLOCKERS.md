@@ -478,7 +478,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - workspace docs are deleted with their subcollections (`recursiveDelete`), which catches note docs
         that never reached Postgres, along with the root `analytics` docs;
       - ANY failure after Postgres answers 500 with Auth intact, because no sweeper exists yet.
+      - after its second audit: the tombstone check runs AFTER `ensureUser`'s upsert, so a write racing the
+        deletion can't re-create the account (tested with a real two-connection race). `authMiddleware`
+        refuses a tombstoned uid on every route. `markQueued` takes the user row before the note row (the
+        order deletion uses), so there's no deadlock. Open GCS upload sessions are cancelled, with retries,
+        via the tombstone. Purges left in the account's workspaces by earlier note deletions run too.
     - [ ] Residuals, queued:
+      - **Bucket versioning keeps "deleted" audio** as noncurrent versions (every bucket is versioned,
+        with no noncurrent lifecycle rule), for note deletion too. Next PR: delete every generation in
+        the purge, and add a noncurrent-version lifecycle rule (Terraform; your apply).
+      - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
+        failing object blocks an account's deletion (fail closed), and must page someone.
+      - Single-note deletion should also cancel the note's open upload session (account deletion does).
       - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today
         an owned workspace goes with its owner, members' notes included.
       - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
