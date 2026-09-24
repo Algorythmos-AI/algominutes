@@ -1,7 +1,8 @@
 name: terraform
 
 # Static checks for the infrastructure code: formatting + `terraform validate`
-# of every environment root. No backend, no credentials, so it never touches
+# of every environment root (a module change must keep every caller valid —
+# PR-08c broke the prod root and a staging-only validate missed it). No backend, no credentials, so it never touches
 # state or GCP. It runs on every PR (not path-filtered) so it can be a required
 # check (plan rev 7, loophole #4). A real `plan` needs gcp-admin and stays a
 # human step (docs/runbooks/resume-staging-and-deploy.md).
@@ -16,6 +17,11 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every environment root: a module change must keep ALL callers valid.
+        env: [staging, prod]
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -24,8 +30,8 @@ jobs:
           terraform_wrapper: false
       - name: Format
         run: terraform fmt -check -diff -recursive infra/terraform
-      - name: Validate staging root
-        working-directory: infra/terraform/envs/staging
+      - name: Validate ${{ matrix.env }} root
+        working-directory: infra/terraform/envs/${{ matrix.env }}
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
