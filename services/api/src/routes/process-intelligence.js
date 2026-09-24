@@ -27,11 +27,11 @@ import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 
 // A9.2 metered-minutes gate — assert quota and charge the ledger BEFORE any paid
-// transcode work is queued. resolveEntitlement/assertCanMeter/meterMinutes all
-// live in the @algominutes/db repo layer (never trust the client for quota).
+// transcode work is queued. assertCanMeter and the debit (written by
+// markQueued) live in the @algominutes/db repo layer (never trust the client
+// for quota).
 import {
   assertCanMeter,
-  meterMinutes,
   QuotaExceededError,
   ensureTrial,
   markQueued,
@@ -184,19 +184,18 @@ export async function processIntelligenceRoute(req, res) {
       deviceHash,
       platform: devPlatform,
       emailPresent: !!req.authEmail,
+      user: { email: callerEmail, name: callerName },
+      log,
     });
     await assertCanMeter(callerUid, minutes);
-    // Idempotent under Cloud Tasks / client retry: the UNIQUE idempotency_key
-    // makes a replay a no-op, so we never double-charge a note's ingest.
-    await meterMinutes({
-      uid: callerUid,
-      workspaceId,
-      noteId,
-      minutes,
-      reason: 'ingest',
-      idempotencyKey: `${noteId}:ingest`,
-    });
+    // The debit itself is written by markQueued, in the transaction that
+    // creates the note row (usage_ledger.note_id is a foreign key), and only
+    // if it actually queues. Idempotent by key: a retry never charges twice.
   } catch (err) {
+    if (err?.code === 'ACCOUNT_DELETED') {
+      log.warn({}, 'process_account_deleted');
+      return res.status(401).json({ error: 'account_deleted' });
+    }
     // instanceof is the intent; the code check is the cross-realm fallback
     // (a QuotaExceededError thrown from another module copy still matches).
     if (err instanceof QuotaExceededError || err?.code === 'QUOTA_EXCEEDED') {
@@ -218,6 +217,7 @@ export async function processIntelligenceRoute(req, res) {
       noteId, workspaceId,
       authorUid: callerUid, authorEmail: callerEmail, authorName: callerName,
       sourceType: type, storagePath, sourceUrl, mimeType: clientMime,
+      meter: { minutes, idempotencyKey: `${noteId}:ingest` },
     }, log);
   } catch (err) {
     if (err?.code === 'ACCOUNT_DELETED') {

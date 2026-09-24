@@ -581,6 +581,32 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     (`promotion-guard` has none), and the six third-party actions are pinned to commit SHAs with
     version comments. Dependabot (`github-actions`) keeps them current.
 
+## Found while fixing R1 (2026-09-25)
+
+- [x] **Fixed (kickoff-meter-in-queue-tx PR): every first `/v1/process` answered 500.** Nothing had ever run
+  the route against real Postgres. The kickoff debited the ingest minutes (`meterMinutes`) *before*
+  `markQueued` created the note row, and `usage_ledger.note_id` is a foreign key, so the first kickoff of
+  every note failed with `meter_ingest_failed` (FK 23503). A new user whose first action is a YouTube import
+  failed one step earlier: `ensureTrial` inserts `subscriptions`, and `subscriptions.uid` references a
+  `users` row that nothing had created yet. Now `markQueued` writes the debit in the queue transaction,
+  after the note row, and only when it actually queues (a duplicate or refused kickoff debits nothing).
+  `ensureTrial` creates the user row in its own transaction. `tests/integration/process-kickoff.test.ts`
+  runs the real route against Postgres, faking only Firestore, GCS, Cloud Tasks and the rate-limit
+  counter. It is mutation-checked.
+- [ ] Residuals (pre-existing, found by the dual-write audit of that PR):
+  - Three failures after `markQueued` commits mark the note `error`, but its ingest debit stands:
+    - the Firestore mirror write fails;
+    - the transcoder config is missing (`kickoff_misconfigured`);
+    - the Cloud Task enqueue fails.
+
+    A retry isn't charged again (the key is idempotent), but a user who gives up has paid for nothing.
+    The sweeper refunds only in-flight notes. Refund on these paths, or enqueue through an outbox written
+    with the debit.
+  - After a refund (transcode failure, summarizer, or the sweeper's `refund:stuck`), a re-queue of the same
+    note reuses the `${noteId}:ingest` key, so the re-run is free. Key the debit per run.
+  - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
+    different notes can both pass it.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
