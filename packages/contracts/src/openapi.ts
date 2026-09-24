@@ -115,12 +115,33 @@ export function buildRegistry(): OpenAPIRegistry {
   registry.registerPath({
     method: 'get',
     path: `${API_BASE_PATH}/health`,
-    summary: 'Liveness probe.',
+    summary: 'Liveness probe (never touches the database).',
     tags: ['system'],
     responses: {
       200: {
         description: 'OK',
-        content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } },
+        content: { 'application/json': { schema: z.object({ status: z.literal('ok') }) } },
+      },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: `${API_BASE_PATH}/health/ready`,
+    summary: 'Readiness probe: proves the service can reach Postgres (post-deploy smoke).',
+    tags: ['system'],
+    responses: {
+      200: {
+        description: 'Postgres reachable',
+        content: { 'application/json': { schema: z.object({ status: z.literal('ok'), db: z.literal('ok') }) } },
+      },
+      503: {
+        description: 'Postgres unreachable',
+        content: {
+          'application/json': {
+            schema: z.object({ status: z.literal('degraded'), db: z.literal('unreachable') }),
+          },
+        },
       },
     },
   });

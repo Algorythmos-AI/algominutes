@@ -18,6 +18,10 @@
 
 import express from 'express';
 import helmet from 'helmet';
+import pgConfigModule from '@algominutes/ai/pg-config.cjs';
+import { getPool } from '@algominutes/db';
+
+const { pingPool } = pgConfigModule;
 
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -57,6 +61,16 @@ export function buildApp() {
   const health = (_req, res) => res.status(200).send('ok');
   app.get('/health', health);
   app.get('/healthz', health);
+  // Readiness: proves the repo-layer pool reaches Postgres (post-deploy smoke).
+  app.get('/health/ready', async (req, res) => {
+    try {
+      await pingPool(getPool());
+      res.status(200).json({ status: 'ok', db: 'ok' });
+    } catch (err) {
+      req.log.error({ err }, 'readiness_db_unreachable');
+      res.status(503).json({ status: 'degraded', db: 'unreachable' });
+    }
+  });
 
   // ── PUBLIC webhook: Stripe ── RAW body BEFORE express.json ──────────────
   // Signature is verified over these exact bytes (see lib/stripe.js).

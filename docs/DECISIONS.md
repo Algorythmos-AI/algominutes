@@ -3,6 +3,25 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## One Postgres connection config; Cloud SQL is ENCRYPTED_ONLY (2026-09-24)
+
+Six pools (repo layer, api read path, transcoder, summarizer, embedder, migrations) each built their own
+config and disagreed: the repo layer — used by api/billing/notifier — connected **without TLS** while the
+workers forced it, after Cloud SQL once rejected unencrypted VPC-connector traffic ("pg_hba.conf rejects
+connection ... no encryption", Bug 16). Defaults also differed (`postgres` vs `algominutes`).
+
+- **`packages/ai/src/pg-config.cjs` is the single builder.** TLS via libpq-style `PGSSLMODE`: `disable` =
+  plaintext; any other value = encrypted; **unset = encrypted unless the host is local** (dev/CI). The server
+  certificate is not chain-verified (Cloud SQL private-IP certs are not public-CA; traffic stays in the VPC) —
+  encryption is what the server enforces. `sslmode` in `DATABASE_URL` is stripped so it can't override the
+  policy (pg lets it). Idle-client pool errors are always logged (the api read pool had an empty handler).
+- **Terraform:** instance `ssl_mode = ENCRYPTED_ONLY`; services get `PGSSLMODE=require`.
+- **Readiness:** `GET /v1/health/ready` (api) and `/health/ready` (billing) ping every pool with a bounded
+  3s timeout → 200 / 503; the post-deploy smoke requires both. `/health` stays DB-free for uptime probes.
+- Evidence: locally, a TLS-only Postgres (`hostssl` + self-signed cert) rejects plaintext with the exact
+  historical error; the whole integration suite passes over encrypted connections; the OLD repo pool fails
+  9 tests against it.
+
 ## Branch model: `integration` = staging (default), `main` = production (2026-09-23)
 
 Owner decision. Every change lands on **`integration`** (the default branch) through a

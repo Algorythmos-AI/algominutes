@@ -86,9 +86,16 @@ gh run watch
 
 The workflow's `smoke` job runs `scripts/smoke-staging.sh`. It must pass. It
 checks that every `*_URL` env is a URL the target service really serves, that
-`api` (`/v1/health`) and `billing` (`/health`) answer 200 without auth, and
+`api` (`/v1/health`) and `billing` (`/health`) answer 200 without auth, that
+their readiness probes (`/v1/health/ready`, `/health/ready`) reach Postgres, and
 that every worker answers 403 without auth. After that, each merge to `integration` (the staging branch)
 that touches a service redeploys only the services it affects.
+
+> **TLS ordering.** The instance is `ssl_mode = ENCRYPTED_ONLY` and services get
+> `PGSSLMODE=require`. Only images built from `integration` at or after the
+> "one Postgres connection config" change can connect under that. An older image's
+> repo-layer pool is plaintext and would be rejected. Never roll back a service
+> to an image older than that change; roll forward instead.
 
 > Health paths: Cloud Run's front end reserves request paths ending in `z`, so
 > an external `GET /healthz` returns a Google 404 before reaching the container.

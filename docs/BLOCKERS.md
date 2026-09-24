@@ -239,7 +239,7 @@ where testable so the fix PR proves itself:
         `db-job/.../eval-diarisation.js:77`, `extractor/.../youtube.js:193`.
       - Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
         Replace the grep checker with a small syntax-aware Node check + an explicit allow marker.
-- [ ] **One Postgres connection config.** `packages/db/src/db.ts` (api/billing/notifier repo layer)
+- [x] **Fixed (pg-connection-config PR):** **One Postgres connection config.** `packages/db/src/db.ts` (api/billing/notifier repo layer)
       connects **without SSL**, while the transcoder/summarizer/embedder pools force
       `ssl:{rejectUnauthorized:false}` because Cloud SQL once rejected unencrypted VPC-connector traffic
       (embedder "Bug 16"). Terraform does not set `ssl_mode`. Unify into one pool-config builder, set

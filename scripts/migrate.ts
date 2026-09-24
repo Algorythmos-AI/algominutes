@@ -12,7 +12,10 @@
  * the runner wraps the whole apply in one as well to keep
  * schema_migrations consistent).
  */
-import { Pool } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
+import pgConfigModule from '../packages/ai/src/pg-config.cjs';
+
+const pgConfig = pgConfigModule as { buildPgConfig: (opts?: { max?: number }) => PoolConfig };
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +60,8 @@ async function main() {
   if (!process.env.DATABASE_URL && !process.env.PGHOST) {
     throw new Error('Set DATABASE_URL or PGHOST/PGUSER/PGPASSWORD/PGDATABASE before running migrations.');
   }
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  // Same connection config (TLS policy) as every service pool.
+  const pool = new Pool(pgConfig.buildPgConfig({ max: 2 }));
   try {
     await ensureExtensions(pool);
     await ensureMigrationsTable(pool);
