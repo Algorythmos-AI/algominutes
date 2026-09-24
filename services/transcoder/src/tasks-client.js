@@ -14,7 +14,7 @@ function loadShared(name) {
 
 const sharedTasks = loadShared('cloud-tasks.cjs');
 
-function makeClient({ env, log, traceId }) {
+function makeClient({ env, log, traceId, uid }) {
   // Each stage enqueues to its OWN queue (the names Terraform creates). The
   // transcoder re-enqueues its own stt-poll work to the transcode queue, and
   // hands off to the summarize / embed queues. Every task carries this
@@ -31,6 +31,10 @@ function makeClient({ env, log, traceId }) {
     embedderUrl: env.EMBEDDER_URL,
   };
 
+  // The kickoff's uid rides along on every hop (self, summarize, embed), like
+  // the traceId, so every worker's logs can name the user.
+  const withUid = (payload) => (uid ? { ...(payload || {}), uid } : payload);
+
   function enqueue(payload, scheduleSeconds) {
     return sharedTasks.enqueueTask({
       projectId: cfg.projectId,
@@ -38,7 +42,7 @@ function makeClient({ env, log, traceId }) {
       queue: cfg.transcodeQueue,
       targetUrl: cfg.transcoderUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
-      payload,
+      payload: withUid(payload),
       scheduleSeconds,
       traceId,
       log,
@@ -52,7 +56,7 @@ function makeClient({ env, log, traceId }) {
       queue: cfg.summarizeQueue,
       targetUrl: cfg.summarizerUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
-      payload,
+      payload: withUid(payload),
       traceId,
       log,
     });
@@ -65,7 +69,7 @@ function makeClient({ env, log, traceId }) {
       queue: cfg.embedQueue,
       targetUrl: cfg.embedderUrl,
       oidcServiceAccount: cfg.oidcServiceAccount,
-      payload,
+      payload: withUid(payload),
       traceId,
       log,
     });
