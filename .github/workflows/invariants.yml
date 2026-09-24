@@ -36,3 +36,6 @@ jobs:
 
       - name: Migration integrity (never edit a committed migration)
         run: bash scripts/check-migrations.sh
+
+      - name: Every workspace declares the packages it imports
+        run: node scripts/check-declared-deps.mjs
