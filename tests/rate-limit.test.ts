@@ -94,3 +94,39 @@ describe('the /v1 router', () => {
     expect(routes.filter((l) => l.includes('authMiddleware'))).toEqual([]);
   });
 });
+
+// services/billing uses the same shared limiter (@algominutes/ai/rate-limit.cjs).
+describe('billing', () => {
+  it('trusts the hop count, limits every client, and wires every authed route through the per-user limit', () => {
+    const src = fs.readFileSync('services/billing/src/app.js', 'utf8');
+    expect(src).toMatch(/app\.set\('trust proxy', trustProxyHops\(\)\)/);
+    expect(src).not.toMatch(/app\.set\('trust proxy', true\)/);
+    expect(src).toMatch(/app\.use\(clientRateLimit\(\)\)/);
+    const routes = src.split('\n').filter((l) => /app\.(get|post|put|patch|delete)\('\/v1\//.test(l));
+    expect(routes.length).toBeGreaterThanOrEqual(3);
+    expect(routes.filter((l) => !l.includes('authed,'))).toEqual([]);
+    // The client limit is mounted before the raw Stripe webhook route.
+    expect(src.indexOf('app.use(clientRateLimit())')).toBeLessThan(src.indexOf("app.post('/webhooks/stripe'"));
+  });
+
+  it('the live billing app limits a client and never its health probes', async () => {
+    const saved = process.env.RATE_LIMIT_IP_PER_MIN;
+    process.env.RATE_LIMIT_IP_PER_MIN = '2';
+    try {
+      // @ts-expect-error: plain ESM module, no type declarations
+      const { buildApp } = await import('../services/billing/src/app.js');
+      const server = buildApp().listen(0);
+      servers.push(server);
+      await new Promise((r) => server.once('listening', r));
+      const { port } = server.address() as AddressInfo;
+      const status = (path: string) => fetch(`http://127.0.0.1:${port}${path}`).then((r) => r.status);
+      for (let i = 0; i < 4; i++) expect(await status('/health')).toBe(200);
+      const statuses = [];
+      for (let i = 0; i < 3; i++) statuses.push(await status('/v1/nope'));
+      expect(statuses).toEqual([404, 404, 429]);
+    } finally {
+      if (saved === undefined) delete process.env.RATE_LIMIT_IP_PER_MIN;
+      else process.env.RATE_LIMIT_IP_PER_MIN = saved;
+    }
+  });
+});

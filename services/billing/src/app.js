@@ -18,10 +18,12 @@
 
 import express from 'express';
 import helmet from 'helmet';
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 import pgConfigModule from '@algominutes/ai/pg-config.cjs';
 import { getPool } from '@algominutes/db';
 
 const { pingPool } = pgConfigModule;
+const { clientRateLimit, userRateLimit, trustProxyHops } = rateLimitModule;
 
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -54,10 +56,15 @@ export function buildApp() {
     },
   }));
 
-  // Trust the proxy so req.ip / X-Forwarded-For behave behind Cloud Run's LB.
-  app.set('trust proxy', true);
+  // Trust exactly the proxy hops in front of the service (the rightmost
+  // X-Forwarded-For entry is the one Cloud Run appended). `true` made req.ip
+  // the leftmost entry, a value the client controls.
+  app.set('trust proxy', trustProxyHops());
 
   app.use(traceMiddleware);
+  // Per client IP on everything but the health probes, including the store
+  // webhooks, which are public and signature-authenticated.
+  app.use(clientRateLimit());
 
   // ── health ── (no auth — infra probes it without an app identity) ──────
   // Cloud Run's front end reserves request paths ending in "z", so an external
@@ -90,9 +97,11 @@ export function buildApp() {
   app.post('/webhooks/google', wrap(googleWebhookRoute));
 
   // ── AUTHED client endpoints (Firebase ID token → req.uid) ───────────────
-  app.post('/v1/purchases/verify', authMiddleware, wrap(verifyPurchaseRoute));
-  app.post('/v1/billing/checkout', authMiddleware, wrap(checkoutRoute));
-  app.post('/v1/billing/portal', authMiddleware, wrap(portalRoute));
+  // Auth, then the caller's per-user budget (one limiter, shared by the three).
+  const authed = [authMiddleware, userRateLimit()];
+  app.post('/v1/purchases/verify', authed, wrap(verifyPurchaseRoute));
+  app.post('/v1/billing/checkout', authed, wrap(checkoutRoute));
+  app.post('/v1/billing/portal', authed, wrap(portalRoute));
 
   // Unmatched → JSON 404 (never an HTML error page).
   app.use((_req, res) => {
