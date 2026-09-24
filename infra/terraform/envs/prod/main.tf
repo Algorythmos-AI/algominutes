@@ -37,6 +37,12 @@ variable "db_edition" {
   type    = string
   default = "ENTERPRISE"
 }
+# Not committed (public repo). Derive at plan time:
+#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-prod \
+#     --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+variable "billing_account" {
+  type = string
+}
 
 provider "google" {
   project = var.project_id
@@ -48,8 +54,23 @@ provider "google-beta" {
   region  = var.region
 }
 
+# The Budgets API rejects user ADC without a quota project. Scope the override
+# to this alias (used only by the budget) so nothing else changes behaviour.
+provider "google" {
+  alias                 = "billing"
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
+}
+
 module "environment" {
   source = "../../modules/environment"
+  providers = {
+    google         = google
+    google-beta    = google-beta
+    google.billing = google.billing
+  }
 
   env            = "prod"
   project_id     = var.project_id
@@ -67,6 +88,11 @@ module "environment" {
   bucket_force_destroy      = false # never blow away prod buckets
 
   firestore_deletion_policy = "ABANDON"
+
+  # Placeholder until prod is provisioned (plan PR-35): set it from staging's
+  # measured gross cost plus expected traffic, and record the figure in DECISIONS.
+  billing_account = var.billing_account
+  monthly_budget  = 300
 }
 
 # Re-export module outputs at the root for convenience.

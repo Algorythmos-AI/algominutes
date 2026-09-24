@@ -36,11 +36,15 @@ done
 
 ```bash
 cd infra/terraform/envs/staging
+# Required for the per-environment budget; never committed (public repo):
+export TF_VAR_billing_account=$(gcloud billing projects describe "$(basename "$PWD" | sed 's/^/algominutes-/')" \
+  --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 terraform init                       # uses the gcs backend from step 1
 terraform plan -out=tfplan           # REVIEW the plan before applying
 terraform apply tfplan               # Cloud SQL creation takes ~10 min
 ```
-Repeat in `infra/terraform/envs/prod`. **Review each plan** — prod has `deletion_protection` on and a
+Repeat in `infra/terraform/envs/prod` (re-export `TF_VAR_billing_account` there, since the command derives the
+project from the directory name). **Review each plan** — prod has `deletion_protection` on and a
 Firestore location that is **permanent** once created.
 
 This provisions (both envs, `australia-southeast1`): APIs, a VPC + serverless connector + private services
