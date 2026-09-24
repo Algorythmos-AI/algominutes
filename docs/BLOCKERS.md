@@ -224,9 +224,26 @@ where testable so the fix PR proves itself:
       (note already `ready`, or another workspace → phantom doc). Now mirrors only when Postgres marked it
       failed or the Postgres write itself errored. Tested.
 - [ ] **Pre-existing, found by the auditors (queued):**
-      - `services/api/src/routes/process-intelligence.js:268,272,289,317` set note status directly in
-        Firestore, outside the repo layer (dual-write violation) → add `notesRepo.markQueued` and route the
-        error branches through `markError`.
+      - [x] **Fixed (process-queue tenant-boundary PR):** `process-intelligence.js` set note status
+        directly in Firestore at **six** sites (185, 197, 268, 272, 289, 317; the audit had listed four).
+        It also carried its own Postgres writer with **no workspace guard**: a caller could reset another
+        tenant's note, re-point it at their own audio and delete its `audio_chunks`, because Postgres note
+        ids are global while Firestore's are per-workspace. This was reproduced on Postgres. All of it now
+        goes through `notesRepo.markQueued` / `markError`, and the route is off the checker's allowlist.
+        Also fixed there: callers with no email claim (anonymous sign-in) got a 500 on every
+        `/v1/process`, because `users.email` is NOT NULL.
+      - [ ] **A duplicate `/v1/process` for an IN-FLIGHT note** (e.g. a client retry after a timeout)
+        re-queues it, which resets the running job and deletes its `audio_chunks`. If the duplicate is
+        rejected instead (rate limit, too large), it transiently marks the in-flight note `error`; the
+        job still finishes `ready`, because workers don't gate on status. This predates the
+        tenant-boundary fix. It needs an in-flight guard in the kickoff: a note already `queued` or
+        processing returns 202 with the current job, and never resets or errors it. Do it in PR-16
+        (idempotent kickoff).
+      - [ ] **Metering idempotency key isn't workspace-scoped** (low): `meterMinutes` uses
+        `${noteId}:ingest`, and it runs *before* markQueued's boundary check. A caller presenting another
+        tenant's note id is refused, but the meter call has already deduped against (or pre-claimed) that
+        tenant's key. No data is exposed, but it's a billing edge. Scope the key by workspace, or run the
+        boundary check first, in the metering PR (PR-16).
       - [x] **Fixed (migrate-before-rollout PR):** db-job now uses `logger.child(...)`; the dead
         `backfill-pr-d` dispatch entry (no handler file) is gone. Was: **db-job's logger is always the fallback:** it calls `logger.cjs .forContext(...)`, which doesn't
         exist, so every run uses an ad-hoc stdout logger that writes `level` instead of `severity` (Cloud

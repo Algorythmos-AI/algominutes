@@ -46,6 +46,18 @@ export interface MarkErrorInput {
   errorMessage: string;
 }
 
+export interface MarkQueuedInput {
+  noteId: string;
+  workspaceId: string;
+  authorUid: string;
+  authorEmail?: string | null;
+  authorName?: string | null;
+  sourceType: string;
+  storagePath?: string | null;
+  sourceUrl?: string | null;
+  mimeType?: string | null;
+}
+
 export interface NoteEditSummary {
   gist: string;
   actionItems: string[];
@@ -80,6 +92,50 @@ export class WorkspaceBoundaryError extends Error {
   }
 }
 
+/**
+ * The caller may write into `workspaceId` only if it is a brand-new workspace
+ * (bootstrapped here with the caller as owner), or the caller is already a
+ * member of it. A workspace row whose owner_uid is the caller but which is
+ * missing the owner's membership row (legacy backfill) is healed. Anyone else
+ * gets a WorkspaceBoundaryError: never add a stranger to an existing workspace.
+ */
+async function ensureWorkspaceAccess(
+  client: import('pg').PoolClient,
+  workspaceId: string,
+  uid: string,
+  name: string,
+): Promise<void> {
+  const created = await client.query(
+    `INSERT INTO workspaces (id, owner_uid, name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+    [workspaceId, uid, name],
+  );
+  if (created.rowCount) {
+    await client.query(
+      `INSERT INTO workspace_members (workspace_id, uid, role) VALUES ($1, $2, 'owner')`,
+      [workspaceId, uid],
+    );
+    return;
+  }
+  const member = await client.query('SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND uid = $2', [
+    workspaceId,
+    uid,
+  ]);
+  if (member.rowCount) return;
+  const healed = await client.query(
+    `INSERT INTO workspace_members (workspace_id, uid, role)
+       SELECT id, owner_uid, 'owner' FROM workspaces WHERE id = $1 AND owner_uid = $2
+       ON CONFLICT (workspace_id, uid) DO NOTHING
+       RETURNING uid`,
+    [workspaceId, uid],
+  );
+  if (!healed.rowCount) {
+    throw new WorkspaceBoundaryError(`${uid} is not a member of workspace ${workspaceId}`);
+  }
+}
+
 async function upsertCoreToPostgres(
   input: MarkReadyInput,
   log: { error: (o: any, m?: string) => void },
@@ -98,32 +154,9 @@ async function upsertCoreToPostgres(
       [input.authorUid, `${input.authorUid}@firebase.local`],
     );
     // Bootstrap a brand-new workspace with the author as owner, but NEVER add
-    // the author to a workspace that already exists: an existing workspace
-    // only accepts writes from someone who is already a member. (Previously
-    // this inserted the membership unconditionally, so a mismatched
-    // (workspaceId, authorUid) pair made the author an OWNER of someone else's
-    // workspace — pinned in tests/integration/tenant-isolation.test.ts.)
-    const created = await client.query(
-      `INSERT INTO workspaces (id, owner_uid, name)
-         VALUES ($1, $2, 'My Workspace')
-         ON CONFLICT (id) DO NOTHING
-         RETURNING id`,
-      [input.workspaceId, input.authorUid],
-    );
-    if (created.rowCount) {
-      await client.query(
-        `INSERT INTO workspace_members (workspace_id, uid, role) VALUES ($1, $2, 'owner')`,
-        [input.workspaceId, input.authorUid],
-      );
-    } else {
-      const member = await client.query(
-        'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND uid = $2',
-        [input.workspaceId, input.authorUid],
-      );
-      if (!member.rowCount) {
-        throw new WorkspaceBoundaryError(`author is not a member of workspace ${input.workspaceId}`);
-      }
-    }
+    // the author to a workspace that already exists unless they are already a
+    // member (pinned in tests/integration/tenant-isolation.test.ts).
+    await ensureWorkspaceAccess(client, input.workspaceId, input.authorUid, 'My Workspace');
 
     const noteRow = await client.query(
       `INSERT INTO notes (
@@ -196,6 +229,93 @@ async function upsertCoreToPostgres(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Queue a note for processing (POST /v1/process). Postgres first (system of
+ * record), then the Firestore 'queued' mirror.
+ *
+ * Tenant boundary: Firestore note ids are scoped per workspace, but
+ * Postgres notes.id is GLOBAL. So a caller can create a Firestore doc in their
+ * own workspace whose id collides with another tenant's note. The upsert
+ * therefore only updates an existing row in the SAME workspace; otherwise it
+ * throws WorkspaceBoundaryError and touches nothing. (Previously this SQL lived
+ * in the api route with no such guard: another tenant's note was reset,
+ * re-pointed at the caller's audio, and its audio_chunks deleted. The
+ * regression test is in tests/integration/tenant-isolation.test.ts.)
+ *
+ * A re-queue of the caller's own note is a fresh start: processing counters
+ * are reset and the previous run's audio_chunks are deleted in the same
+ * transaction.
+ */
+export async function markQueued(
+  firestore: Firestore,
+  input: MarkQueuedInput,
+  log: { error: (o: any, m?: string) => void },
+): Promise<void> {
+  if (isPostgresEnabled()) {
+    await withTx(
+      async (client) => {
+        // users.email is NOT NULL, and Postgres enforces that while forming the
+        // row, before ON CONFLICT. A caller with no email claim (anonymous
+        // sign-in) therefore needs the same placeholder markReady uses; a real
+        // email, when present, always wins and is never overwritten by it.
+        await client.query(
+          `INSERT INTO users (uid, email, display_name)
+             VALUES ($1, COALESCE($2::text, $1 || '@firebase.local'), $3)
+           ON CONFLICT (uid) DO UPDATE SET
+             email        = COALESCE($2::text, users.email),
+             display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
+          [input.authorUid, input.authorEmail || null, input.authorName || null],
+        );
+        await ensureWorkspaceAccess(
+          client,
+          input.workspaceId,
+          input.authorUid,
+          input.authorName ? `${input.authorName}'s Workspace` : 'My Workspace',
+        );
+        const noteRow = await client.query(
+          `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, storage_path, source_url, mime_type)
+             VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7)
+           ON CONFLICT (id) DO UPDATE SET
+             status = 'queued',
+             source_type = EXCLUDED.source_type,
+             storage_path = COALESCE(EXCLUDED.storage_path, notes.storage_path),
+             source_url   = COALESCE(EXCLUDED.source_url, notes.source_url),
+             mime_type    = COALESCE(EXCLUDED.mime_type, notes.mime_type),
+             summarizer_enqueued_at = NULL,
+             embedder_enqueued_at = NULL,
+             chunks_done = 0,
+             chunks_total = NULL,
+             duration_sec_probed = NULL,
+             error_message = NULL,
+             updated_at = NOW()
+           -- An existing note id in ANOTHER workspace must never be touched.
+           WHERE notes.workspace_id = EXCLUDED.workspace_id
+           RETURNING id`,
+          [
+            input.noteId,
+            input.workspaceId,
+            input.authorUid,
+            input.sourceType,
+            input.storagePath || null,
+            input.sourceUrl || null,
+            input.mimeType || null,
+          ],
+        );
+        if (!noteRow.rowCount) {
+          throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
+        }
+        // Safe only after the boundary check above, in the same transaction.
+        await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
+      },
+      { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
+    );
+  }
+
+  await firestore
+    .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
+    .set({ status: 'queued', updatedAt: ISO_NOW() }, { merge: true });
 }
 
 /**
