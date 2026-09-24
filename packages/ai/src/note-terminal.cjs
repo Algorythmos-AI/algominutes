@@ -47,38 +47,50 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   }
 
   let pgOk = false;
+  let pgErrored = false;
   try {
     const client = await pool.connect();
     try {
       const { rowCount } = await client.query(
+        // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a
+        // note id from another workspace matches nothing.
         `UPDATE notes SET status = 'error', error_message = $2, updated_at = NOW()
-          WHERE id = $1 AND status <> 'ready'`,
-        [noteId, message],
+          WHERE id = $1 AND workspace_id = $3 AND status <> 'ready'`,
+        [noteId, message, workspaceId],
       );
       pgOk = rowCount > 0;
     } finally {
       client.release();
     }
   } catch (err) {
+    pgErrored = true;
     log.error({ err, noteId, workspaceId }, `${name}_pg_failed`);
   }
 
+  // Mirror to Firestore only if Postgres agrees the note is now failed, or if
+  // the Postgres write itself errored (the user must still see the failure).
+  // When the UPDATE succeeded but matched no row, the note is already 'ready'
+  // or belongs to another workspace — writing 'error' here would contradict
+  // the system of record or create a phantom doc under the wrong workspace.
+  const shouldMirror = pgOk || pgErrored;
   let mirrorOk = false;
-  try {
-    await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).set(
-      { status: 'error', errorMessage: message, updatedAt: new Date().toISOString() },
-      { merge: true },
-    );
-    mirrorOk = true;
-  } catch (err) {
-    log.error({ err, noteId, workspaceId }, `${name}_mirror_failed`);
+  if (shouldMirror) {
+    try {
+      await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).set(
+        { status: 'error', errorMessage: message, updatedAt: new Date().toISOString() },
+        { merge: true },
+      );
+      mirrorOk = true;
+    } catch (err) {
+      log.error({ err, noteId, workspaceId }, `${name}_mirror_failed`);
+    }
   }
 
   // One line per terminal failure, with a stable event name, because this is
   // what the alerting in the runbook counts. Emitted whether or not the writes
   // landed — a note that failed and could not even be marked failed is the
   // worst case, not one to stay quiet about.
-  log.error({ noteId, workspaceId, pgOk, mirrorOk, reason: message }, 'note_failed');
+  log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };

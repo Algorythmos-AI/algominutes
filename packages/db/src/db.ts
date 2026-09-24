@@ -11,6 +11,10 @@
  *   WRITE_POSTGRES                — 'true' to enable dual-write paths
  */
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
+import loggerModule from '@algominutes/ai/logger.cjs';
+
+// Structured logger (CLAUDE.md §1 Logging) — never console.*.
+const log = (loggerModule as { logger: { error: (o: unknown, m?: string) => void } }).logger;
 
 let pool: Pool | null = null;
 
@@ -38,8 +42,7 @@ export function getPool(): Pool {
     pool = new Pool(buildConfig());
     pool.on('error', (err) => {
       // Don't crash the process on a stale idle client; pg-pool reconnects.
-      // eslint-disable-next-line no-console
-      console.error(JSON.stringify({ severity: 'ERROR', msg: 'pg_pool_error', err: { message: err.message } }));
+      log.error({ err }, 'pg_pool_error');
     });
   }
   return pool;
@@ -54,7 +57,9 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise
     await client.query('COMMIT');
     return out;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    await client
+      .query('ROLLBACK')
+      .catch((rollbackErr) => log.error({ err: rollbackErr }, 'pg_rollback_failed'));
     throw err;
   } finally {
     client.release();
