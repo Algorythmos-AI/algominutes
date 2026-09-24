@@ -23,10 +23,6 @@ updates:
       # all 7 services. It is a planned migration (BLOCKERS), not a weekly bump.
       - dependency-name: express
         update-types: ['version-update:semver-major']
-      # Only user: services/api's synchronous process-audio route, which plan
-      # PR-16 retires. The dependency leaves with it; no point migrating a major.
-      - dependency-name: '@google/genai'
-        update-types: ['version-update:semver-major']
       # apps/web toolchain: @vitejs/plugin-react 6 requires vite 8 (we are on 6).
       # Vite majors move together as one planned web-toolchain migration.
       - dependency-name: vite
