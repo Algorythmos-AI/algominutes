@@ -37,5 +37,8 @@ jobs:
       - name: Migration integrity (never edit a committed migration)
         run: bash scripts/check-migrations.sh
 
+      - name: New migrations are expand-only, or marked contract steps
+        run: node scripts/check-migration-expand.mjs
+
       - name: Every workspace declares the packages it imports
         run: node scripts/check-declared-deps.mjs

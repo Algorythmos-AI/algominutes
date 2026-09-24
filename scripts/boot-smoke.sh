@@ -40,11 +40,24 @@ if [ "$svc" = "db-job" ]; then
   code=$?
   set -e
   echo "$out" | tail -20
-  if [ "$code" -eq 64 ] && echo "$out" | grep -q job_name_unknown; then
-    echo "boot-smoke $svc: ok (loaded, rejected unknown job with exit 64)"
+  if ! { [ "$code" -eq 64 ] && echo "$out" | grep -q job_name_unknown; }; then
+    echo "boot-smoke $svc: FAILED (exit $code)"
+    exit 1
+  fi
+  # The deploy runs JOB_NAME=migrate before every rollout. Prove, without a
+  # database, that the image resolves the migrator and ships its migrations:
+  # a deliberately wrong expected head must fail on the head check, naming
+  # the newest migration baked into the image.
+  set +e
+  out=$(docker run --rm "${env_args[@]}" -e JOB_NAME=migrate -e EXPECTED_MIGRATION_HEAD=__boot_smoke__ "$image" 2>&1)
+  code=$?
+  set -e
+  echo "$out" | tail -5
+  if [ "$code" -eq 1 ] && echo "$out" | grep -qE 'head mismatch: this image ships [0-9]{3}_'; then
+    echo "boot-smoke $svc: ok (unknown job -> 64; migrate handler loads and sees its migrations)"
     exit 0
   fi
-  echo "boot-smoke $svc: FAILED (exit $code)"
+  echo "boot-smoke $svc: FAILED migrate probe (exit $code)"
   exit 1
 fi
 

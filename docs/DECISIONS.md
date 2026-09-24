@@ -3,6 +3,47 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Migrations run inside the VPC before every rollout (2026-09-24, PR-08b)
+
+Migrations were run by hand from a laptop over the Auth Proxy. Nothing ran them
+on deploy, so a merged migration (013, 014…) would never reach staging, while
+code that depends on it would.
+
+- **Order: build → migrate → rollout → smoke** (`deploy-staging.yml`). Every image
+  is built first. db-job is pointed at this commit's image, runs `JOB_NAME=migrate`
+  inside the VPC, and must succeed before any service image rolls out. Any deploy
+  rebuilds db-job, so migrate never runs an older schema. A failed migrate leaves
+  every service on its previous image.
+- **Safe only because new migrations are expand-only, and that is now enforced.**
+  BUILD-PLAN §4.4 is expand/contract, and `006` already drops a column and sets
+  NOT NULL. Run before rollout, a contract step would break the images still
+  serving. The dual-write auditor caught that this safety claim had nothing
+  behind it. `scripts/check-migration-expand.mjs` (invariants CI) fails a *new*
+  migration that does any of the following, unless it carries
+  `-- contract: <why the serving code is compatible>`, i.e. the code that
+  stopped depending on the old shape already shipped:
+  - drop, rename or SET NOT NULL;
+  - change a column type;
+  - add a NOT NULL column without a DEFAULT;
+  - add a constraint or unique index to an existing table.
+
+  Its classifier is pinned by a test on the real history, which flags exactly
+  002, 006 and 009.
+- **One runner** (`packages/db/src/migrator.ts`) is shared by the CLI, the
+  integration harness and the job. Its properties, each covered by an integration
+  test and a mutation check:
+  - an advisory lock serializes overlapping runs;
+  - bookkeeping is atomic with the DDL;
+  - `lock_timeout` 15s stops DDL queueing behind live traffic;
+  - sha256 drift detection refuses edited history;
+  - `EXPECTED_MIGRATION_HEAD` must match the image, and the head is read back
+    from `schema_migrations` afterwards.
+- **"Smoke asserts schema at head"** is enforced by the migrate job itself, from
+  inside the VPC. GitHub has no route to the private-IP instance, and exposing
+  the schema version on a public endpoint buys nothing.
+- **Cost:** one Cloud Run Job execution per deploy (seconds of vCPU) plus one db-job
+  image build (cached).
+
 ## One Postgres connection config; Cloud SQL is ENCRYPTED_ONLY (2026-09-24)
 
 Six pools (repo layer, api read path, transcoder, summarizer, embedder, migrations) each built their own
