@@ -78,6 +78,7 @@ export async function processIntelligenceRoute(req, res) {
       return res.status(400).json({ error: 'Invalid sourceUrl' });
     }
     let parsedHost = '';
+    // silent-catch-ok: an unparseable URL is the client's input error, answered with a 400.
     try { parsedHost = new URL(sourceUrl).host; } catch { return res.status(400).json({ error: 'Invalid sourceUrl' }); }
     const allowedHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be']);
     if (!allowedHosts.has(parsedHost)) return res.status(400).json({ error: 'URL host not allowed' });

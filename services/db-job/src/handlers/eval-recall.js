@@ -78,6 +78,7 @@ async function run({ log, traceId, env }) {
     path.join(__dirname, '../../../evals/queries.jsonl'),
     '/app/evals/queries.jsonl',
   ];
+  // silent-catch-ok: existence probe over candidate paths; none found throws just below.
   const queriesPath = candidates.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } });
   if (!queriesPath) throw new Error(`evals/queries.jsonl not found; checked: ${candidates.join(', ')}`);
   log.info({ traceId, queriesPath }, 'eval_recall_loading_queries');
