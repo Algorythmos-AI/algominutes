@@ -6,7 +6,10 @@ import { createRequire } from 'node:module';
 // pointed at the same DATABASE_URL — and all built by the ONE shared config, so
 // the suite honours PGSSLMODE exactly like production.
 const { buildPgConfig } = createRequire(import.meta.url)('@algominutes/ai/pg-config.cjs');
-export const pool = new pg.Pool(buildPgConfig({ max: 4 }));
+// The fixture pool is the test's own, not a service's: exempt from a service
+// connection budget (PG_POOL_MAX), so a test run with one caps only the code under test.
+const { PG_POOL_MAX: _serviceBudget, ...fixtureEnv } = process.env;
+export const pool = new pg.Pool(buildPgConfig({ max: 4 }, fixtureEnv));
 
 // Tables that are seeded by migrations and must survive a reset.
 const KEEP = new Set(['schema_migrations', 'plans']);

@@ -116,7 +116,9 @@ resource "google_cloud_run_v2_service" "services" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = var.cloud_run_max_instances
+      # From the connection budget, so max instances x pools x PG_POOL_MAX fits
+      # the database (connection-budget.json). Also the cost guard.
+      max_instance_count = var.connection_budget.services[each.key].max_instances
     }
 
     vpc_access {
@@ -140,9 +142,13 @@ resource "google_cloud_run_v2_service" "services" {
         container_port = 8080
       }
 
-      # Plain env: common + per-service overrides.
+      # Plain env: common + per-service overrides (+ the pool cap for DB services).
       dynamic "env" {
-        for_each = merge(local.common_env, local.service_env[each.key])
+        for_each = merge(
+          local.common_env,
+          local.service_env[each.key],
+          contains(local.db_services, each.key) ? { PG_POOL_MAX = tostring(var.connection_budget.services[each.key].pool_max) } : {},
+        )
         content {
           name  = env.key
           value = env.value
@@ -206,7 +212,7 @@ resource "google_cloud_run_v2_job" "db_job" {
           limits = { cpu = "1", memory = "1Gi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env)
+          for_each = merge(local.common_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
           content {
             name  = env.key
             value = env.value

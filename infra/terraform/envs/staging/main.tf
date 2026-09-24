@@ -78,6 +78,7 @@ module "environment" {
 
   # Smallest viable tiers. db-f1-micro is shared-core → requires ENTERPRISE
   # edition (set in tfvars); ENTERPRISE_PLUS rejects it.
+  connection_budget         = jsondecode(file("${path.module}/connection-budget.json"))
   db_tier                   = "db-f1-micro"
   db_edition                = var.db_edition
   db_disk_size_gb           = 10

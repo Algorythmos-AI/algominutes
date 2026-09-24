@@ -149,6 +149,19 @@ resource "google_sql_database_instance" "pg" {
     google_project_service.apis,
   ]
 
+  lifecycle {
+    # The services can never open more connections than the tier allows
+    # (connection-budget.json; docs/DECISIONS.md).
+    precondition {
+      condition     = var.connection_budget.tier == var.db_tier
+      error_message = "connection-budget.json is for tier ${var.connection_budget.tier}, but db_tier is ${var.db_tier}."
+    }
+    precondition {
+      condition     = local.connection_worst_case <= var.connection_budget.max_connections - var.connection_budget.reserved - var.connection_budget.operator_headroom
+      error_message = "Connection budget exceeded: the services' worst case (${local.connection_worst_case}) is over the tier's usable connections."
+    }
+  }
+
   settings {
     tier = var.db_tier
     # Google now defaults new Postgres instances to ENTERPRISE_PLUS, which
@@ -243,6 +256,13 @@ resource "google_secret_manager_secret_version" "db_password" {
 # ---------------------------------------------------------------------------
 locals {
   bucket_suffixes = ["recordings", "imports", "scans"]
+
+  # Worst-case Postgres connections: every service at max instances with every
+  # pool full, plus each job (connection-budget.json).
+  connection_worst_case = sum(concat(
+    [for s in values(var.connection_budget.services) : s.max_instances * s.pools * s.pool_max],
+    [for j in values(var.connection_budget.jobs) : j.connections],
+  ))
 }
 
 resource "google_storage_bucket" "buckets" {
