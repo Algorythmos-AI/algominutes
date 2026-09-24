@@ -28,15 +28,21 @@ queues with `max_attempts = 5`.
 
 ```bash
 cd infra/terraform/envs/staging
+# The billing account ID is required (for the budget) but never committed:
+export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-staging \
+  --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 terraform init                                  # real GCS backend this time
 terraform plan  -var-file=terraform.tfvars -out plan.out   # RECORD this output
 terraform apply plan.out
 ```
 
+Creating the budget needs `billing.budgets.create` on the billing account
+(Billing Account Administrator or Costs Manager); the account owner has it.
+
 Expected in the plan: `google_vpc_access_connector` **created** (deleted at
 pause); `google_sql_database_instance … activation_policy = "ALWAYS"`; the
 `google_cloud_run_v2_service` ×7, `google_cloud_run_v2_job.db_job`, the WIF
-pool/provider, and the `gha-deployer` SA all **created**.
+pool/provider, the `gha-deployer` SA, and `google_billing_budget.env` all **created**.
 
 > Note the `*_URL` envs use Cloud Run's deterministic hostname
 > `https://SERVICE-PROJECTNUMBER.REGION.run.app`. After apply, confirm the real
@@ -106,6 +112,37 @@ that touches a service redeploys only the services it affects.
 > Health paths: Cloud Run's front end reserves request paths ending in `z`, so
 > an external `GET /healthz` returns a Google 404 before reaching the container.
 > Probe `/health` from outside.
+
+## Budget alerts and the end of the free trial (14 Nov 2026)
+
+Terraform creates a monthly budget for the project (`budget.tf`): **A$100 of gross
+cost, with credits excluded**. It measures what the trial credit is paying for,
+which is also what staging will cost once billing is paid. Billing account admins
+get an email:
+
+- at 50%, 90% and 100% of actual spend;
+- when the month is *forecast* to pass 100%.
+
+On the trial the invoice stays $0, so these emails are the only signal that the
+credit is burning.
+
+| Alert | Likely cause | Do |
+|---|---|---|
+| 50% early in the month | something left running (a Cloud Run min-instance, a load test, NAT turned on) | check Billing → Reports grouped by SKU; fix or pause |
+| forecast 100% | steady spend above plan | raise `monthly_budget` deliberately, or cut |
+| 100% | over budget | pause (below) unless it's expected |
+
+**Before 14 Nov**, decide one of the following and record it in `docs/DECISIONS.md`:
+
+1. **Upgrade to a paid billing account** and keep staging running. Idle staging is
+   Cloud SQL `db-f1-micro` plus the 2-instance VPC connector; the budget reports
+   show the real monthly figure.
+2. **Pause** (next section) and resume when needed.
+
+Under Google's free-trial terms, resources on a trial that ends without an upgrade
+are stopped, and are deleted if you still don't upgrade within the grace period.
+Check the current wording on the Billing page. Do not let the date pass
+undecided.
 
 ## Pausing again (cost control)
 
