@@ -16,14 +16,11 @@ PATTERNS=(
   'catch\s*\(\s*_[a-zA-Z0-9_]*\s*\)\s*\{\s*\}'
   'catch\s*\{\s*\}'
 )
+# Server + shared code is checked syntax-aware by check-no-silent-catch.mjs
+# (run at the end). These one-line grep rules remain only for apps/web/src,
+# until its own cleanup brings it under the AST gate (BLOCKERS).
 TARGETS=(
-  "$ROOT/functions"
-  "$ROOT/services/api"
-  "$ROOT/packages/ai"
-  "$ROOT/packages/db"
-  "$ROOT/services"
   "$ROOT/apps/web/src"
-  "$ROOT/scripts"
 )
 
 found=0
@@ -38,7 +35,10 @@ done
 
 if [ "$found" -ne 0 ]; then
   echo
-  echo "ERROR: Silent catch handlers detected. Replace with logger.error(...)."
+  echo "ERROR: Silent catch handlers detected in apps/web/src. Replace with logger.error(...)."
   exit 1
 fi
-echo "OK: no silent catch handlers."
+echo "OK: no one-line silent catch handlers in apps/web/src."
+
+# Server + shared code: syntax-aware (needs `typescript` from npm ci).
+cd "$ROOT" && node scripts/check-no-silent-catch.mjs

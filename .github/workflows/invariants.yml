@@ -19,7 +19,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: No silent catch handlers
+      # The silent-catch gate parses code with the TypeScript compiler.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: No silent catch handlers (syntax-aware)
         run: bash scripts/check-no-silent-catch.sh
 
       - name: No public @google/generative-ai imports in services

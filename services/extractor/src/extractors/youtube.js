@@ -36,7 +36,7 @@ function validateYoutubeUrl(rawUrl) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
-  } catch (err) {
+  } catch { // silent-catch-ok: an unparseable URL is invalid input, reported as such
     return { ok: false, reason: 'invalid_url' };
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
