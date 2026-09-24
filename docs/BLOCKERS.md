@@ -279,6 +279,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   October 2026. Move all 8 service images together, run the boot smoke plus a staging
   deploy, and update `engines`. Never move to an odd major: Dependabot proposed
   `node:25`, which is already EOL (#20, declined).
+- [ ] **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6
+  requires vite ^8). Do it in one apps/web PR, together with the tesseract-asset build
+  fix above and a web-build CI job, so the result is actually verified.
+- [ ] **`@google/genai` 1 → 2** (#29 declined): its only user is
+  `services/api/src/routes/process-audio.js`, the synchronous route plan PR-16 retires.
+  Delete the dependency with that route; don't migrate it.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
