@@ -25,6 +25,16 @@ jobs:
         run: npm test
       - name: Unit tests (node:test suites)
         run: npm run test:node
+      # The committed OpenAPI spec is what the iOS/Android/web clients are
+      # generated from, so it must be exactly what the zod source produces.
+      # Regeneration is deterministic; any diff means a stale spec.
+      - name: OpenAPI spec matches its zod source (no drift)
+        run: |
+          npm run openapi -w @algominutes/contracts
+          if ! git diff --exit-code -- packages/contracts/openapi/; then
+            echo "::error::packages/contracts/openapi/openapi.v1.json is stale. Run: npm run openapi -w @algominutes/contracts, and commit the result."
+            exit 1
+          fi
 
   # Integration tests against a REAL Postgres 16 + pgvector (never mocked):
   # migrations apply on a real server, replay idempotency, PII-before-storage,
