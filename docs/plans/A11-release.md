@@ -51,7 +51,7 @@ If the repo goes private, macOS tests move to Xcode Cloud hours or paid minutes.
 ## Human-only prerequisites (critical path, in order)
 
 1. **Free disk space:** delete `~/Library/Developer/Xcode/DerivedData`, run `xcrun simctl delete unavailable`, and `docker system prune` when your other containers are idle.
-2. **Staging:** `terraform plan` as `gcp-admin@algorythmos.com` → paste it to me → apply. Then set the repo variables (runbook §3).
+2. **Staging:** `terraform plan` as `algorythmos.france@gmail.com` (primary working account) → paste it to me → apply. Then set the repo variables (runbook §3).
 3. **Firebase (staging):**
    - register the iOS app;
    - enable Apple/Google/anonymous sign-in;

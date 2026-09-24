@@ -1,21 +1,23 @@
 # Runbook — resume staging and stand up Cloud Run
 
-> Prereq: you must be `gcp-admin@algorythmos.com`. The Terraform state bucket
-> (`gs://algominutes-staging-tfstate`) denies `skalaliya@gmail.com`, so ADC must
-> be the admin account or every `plan`/`apply` fails with a 403.
+> Prereq: you act as **`algorythmos.france@gmail.com`**, the primary working account
+> (Owner on the project, Billing Account Administrator). Terraform authenticates with a
+> short-lived token from that account, so your default gcloud account and ADC stay untouched.
 
 This runbook un-pauses `algominutes-staging` (paused 2026-08-27, see
 `docs/DECISIONS.md`) and brings the backend up for the first time, using the
-Terraform added in PR-06. **It resumes billing against the A$431 trial credit
-(expires 14 Nov 2026).**
+Terraform added in PR-06. The billing account is a **full (paid) account**. The
+A$431 credit is spent first (it expires 2026-11-14), then pay-as-you-go.
 
-## 0. Authenticate as the admin
+## 0. Authenticate as the primary account
 
 ```bash
-gcloud auth application-default login   # choose gcp-admin@algorythmos.com
-gcloud config set account gcp-admin@algorythmos.com
-gcloud config set project algominutes-staging
+gcloud auth login algorythmos.france@gmail.com --no-activate   # once per machine
+export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token --account=algorythmos.france@gmail.com)
 ```
+
+The token lasts about an hour; re-export it if a session runs longer. Every
+`gcloud` command below takes `--account=algorythmos.france@gmail.com`.
 
 ## 1. Terraform apply (resumes staging + creates Cloud Run)
 
@@ -30,7 +32,7 @@ queues with `max_attempts = 5`.
 cd infra/terraform/envs/staging
 # The billing account ID is required (for the budget) but never committed:
 export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-staging \
-  --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+  --account=algorythmos.france@gmail.com --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 terraform init                                  # real GCS backend this time
 terraform plan  -var-file=terraform.tfvars -out plan.out   # RECORD this output
 terraform apply plan.out
@@ -141,17 +143,10 @@ credit is burning.
 | forecast 100% | steady spend above plan | raise `monthly_budget` deliberately, or cut |
 | 100% | over budget | pause (below) unless it's expected |
 
-**Before 14 Nov**, decide one of the following and record it in `docs/DECISIONS.md`:
-
-1. **Upgrade to a paid billing account** and keep staging running. Idle staging is
-   Cloud SQL `db-f1-micro` plus the 2-instance VPC connector; the budget reports
-   show the real monthly figure.
-2. **Pause** (next section) and resume when needed.
-
-Under Google's free-trial terms, resources on a trial that ends without an upgrade
-are stopped, and are deleted if you still don't upgrade within the grace period.
-Check the current wording on the Billing page. Do not let the date pass
-undecided.
+**Trial end: decided.** The billing account was upgraded to a full (paid) account
+(2026-09-25). Remaining credit is spent first until 2026-11-14, then usage is
+billed pay-as-you-go. Nothing stops on 14 Nov. The budget alerts above are
+what watch the spend. To stop spend, pause (below).
 
 ## Pausing again (cost control)
 

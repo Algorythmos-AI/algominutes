@@ -16,7 +16,7 @@ run; each item has a safe reversible default already applied. Grouped by type.
 
 **Staging: ✅ DONE** — `terraform apply` live (111 resources), Firebase enabled (Blaze), Google sign-in on,
 Web + Android apps registered, `apps/web/.env` + `apps/android/app/google-services.json` wired (both
-git-ignored). **Prod: ⏳ pending.** Remaining, all from a `gcp-admin@algorythmos.com` shell:
+git-ignored). **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
 
 - [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
       `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).

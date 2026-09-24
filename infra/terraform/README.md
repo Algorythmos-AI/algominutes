@@ -30,7 +30,7 @@ infra/terraform/
 ## Prerequisites
 
 - Terraform >= 1.9.
-- A shell authenticated as **`gcp-admin@algorythmos.com`** with Owner on the
+- A shell authenticated as **`algorythmos.france@gmail.com`** (primary working account) with Owner on the
   target project:
   `gcloud auth application-default login`
 - Both projects already exist and are billing-linked (see
