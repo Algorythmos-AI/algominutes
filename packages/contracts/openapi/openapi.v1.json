@@ -1311,7 +1311,7 @@
   "paths": {
     "/v1/health": {
       "get": {
-        "summary": "Liveness probe.",
+        "summary": "Liveness probe (never touches the database).",
         "tags": [
           "system"
         ],
@@ -1323,12 +1323,81 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "ok": {
-                      "type": "boolean"
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
                     }
                   },
                   "required": [
-                    "ok"
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "summary": "Readiness probe: proves the service can reach Postgres (post-deploy smoke).",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Postgres reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    },
+                    "db": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "db"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "degraded"
+                      ]
+                    },
+                    "db": {
+                      "type": "string",
+                      "enum": [
+                        "unreachable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "db"
                   ]
                 }
               }

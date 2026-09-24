@@ -17,43 +17,17 @@
 //   - functions/search-and-chat.cjs  handleSearch / handleChatStream
 //   - functions/note-read.cjs        handleNoteRead
 //
-// Known gap: the pool's 'error' event — emitted when an *idle* client dies,
-// e.g. Cloud SQL maintenance, failover, pg_terminate_backend, or a NAT flow
-// reset — is not logged. Errors on *in-flight* queries surface normally
-// through withQueryTimeout, so no user-facing failure is hidden; what is
-// lost is the leading indicator for connection churn.
-//
-// It is deferred, not blocked. shared/logger.cjs is a request-context-free
-// singleton sitting in this same directory, so the fix is two lines; it is
-// held back only so the extraction stayed a pure move. Tracked as follow-up
-// work rather than an open-ended TODO (discipline rule 8: known issues stay
-// visible).
+// The pool's 'error' event (an idle client dying) is logged via the shared
+// attachPoolErrorLogger — formerly an empty handler, now closed.
+
+const { buildPgConfig, attachPoolErrorLogger } = require('./pg-config.cjs');
+const { logger } = require('./logger.cjs');
 
 let _pool = null;
 function pool() {
   if (_pool) return _pool;
   const { Pool } = require('pg');
-  const ssl = { rejectUnauthorized: false };
-  _pool = new Pool(
-    process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, ssl, max: 10, idleTimeoutMillis: 30000 }
-      : {
-          host: process.env.PGHOST,
-          port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-          database: process.env.PGDATABASE || 'postgres',
-          user: process.env.PGUSER || 'postgres',
-          password: process.env.PGPASSWORD,
-          ssl,
-          max: 10,
-          idleTimeoutMillis: 30000,
-        },
-  );
-  // Required, not optional: pg.Pool emits 'error' when an *idle* client dies
-  // and with no listener EventEmitter rethrows, killing the instance. The
-  // empty body is the known gap described in the header — note that "logged
-  // at use site" would be wrong here, because use-site logging covers
-  // in-flight queries and this event fires precisely when there is none.
-  _pool.on('error', () => { /* see header: idle-client errors are not logged yet */ });
+  _pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 10 })), logger, { pool: 'api-read' });
   return _pool;
 }
 
