@@ -6,7 +6,9 @@ const MAX_AUDIO_BYTES = 500 * 1024 * 1024;
 const RATE_LIMIT_PER_HOUR = 20;
 const MAX_BYTES_PER_HOUR = 1024 * 1024 * 1024;
 const RETRY_DEADLINE_MS = 240_000;
-const MODEL_LADDER = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+// Model ids live in models.cjs (lifecycle + region facts); this re-export keeps
+// existing importers working.
+const MODEL_LADDER = require('./models.cjs').LADDER;
 
 function resolveGeminiAudioMime(hint, storagePath) {
   const raw = (hint || '').toLowerCase();

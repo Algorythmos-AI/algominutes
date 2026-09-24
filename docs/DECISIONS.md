@@ -3,6 +3,48 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Gemini models: one registry, Sydney-only, gemini-3.5-flash first (2026-09-24, PR-10)
+
+The ladder was `gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash`. Per Google's
+official lifecycle table (checked today):
+- **1.5-flash retired on 2025-09-24** and **2.0-flash on 2026-06-01**;
+- **2.5-flash retires on 2026-10-20**.
+
+Worse, a 404 was treated as non-transient, so the ladder never fell through a
+retired rung: today it is effectively one model, and after 2026-10-20 every summary
+and transcript fast path would fail.
+
+- **Data residency decides the model.** Everything runs in australia-southeast1,
+  for both availability and ML processing (A4). Google's locations table serves
+  only **gemini-3.5-flash** and gemini-2.5-flash in Sydney among current Flash
+  models. None of 3.6, 3.7 or 3.8-flash, nor any flash-lite, is served there,
+  including Google's own recommended successor for 2.5-flash
+  (`gemini-3.1-flash-lite`). So the ladder is `gemini-3.5-flash → gemini-2.5-flash`.
+  3.5-flash is GA, supported to 2027-05-19 or later, with structured output, audio
+  input and 65,536 max output tokens. 2.5-flash drops out automatically on
+  2026-10-20; the ladder is filtered by date at call time.
+  **Using a newer model means relaxing residency (a global or other-region
+  endpoint). That is an owner decision, not a code change.**
+- **`packages/ai/src/models.cjs` is the only place model ids live.** It holds the
+  lifecycle dates and regions, with source links. `tests/models.test.ts` fails CI:
+  - if a model id is hard-coded anywhere else;
+  - if the primary, chat or embedding model is within 45 days of an announced
+    retirement (or of its "supported until at least" floor).
+- **The ladder falls through a 404** (model unavailable) instead of failing. Calls
+  now return `finishReason` and log `gemini_output_truncated` on `MAX_TOKENS`,
+  because thinking tokens count against `maxOutputTokens`.
+- **`vertex-smoke` preflight.** A db-job step in every deploy, after migrate and
+  before rollout. It calls every active rung with the summarizer's real template,
+  schema and 16,384-token budget on a ~40-minute synthetic transcript, plus one
+  embedding call, and fails on any error, non-`STOP` finish, or schema mismatch.
+  run-db-job gains `roles/aiplatform.user` (which its existing eval handlers also
+  lacked). **Operating cost:** about one summary call per rung, plus one
+  embedding, per deploy.
+- **Embeddings:** `text-embedding-004` retires on 2027-04-01. The successor served
+  in Sydney is `gemini-embedding-001` (supported to 2028-05-20 or later). Vectors
+  don't compare across models, so that is a planned re-embed migration (BLOCKERS),
+  not a swap.
+
 ## Security baseline for a public repo (2026-09-24, PR-09)
 
 The repo is public (free CI), so anything a workflow can do, a stranger's PR

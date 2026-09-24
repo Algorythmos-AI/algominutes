@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { GoogleAuth } = require('google-auth-library');
 
-const EMBED_MODEL = 'text-embedding-004';
+const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 const EMBED_DIM = 768;
 
 function vectorToSqlText(values) {

@@ -16,7 +16,8 @@ const _redaction = require('./redaction.cjs');
 
 const TARGET_CHARS = 2000;
 const OVERLAP_CHARS = 200;
-const EMBED_MODEL = 'text-embedding-004';
+// Model id: models.cjs (lifecycle + Sydney availability).
+const EMBED_MODEL = require('./models.cjs').EMBED_MODEL;
 const EMBED_DIM = 768;
 
 function timeStrToMs(t) {
