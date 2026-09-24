@@ -409,19 +409,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   Deliberate non-note writes carry a reasoned `// firestore-write-ok: <reason>` on the line or the line
   above. The two rate-limit counters are marked. The account-deletion cascade is marked as a tracked
   exception (below). Was: **The direct-Firestore gate misses batched and transactional writes.**
-- [ ] **⚠️ M1: account deletion is Firestore-first and can leave Postgres data behind**
-  (`services/api/src/routes/delete-account.cjs`). It deletes each note's Firestore doc and relies on the
-  `onNoteDeleted` trigger to delete the Postgres rows. If a batch fails, those notes survive in Postgres.
-  `DELETE FROM users` is "best-effort": an FK from a workspace this user owns makes it fail, it's
-  logged as a warning, and the request still returns 200 once Auth is deleted. So a "deleted" account can
-  keep transcripts, summaries and embeddings. That breaks the M1 evidence item ("deleting the account
-  removes the PG and Firestore rows") and App Store 5.1.1(v). Move plan **PR-34** (single deletion path)
-  ahead of M1:
-  - Postgres first, in one transaction: notes and their cascades, solely-owned workspaces, memberships,
-    upload_sessions, push tokens, the users row. Workspace-scoped, in the repo layer.
-  - Then the Firestore mirrors, the GCS audio, the Apple token revocation (PR-29), and Auth last.
-  - Return 200 only when Postgres is gone, and make every step idempotent so a retry finishes the job.
-  - An integration test proves no row with the uid survives.
+- [ ] **⚠️ M1: deletion doesn't work on the new backend. A deleted note stays in Postgres, stays
+  searchable, and its audio stays in GCS.** (Verified 2026-09-25.)
+  - **Deleting a note:** the clients delete the Firestore doc (`NotesRepository.swift deleteNote`) and rely
+    on the `functions/` trigger `onNoteDeleted` to delete the Postgres rows and GCS audio. Nothing in the
+    new pipeline deploys `functions/`: no workflow, Terraform or runbook references it, and it targets
+    `us-central1`. Nothing writes `notes.deleted_at` either. So the transcript, summary and embeddings stay,
+    and `/v1/search` and chat still return them (they filter on `deleted_at IS NULL`, which is never set).
+  - **Deleting an account** (`delete-account.cjs`): `DELETE FROM users` cascades almost every table, so the
+    Postgres side works *if every step succeeds*. But each step is best-effort: a failure is logged, then
+    Auth is deleted anyway and the request returns 200, so the user can never retry. GCS audio is removed
+    only by that undeployed trigger. Non-note Firestore docs (`rateLimits/{uid}`) are never removed.
+  - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
+    - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped
+      Postgres delete in one transaction, then the Firestore mirror, then a Cloud Task (idempotent, with a
+      DLQ) that deletes the note's GCS prefixes.
+    - Account deletion: Postgres first; answer 200 only when Postgres is gone; Auth last; each step
+      idempotent so a retry finishes the job.
+    - Firestore rules stop clients deleting note docs directly (after PR-17).
+    - Integration tests: no row with the uid or note id survives, and search can't return a deleted note.
 - [x] **Fixed (trace-across-task-hops PR): traceId did not cross the Cloud Tasks hops** (found by the log
   auditor of the generation-at-write PR). `enqueueTask` sent only the payload, and every worker made a
   fresh traceId from its own request header, so one recording logged under a different id in each service.
