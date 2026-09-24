@@ -15,7 +15,7 @@ import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { purgeNoteObjects } = noteStorage as {
   purgeNoteObjects: (
-    args: { bucket: unknown; workspaceId: string; noteId: string; storagePath: string | null; includeScratch: boolean },
+    args: { bucket: unknown; workspaceId: string; noteId: string; includeScratch: boolean },
     log?: { info: (o: any, m?: string) => void },
   ) => Promise<string[]>;
 };
@@ -108,7 +108,6 @@ export async function runStoragePurge(
         bucket,
         workspaceId: purge.workspaceId,
         noteId: purge.noteId,
-        storagePath: purge.storagePath,
         includeScratch: purge.includeScratch,
       },
       { info: (o: any, m?: string) => log.info({ ...fields, ...o }, m) },

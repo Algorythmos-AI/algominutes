@@ -13,6 +13,11 @@
  *
  * The bucket is passed in (a @google-cloud/storage Bucket), so this module has
  * no SDK dependency and tests can use a fake.
+ *
+ * The buckets are VERSIONED. Deleting an object by name only makes its live
+ * version noncurrent, and the bytes stay. So every listing asks for all
+ * versions, and each generation is deleted. A lifecycle rule for noncurrent
+ * versions (Terraform) is the backstop.
  */
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -50,23 +55,26 @@ function ownedStoragePath(storagePath, workspaceId, noteId) {
 }
 
 /**
- * Delete every object of one note. Throws on a listing or deletion error, so
- * the caller keeps the purge for a retry; a missing object is not an error.
- * Returns the names it deleted.
+ * Delete every object of one note, every generation of it. Throws on a listing
+ * or deletion error, so the caller keeps the purge for a retry; a missing
+ * object is not an error. Returns the names it deleted.
+ *
+ * (The note's recorded storage_path always has one of the listed exact names,
+ * see ownedStoragePath, so the listing covers it. Nothing is deleted by a
+ * client-supplied path.)
  */
-async function purgeNoteObjects({ bucket, workspaceId, noteId, storagePath, includeScratch }, log) {
-  const names = new Set();
+async function purgeNoteObjects({ bucket, workspaceId, noteId, includeScratch }, log) {
+  const targets = [];
   for (const set of noteObjectSets({ workspaceId, noteId, includeScratch })) {
-    const [files] = await bucket.getFiles({ prefix: set.prefix });
-    for (const f of files) if (set.matches(f.name)) names.add(f.name);
+    const [files] = await bucket.getFiles({ prefix: set.prefix, versions: true });
+    for (const f of files) if (set.matches(f.name)) targets.push(f);
   }
-  const own = ownedStoragePath(storagePath, workspaceId, noteId);
-  if (own) names.add(own);
-  for (const name of names) {
-    await bucket.file(name).delete({ ignoreNotFound: true });
-  }
-  if (log) log.info({ noteId, workspaceId, objects: names.size }, 'note_storage_purged');
-  return [...names];
+  // Each File from a versions listing carries its generation, so delete()
+  // removes exactly that version, live or noncurrent.
+  for (const f of targets) await f.delete({ ignoreNotFound: true });
+  const names = [...new Set(targets.map((f) => f.name))];
+  if (log) log.info({ noteId, workspaceId, objects: names.length, versions: targets.length }, 'note_storage_purged');
+  return names;
 }
 
 /**
@@ -81,7 +89,8 @@ async function purgeWorkspaceObjects({ bucket, workspaceId }, log) {
   }
   let n = 0;
   for (const root of CONTENT_ROOTS) {
-    const [files] = await bucket.getFiles({ prefix: `${root}/${workspaceId}/` });
+    // Every version (see the header): a plain listing misses noncurrent ones.
+    const [files] = await bucket.getFiles({ prefix: `${root}/${workspaceId}/`, versions: true });
     for (const f of files) {
       await f.delete({ ignoreNotFound: true });
       n += 1;

@@ -484,9 +484,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         order deletion uses), so there's no deadlock. Open GCS upload sessions are cancelled, with retries,
         via the tombstone. Purges left in the account's workspaces by earlier note deletions run too.
     - [ ] Residuals, queued:
-      - **Bucket versioning keeps "deleted" audio** as noncurrent versions (every bucket is versioned,
-        with no noncurrent lifecycle rule), for note deletion too. Next PR: delete every generation in
-        the purge, and add a noncurrent-version lifecycle rule (Terraform; your apply).
+      - ~~Bucket versioning keeps "deleted" audio~~ **fixed (purge-all-object-versions PR):** the purges
+        delete every generation, and a noncurrent-version lifecycle rule (7 days) is in Terraform, pending
+        your apply. See DECISIONS.
       - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
         failing object blocks an account's deletion (fail closed), and must page someone.
       - Single-note deletion should also cancel the note's open upload session (account deletion does).
