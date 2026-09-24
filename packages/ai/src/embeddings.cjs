@@ -101,7 +101,10 @@ async function embedChunks({ chunks, log, project, location }) {
       }),
     });
     if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
+      const errText = await resp.text().catch((err) => {
+        log.warn({ err }, 'vertex_embed_error_body_unreadable');
+        return '';
+      });
       log.error({ status: resp.status, body: errText.slice(0, 300) }, 'vertex_embed_http_error');
       throw new Error(`vertex_embed_failed: ${resp.status}`);
     }

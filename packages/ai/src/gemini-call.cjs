@@ -112,7 +112,10 @@ async function callGeminiWithLadder({
         });
 
         if (!resp.ok) {
-          const errText = await resp.text().catch(() => '');
+          const errText = await resp.text().catch((err) => {
+            log.warn({ err, model: modelName }, 'gemini_error_body_unreadable');
+            return '';
+          });
           if (isModelUnavailable(resp.status)) {
             lastErr = new Error(`Vertex Gemini ${resp.status}: ${errText.slice(0, 300)}`);
             log.warn({ err: lastErr, model: modelName, location: loc }, 'gemini_model_unavailable');

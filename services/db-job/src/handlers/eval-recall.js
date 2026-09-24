@@ -51,7 +51,8 @@ async function embedQuery(text, project, location) {
     }),
   });
   if (!resp.ok) {
-    const errBody = await resp.text().catch(() => '');
+    // No logger here: the reason travels in the thrown error, which job_failed logs.
+    const errBody = await resp.text().catch((err) => `<body unreadable: ${err.message}>`);
     throw new Error(`vertex_embed_failed: ${resp.status} ${errBody.slice(0, 200)}`);
   }
   const data = await resp.json();
