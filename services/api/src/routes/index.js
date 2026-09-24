@@ -14,7 +14,6 @@ import { authMiddleware } from '../middleware/auth.js';
 import { adminMiddleware } from '../middleware/admin.js';
 
 // server.ts-derived routes (ESM).
-import { processAudioRoute } from './process-audio.js';
 import { updateNoteRoute } from './update-note.js';
 import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
@@ -83,8 +82,6 @@ export function buildRouter() {
     }
   });
 
-  // ── POST /v1/process-audio ── server.ts /api/process-audio ─────────────
-  router.post('/process-audio', authMiddleware, wrap(processAudioRoute));
 
   // ── POST /v1/process ── functions/index.js processIntelligence (async) ──
   router.post('/process', authMiddleware, wrap(processIntelligenceRoute));
