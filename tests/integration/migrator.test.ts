@@ -41,7 +41,19 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await db.end();
-  await pool.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+  // pool.end() resolves before the server has reaped the backends. Terminating
+  // them (DROP … WITH (FORCE)) while a client is still closing surfaces as an
+  // unhandled 57P01 in that client, so wait for them to go instead. A backend
+  // that never goes is a leaked connection, and the plain DROP then fails loudly.
+  for (let i = 0; i < 50; i++) {
+    const { rows } = await pool.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1',
+      [dbName],
+    );
+    if (rows[0]!.n === 0) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await pool.query(`DROP DATABASE IF EXISTS ${dbName}`);
   rmSync(dir, { recursive: true, force: true });
 });
 
