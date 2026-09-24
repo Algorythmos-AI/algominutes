@@ -350,6 +350,28 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Newer models (3.6/3.7/3.8-flash, flash-lite) are not served in Sydney.** If
   quality or cost needs them, that's a data-residency decision for the owner.
 
+## Found while documenting the API contract (2026-09-25)
+
+- [x] **Fixed (upload-sessions PR): SSRF and a cross-workspace oracle in `/v1/uploads/{id}`.** The
+  `uploadId` was client-controlled base64 JSON holding the GCS session URI and storage path. `GET` then
+  PUT to whatever URI it contained, and `/complete` reported whether *any* object existed. Sessions now
+  live server-side (migration 013). The id is a random UUID, reads are scoped to the owner's uid and
+  expiry, and the stored URI must be `https://storage.googleapis.com`.
+- [ ] **`regenerate-summary.js:146` writes Firestore directly** (`db.doc(...).set(...)`), outside the
+  repo layer (CLAUDE.md §1). The grep gate misses the multi-line form. Route it through notes-repo, and
+  give `check-no-direct-firestore` the same AST treatment as the silent-catch gate.
+- [ ] **`EntitlementResponse` requires `state`, but `/v1/entitlement` (and `/v1/process`'s 402) never
+  send it,** nor `trialEndsAt`. Live bodies fail `EntitlementResponse.parse`. This is a three-client
+  contract change: decide whether the handler adds them or the schema drops them.
+- [ ] **Four handlers ignore stricter schemas that already exist:**
+  - accept-terms (only checks truthiness);
+  - retention (accepts a missing field);
+  - events (accepts any event name, when the `AnalyticsEvent` enum exists);
+  - support (truncates instead of rejecting).
+
+  Validate with the schemas in the contract-documentation PR.
+- [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
+
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
 Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all
