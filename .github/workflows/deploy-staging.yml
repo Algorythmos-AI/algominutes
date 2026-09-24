@@ -6,7 +6,7 @@ name: deploy-staging
 # production — so this runs on pushes to `integration`; prod deploys from
 # `main` arrive with the prod environment (plan PR-35).
 #
-# - Order: build → migrate → rollout → smoke. Every image is built first; the
+# - Order: build → migrate + Vertex smoke → rollout → smoke. Every image is built first; the
 #   db-job `migrate` handler then applies migrations INSIDE the VPC (Cloud SQL
 #   is private-IP) from the image built at this commit, and must finish before
 #   any service image rolls out. That is safe because new migrations are
@@ -166,6 +166,18 @@ jobs:
           echo "Logs: gcloud logging read 'jsonPayload.traceId=\"$trace\"' --project $PROJECT --freshness=1h"
           gcloud run jobs execute db-job --region "$REGION" --project "$PROJECT" --wait \
             --update-env-vars "JOB_NAME=migrate,EXPECTED_MIGRATION_HEAD=${head},TRACE_ID=${trace}"
+      - name: Vertex smoke (every active model answers in-region with the real call shape)
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          # packages/ai/src/models.cjs: a retired model, one not served in the
+          # region, a rejected response schema or a truncated summary fails the
+          # deploy here, before any service rolls out.
+          trace=$(cat /proc/sys/kernel/random/uuid)
+          echo "Vertex smoke (traceId $trace)"
+          gcloud run jobs execute db-job --region "$REGION" --project "$PROJECT" --wait \
+            --update-env-vars "JOB_NAME=vertex-smoke,TRACE_ID=${trace}"
 
   rollout:
     needs: [changes, migrate]

@@ -19,8 +19,8 @@
 // schema-compat test in tests/summary-templates.test.ts is the guardrail —
 // not this comment.
 //
-// Flat also matters for the model ladder: shared/gemini-call.cjs falls back to
-// gemini-1.5-flash, which handles deeply nested response schemas poorly.
+// Flat also keeps the schema portable across every rung of the model ladder
+// (packages/ai/src/models.cjs): each model must accept it unchanged.
 
 const BASE_SCHEMA = {
   type: 'OBJECT',

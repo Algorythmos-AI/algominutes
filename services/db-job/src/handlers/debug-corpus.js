@@ -4,12 +4,13 @@
 
 const { Pool } = require('pg');
 const { GoogleAuth } = require('google-auth-library');
+const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 
 async function embedQuery(text, project, location) {
   const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   const client = await auth.getClient();
   const t = (await client.getAccessToken())?.token;
-  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/text-embedding-004:predict`;
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${EMBED_MODEL}:predict`;
   const r = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },

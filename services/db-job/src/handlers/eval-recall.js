@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { GoogleAuth } = require('google-auth-library');
 
-const EMBED_MODEL = 'text-embedding-004';
+const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 const EMBED_DIM = 768;
 
 function vectorToSqlText(values) {
@@ -51,7 +51,8 @@ async function embedQuery(text, project, location) {
     }),
   });
   if (!resp.ok) {
-    const errBody = await resp.text().catch(() => '');
+    // No logger here: the reason travels in the thrown error, which job_failed logs.
+    const errBody = await resp.text().catch((err) => `<body unreadable: ${err.message}>`);
     throw new Error(`vertex_embed_failed: ${resp.status} ${errBody.slice(0, 200)}`);
   }
   const data = await resp.json();
