@@ -260,6 +260,7 @@ async function enforceUsageBudget(db, uid, bytes) {
       err.code = 429;
       throw err;
     }
+    // firestore-write-ok: the per-uid rate-limit counter (rateLimits/{uid}), not a note
     tx.set(limitRef, {
       count: count + 1,
       bytes: usedBytes + addBytes,
