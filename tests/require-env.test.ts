@@ -79,6 +79,23 @@ describe('requireEnv', () => {
     ).toThrow(/Postgres target/);
   });
 
+  it('exact: passes only when the value matches exactly', () => {
+    process.env.WRITE_POSTGRES = 'true';
+    const log = capturingLogger();
+    expect(() => requireEnv('svc', { exact: { WRITE_POSTGRES: 'true' } }, { logger: log, exit: false })).not.toThrow();
+  });
+
+  it('exact: rejects an unset flag AND a wrong value, naming what it got', () => {
+    const log = capturingLogger();
+    expect(() => requireEnv('svc', { exact: { WRITE_POSTGRES: 'true' } }, { logger: log, exit: false })).toThrow(
+      /WRITE_POSTGRES must be 'true' \(got unset\)/,
+    );
+    process.env.WRITE_POSTGRES = 'false';
+    expect(() => requireEnv('svc', { exact: { WRITE_POSTGRES: 'true' } }, { logger: log, exit: false })).toThrow(
+      /got 'false'/,
+    );
+  });
+
   it('requires a logger', () => {
     expect(() => requireEnv('svc', { required: [] }, {} as never)).toThrow(/logger is required/);
   });
