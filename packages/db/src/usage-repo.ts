@@ -10,22 +10,9 @@
  * is what the user consumed against their plan quota.
  */
 import { getPool, isPostgresEnabled } from './db.js';
+import { currentBillingPeriod, insertDebit, type MeterInput } from './ledger.js';
 
-/** 'YYYY-MM' in UTC — the monthly quota window key. */
-export function currentBillingPeriod(now: Date = new Date()): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-export interface MeterInput {
-  uid: string;
-  workspaceId?: string | null;
-  noteId?: string | null;
-  minutes: number;
-  reason?: string;
-  /** Stable key so a Cloud Tasks replay does not double-charge, e.g. `${noteId}:ingest`. */
-  idempotencyKey: string;
-  billingPeriod?: string;
-}
+export { currentBillingPeriod, type MeterInput } from './ledger.js';
 
 /**
  * Append a debit (minutes consumed). Idempotent: a second call with the same
@@ -33,24 +20,7 @@ export interface MeterInput {
  */
 export async function meterMinutes(input: MeterInput): Promise<{ applied: boolean; id?: number }> {
   if (!isPostgresEnabled()) return { applied: false };
-  const period = input.billingPeriod ?? currentBillingPeriod();
-  const { rows } = await getPool().query(
-    `INSERT INTO usage_ledger
-       (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
-     VALUES ($1, $2, $3, 'debit', $4, $5, $6, $7)
-     ON CONFLICT (idempotency_key) DO NOTHING
-     RETURNING id`,
-    [
-      input.uid,
-      input.workspaceId ?? null,
-      input.noteId ?? null,
-      Math.max(0, input.minutes),
-      period,
-      input.reason ?? 'ingest',
-      input.idempotencyKey,
-    ],
-  );
-  return rows.length ? { applied: true, id: rows[0].id } : { applied: false };
+  return insertDebit(getPool(), input);
 }
 
 /**
