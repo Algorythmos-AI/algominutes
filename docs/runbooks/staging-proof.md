@@ -47,6 +47,23 @@ gcloud compute ssh algominutes-staging-bastion --zone australia-southeast1-a \
 
 It's done when it logs `bastion-startup: ready`.
 
+## Prove the rate limit keys on the real client IP (from your Mac)
+
+The api trusts exactly `TRUST_PROXY_HOPS` proxies (default 1), because Cloud Run's front
+end appends the real client address as the rightmost `X-Forwarded-For` entry. If that's
+wrong, either spoofed headers get fresh buckets (too few hops) or every client shares one
+bucket (too many). After a deploy, check it from outside. Rotate a spoofed leftmost entry
+and expect `429` once the per-IP limit (300/min) is used up:
+
+```bash
+API=https://api-PROJECTNUMBER.australia-southeast1.run.app   # the deployed api URL
+for i in $(seq 1 310); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 10.0.$((i/250)).$((i%250))" "$API/v1/shares/read" -X POST -H 'Content-Type: application/json' -d '{}'; done | sort | uniq -c
+```
+
+Pass: some `429`s appear, even though every request claimed a different IP. If there are
+no `429`s, spoofing works and `TRUST_PROXY_HOPS` is too low. If `429`s also show up for a
+second machine that sent nothing, all clients share a bucket and it's too high.
+
 ## Security
 
 - **No inbound traffic** except SSH from Google's IAP range, and only to this VM.
