@@ -142,10 +142,12 @@ async function handle(payload, deps) {
     template || (noteRow && noteRow.summary_template) || sharedTemplates.DEFAULT_TEMPLATE_ID,
   );
 
-  const redacted = lines.map((l) => {
-    const { text } = sharedRedaction.redactPII(l.text || '');
+  // Line by line, carrying a private key that spans lines (redactLines), so a
+  // key's later base64 lines are redacted along with its BEGIN line.
+  const { texts: scrubbed } = sharedRedaction.redactLines(lines.map((l) => l.text || ''));
+  const redacted = lines.map((l, i) => {
     const speaker = l.speakerName || (l.speakerTag ? `Speaker ${l.speakerTag}` : 'Speaker');
-    return { speaker, text, time: fmtTime(l.startMs) };
+    return { speaker, text: scrubbed[i], time: fmtTime(l.startMs) };
   });
 
   const transcriptStr = redacted.map((l) => `[${l.time}] ${l.speaker}: ${l.text}`).join('\n');
