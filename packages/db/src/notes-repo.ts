@@ -731,3 +731,22 @@ export async function deleteNote(
   await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).delete();
   return outcome;
 }
+
+/**
+ * Notes stuck in an in-flight status (no progress written) for longer than
+ * `olderThanMs`, oldest first: what the sweeper fails, so the user sees an
+ * error and can retry instead of a spinner that never ends. The threshold
+ * must exceed IN_FLIGHT_STALE_MS, so a client re-queue gets its chance first.
+ */
+export async function listStuckNotes(
+  input: { olderThanMs: number; limit?: number },
+): Promise<Array<{ noteId: string; workspaceId: string; status: string; updatedAt: Date }>> {
+  const { rows } = await getPool().query(
+    `SELECT id, workspace_id, status, updated_at FROM notes
+      WHERE status = ANY($1::text[]) AND deleted_at IS NULL
+        AND updated_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')
+      ORDER BY updated_at ASC LIMIT $3`,
+    [IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs, input.limit ?? 100],
+  );
+  return rows.map((r) => ({ noteId: r.id, workspaceId: r.workspace_id, status: r.status, updatedAt: new Date(r.updated_at) }));
+}

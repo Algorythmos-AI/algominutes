@@ -380,7 +380,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - support (truncates instead of rejecting).
 
   Validate with the schemas in the contract-documentation PR.
-- [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
+- [x] **Fixed (sweeper PR):** expired upload sessions are deleted by the sweep. Was: **Upload sessions
+  accumulate:** expired rows were never deleted.
 - [x] **Fixed (generation-at-write PR):** `markSummaryReady` takes the generation the run read and
   only writes if it's still current (`summary_generation = $3` in the workspace-scoped UPDATE). A superseded
   run writes nothing in either store, logs `summarizer_generation_superseded`, and doesn't notify. Tested,
@@ -497,8 +498,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         an hour. Clients must sign out on the 200.
       - Firestore rules (PR-11) should stop a signed-in client re-creating `workspaces/{ws}` docs after
         deletion. The web app does that at sign-in (`App.tsx:648`).
-      - The sweeper (PR-15) should prune completed tombstones after the retention window, and drain
-        `storage_purges`.
+      - ~~The sweeper should prune tombstones and drain `storage_purges`~~ **done (sweeper PR):**
+        `db-job` `JOB_NAME=sweep`, run by Cloud Scheduler every 15 min (Terraform, pending your apply).
+        It retries purges (capped at 10 attempts, then `storage_purge_stuck`), fails notes stuck in flight
+        past `IN_FLIGHT_STALE_MS` + 30 min (Postgres first, dead letter, refund), drops expired upload
+        sessions, **finishes account deletions a client abandoned**, and prunes tombstones completed more
+        than 30 days ago.
       - `process-intelligence.js` also writes root Firestore `analytics` docs. `analytics_events` exists in
         Postgres, so stop writing them.
     - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.

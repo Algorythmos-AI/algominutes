@@ -53,7 +53,7 @@ options (product-configurable, plan-aware):
 | **Audio chunk metadata** | Postgres `audio_chunks` | With the note | `ON DELETE CASCADE` |
 | **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | `POST /v1/notes/delete` (notes-repo `deleteNote`: Postgres first, then the Firestore mirror) / delete-account / retention job |
 | **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `POST /v1/account/delete`: Postgres first (the `users` cascade), then open upload sessions cancelled, each note's doc + audio (`storage_purges`), the account's workspace docs (with subcollections) + storage, and Auth last. 200 only when all of it is gone; idempotent, so a retry finishes it |
-| **Deleted-account tombstone** | Postgres `account_deletions` (uid, its workspace ids; no content) | Kept so a still-valid token can't re-create the account, and a retry can finish | The sweeper prunes completed rows after the retention window (queued) |
+| **Deleted-account tombstone** | Postgres `account_deletions` (uid, its workspace ids; no content) | Kept so a still-valid token can't re-create the account, and a retry (or the sweeper) can finish | The sweeper (`db-job` `sweep`, every 15 min) prunes completed rows after 30 days |
 | **Workspace membership** | Postgres `workspace_members` | Until account deletion / removal | `delete-account` endpoint |
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |
 | **Billing/subscription state** | Stripe / App Store / Play + Postgres | Per payment-processor + tax/record-keeping law | see below |

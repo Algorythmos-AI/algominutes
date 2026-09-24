@@ -371,6 +371,9 @@ locals {
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
     # run.invoker on each service (resource-level, in cloud-run.tf).
     "run-jobs" = "AlgoMinutes Cloud Tasks OIDC + invoker identity"
+    # Identity Cloud Scheduler uses to start the db-job sweep (scheduler.tf).
+    # It can only run that one job, with overrides.
+    "run-scheduler" = "AlgoMinutes Cloud Scheduler invoker (db-job sweep)"
   }
 
   # Roles common to every service.
@@ -441,8 +444,10 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
-      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall, debug-corpus
+      "roles/aiplatform.user",    # vertex-smoke (deploy preflight), eval-recall, debug-corpus
+      "roles/firebaseauth.admin", # sweep: finishes an abandoned account deletion (deletes the Auth user)
     ])
+    "run-scheduler" = local.common_roles
     # run-jobs is purely an invocation identity: common logging/trace roles only.
     # Its run.invoker grants are resource-level (per service, in cloud-run.tf).
     "run-jobs" = local.common_roles
@@ -451,7 +456,8 @@ locals {
   # Services that read/write objects — get storage.objectAdmin on the buckets
   # (resource-level, tighter than a project grant). billing + notifier do not
   # touch object storage.
-  storage_sas = ["run-api", "run-transcoder", "run-summarizer", "run-embedder", "run-extractor"]
+  # run-db-job: the sweep retries storage purges (deleted notes' and accounts' audio).
+  storage_sas = ["run-api", "run-transcoder", "run-summarizer", "run-embedder", "run-extractor", "run-db-job"]
 
   # Flatten { sa => [roles] } into { "sa|role" => {sa, role} } for for_each.
   sa_role_pairs = merge([
