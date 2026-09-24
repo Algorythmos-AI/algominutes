@@ -101,10 +101,17 @@ async function handleKickoff(payload, deps) {
       } catch (err) {
         if (err.isPermanent) {
           log.error({ err, noteId }, 'youtube_permanent_failure');
-          await mirror.mirrorError({
-            workspaceId,
+          // Postgres first, then the mirror (note-terminal). A Firestore-only
+          // error mirror left Postgres at 'queued', so the idempotent kickoff
+          // saw the note as still in flight and refused a retry for 3 h.
+          await noteTerminal.markNoteFailed({
+            pool: db.pool(),
+            firestore: mirror.db(),
             noteId,
-            errorMessage: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
+            workspaceId,
+            message: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
+            log,
+            event: 'youtube_permanent_failure',
           });
           // A7.4 tail for a permanent (non-retryable) terminal failure — DLQ +
           // refund + notify. Best-effort; never throws (guarded when the hooks
