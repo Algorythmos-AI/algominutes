@@ -71,10 +71,15 @@ function loadFixtures() {
 function liveHypothesis(dir, fixtureId, engine) {
   if (!dir) return null;
   const p = path.join(dir, `${fixtureId}.${engine}.json`);
+  // Absent file = no override (synthetic hypothesis). A present-but-broken
+  // file must fail the eval, not silently fall back to synthetic data.
   try {
     if (!fs.statSync(p).isFile()) return null;
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch { return null; }
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+  return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
 async function run({ log, traceId, env }) {

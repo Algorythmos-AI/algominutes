@@ -498,7 +498,7 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
     const feeder = createSseLineFeeder((rawLine) => {
       const parsed = parseSseDataLine(rawLine);
       if (parsed.type === 'parse_error') {
-        log.warn({ uid, parseErr: parsed.parseErr, payloadHead: parsed.payloadHead }, 'chat_stream_parse_failed');
+        log.warn({ uid, noteId, err: parsed.parseErr, payloadHead: parsed.payloadHead }, 'chat_stream_parse_failed');
         return;
       }
       if (parsed.type === 'text') {

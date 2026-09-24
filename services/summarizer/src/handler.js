@@ -217,7 +217,7 @@ async function handle(payload, deps) {
     );
     await c2.query('COMMIT');
   } catch (err) {
-    await c2.query('ROLLBACK').catch((rollbackErr) => log.error({ rollbackErr, noteId }, 'summarizer_rollback_failed'));
+    await c2.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'summarizer_rollback_failed'));
     throw err;
   } finally { c2.release(); }
 

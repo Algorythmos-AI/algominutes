@@ -248,12 +248,18 @@ where testable so the fix PR proves itself:
         `backfill-pr-d` dispatch entry (no handler file) is gone. Was: **db-job's logger is always the fallback:** it calls `logger.cjs .forContext(...)`, which doesn't
         exist, so every run uses an ad-hoc stdout logger that writes `level` instead of `severity` (Cloud
         Logging may not treat errors as ERROR) and prints Error objects as `{}`.
-      - **Errors logged under a key other than `err` lose message + stack** (logger only formats `err`):
+      - [x] **Fixed (surface-dropped-errors PR):** the Error instances among these (`cleanupErr`,
+        both `rollbackErr`, `parseErr`) are now logged as `err`. (`op.error` is a plain status object,
+        and `reason` is a rate-limit string; both serialize fine.) Was: **Errors logged under a key other than `err` lose message + stack** (logger only formats `err`):
         `process-intelligence.js:112`, `transcoder/src/fast-path.js:104`, `summarizer/src/handler.js:238`,
         `transcoder/src/handler.js:132`, `search-and-chat.cjs:499`.
-      - `services/transcoder/src/stt.js:140`: an STT response decode failure is swallowed and saves an
+      - [x] **Fixed (surface-dropped-errors PR):** a decode failure is now reported as the operation's
+        error (DECODE_FAILED), so the existing terminal path runs: chunk error, note failed, DLQ.
+        Tested with a fake operations client and mutation-checked. Was: `services/transcoder/src/stt.js:140`: an STT response decode failure is swallowed and saves an
         empty transcript chunk — must fail the chunk and log.
-      - Silent fallbacks: `delete-account.cjs:56` (token verify failure → 401 with no log),
+      - [x] **Fixed (surface-dropped-errors PR):** delete-account logs `delete_account_token_invalid`
+        (warn); eval-diarisation treats only ENOENT as "no override"; malformed YouTube captions are
+        `YOUTUBE_CAPTIONS_MALFORMED` instead of "no captions". Was: Silent fallbacks: `delete-account.cjs:56` (token verify failure → 401 with no log),
         `db-job/.../eval-diarisation.js:77`, `extractor/.../youtube.js:193`.
       - Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
         Replace the grep checker with a small syntax-aware Node check + an explicit allow marker.
