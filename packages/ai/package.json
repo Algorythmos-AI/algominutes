@@ -8,7 +8,7 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@google-cloud/aiplatform": "^3.34.0",
+    "@google-cloud/aiplatform": "^7.4.0",
     "@google-cloud/tasks": "^7.1.1",
     "google-auth-library": "^9.15.1",
     "pg": "^8.23.0"
