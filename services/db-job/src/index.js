@@ -66,6 +66,7 @@ async function main() {
   requireEnv(
     'db-job',
     {
+      exact: { WRITE_POSTGRES: 'true' },
       oneOf: [
         { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
       ],

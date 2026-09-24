@@ -61,10 +61,15 @@ locals {
   # Postgres connection env for the DB-touching services (password comes from a
   # Secret Manager ref, not a plain value — see the dynamic env below).
   db_env = {
-    PGHOST     = google_sql_database_instance.pg.private_ip_address
-    PGPORT     = "5432"
-    PGDATABASE = google_sql_database.app.name
-    PGUSER     = google_sql_user.app.name
+    # Postgres is the source of truth (CLAUDE.md §1). Every @algominutes/db repo
+    # function and the api's pg-query reads are no-ops unless this is 'true' —
+    # a leftover migration toggle from the Firestore-only era. Unset, staging
+    # would silently drop note writes and dead-letter rows.
+    WRITE_POSTGRES = "true"
+    PGHOST         = google_sql_database_instance.pg.private_ip_address
+    PGPORT         = "5432"
+    PGDATABASE     = google_sql_database.app.name
+    PGUSER         = google_sql_user.app.name
   }
 
   # Per-service extra plain env, merged over common_env.

@@ -12,7 +12,7 @@ image="$2"
 name="boot-smoke-$svc"
 
 env_args=(
-  -e NODE_ENV=production -e PORT=8080
+  -e NODE_ENV=production -e PORT=8080 -e WRITE_POSTGRES=true
   -e GOOGLE_CLOUD_PROJECT=boot-smoke -e GCLOUD_PROJECT=boot-smoke
   -e PGHOST=127.0.0.1 -e PGPORT=5432 -e PGDATABASE=boot -e PGUSER=boot -e PGPASSWORD=boot
   -e TASKS_PROJECT=boot-smoke -e TASKS_LOCATION=australia-southeast1
