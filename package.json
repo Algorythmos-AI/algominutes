@@ -22,7 +22,8 @@
     "typecheck": "npm run typecheck -w @algominutes/contracts -w @algominutes/db -w @algominutes/ai -w @algominutes/tokens",
     "contracts:openapi": "npm run openapi --workspace @algominutes/contracts --if-present",
     "contracts:models": "npm run models --workspace @algominutes/contracts --if-present",
-    "test:node": "node --test services/transcoder/test/providers.test.mjs && node --test evals/diarisation/der.test.mjs"
+    "test:node": "node --test services/transcoder/test/providers.test.mjs && node --test evals/diarisation/der.test.mjs",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
