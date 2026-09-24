@@ -37,8 +37,9 @@ describe('deleteAccountData (Postgres, first)', () => {
     // Bob and his note are untouched.
     expect(await count(`SELECT 1 FROM notes WHERE id = 'b1'`)).toBe(1);
     expect(await count(`SELECT 1 FROM transcript_lines WHERE note_id = 'b1'`)).toBe(1);
-    expect((await pool.query(`SELECT note_id FROM storage_purges WHERE uid = 'alice' ORDER BY note_id`)).rows.map((x) => x.note_id))
-      .toEqual(['a-in-b', 'a1', 'a2']);
+    // Sorted in JS: SQL ORDER BY depends on the database collation.
+    expect((await pool.query(`SELECT note_id FROM storage_purges WHERE uid = 'alice'`)).rows.map((x) => x.note_id).sort())
+      .toEqual(['a-in-b', 'a1', 'a2'].sort());
   });
 
   it('is a no-op on a retry (the account is already gone)', async () => {
