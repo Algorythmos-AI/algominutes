@@ -30,6 +30,10 @@ async function ensureExtensions(pool: Pool) {
     try {
       await pool.query(`CREATE EXTENSION IF NOT EXISTS ${ext}`);
     } catch (err) {
+      // Only a genuine privilege error is expected (the app role on Cloud SQL
+      // cannot CREATE EXTENSION; 000_extensions.sql is bootstrapped by a
+      // privileged role). Anything else — e.g. connection refused — is real.
+      if ((err as { code?: string }).code !== '42501') throw err;
       console.log(`SKIP   extension ${ext} (lacks CREATE privilege; expected for app role)`);
     }
   }
@@ -78,7 +82,7 @@ async function main() {
         await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
         await client.query('COMMIT');
       } catch (err) {
-        await client.query('ROLLBACK').catch(() => undefined);
+        await client.query('ROLLBACK').catch((rollbackErr) => console.error('ROLLBACK failed:', rollbackErr));
         throw err;
       } finally {
         client.release();

@@ -7,3 +7,7 @@ declare module '@algominutes/ai/note-edit.cjs' {
   const mod: unknown;
   export default mod;
 }
+declare module '@algominutes/ai/logger.cjs' {
+  const mod: unknown;
+  export default mod;
+}

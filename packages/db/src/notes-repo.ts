@@ -19,7 +19,7 @@ import noteEditShared from '@algominutes/ai/note-edit.cjs';
 const { writeNoteEditWithinTx } = noteEditShared as {
   writeNoteEditWithinTx: (
     client: import('pg').PoolClient,
-    edit: { noteId: string; title?: string; summary?: NoteEditSummary },
+    edit: { noteId: string; workspaceId: string; title?: string; summary?: NoteEditSummary },
   ) => Promise<{ pgRowPresent: boolean }>;
 };
 
@@ -71,7 +71,19 @@ function timeStrToMs(t: string): number {
   return a * 1000;
 }
 
-async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {
+/** Thrown when a write would cross a workspace boundary (CLAUDE.md §1 multi-tenancy). */
+export class WorkspaceBoundaryError extends Error {
+  readonly code = 'WORKSPACE_BOUNDARY';
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkspaceBoundaryError';
+  }
+}
+
+async function upsertCoreToPostgres(
+  input: MarkReadyInput,
+  log: { error: (o: any, m?: string) => void },
+): Promise<void> {
   if (!isPostgresEnabled()) return;
   const pool = getPool();
   const client = await pool.connect();
@@ -85,20 +97,35 @@ async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {
          ON CONFLICT (uid) DO NOTHING`,
       [input.authorUid, `${input.authorUid}@firebase.local`],
     );
-    await client.query(
+    // Bootstrap a brand-new workspace with the author as owner, but NEVER add
+    // the author to a workspace that already exists: an existing workspace
+    // only accepts writes from someone who is already a member. (Previously
+    // this inserted the membership unconditionally, so a mismatched
+    // (workspaceId, authorUid) pair made the author an OWNER of someone else's
+    // workspace — pinned in tests/integration/tenant-isolation.test.ts.)
+    const created = await client.query(
       `INSERT INTO workspaces (id, owner_uid, name)
          VALUES ($1, $2, 'My Workspace')
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
       [input.workspaceId, input.authorUid],
     );
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, uid, role)
-         VALUES ($1, $2, 'owner')
-         ON CONFLICT (workspace_id, uid) DO NOTHING`,
-      [input.workspaceId, input.authorUid],
-    );
+    if (created.rowCount) {
+      await client.query(
+        `INSERT INTO workspace_members (workspace_id, uid, role) VALUES ($1, $2, 'owner')`,
+        [input.workspaceId, input.authorUid],
+      );
+    } else {
+      const member = await client.query(
+        'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND uid = $2',
+        [input.workspaceId, input.authorUid],
+      );
+      if (!member.rowCount) {
+        throw new WorkspaceBoundaryError(`author is not a member of workspace ${input.workspaceId}`);
+      }
+    }
 
-    await client.query(
+    const noteRow = await client.query(
       `INSERT INTO notes (
          id, workspace_id, author_uid, status, source_type,
          storage_path, mime_type, duration_sec, updated_at
@@ -108,7 +135,10 @@ async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {
              storage_path  = COALESCE(EXCLUDED.storage_path, notes.storage_path),
              mime_type     = COALESCE(EXCLUDED.mime_type, notes.mime_type),
              duration_sec  = COALESCE(EXCLUDED.duration_sec, notes.duration_sec),
-             updated_at    = NOW()`,
+             updated_at    = NOW()
+         -- An existing note id in ANOTHER workspace must never be overwritten.
+         WHERE notes.workspace_id = EXCLUDED.workspace_id
+       RETURNING id`,
       [
         input.noteId,
         input.workspaceId,
@@ -119,6 +149,9 @@ async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {
         input.durationSec || null,
       ],
     );
+    if (!noteRow.rowCount) {
+      throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
+    }
 
     await client.query(
       `INSERT INTO summaries (note_id, gist, model, generated_at)
@@ -154,7 +187,11 @@ async function upsertCoreToPostgres(input: MarkReadyInput): Promise<void> {
     }
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    await client
+      .query('ROLLBACK')
+      .catch((rollbackErr) =>
+        log.error({ err: rollbackErr, noteId: input.noteId, workspaceId: input.workspaceId }, 'pg_rollback_failed'),
+      );
     throw err;
   } finally {
     client.release();
@@ -176,12 +213,16 @@ export async function markReady(
   let pgWritten = false;
   if (isPostgresEnabled()) {
     try {
-      await upsertCoreToPostgres(input);
+      await upsertCoreToPostgres(input, log);
       pgWritten = true;
     } catch (err) {
-      log.error({ err, noteId: input.noteId }, 'pg_mark_ready_failed');
-      // Do not propagate; we still mirror to Firestore so the user sees
-      // the result. Background reconciliation can re-sync.
+      log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'pg_mark_ready_failed');
+      // Postgres is the system of record (CLAUDE.md §1): never let the
+      // Firestore cache say 'ready' for a note Postgres does not have. Fail
+      // the call so the caller retries / marks the note errored instead.
+      // (Previously this was swallowed and Firestore flipped to 'ready'
+      // anyway, citing a "background reconciliation" that does not exist.)
+      throw err;
     }
   }
 
@@ -207,11 +248,14 @@ export async function markError(
   if (isPostgresEnabled()) {
     try {
       await getPool().query(
-        `UPDATE notes SET status='error', error_message=$2, updated_at=NOW() WHERE id=$1`,
-        [input.noteId, input.errorMessage],
+        // Scoped to the caller's workspace: an id from another workspace
+        // (e.g. after markReady rejected a cross-workspace write) matches nothing.
+        `UPDATE notes SET status='error', error_message=$3, updated_at=NOW()
+           WHERE id=$1 AND workspace_id=$2`,
+        [input.noteId, input.workspaceId, input.errorMessage],
       );
     } catch (err) {
-      log.error({ err, noteId: input.noteId }, 'pg_mark_error_failed');
+      log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'pg_mark_error_failed');
     }
   }
   await firestore
@@ -221,9 +265,9 @@ export async function markError(
 
 /**
  * Persist a manual note edit (title / summary) to Postgres (system of record)
- * and mirror it to Firestore. Unlike markReady, a Postgres failure is NOT
- * swallowed — the edit endpoint fails hard so the Firestore cache never leads
- * the record. Only the fields provided are touched; a note without a Postgres
+ * and mirror it to Firestore. As in markReady, a Postgres failure is NOT
+ * swallowed — the edit fails hard so the Firestore cache never leads the
+ * record. The Postgres UPDATE is scoped to input.workspaceId. Only the fields provided are touched; a note without a Postgres
  * row yet (legacy / not-yet-processed) still gets the Firestore mirror.
  */
 export async function applyNoteEdit(
@@ -237,6 +281,7 @@ export async function applyNoteEdit(
       const { pgRowPresent } = await withTx((client) =>
         writeNoteEditWithinTx(client, {
           noteId: input.noteId,
+          workspaceId: input.workspaceId,
           title: input.title,
           summary: input.summary,
         }),

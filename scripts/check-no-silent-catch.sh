@@ -11,6 +11,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATTERNS=(
   '\.catch\(\s*(\(\s*\)|\(\s*_[a-zA-Z0-9_]*\s*\))\s*=>\s*\{\s*\}\s*\)'
+  # A handler that returns a bare value swallows the error just as silently.
+  '\.catch\(\s*(\(\s*\)|\(\s*_?[a-zA-Z0-9_]*\s*\)|_?[a-zA-Z0-9_]+)\s*=>\s*(undefined|null|void 0|false|true|0|\[\]|\{\s*\})\s*\)'
   'catch\s*\(\s*_[a-zA-Z0-9_]*\s*\)\s*\{\s*\}'
   'catch\s*\{\s*\}'
 )
@@ -21,6 +23,7 @@ TARGETS=(
   "$ROOT/packages/db"
   "$ROOT/services"
   "$ROOT/apps/web/src"
+  "$ROOT/scripts"
 )
 
 found=0

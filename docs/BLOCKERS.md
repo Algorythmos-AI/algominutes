@@ -200,22 +200,53 @@ First run of all 13 migrations on a real Postgres 16 + pgvector: **clean + idemp
 (`tests/integration/**`, `npm run test:integration`) then surfaced these; each is pinned by a test
 where testable so the fix PR proves itself:
 
-- [ ] **Membership escalation in `markReady`** (`packages/db/src/notes-repo.ts` `upsertCoreToPostgres`):
+- [x] **Fixed (tenant-isolation PR):** **Membership escalation in `markReady`** (`packages/db/src/notes-repo.ts` `upsertCoreToPostgres`):
       it inserts `(workspaceId, authorUid)` into `workspace_members` as **`owner`** with
       `ON CONFLICT DO NOTHING`, never checking the author already belongs. A mismatched worker payload
       makes the author an owner of someone else's workspace. Pinned: `tenant-isolation.test.ts`
       (`it.fails`, verified to fail on the escalation itself).
-- [ ] **`markReady` inverts the source of truth**: on a Postgres failure it logs, then still marks the
+- [x] **Fixed:** **`markReady` inverts the source of truth**: on a Postgres failure it logs, then still marks the
       Firestore note `ready` ("background reconciliation" referenced in the comment does not exist).
       Postgres must win: fail the task so it retries instead.
-- [ ] **`applyNoteEdit` has no Postgres membership check** — `UPDATE notes WHERE id=$1`; the route
+- [x] **Fixed** (UPDATE scoped by `workspace_id`): **`applyNoteEdit` has no Postgres membership check** — `UPDATE notes WHERE id=$1`; the route
       (`services/api/src/routes/update-note.js`) only checks the Firestore doc's `authorId`.
-- [ ] **Silent catch** `ROLLBACK … .catch(() => undefined)` in `notes-repo.ts`, and
+- [x] **Fixed** (3 sites + checker widened to `=> undefined|null|void 0|…`, now also scans `scripts/`): **Silent catch** `ROLLBACK … .catch(() => undefined)` in `notes-repo.ts`, and
       `scripts/check-no-silent-catch.sh` only matches `() => {}`, so `() => undefined` / `() => null`
       slip through — widen the checker.
-- [ ] **`scripts/migrate.ts` mislabels failures**: every `CREATE EXTENSION` error (including
+- [x] **Fixed** (only `42501` is swallowed): **`scripts/migrate.ts` mislabels failures**: every `CREATE EXTENSION` error (including
       *connection refused*) is printed as "lacks CREATE privilege; expected" — misleading on an
       outage. Only swallow `42501 insufficient_privilege`; rethrow the rest.
+- [x] **Also fixed in the same PR:** `markReady` could **overwrite a note in another workspace**
+      (`notes ON CONFLICT (id) DO UPDATE` had no workspace guard); `markError` and
+      `note-terminal.cjs markNoteFailed` updated `notes WHERE id=$1` without a workspace scope. All three
+      are now workspace-scoped, each with a two-workspace test (mutation-checked: they fail on the old code).
+- [x] **Also fixed:** `markNoteFailed` mirrored Firestore `'error'` even when Postgres matched no row
+      (note already `ready`, or another workspace → phantom doc). Now mirrors only when Postgres marked it
+      failed or the Postgres write itself errored. Tested.
+- [ ] **Pre-existing, found by the auditors (queued):**
+      - `services/api/src/routes/process-intelligence.js:268,272,289,317` set note status directly in
+        Firestore, outside the repo layer (dual-write violation) → add `notesRepo.markQueued` and route the
+        error branches through `markError`.
+      - **db-job's logger is always the fallback:** it calls `logger.cjs .forContext(...)`, which doesn't
+        exist, so every run uses an ad-hoc stdout logger that writes `level` instead of `severity` (Cloud
+        Logging may not treat errors as ERROR) and prints Error objects as `{}`.
+      - **Errors logged under a key other than `err` lose message + stack** (logger only formats `err`):
+        `process-intelligence.js:112`, `transcoder/src/fast-path.js:104`, `summarizer/src/handler.js:238`,
+        `transcoder/src/handler.js:132`, `search-and-chat.cjs:499`.
+      - `services/transcoder/src/stt.js:140`: an STT response decode failure is swallowed and saves an
+        empty transcript chunk — must fail the chunk and log.
+      - Silent fallbacks: `delete-account.cjs:56` (token verify failure → 401 with no log),
+        `db-job/.../eval-diarisation.js:77`, `extractor/.../youtube.js:193`.
+      - Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
+        Replace the grep checker with a small syntax-aware Node check + an explicit allow marker.
+- [ ] **One Postgres connection config.** `packages/db/src/db.ts` (api/billing/notifier repo layer)
+      connects **without SSL**, while the transcoder/summarizer/embedder pools force
+      `ssl:{rejectUnauthorized:false}` because Cloud SQL once rejected unencrypted VPC-connector traffic
+      (embedder "Bug 16"). Terraform does not set `ssl_mode`. Unify into one pool-config builder, set
+      `ssl_mode` explicitly in Terraform, and add a deep health check that proves each service can
+      query Postgres after deploy — before the first staging deploy relies on it.
+- [ ] **`db.ts` used `console.error`** (fixed here → structured logger); `check-no-console.sh` should
+      also scan `packages/db` + `packages/ai` — widen it.
 - [ ] **Contract drift**: only 4 api routes match `openapi.v1.json`; 7 spec paths are served under
       other names and 24 routes are undocumented. Pinned by the ratchet `tests/contract-routes.test.ts`
       (fails on any new drift). Reconcile to zero before the iOS `/v1` client (plan PR-17).
