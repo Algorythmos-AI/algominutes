@@ -545,7 +545,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
   repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
   it with PR-13 (map-reduce), which rewrites this handler anyway.
-- [ ] **Postgres connections vs `db-f1-micro` (staging).** That tier allows about 25 connections. Each
+- [x] **Fixed (pg-connection-budget PR; owner chose "cap the pools"):** a per-environment budget
+  (`connection-budget.json` → max instances + `PG_POOL_MAX`), enforced by a Terraform precondition, a test,
+  and a CI run with every pool capped at 1. See DECISIONS. Was: **Postgres connections vs `db-f1-micro` (staging).** That tier allows about 25 connections. Each
   service's pools are lazy, and real use is bounded by request concurrency (the summarizer holds at most one
   repo connection per request: 4 instances × concurrency 4 = 16). But the sum across services at max scale
   is well over 25: api alone is 4 instances × (api-read 10 + repo 8). At low traffic this is fine. Under a

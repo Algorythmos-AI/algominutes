@@ -54,8 +54,22 @@ function stripSslParams(url) {
  * @param {{ max?: number, idleTimeoutMillis?: number }} [opts]
  * @param {NodeJS.ProcessEnv} [env]
  */
+/**
+ * The per-service connection budget (PG_POOL_MAX, set by Terraform from
+ * infra/terraform/envs/<env>/connection-budget.json): every pool the service
+ * opens is capped at it, so max instances x pools x cap fits the database's
+ * connection limit. It only ever lowers a pool's size. A pool that's too small
+ * just queues (a pg.Pool waits for a free client), where too many connections
+ * make Postgres refuse them.
+ */
+function poolCap(env) {
+  const n = Number(env.PG_POOL_MAX);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function buildPgConfig(opts = {}, env = process.env) {
-  const max = opts.max ?? 4;
+  const cap = poolCap(env);
+  const max = cap ? Math.min(opts.max ?? 4, cap) : (opts.max ?? 4);
   const idleTimeoutMillis = opts.idleTimeoutMillis ?? 30000;
   const ssl = resolveSsl(env);
   if (env.DATABASE_URL) {

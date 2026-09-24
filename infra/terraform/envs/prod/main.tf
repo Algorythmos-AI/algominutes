@@ -78,6 +78,7 @@ module "environment" {
   region         = var.region
 
   # Modest dedicated tier.
+  connection_budget         = jsondecode(file("${path.module}/connection-budget.json"))
   db_tier                   = "db-custom-1-3840" # 1 vCPU / 3.75 GB
   db_edition                = var.db_edition
   db_disk_size_gb           = 20

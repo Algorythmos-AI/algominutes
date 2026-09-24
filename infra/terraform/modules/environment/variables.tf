@@ -80,10 +80,23 @@ variable "task_max_attempts" {
 
 # --- Cloud Run ---------------------------------------------------------------
 
-variable "cloud_run_max_instances" {
-  description = "Upper bound on Cloud Run instances per service — a cost guard so a runaway loop can't scale without limit."
-  type        = number
-  default     = 4
+variable "connection_budget" {
+  description = "Postgres connection budget, from envs/<env>/connection-budget.json: per service its max instances (also a cost guard), pool count and PG_POOL_MAX, plus each job's connections. The worst case must fit the tier (precondition on the Cloud SQL instance)."
+  type = object({
+    tier              = string
+    max_connections   = number
+    reserved          = number
+    operator_headroom = number
+    services = map(object({
+      max_instances = number
+      pools         = number
+      pool_max      = number
+    }))
+    jobs = map(object({
+      connections = number
+      pool_max    = number
+    }))
+  })
 }
 
 variable "allowed_origins" {
