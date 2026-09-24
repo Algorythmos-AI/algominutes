@@ -189,7 +189,7 @@ function salvageGeminiJson(rawText) {
           },
           partial: true,
         };
-      } catch { /* fall through */ }
+      } catch { /* silent-catch-ok: salvage failed; the original parse error is rethrown below */ }
     }
     throw firstErr;
   }

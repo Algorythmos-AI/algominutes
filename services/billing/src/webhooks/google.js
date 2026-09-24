@@ -37,7 +37,7 @@ function decodePubSubMessage(body) {
   try {
     return JSON.parse(Buffer.from(data, 'base64').toString('utf8'));
   } catch {
-    // Malformed base64/JSON — surfaced by the caller as a 400 (permanent).
+    // silent-catch-ok: malformed base64/JSON is surfaced by the caller as a 400 (permanent).
     return undefined;
   }
 }

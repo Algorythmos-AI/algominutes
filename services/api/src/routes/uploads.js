@@ -46,7 +46,7 @@ function decodeUploadId(raw) {
   try {
     decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
   } catch {
-    // A malformed handle is a client bug (a truncated/garbled token), not a
+    // silent-catch-ok: a malformed handle is a client bug (a truncated/garbled token), not a
     // server error — decode failure maps to a 400 at the call site.
     return null;
   }

@@ -261,7 +261,13 @@ where testable so the fix PR proves itself:
         (warn); eval-diarisation treats only ENOENT as "no override"; malformed YouTube captions are
         `YOUTUBE_CAPTIONS_MALFORMED` instead of "no captions". Was: Silent fallbacks: `delete-account.cjs:56` (token verify failure → 401 with no log),
         `db-job/.../eval-diarisation.js:77`, `extractor/.../youtube.js:193`.
-      - Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
+      - [x] **Fixed (syntax-aware silent-catch PR):** `scripts/check-no-silent-catch.mjs` parses server and
+        shared code with the TypeScript compiler. A catch must throw, log, use the error, or carry
+        `// silent-catch-ok: <reason>`. 12 server sites were triaged (2 fixed, 10 marked with a reason).
+      - [ ] **apps/web/src silent catches (27):** mostly `resp.text().catch(() => '')`, plus
+        `catch { /* ignore */ }`. They're still under the old one-line grep rules. Clean them up (a shared
+        `readErrorBody(resp)` helper plus reasoned markers), then add `apps/web/src` to the AST gate's ROOTS.
+      - Was: Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
         Replace the grep checker with a small syntax-aware Node check + an explicit allow marker.
 - [x] **Fixed (pg-connection-config PR):** **One Postgres connection config.** `packages/db/src/db.ts` (api/billing/notifier repo layer)
       connects **without SSL**, while the transcoder/summarizer/embedder pools force
