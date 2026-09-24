@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
   getPool, setNoteSpeakers, getNoteSpeakers, markReady, markError, markQueued, applyNoteEdit, WorkspaceBoundaryError,
+  getNoteQueueState, IN_FLIGHT_STALE_MS,
 } from '@algominutes/db';
 import { createRequire } from 'node:module';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } from './helpers';
@@ -226,8 +227,10 @@ describe('markQueued (notes-repo): POST /v1/process', () => {
     await markQueued(fs, queuedInput({ noteId: 'note-anon', workspaceId: 'ws-anon', authorUid: 'anon' }), quietLog);
     expect((await pool.query(`SELECT email FROM users WHERE uid = 'anon'`)).rows[0].email).toBe('anon@firebase.local');
 
-    await markQueued(fs, queuedInput({ authorEmail: 'alice@real.example' }), quietLog);
-    await markQueued(fs, queuedInput(), quietLog); // a later call without the claim
+    // Fresh note ids: each call is a real kickoff (a duplicate of an in-flight
+    // note is a no-op, covered below).
+    await markQueued(fs, queuedInput({ noteId: 'note-e1', authorEmail: 'alice@real.example' }), quietLog);
+    await markQueued(fs, queuedInput({ noteId: 'note-e2' }), quietLog); // a later call without the claim
     expect((await pool.query(`SELECT email FROM users WHERE uid = 'alice'`)).rows[0].email).toBe('alice@real.example');
   });
 
@@ -239,6 +242,65 @@ describe('markQueued (notes-repo): POST /v1/process', () => {
     await pool.query(`DELETE FROM workspace_members WHERE workspace_id = 'ws-b' AND uid = 'bob'`);
     await markQueued(fs, queuedInput({ noteId: 'note-b2', workspaceId: 'ws-b', authorUid: 'bob' }), quietLog);
     expect(await isMember('ws-b', 'bob')).toBe(true);
+  });
+});
+
+// A duplicate POST /v1/process for a note that is already being processed
+// (e.g. a client retry after a timeout) used to reset the running job and
+// delete its audio_chunks. It must be a no-op, atomically.
+describe('idempotent kickoff: in-flight guard', () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it('getNoteQueueState: new, foreign, in-flight, stale and terminal notes', async () => {
+    expect(await getNoteQueueState({ noteId: 'nope', workspaceId: 'ws-a' })).toEqual({ foreign: false, inFlight: false, status: null });
+    expect((await getNoteQueueState({ noteId: 'note-b', workspaceId: 'ws-a' })).foreign).toBe(true);
+    expect(await getNoteQueueState({ noteId: 'note-a', workspaceId: 'ws-a' })).toEqual({ foreign: false, inFlight: true, status: 'queued' });
+    await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = $1 WHERE id = 'note-a'`, [ago(IN_FLIGHT_STALE_MS + 60_000)]);
+    expect((await getNoteQueueState({ noteId: 'note-a', workspaceId: 'ws-a' })).inFlight).toBe(false); // stuck
+    for (const status of ['ready', 'error']) {
+      await pool.query(`UPDATE notes SET status = $1, updated_at = NOW() WHERE id = 'note-a'`, [status]);
+      expect((await getNoteQueueState({ noteId: 'note-a', workspaceId: 'ws-a' })).inFlight).toBe(false);
+    }
+  });
+
+  it('a duplicate kickoff of an in-flight note changes nothing: no reset, no chunk loss, no mirror', async () => {
+    await pool.query(`UPDATE notes SET status = 'transcribing', chunks_done = 5, chunks_total = 12 WHERE id = 'note-a'`);
+    await seedChunks('note-a', 5);
+    const { fs, writes } = firestoreSetStub();
+    const out = await markQueued(fs, queuedInput(), quietLog);
+    expect(out).toEqual({ queued: false, status: 'transcribing' });
+    const { rows } = await pool.query(`SELECT status, chunks_done, chunks_total FROM notes WHERE id = 'note-a'`);
+    expect(rows[0]).toEqual({ status: 'transcribing', chunks_done: 5, chunks_total: 12 });
+    expect(await count(`SELECT 1 FROM audio_chunks WHERE note_id = 'note-a'`)).toBe(5);
+    expect(writes).toEqual([]);
+  });
+
+  it('a stuck in-flight note (past the stale window) can be re-queued', async () => {
+    await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = $1 WHERE id = 'note-a'`, [ago(IN_FLIGHT_STALE_MS + 60_000)]);
+    const { fs } = firestoreSetStub();
+    expect(await markQueued(fs, queuedInput(), quietLog)).toEqual({ queued: true, status: 'queued' });
+  });
+
+  it('two concurrent kickoffs of a brand-new note queue it exactly once', async () => {
+    const { fs, writes } = firestoreSetStub();
+    // Force a real overlap: hold alice's users row, so both kickoffs get past
+    // their state read and stall at the users upsert before either commits.
+    // (Unforced, the first finishes before the second starts and the race
+    // never happens; this test then passed even without the advisory lock.)
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query(`SELECT 1 FROM users WHERE uid = 'alice' FOR UPDATE`);
+    const racing = Promise.all([
+      markQueued(fs, queuedInput({ noteId: 'note-race' }), quietLog),
+      markQueued(fs, queuedInput({ noteId: 'note-race' }), quietLog),
+    ]);
+    await new Promise((r) => setTimeout(r, 400));
+    await holder.query('ROLLBACK');
+    holder.release();
+    const results = await racing;
+    expect(results.filter((r) => r.queued)).toHaveLength(1);
+    expect(results.filter((r) => !r.queued)).toEqual([{ queued: false, status: 'queued' }]);
+    expect(writes).toHaveLength(1); // one Firestore mirror
   });
 });
 

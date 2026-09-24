@@ -232,14 +232,20 @@ where testable so the fix PR proves itself:
         goes through `notesRepo.markQueued` / `markError`, and the route is off the checker's allowlist.
         Also fixed there: callers with no email claim (anonymous sign-in) got a 500 on every
         `/v1/process`, because `users.email` is NOT NULL.
-      - [ ] **A duplicate `/v1/process` for an IN-FLIGHT note** (e.g. a client retry after a timeout)
+      - [x] **Fixed (idempotent-kickoff PR):** a Postgres pre-check (before rate limits and metering) answers
+        a duplicate with 202 and the current status, and a foreign id with 404. `markQueued` re-checks
+        atomically (per-note advisory lock + `FOR UPDATE`), so concurrent duplicates queue once. Anything
+        in flight longer than 3 h counts as stuck and may re-queue, until the PR-15 sweeper replaces that.
+        Was: **A duplicate `/v1/process` for an IN-FLIGHT note** (e.g. a client retry after a timeout)
         re-queues it, which resets the running job and deletes its `audio_chunks`. If the duplicate is
         rejected instead (rate limit, too large), it transiently marks the in-flight note `error`; the
         job still finishes `ready`, because workers don't gate on status. This predates the
         tenant-boundary fix. It needs an in-flight guard in the kickoff: a note already `queued` or
         processing returns 202 with the current job, and never resets or errors it. Do it in PR-16
         (idempotent kickoff).
-      - [ ] **Metering idempotency key isn't workspace-scoped** (low): `meterMinutes` uses
+      - [x] **Resolved (idempotent-kickoff PR):** the foreign-id pre-check now runs before metering, so a
+        rejected request never reaches `meterMinutes`. The key format is unchanged, because refunds find the
+        debit by `note_id`. Was: **Metering idempotency key isn't workspace-scoped** (low): `meterMinutes` uses
         `${noteId}:ingest`, and it runs *before* markQueued's boundary check. A caller presenting another
         tenant's note id is refused, but the meter call has already deduped against (or pre-claimed) that
         tenant's key. No data is exposed, but it's a billing edge. Scope the key by workspace, or run the
