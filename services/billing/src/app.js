@@ -45,8 +45,14 @@ export function buildApp() {
   const app = express();
 
   app.disable('x-powered-by');
-  // JSON + webhook service, never HTML — keep helmet's protections, drop CSP.
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // JSON + webhook service, never HTML, so the strictest CSP costs nothing
+  // (docs/DECISIONS.md): nothing may load, run or frame a response.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: { defaultSrc: ["'none'"], baseUri: ["'none'"], formAction: ["'none'"], frameAncestors: ["'none'"] },
+    },
+  }));
 
   // Trust the proxy so req.ip / X-Forwarded-For behave behind Cloud Run's LB.
   app.set('trust proxy', true);
