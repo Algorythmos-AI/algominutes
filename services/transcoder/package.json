@@ -9,7 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@google-cloud/speech": "^7.0.0",
+    "@google-cloud/speech": "^8.1.0",
     "@google-cloud/storage": "^8.2.0",
     "@google-cloud/tasks": "^7.1.1",
     "express": "^4.21.2",
