@@ -489,6 +489,26 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   each service a connection budget (pool max × max instances ≤ the tier's limit), or move to a larger tier
   (a cost decision, yours). The staging proof should watch `pg_stat_activity` under the e2e run.
 
+## Found in the CodeQL backlog (2026-09-25)
+
+- [x] **Fixed (billing-apple-fail-closed PR): Apple purchases and notifications were trusted without
+  verification** (CodeQL `js/user-controlled-bypass`, high). `lib/apple.js verifyAndDecodeJws` only decoded
+  the JWS. So any signed-in user could forge a StoreKit transaction to `POST /v1/purchases/verify` and grant
+  themselves Pro with any expiry, and anyone could forge App Store notifications (renew or revoke a real
+  subscriber). It now **fails closed with 503**. Only `APPLE_JWS_TRUST_UNVERIFIED=true` restores decode-only,
+  for local dev and tests, and never on Cloud Run (`K_SERVICE`). The Google Play rail was already safe: it
+  re-verifies every token server-side against the Play API.
+  - [ ] **PR-32 (before any Apple billing):** verify the x5c chain to Apple Root CA - G3, the ES256
+    signature, and the bundle id / environment. The paywall stays hidden behind its flag until then.
+- [ ] **Still open in CodeQL** (triage next):
+  - `js/polynomial-redos` in `redaction.cjs` (the PII pre-scrub runs over whole 2–4 h transcripts);
+  - `js/log-injection` in `client-error.js`;
+  - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
+  - `js/insecure-helmet-configuration` ×2 (the api disables CSP by design, since it serves JSON only);
+    dismissing needs your yes;
+  - `js/missing-rate-limiting` ×6 on billing (its webhooks need provider-aware limits);
+  - `actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14 (supply chain, public repo).
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
