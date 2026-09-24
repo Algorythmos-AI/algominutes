@@ -30,7 +30,9 @@ import ts from 'typescript';
 // Server + shared code, where CLAUDE.md §1 applies. apps/web/src is still held to
 // the one-line grep rules in check-no-silent-catch.sh until its own cleanup (BLOCKERS).
 const ROOTS = ['packages', 'services', 'functions', 'scripts'];
-const SKIP = /node_modules|\/dist\/|\/build\/|\/generated\/|\.d\.ts$/;
+// Whole path segments only (so e.g. `builder.js` is not skipped), plus type declarations.
+const SKIP_DIR = /(^|\/)(node_modules|dist|build|generated)(\/|$)/;
+const skip = (p) => SKIP_DIR.test(p) || p.endsWith('.d.ts');
 const LOG_METHODS = new Set(['error', 'warn', 'info', 'debug', 'fatal']);
 const MARKER = /silent-catch-ok:[ \t]*[^\s*]/; // reason must be on the same line
 
@@ -38,7 +40,7 @@ function* sourceFiles(dir) {
   if (!fs.existsSync(dir)) return;
   for (const name of fs.readdirSync(dir)) {
     const p = path.join(dir, name);
-    if (SKIP.test(p)) continue;
+    if (skip(p)) continue;
     if (fs.statSync(p).isDirectory()) yield* sourceFiles(p);
     else if (/\.(c|m)?[jt]sx?$/.test(name)) yield p;
   }
