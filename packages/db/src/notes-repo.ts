@@ -11,6 +11,7 @@
  */
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
+import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 // Shared, Postgres-only edit writer. Same module the deployed Cloud Function
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
@@ -84,57 +85,8 @@ function timeStrToMs(t: string): number {
 }
 
 /** Thrown when a write would cross a workspace boundary (CLAUDE.md §1 multi-tenancy). */
-export class WorkspaceBoundaryError extends Error {
-  readonly code = 'WORKSPACE_BOUNDARY';
-  constructor(message: string) {
-    super(message);
-    this.name = 'WorkspaceBoundaryError';
-  }
-}
+export { WorkspaceBoundaryError } from './workspace-access';
 
-/**
- * The caller may write into `workspaceId` only if it is a brand-new workspace
- * (bootstrapped here with the caller as owner), or the caller is already a
- * member of it. A workspace row whose owner_uid is the caller but which is
- * missing the owner's membership row (legacy backfill) is healed. Anyone else
- * gets a WorkspaceBoundaryError: never add a stranger to an existing workspace.
- */
-async function ensureWorkspaceAccess(
-  client: import('pg').PoolClient,
-  workspaceId: string,
-  uid: string,
-  name: string,
-): Promise<void> {
-  const created = await client.query(
-    `INSERT INTO workspaces (id, owner_uid, name)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (id) DO NOTHING
-       RETURNING id`,
-    [workspaceId, uid, name],
-  );
-  if (created.rowCount) {
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, uid, role) VALUES ($1, $2, 'owner')`,
-      [workspaceId, uid],
-    );
-    return;
-  }
-  const member = await client.query('SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND uid = $2', [
-    workspaceId,
-    uid,
-  ]);
-  if (member.rowCount) return;
-  const healed = await client.query(
-    `INSERT INTO workspace_members (workspace_id, uid, role)
-       SELECT id, owner_uid, 'owner' FROM workspaces WHERE id = $1 AND owner_uid = $2
-       ON CONFLICT (workspace_id, uid) DO NOTHING
-       RETURNING uid`,
-    [workspaceId, uid],
-  );
-  if (!healed.rowCount) {
-    throw new WorkspaceBoundaryError(`${uid} is not a member of workspace ${workspaceId}`);
-  }
-}
 
 async function upsertCoreToPostgres(
   input: MarkReadyInput,
@@ -325,18 +277,7 @@ export async function markQueued(
           return { queued: false, status: state.status };
         }
 
-        // users.email is NOT NULL, and Postgres enforces that while forming the
-        // row, before ON CONFLICT. A caller with no email claim (anonymous
-        // sign-in) therefore needs the same placeholder markReady uses; a real
-        // email, when present, always wins and is never overwritten by it.
-        await client.query(
-          `INSERT INTO users (uid, email, display_name)
-             VALUES ($1, COALESCE($2::text, $1 || '@firebase.local'), $3)
-           ON CONFLICT (uid) DO UPDATE SET
-             email        = COALESCE($2::text, users.email),
-             display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
-          [input.authorUid, input.authorEmail || null, input.authorName || null],
-        );
+        await ensureUser(client, { uid: input.authorUid, email: input.authorEmail, name: input.authorName });
         await ensureWorkspaceAccess(
           client,
           input.workspaceId,
