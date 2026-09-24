@@ -73,6 +73,8 @@ describe('markSummaryReady (summarizer final write)', () => {
   const expectUntouched = async (writes: unknown[]) => {
     expect(writes).toEqual([]);
     expect(await count(`SELECT 1 FROM summaries WHERE note_id = 'note-a'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM action_items WHERE note_id = 'note-a'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM key_decisions WHERE note_id = 'note-a'`)).toBe(0);
     expect((await pool.query(`SELECT status FROM notes WHERE id = 'note-a'`)).rows[0].status).toBe('summarizing');
   };
 

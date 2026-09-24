@@ -391,13 +391,23 @@ export async function claimSummaryRegeneration(input: {
 /**
  * Hand a claimed note back (the regenerate task could not be enqueued), so it
  * is not stuck in 'summarizing' waiting for a task that will never arrive.
- * Scoped to the caller's workspace, and only if it is still in 'summarizing'.
+ * Scoped to the caller's workspace, and only if it is still in 'summarizing'
+ * at the generation this claim minted.
+ *
+ * It also undoes the claim's generation bump. No task carries that generation,
+ * and leaving it bumped would make a run still in flight from before a
+ * stale-lock takeover count as superseded, so its summary would be discarded
+ * (markSummaryReady only writes at the generation the run read).
  */
-export async function releaseSummaryClaim(input: { noteId: string; workspaceId: string }): Promise<void> {
+export async function releaseSummaryClaim(input: { noteId: string; workspaceId: string; generation: number }): Promise<void> {
   await getPool().query(
-    `UPDATE notes SET status = 'ready', updated_at = NOW()
-      WHERE id = $1 AND workspace_id = $2 AND status = 'summarizing'`,
-    [input.noteId, input.workspaceId],
+    `UPDATE notes
+        SET status = 'ready',
+            summary_generation = summary_generation - 1,
+            updated_at = NOW()
+      WHERE id = $1 AND workspace_id = $2 AND status = 'summarizing'
+        AND summary_generation = $3`,
+    [input.noteId, input.workspaceId, input.generation],
   );
 }
 
