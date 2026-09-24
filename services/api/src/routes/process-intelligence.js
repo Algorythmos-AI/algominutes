@@ -220,6 +220,11 @@ export async function processIntelligenceRoute(req, res) {
       sourceType: type, storagePath, sourceUrl, mimeType: clientMime,
     }, log);
   } catch (err) {
+    if (err?.code === 'ACCOUNT_DELETED') {
+      // The account was deleted; its token is still valid for up to an hour.
+      log.warn({}, 'process_account_deleted');
+      return res.status(401).json({ error: 'account_deleted' });
+    }
     if (err instanceof WorkspaceBoundaryError || err?.code === 'WORKSPACE_BOUNDARY') {
       // Postgres note ids are global: this id belongs to another workspace.
       // Nothing was written; answer exactly as for a note that doesn't exist.

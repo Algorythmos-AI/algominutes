@@ -463,7 +463,44 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       PR-15 sweeper should also remove objects of notes that don't exist.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
-    - [ ] Account deletion reuses this path (below).
+    - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in
+      one transaction: a purge row per owned note, tagged with the uid (migration 015), then
+      `DELETE FROM users`, whose cascade removes the rest. Then the purges (each note's doc and audio),
+      the account's workspace docs, `rateLimits/{uid}`, and leftover uploads under its workspace
+      prefixes. Auth goes last. A Postgres or Firestore failure answers 500 with Auth intact, so the
+      client retries, and the retry finishes the job by uid. Hardened after its dual-write audit:
+      - an `account_deletions` tombstone (migration 016) keeps the owned workspace ids for retries, and
+        makes `ensureUser` refuse to re-create the account from a still-valid token. The upload route
+        refuses (401) before minting a GCS session;
+      - the transaction locks the user and workspace rows, so a concurrent note insert fails its FK
+        instead of escaping a purge;
+      - dead letters, support requests and analytics events go too (their FKs only NULLed the uid);
+      - workspace docs are deleted with their subcollections (`recursiveDelete`), which catches note docs
+        that never reached Postgres, along with the root `analytics` docs;
+      - ANY failure after Postgres answers 500 with Auth intact, because no sweeper exists yet.
+      - after its second audit: the tombstone check runs AFTER `ensureUser`'s upsert, so a write racing the
+        deletion can't re-create the account (tested with a real two-connection race). `authMiddleware`
+        refuses a tombstoned uid on every route. `markQueued` takes the user row before the note row (the
+        order deletion uses), so there's no deadlock. Open GCS upload sessions are cancelled, with retries,
+        via the tombstone. Purges left in the account's workspaces by earlier note deletions run too.
+    - [ ] Residuals, queued:
+      - **Bucket versioning keeps "deleted" audio** as noncurrent versions (every bucket is versioned,
+        with no noncurrent lifecycle rule), for note deletion too. Next PR: delete every generation in
+        the purge, and add a noncurrent-version lifecycle rule (Terraform; your apply).
+      - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
+        failing object blocks an account's deletion (fail closed), and must page someone.
+      - Single-note deletion should also cancel the note's open upload session (account deletion does).
+      - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today
+        an owned workspace goes with its owner, members' notes included.
+      - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
+        re-create the account, but a deleted account's token can still *read* (nothing is left) for up to
+        an hour. Clients must sign out on the 200.
+      - Firestore rules (PR-11) should stop a signed-in client re-creating `workspaces/{ws}` docs after
+        deletion. The web app does that at sign-in (`App.tsx:648`).
+      - The sweeper (PR-15) should prune completed tombstones after the retention window, and drain
+        `storage_purges`.
+      - `process-intelligence.js` also writes root Firestore `analytics` docs. `analytics_events` exists in
+        Postgres, so stop writing them.
     - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.
   - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
     - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped

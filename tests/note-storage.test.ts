@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { purgeNoteObjects, noteObjectSets, ownedStoragePath } = require('@algominutes/ai/note-storage.cjs');
+const { purgeNoteObjects, noteObjectSets, ownedStoragePath, cancelResumableUpload } = require('@algominutes/ai/note-storage.cjs');
 
 // The objects of one note are matched by EXACT name after a prefix listing. A
 // bare prefix would also match another note whose id extends this one's
@@ -64,5 +64,23 @@ describe('purgeNoteObjects', () => {
 
     const failing = { ...bucket, getFiles: async () => { throw new Error('list 503'); } };
     await expect(purgeNoteObjects({ bucket: failing, workspaceId: 'ws1', noteId: 'note1' })).rejects.toThrow('list 503');
+  });
+});
+
+describe('cancelResumableUpload', () => {
+  it('DELETEs the GCS session and treats 499/404/410 as done', async () => {
+    const calls: any[] = [];
+    for (const status of [499, 404, 410]) {
+      await cancelResumableUpload('https://storage.googleapis.com/upload/storage/v1/b/x/o?upload_id=1', async (u: string, i: any) => { calls.push([u, i.method]); return { status }; });
+    }
+    expect(calls.every(([, m]) => m === 'DELETE')).toBe(true);
+    await expect(cancelResumableUpload('https://storage.googleapis.com/u', async () => ({ status: 503 }))).rejects.toThrow(/HTTP 503/);
+  });
+
+  it('never contacts anything but storage.googleapis.com over https', async () => {
+    const never = async () => { throw new Error('must not be called'); };
+    for (const uri of ['https://evil.example/u', 'http://storage.googleapis.com/u', 'https://storage.googleapis.com.evil.example/u', 'not a url']) {
+      await expect(cancelResumableUpload(uri, never)).rejects.toThrow(/refusing|not a session uri/);
+    }
   });
 });
