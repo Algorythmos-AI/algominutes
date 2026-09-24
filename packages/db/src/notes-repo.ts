@@ -12,6 +12,7 @@
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
+import { insertDebit } from './ledger';
 // Shared, Postgres-only edit writer. Same module the deployed Cloud Function
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
@@ -57,6 +58,12 @@ export interface MarkQueuedInput {
   storagePath?: string | null;
   sourceUrl?: string | null;
   mimeType?: string | null;
+  /**
+   * The ingest debit, written in the queue transaction: after the note row
+   * exists (usage_ledger.note_id is a foreign key), and only when this call
+   * actually queues. A duplicate or refused kickoff debits nothing.
+   */
+  meter?: { minutes: number; idempotencyKey: string };
 }
 
 export interface NoteEditSummary {
@@ -317,6 +324,17 @@ export async function markQueued(
         }
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
+        if (input.meter) {
+          // Idempotent by key: a re-queue of the same note isn't charged twice.
+          await insertDebit(client, {
+            uid: input.authorUid,
+            workspaceId: input.workspaceId,
+            noteId: input.noteId,
+            minutes: input.meter.minutes,
+            reason: 'ingest',
+            idempotencyKey: input.meter.idempotencyKey,
+          });
+        }
         return { queued: true, status: 'queued' };
       },
       { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },

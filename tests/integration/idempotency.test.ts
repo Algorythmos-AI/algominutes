@@ -109,10 +109,11 @@ describe('usage ledger (packages/db usage-repo)', () => {
 
 describe('subscriptions + push tokens', () => {
   it('ensureTrial: a replay keeps the single original trial', async () => {
-    const first = await ensureTrial('u1', { platform: 'ios' });
-    const second = await ensureTrial('u1', { platform: 'ios' });
+    const first = await ensureTrial('u1');
+    const second = await ensureTrial('u1');
     expect(await count(`SELECT 1 FROM subscriptions WHERE uid = 'u1'`)).toBe(1);
-    expect(String(second.trial_ends_at)).toBe(String(first.trial_ends_at));
+    expect(first.trial_end).not.toBeNull();
+    expect(String(second.trial_end)).toBe(String(first.trial_end));
   });
 
   it('registerPushToken: a token that moves accounts is re-homed, not duplicated', async () => {
