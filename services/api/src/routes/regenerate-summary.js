@@ -103,7 +103,7 @@ export async function regenerateSummaryRoute(req, res) {
     log.error({ err }, 'regenerate_summary_enqueue_failed');
     // Hand the note back rather than leaving it stuck in 'summarizing'
     // waiting for a task that will never arrive.
-    await releaseSummaryClaim({ noteId, workspaceId })
+    await releaseSummaryClaim({ noteId, workspaceId, generation: claimed.summary_generation })
       .catch((rbErr) => log.error({ err: rbErr }, 'regenerate_summary_unclaim_failed'));
     return res.status(500).json({ error: "Couldn't queue the summary. Please try again." });
   }
