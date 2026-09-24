@@ -10,7 +10,7 @@
 # tsx — the on-the-fly TypeScript runtime.
 #
 #   docker build -f services/api/Dockerfile -t algominutes-api .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 WORKDIR /app
 

@@ -4,7 +4,7 @@
 # service imports ONLY @algominutes/ai (CommonJS, no TypeScript), so it runs on
 # plain `node` — it does not need tsx or @algominutes/db.
 #   docker build -f services/extractor/Dockerfile -t algominutes-extractor .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 # System packages:
 #   poppler-utils        -> pdftoppm, rasterizes image-only PDF pages before OCR.

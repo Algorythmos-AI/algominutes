@@ -4,7 +4,7 @@
 # exits. BUILD CONTEXT = REPO ROOT. Runs under tsx (imports @algominutes/db
 # TypeScript source via the repo layer).
 #   docker build -f services/db-job/Dockerfile -t algominutes-db-job .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 WORKDIR /app
 

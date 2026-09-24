@@ -3,7 +3,7 @@
 # BUILD CONTEXT = REPO ROOT (npm links the @algominutes/* workspaces). Runs
 # under tsx because it imports @algominutes/db TypeScript source.
 #   docker build -f services/transcoder/Dockerfile -t algominutes-transcoder .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 # ffmpeg for transcode/chunk; yt-dlp for YouTube ingest. python3 is only here
 # because yt-dlp ships as a Python wheel; we run no Python ourselves. The

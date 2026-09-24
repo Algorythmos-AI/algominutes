@@ -4,7 +4,7 @@
 # under tsx because it imports @algominutes/db TypeScript source and there is
 # no build step.
 #   docker build -f services/notifier/Dockerfile -t algominutes-notifier .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 WORKDIR /app
 

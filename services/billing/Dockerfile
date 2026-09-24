@@ -6,7 +6,7 @@
 #
 # BUILD CONTEXT = REPO ROOT. Runs under tsx (imports @algominutes/db TS source).
 #   docker build -f services/billing/Dockerfile -t algominutes-billing .
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 
 WORKDIR /app
 
