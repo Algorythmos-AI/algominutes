@@ -422,7 +422,18 @@ export interface MarkSummaryReadyInput {
   /** Redacted transcript preview for the live UI (the full transcript stays in Postgres). */
   transcriptPreview: { speaker: string; text: string; time: string }[];
   transcriptTruncated: boolean;
+  /**
+   * The note's summary_generation when this run read it, before the Gemini
+   * call. The write only lands if it is still current: a regenerate claimed
+   * during the run bumps it, and the older run must not overwrite the newer one.
+   */
+  expectedGeneration: number;
 }
+
+export type MarkSummaryReadyResult =
+  | { written: true }
+  /** not_found: deleted or not in this workspace. superseded: a newer generation owns the note. */
+  | { written: false; reason: 'not_found' | 'superseded' };
 
 /**
  * The summarizer's final write (the last pipeline stage). In one transaction,
@@ -431,18 +442,19 @@ export interface MarkSummaryReadyInput {
  * and the summary, action items and key decisions are replaced. Then the
  * Firestore mirror is written.
  *
- * If the note is gone (deleted mid-run) or isn't in that workspace, nothing is
- * written, in either store, and { written: false } is returned. Mirroring anyway
- * would resurrect a phantom document. Idempotent on replay: everything is
- * upserted or replaced.
+ * Nothing is written, in either store, if the note is gone (deleted mid-run),
+ * isn't in that workspace, or has moved on to a newer summary generation since
+ * this run read it. Mirroring anyway would resurrect a phantom document, or put
+ * a stale summary over a newer one. Idempotent on replay: everything is upserted
+ * or replaced.
  */
 export async function markSummaryReady(
   firestore: Firestore,
   input: MarkSummaryReadyInput,
   log: { error: (o: any, m?: string) => void },
-): Promise<{ written: boolean }> {
-  const written = await withTx(
-    async (client) => {
+): Promise<MarkSummaryReadyResult> {
+  const outcome = await withTx(
+    async (client): Promise<MarkSummaryReadyResult> => {
       const note = await client.query(
         `UPDATE notes
             SET status = 'ready',
@@ -450,10 +462,17 @@ export async function markSummaryReady(
                 summary_requested_at = NULL,
                 updated_at = NOW()
           WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+            AND summary_generation = $3
           RETURNING id`,
-        [input.noteId, input.workspaceId],
+        [input.noteId, input.workspaceId, input.expectedGeneration],
       );
-      if (!note.rowCount) return false;
+      if (!note.rowCount) {
+        const live = await client.query(
+          'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+          [input.noteId, input.workspaceId],
+        );
+        return { written: false, reason: live.rowCount ? 'superseded' : 'not_found' };
+      }
       await client.query(
         `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
            VALUES ($1, $2, NULL, $3, $4)
@@ -470,11 +489,11 @@ export async function markSummaryReady(
       for (const text of input.summary.keyDecisions || []) {
         await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
       }
-      return true;
+      return { written: true };
     },
     { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
   );
-  if (!written) return { written: false };
+  if (!outcome.written) return outcome;
 
   await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).set(
     {

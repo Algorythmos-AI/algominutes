@@ -186,18 +186,24 @@ async function handle(payload, deps) {
 
   // Postgres (summary rows, 'ready', manual-edit flags cleared, all in one
   // transaction), then the Firestore mirror: notes-repo markSummaryReady.
-  const { written } = await markSummaryReady(firestore(), {
+  // The generation read above is re-checked at the write, because the guard
+  // before Gemini can't see a regenerate claimed during the call.
+  const result = await markSummaryReady(firestore(), {
     noteId,
     workspaceId,
     summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
     model,
     transcriptPreview: redacted.slice(0, 200),
     transcriptTruncated: redacted.length > 200,
+    expectedGeneration: Number(noteRow.summary_generation),
   }, log);
-  if (!written) {
-    // Deleted (or moved) while we summarized: nothing was written anywhere,
-    // and there's nobody to notify.
-    log.warn({ noteId, workspaceId }, 'summarizer_note_gone_before_write');
+  if (!result.written) {
+    // Nothing was written anywhere, and there's nobody to notify: the note was
+    // deleted while we summarized, or a newer run now owns its summary.
+    log.warn(
+      { noteId, workspaceId, generation: Number(noteRow.summary_generation) },
+      result.reason === 'superseded' ? 'summarizer_generation_superseded' : 'summarizer_note_gone_before_write',
+    );
     return;
   }
 

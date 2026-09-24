@@ -381,12 +381,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
   Validate with the schemas in the contract-documentation PR.
 - [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
-- [ ] **The summarizer's generation guard is checked before Gemini, not at the write** (found by the
-  dual-write audit of the summarizer-via-repo PR). The run reads `summary_generation`, spends minutes in
-  Gemini, then `markSummaryReady` writes without re-checking it. If a newer regenerate claims the note in
-  that window, the older run can still land its summary and clear `summary_requested_at`. The fix is to pass
-  the task's generation to `markSummaryReady` and add it to the workspace-scoped `UPDATE … RETURNING id`, so
-  a stale run writes nothing. Queued as the next small PR.
+- [x] **Fixed (generation-at-write PR):** `markSummaryReady` takes the generation the run read and
+  only writes if it's still current (`summary_generation = $3` in the workspace-scoped UPDATE). A superseded
+  run writes nothing in either store, logs `summarizer_generation_superseded`, and doesn't notify. Tested,
+  and mutation-checked. Was: **The summarizer's generation guard is checked before Gemini, not at the
+  write** (found by the dual-write audit of the summarizer-via-repo PR). The run read `summary_generation`,
+  spent minutes in Gemini, then wrote without re-checking it, so an older run could land over a regenerate
+  claimed in that window.
 - [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
   repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
   it with PR-13 (map-reduce), which rewrites this handler anyway.
