@@ -164,10 +164,10 @@ async function touchShareRead(client, shareId) {
  * rather than a reuse. Keying by hashed IP means a crawled or leaked link
  * cannot become a billable loop against one note.
  *
- * Uses runTransaction + tx.set — the enforceUsageBudget idiom — because
- * scripts/check-no-direct-firestore.sh forbids `.doc(x).set(...)` outside the
- * repo layer, and a bare set would also lose the read-modify-write race that
- * makes a counter a counter.
+ * Uses runTransaction + tx.set, the enforceUsageBudget idiom, because a bare
+ * set would lose the read-modify-write race that makes a counter a counter.
+ * It is not a note write, so it carries a firestore-write-ok marker for
+ * scripts/check-no-direct-firestore.mjs.
  *
  * Throws Error with code 429 when over budget. maxInstances on the function is
  * the hard spend ceiling; this is the per-source one.
@@ -190,6 +190,7 @@ async function enforceShareReadBudget(db, ipHash, { limit = 60, windowMs = 60 * 
       err.code = 429;
       throw err;
     }
+    // firestore-write-ok: the per-IP share-read rate-limit counter, not a note
     tx.set(ref, { count: count + 1, windowStart, updatedAt: new Date().toISOString() }, { merge: true });
   });
 }
