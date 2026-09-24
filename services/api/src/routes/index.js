@@ -16,6 +16,7 @@ import { userRateLimit } from '../middleware/rate-limit.js';
 
 // server.ts-derived routes (ESM).
 import { updateNoteRoute } from './update-note.js';
+import { deleteNoteRoute } from './delete-note.js';
 import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
 // functions/index.js HTTP handlers, ported to services/api (ESM).
@@ -100,6 +101,9 @@ export function buildRouter() {
 
   // ── POST /v1/notes/update ── server.ts /api/update-note (updateNote twin) ─
   router.post('/notes/update', authed, wrap(updateNoteRoute));
+
+  // ── /v1/notes/delete ── the single deletion path (notes-repo deleteNote) ──
+  router.post('/notes/delete', authed, wrap(deleteNoteRoute));
 
   // ── POST /v1/notes/:id/speakers ── name diarised speakers (ADR 0005) ────
   router.post('/notes/:id/speakers', authed, wrap(setNoteSpeakersRoute));
