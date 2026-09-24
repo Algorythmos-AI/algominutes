@@ -186,6 +186,23 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
+    path: `${API_BASE_PATH}/notes/delete`,
+    summary: 'Delete a note: Postgres rows (search and chat stop returning it), the Firestore mirror, and its audio. Idempotent.',
+    tags: ['notes'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.DeleteNoteRequest) },
+    responses: {
+      200: { description: 'The note is deleted (or already was); its audio is queued for purge.', ...json(S.DeleteNoteResponse) },
+      400: errorResponse('Invalid noteId / workspaceId.'),
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('Not a member of that workspace.'),
+      500: errorResponse('Delete failed; safe to retry.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
     path: `${API_BASE_PATH}/notes/{id}/speakers`,
     summary: 'Name the diarised speakers of a note (per-note, ADR 0005).',
     tags: ['notes'],

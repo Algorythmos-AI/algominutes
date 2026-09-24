@@ -45,13 +45,13 @@ options (product-configurable, plan-aware):
 
 | Data | Store | Kept for | Deleted by |
 |---|---|---|---|
-| **Original audio** | Cloud Storage (GCS), note-prefixed | Until note/account delete or user-set retention; local device copy purged after confirmed upload (§5) | `onNoteDeleted` Storage cleanup |
-| **Intermediate FLAC chunks** | Cloud Storage (processing scratch) | Transient — through processing; backstopped by the delete cascade | `onNoteDeleted` (prefix sweep) |
+| **Original audio** | Cloud Storage (GCS), note-prefixed | Until note/account delete or user-set retention; local device copy purged after confirmed upload (§5) | `POST /v1/notes/delete` → a `storage_purges` row in the delete's transaction, purged right away and retried until it succeeds |
+| **Intermediate FLAC chunks** | Cloud Storage (processing scratch) | Transient — through processing; backstopped by the delete cascade | the transcoder, then the note's `storage_purges` row (`transcoder/{noteId}/`) |
 | **Transcript lines** | Postgres `transcript_lines` (+ Firestore cache) | With the note | `DELETE FROM notes` → `ON DELETE CASCADE` |
 | **Summaries / action items / key decisions** | Postgres `summaries`, `action_items`, `key_decisions` | With the note | `ON DELETE CASCADE` |
 | **Embeddings** | Postgres `embeddings` | With the note | `ON DELETE CASCADE` |
 | **Audio chunk metadata** | Postgres `audio_chunks` | With the note | `ON DELETE CASCADE` |
-| **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | delete-account / manual / retention job |
+| **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | `POST /v1/notes/delete` (notes-repo `deleteNote`: Postgres first, then the Firestore mirror) / delete-account / retention job |
 | **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `delete-account` endpoint |
 | **Workspace membership** | Postgres `workspace_members` | Until account deletion / removal | `delete-account` endpoint |
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |

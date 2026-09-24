@@ -420,6 +420,27 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     Postgres side works *if every step succeeds*. But each step is best-effort: a failure is logged, then
     Auth is deleted anyway and the request returns 200, so the user can never retry. GCS audio is removed
     only by that undeployed trigger. Non-note Firestore docs (`rateLimits/{uid}`) are never removed.
+  - **Done (note-deletion-path PR):** `POST /v1/notes/delete` → notes-repo `deleteNote`.
+    - Postgres goes first, in one workspace-scoped transaction: a membership check, then the cascade.
+      Search and chat can no longer return the note.
+    - Then the Firestore mirror.
+    - Then the audio purge. It's recorded in `storage_purges` (migration 014) in the same transaction and
+      matched by exact object name, so deleting `note1` never touches `note10`, which the old
+      `onNoteDeleted` prefix sweep would have. A failed purge stays queued.
+    - Idempotent, and tested (integration + route, mutation-checked).
+  - **Still open for M1:**
+    - [ ] iOS calls the route instead of deleting the doc (PR-17). Then Firestore rules stop clients
+      deleting note docs.
+    - [ ] Workers must not resurrect a deleted note. The transcoder mirrors `status: 'chunking'` with
+      `set(…, { merge: true })` *before* any Postgres write (handler.js:52), so a note deleted between
+      kickoff and transcoding comes back as a phantom doc. Its later Postgres writes then fail (NOTE_NOT_FOUND
+      / FK), so each retry re-creates the doc until the task dead-letters. Mirror with `update()` (which
+      fails on a missing doc), and treat a vanished note as an acknowledged no-op in the
+      transcoder and embedder.
+    - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
+      the rows that stay stuck.
+    - [ ] Account deletion reuses this path (below).
+    - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.
   - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
     - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped
       Postgres delete in one transaction, then the Firestore mirror, then a Cloud Task (idempotent, with a
