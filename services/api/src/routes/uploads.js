@@ -24,6 +24,7 @@ import {
   isPostgresEnabled,
   UploadSessionsUnavailableError,
   WorkspaceBoundaryError,
+  isAccountDeleted,
 } from '@algominutes/db';
 
 const { isValidId } = intelligenceModule;
@@ -103,6 +104,12 @@ export async function createUploadSessionRoute(req, res) {
     log.error({}, 'upload_sessions_unavailable');
     return res.status(503).json({ error: 'Uploads are unavailable until Postgres is provisioned.' });
   }
+  // A deleted account's token can still verify for up to an hour. Refuse
+  // before minting a GCS session, which is a capability to write objects.
+  if (await isAccountDeleted(req.uid)) {
+    log.warn({}, 'upload_account_deleted');
+    return res.status(401).json({ error: 'account_deleted' });
+  }
   let sessionUri;
   try {
     const bucket = getStorage().bucket();
@@ -125,6 +132,10 @@ export async function createUploadSessionRoute(req, res) {
       workspaceId, noteId, storagePath, sessionUri, totalBytes, expiresAt,
     }, log);
   } catch (err) {
+    if (err?.code === 'ACCOUNT_DELETED') {
+      log.warn({}, 'upload_account_deleted');
+      return res.status(401).json({ error: 'account_deleted' });
+    }
     if (err instanceof WorkspaceBoundaryError || err?.code === 'WORKSPACE_BOUNDARY') {
       log.warn({ err }, 'upload_workspace_boundary');
       return res.status(403).json({ error: 'Workspace mismatch' });

@@ -14,6 +14,16 @@ export class WorkspaceBoundaryError extends Error {
   }
 }
 
+/** The account was deleted (account_deletions): it must not be re-created. */
+export class AccountDeletedError extends Error {
+  readonly code = 'ACCOUNT_DELETED';
+  readonly status = 401;
+  constructor(uid: string) {
+    super(`account ${uid} was deleted`);
+    this.name = 'AccountDeletedError';
+  }
+}
+
 /**
  * Upsert the user row (an FK target for workspaces, notes, uploads).
  * users.email is NOT NULL, and Postgres enforces that while forming the row,
@@ -33,6 +43,14 @@ export async function ensureUser(
        display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
     [user.uid, user.email || null, user.name || null],
   );
+  // A deleted account stays deleted: its ID token can still verify for up to
+  // an hour. The check comes AFTER the upsert, on purpose. If a deletion was in
+  // flight, the upsert waited for its row lock, and in READ COMMITTED this next
+  // statement sees the tombstone it committed. Throwing rolls the upsert back.
+  // (Checked first, a request racing the deletion would pass, then re-create
+  // the row once the deletion released its lock.)
+  const tomb = await client.query('SELECT 1 FROM account_deletions WHERE uid = $1', [user.uid]);
+  if (tomb.rowCount) throw new AccountDeletedError(user.uid);
 }
 
 /**

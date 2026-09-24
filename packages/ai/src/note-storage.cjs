@@ -69,4 +69,44 @@ async function purgeNoteObjects({ bucket, workspaceId, noteId, storagePath, incl
   return [...names];
 }
 
-module.exports = { purgeNoteObjects, noteObjectSets, ownedStoragePath };
+/**
+ * Delete every content object of one WORKSPACE (account deletion): everything
+ * under `{recordings|imports|scans}/{workspaceId}/`, including uploads that
+ * never became a note. The trailing slash keeps `ws1` from matching `ws10`.
+ * Throws on an error, so the caller can log it for a retry.
+ */
+async function purgeWorkspaceObjects({ bucket, workspaceId }, log) {
+  if (typeof workspaceId !== 'string' || !ID.test(workspaceId)) {
+    throw new Error('note-storage: invalid workspaceId');
+  }
+  let n = 0;
+  for (const root of CONTENT_ROOTS) {
+    const [files] = await bucket.getFiles({ prefix: `${root}/${workspaceId}/` });
+    for (const f of files) {
+      await f.delete({ ignoreNotFound: true });
+      n += 1;
+    }
+  }
+  if (log) log.info({ workspaceId, objects: n }, 'workspace_storage_purged');
+  return n;
+}
+
+/**
+ * Cancel a GCS resumable-upload session, so nothing more can be uploaded
+ * through its URI. GCS answers 499 to the cancel, and 404/410 once it's already
+ * gone; all three are success. Only a storage.googleapis.com URI is ever
+ * contacted (the same rule as the upload routes). Throws on anything else.
+ */
+async function cancelResumableUpload(sessionUri, fetchImpl = fetch) {
+  let url;
+  try { url = new URL(sessionUri); } catch (err) { throw new Error(`not a session uri: ${err.message}`); }
+  if (url.protocol !== 'https:' || url.hostname !== 'storage.googleapis.com') {
+    throw new Error('refusing to cancel a non-GCS session uri');
+  }
+  const res = await fetchImpl(url.href, { method: 'DELETE', headers: { 'Content-Length': '0' } });
+  if (![499, 404, 410, 200, 204].includes(res.status)) {
+    throw new Error(`cancel resumable upload failed: HTTP ${res.status}`);
+  }
+}
+
+module.exports = { purgeNoteObjects, purgeWorkspaceObjects, cancelResumableUpload, noteObjectSets, ownedStoragePath };

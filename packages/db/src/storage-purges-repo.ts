@@ -26,13 +26,15 @@ export interface StoragePurge {
   workspaceId: string;
   storagePath: string | null;
   includeScratch: boolean;
+  /** Set when an account deletion queued it, so a retry can find it by uid. */
+  uid: string | null;
   traceId: string | null;
   attempts: number;
   lastError: string | null;
   createdAt: Date;
 }
 
-const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, trace_id, attempts, last_error, created_at`;
+const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, uid, trace_id, attempts, last_error, created_at`;
 
 function toPurge(r: any): StoragePurge {
   return {
@@ -41,6 +43,7 @@ function toPurge(r: any): StoragePurge {
     workspaceId: r.workspace_id,
     storagePath: r.storage_path,
     includeScratch: r.include_scratch,
+    uid: r.uid ?? null,
     traceId: r.trace_id,
     attempts: r.attempts,
     lastError: r.last_error,
@@ -58,6 +61,21 @@ export async function listPendingStoragePurges(limit = 50): Promise<StoragePurge
   const { rows } = await getPool().query(
     `SELECT ${COLUMNS} FROM storage_purges ORDER BY created_at ASC, id ASC LIMIT $1`,
     [limit],
+  );
+  return rows.map(toPurge);
+}
+
+/**
+ * An account's purges still pending, oldest first: the ones its deletion
+ * queued (tagged with the uid), plus any left in its workspaces by earlier
+ * single-note deletions that never finished.
+ */
+export async function listStoragePurgesForAccount(input: { uid: string; workspaceIds: string[] }): Promise<StoragePurge[]> {
+  const { rows } = await getPool().query(
+    `SELECT ${COLUMNS} FROM storage_purges
+      WHERE uid = $1 OR workspace_id = ANY($2::text[])
+      ORDER BY created_at ASC, id ASC`,
+    [input.uid, input.workspaceIds],
   );
   return rows.map(toPurge);
 }
