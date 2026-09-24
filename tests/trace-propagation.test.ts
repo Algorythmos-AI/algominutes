@@ -48,6 +48,26 @@ describe('traceIdFromTask', () => {
   });
 });
 
+describe('traceIdFrom (the request header)', () => {
+  const h = (v: string) => ({ 'x-cloud-trace-context': v });
+
+  it('takes the trace id with or without a span and options', () => {
+    expect(logger.traceIdFrom(h('105445aa7843bc8bf206b12000100000/1;o=1'))).toBe('105445aa7843bc8bf206b12000100000');
+    expect(logger.traceIdFrom(h('105445aa7843bc8bf206b12000100000;o=1'))).toBe('105445aa7843bc8bf206b12000100000');
+    expect(logger.traceIdFrom(h('105445aa7843bc8bf206b12000100000'))).toBe('105445aa7843bc8bf206b12000100000');
+  });
+
+  // enqueueTask refuses an invalid id, so a malformed header must never become
+  // the request's traceId (it would turn a kickoff into a 500).
+  it('never returns an id enqueueTask would refuse', () => {
+    for (const bad of ['abc def/1', '/1;o=1', '', 'x'.repeat(200)]) {
+      const id = logger.traceIdFrom(h(bad));
+      expect(logger.isTraceId(id)).toBe(true);
+      expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    }
+  });
+});
+
 describe('enqueueTask carries the traceId', () => {
   it('puts it in the task body, next to the payload', async () => {
     const client = fakeClient();
@@ -83,6 +103,37 @@ describe("the transcoder's tasks client", () => {
     await tasks.enqueueEmbedder({ noteId: 'n' });
     expect(calls.map((c) => c.traceId)).toEqual(['trace-3', 'trace-3', 'trace-3']);
   });
+});
+
+describe('the notify hooks', () => {
+  const original = cloudTasks.enqueueTask;
+  const env = { NOTIFIER_URL: 'https://notifier.example', TASKS_PROJECT: 'p', JOBS_SA_EMAIL: 'jobs@p.iam.gserviceaccount.com' };
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    cloudTasks.enqueueTask = original;
+    for (const k of Object.keys(env)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  for (const svc of ['transcoder', 'summarizer']) {
+    it(`${svc}: carries the traceId, and logs with the user and workspace`, async () => {
+      for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
+      const calls: any[] = [];
+      cloudTasks.enqueueTask = async (args: any) => { calls.push(args); return 'task'; };
+      const children: any[] = [];
+      const lines: any[] = [];
+      const log = {
+        child(fields: any) { children.push(fields); return { ...log, info: (o: any, m: string) => lines.push({ ...fields, ...o, m }) }; },
+        info() {}, warn() {}, error() {},
+      };
+      const { enqueueNotify } = require(`../services/${svc}/src/terminal-hooks.js`);
+      await enqueueNotify({ type: 'note_ready', noteId: 'n1', workspaceId: 'w1', uid: 'u1', traceId: 'trace-4', log });
+      expect(calls[0].traceId).toBe('trace-4');
+      expect(lines).toContainEqual(expect.objectContaining({ m: 'notify_enqueued', userId: 'u1', workspaceId: 'w1', noteId: 'n1' }));
+    });
+  }
 });
 
 // Every enqueueTask({...}) call in server code must pass a traceId property.

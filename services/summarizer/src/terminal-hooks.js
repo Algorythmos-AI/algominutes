@@ -88,7 +88,8 @@ async function refundSafe(input, log) {
   }
 }
 
-async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log }) {
+async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: baseLog }) {
+  const log = baseLog.child({ userId: uid, workspaceId });
   const targetUrl = process.env.NOTIFIER_URL;
   const projectId = process.env.TASKS_PROJECT;
   const oidcServiceAccount = process.env.JOBS_SA_EMAIL;

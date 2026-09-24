@@ -57,21 +57,25 @@ function makeLogger(base = {}) {
   };
 }
 
-function traceIdFrom(headers) {
-  const raw = headers && (headers['x-cloud-trace-context'] || headers['X-Cloud-Trace-Context']);
-  if (typeof raw === 'string' && raw.length) return raw.split('/')[0];
-  // node:crypto randomUUID exists on every runtime we ship (Node 22+). The old
-  // Math.random() fallback was dead code, and CodeQL rightly flags it once the
-  // id travels in a task body.
-  return randomUUID();
-}
-
-// A traceId we accept from a task body: Cloud Trace ids (32 hex), UUIDs, and
+// A traceId we accept, from a header or a task body: Cloud Trace ids (32 hex), UUIDs, and
 // the like. Anything else (wrong type, oversized, odd characters) is ignored,
 // so a body can't smuggle arbitrary text into every log line.
 const TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 function isTraceId(value) {
   return typeof value === 'string' && TRACE_ID.test(value);
+}
+
+function traceIdFrom(headers) {
+  // X-Cloud-Trace-Context is TRACE_ID/SPAN_ID;o=OPTIONS, and the span and
+  // options are optional. Only a well-formed id is taken: enqueueTask refuses
+  // anything else, so a malformed header must never become the request's id.
+  const raw = headers && (headers['x-cloud-trace-context'] || headers['X-Cloud-Trace-Context']);
+  const id = typeof raw === 'string' ? raw.split(/[/;]/)[0] : '';
+  if (isTraceId(id)) return id;
+  // node:crypto randomUUID exists on every runtime we ship (Node 22+). The old
+  // Math.random() fallback was dead code, and CodeQL rightly flags it once the
+  // id travels in a task body.
+  return randomUUID();
 }
 
 /**

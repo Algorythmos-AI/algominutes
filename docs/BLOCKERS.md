@@ -415,8 +415,16 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   This broke the CLAUDE.md §1 invariant and the M1 evidence item "one `traceId` end to end". Now
   `enqueueTask` requires a traceId and writes it into the task body. Every worker logs under
   `traceIdFromTask(body, headers)` (validated; falls back to the header). A syntax-aware test fails if any
-  `enqueueTask({...})` call omits it. The summarizer's lines also gain `userId`, and the worker loggers
-  gain `workspaceId`.
+  `enqueueTask({...})` call omits it. `traceIdFrom` now only takes a well-formed header id (with or
+  without a span), so a malformed header can never make a strict enqueue fail a kickoff. The summarizer's
+  lines, and every notify line, also gain `userId`; the worker loggers gain `workspaceId`.
+- [ ] **The note-delete cascade hop has no traceId.** `functions/index.js onNoteDeleted` is a Firestore
+  trigger, so there's nowhere to carry the api's id. It gets fixed with plan PR-34 (the single deletion
+  path): the api enqueues the cascade as a Cloud Task, which carries the id like every other hop.
+- [ ] **Workers can't log `userId`: no task payload carries `uid`.** The api has `req.uid` at kickoff, so
+  add `uid` to the kickoff payload, and have the transcoder pass it on to the summarize and embed payloads.
+  Then the transcoder, embedder and summarizer entry loggers can bind it. (Task payloads are internal and
+  aren't in `packages/contracts`.) Small; queued.
 - [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
   repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
   it with PR-13 (map-reduce), which rewrites this handler anyway.
