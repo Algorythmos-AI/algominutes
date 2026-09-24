@@ -259,6 +259,20 @@ resource "google_storage_bucket" "buckets" {
     enabled = true
   }
 
+  # Versioning keeps a deleted object's bytes as a noncurrent version. The app
+  # deletes every generation when it deletes a note or an account
+  # (packages/ai/src/note-storage.cjs). This rule is the backstop, so no
+  # noncurrent version outlives the deletion window promised in
+  # docs/DATA-RETENTION.md (30 days).
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = var.noncurrent_version_retention_days
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
   # Lifecycle deletion only on the recordings bucket, only when a positive
   # retention window is configured.
   dynamic "lifecycle_rule" {

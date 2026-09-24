@@ -51,19 +51,57 @@ describe('ownedStoragePath', () => {
   });
 });
 
-describe('purgeNoteObjects', () => {
-  it('lists by prefix, deletes the exact matches plus the recorded path, and propagates a failure', async () => {
-    const present = new Set(['recordings/ws1/note1.m4a', 'recordings/ws1/note10.m4a']);
-    const bucket = {
-      getFiles: async ({ prefix }: { prefix: string }) => [[...present].filter((n) => n.startsWith(prefix)).map((name) => ({ name }))],
-      file: (name: string) => ({ delete: async () => void present.delete(name) }),
-    };
-    const deleted = await purgeNoteObjects({ bucket, workspaceId: 'ws1', noteId: 'note1', storagePath: 'imports/ws1/note1.mp4', includeScratch: true });
-    expect(deleted.sort()).toEqual(['imports/ws1/note1.mp4', 'recordings/ws1/note1.m4a']);
-    expect([...present]).toEqual(['recordings/ws1/note10.m4a']);
+// A versioned bucket: each name has generations; only the newest may be live.
+// Deleting by name alone would leave the noncurrent versions (the bytes).
+function versionedBucket(entries: Array<[string, number[], boolean]>) {
+  const gens = new Map(entries.map(([name, g, live]) => [name, { gens: new Set(g), live }]));
+  const fileOf = (name: string, generation: number) => ({
+    name,
+    generation,
+    delete: async () => { gens.get(name)?.gens.delete(generation); },
+  });
+  return {
+    gens,
+    getFiles: async ({ prefix, versions }: { prefix: string; versions?: boolean }) => [[...gens.entries()]
+      .filter(([n]) => n.startsWith(prefix))
+      .flatMap(([n, v]) => {
+        const all = [...v.gens].sort((a, b) => a - b);
+        const listed = versions ? all : (v.live && all.length ? [all[all.length - 1]] : []);
+        return listed.map((g) => fileOf(n, g));
+      })],
+  };
+}
 
-    const failing = { ...bucket, getFiles: async () => { throw new Error('list 503'); } };
+describe('purgeNoteObjects', () => {
+  it('deletes every generation of exactly the note\'s objects, and propagates a failure', async () => {
+    const bucket = versionedBucket([
+      ['recordings/ws1/note1.m4a', [1, 2, 3], true],
+      ['imports/ws1/note1.mp4', [7], false], // only a noncurrent version left
+      ['recordings/ws1/note10.m4a', [1], true],
+    ]);
+    const deleted = await purgeNoteObjects({ bucket, workspaceId: 'ws1', noteId: 'note1', includeScratch: true });
+    expect(deleted.sort()).toEqual(['imports/ws1/note1.mp4', 'recordings/ws1/note1.m4a']);
+    expect([...bucket.gens.get('recordings/ws1/note1.m4a')!.gens]).toEqual([]);
+    expect([...bucket.gens.get('imports/ws1/note1.mp4')!.gens]).toEqual([]);
+    expect([...bucket.gens.get('recordings/ws1/note10.m4a')!.gens]).toEqual([1]);
+
+    const failing = { getFiles: async () => { throw new Error('list 503'); } };
     await expect(purgeNoteObjects({ bucket: failing, workspaceId: 'ws1', noteId: 'note1' })).rejects.toThrow('list 503');
+  });
+});
+
+describe('purgeWorkspaceObjects', () => {
+  it('deletes every generation under the workspace prefixes, and nothing of ws10', async () => {
+    const { purgeWorkspaceObjects } = require('@algominutes/ai/note-storage.cjs');
+    const bucket = versionedBucket([
+      ['recordings/ws1/a.m4a', [1, 2], true],
+      ['scans/ws1/b.jpg', [4], false],
+      ['recordings/ws10/c.m4a', [1], true],
+    ]);
+    await purgeWorkspaceObjects({ bucket, workspaceId: 'ws1' });
+    expect([...bucket.gens.get('recordings/ws1/a.m4a')!.gens]).toEqual([]);
+    expect([...bucket.gens.get('scans/ws1/b.jpg')!.gens]).toEqual([]);
+    expect([...bucket.gens.get('recordings/ws10/c.m4a')!.gens]).toEqual([1]);
   });
 });
 

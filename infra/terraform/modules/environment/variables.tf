@@ -243,3 +243,13 @@ variable "bastion_machine_type" {
   type        = string
   default     = "e2-small"
 }
+
+variable "noncurrent_version_retention_days" {
+  description = "Days a noncurrent (deleted or overwritten) object version is kept before the bucket lifecycle deletes it. The app already deletes every generation on note/account deletion; this is the backstop. Must stay well inside docs/DATA-RETENTION.md's 30-day deletion window."
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.noncurrent_version_retention_days >= 1 && var.noncurrent_version_retention_days <= 30
+    error_message = "noncurrent_version_retention_days must be 1-30 (the deletion window is 30 days)."
+  }
+}
