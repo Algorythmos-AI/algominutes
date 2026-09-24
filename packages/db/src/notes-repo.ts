@@ -85,7 +85,7 @@ function timeStrToMs(t: string): number {
 }
 
 /** Thrown when a write would cross a workspace boundary (CLAUDE.md §1 multi-tenancy). */
-export { WorkspaceBoundaryError } from './workspace-access';
+export { WorkspaceBoundaryError, AccountDeletedError } from './workspace-access';
 
 
 async function upsertCoreToPostgres(

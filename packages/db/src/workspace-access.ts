@@ -14,6 +14,16 @@ export class WorkspaceBoundaryError extends Error {
   }
 }
 
+/** The account was deleted (account_deletions): it must not be re-created. */
+export class AccountDeletedError extends Error {
+  readonly code = 'ACCOUNT_DELETED';
+  readonly status = 401;
+  constructor(uid: string) {
+    super(`account ${uid} was deleted`);
+    this.name = 'AccountDeletedError';
+  }
+}
+
 /**
  * Upsert the user row (an FK target for workspaces, notes, uploads).
  * users.email is NOT NULL, and Postgres enforces that while forming the row,
@@ -25,6 +35,10 @@ export async function ensureUser(
   client: PoolClient,
   user: { uid: string; email?: string | null; name?: string | null },
 ): Promise<void> {
+  // A deleted account stays deleted. Its ID token can still verify for up to
+  // an hour, and this upsert would otherwise quietly bring the account back.
+  const tomb = await client.query('SELECT 1 FROM account_deletions WHERE uid = $1', [user.uid]);
+  if (tomb.rowCount) throw new AccountDeletedError(user.uid);
   await client.query(
     `INSERT INTO users (uid, email, display_name)
        VALUES ($1, COALESCE($2::text, $1 || '@firebase.local'), $3)

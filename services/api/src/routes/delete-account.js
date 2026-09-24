@@ -7,16 +7,17 @@
 //      happens: 500, Auth intact, the client retries.
 //   2. The purges (storage-purges-repo): each note's Firestore doc and audio.
 //      Pending ones from an earlier attempt run too (found by uid).
-//   3. The account's own Firestore docs (its workspace docs, its rate-limit
-//      counter), then any leftover uploads under its workspaces' storage
-//      prefixes. A Firestore failure answers 500 (retry) with Auth intact.
-//   4. The Auth user, last.
-// Only then 200. A purge or storage sweep that fails stays queued and logged
-// (the sweeper retries it within the retention window, docs/DATA-RETENTION.md)
-// rather than blocking the account's deletion.
+//   3. The account's own Firestore docs (its workspace docs with their
+//      subcollections, its analytics docs, its rate-limit counter), then any
+//      leftover uploads under its workspaces' storage prefixes.
+//   4. The Auth user, last. Then the tombstone is marked complete.
+// Only then 200. ANY failure in 2-4 answers 500 with Auth intact, so the
+// client retries. Nothing else retries a purge yet (the PR-15 sweeper), so a
+// 200 has to mean everything is gone.
 //
 // Every step is idempotent. A retry after any failure finds the users row
-// already gone and finishes what's left.
+// already gone, reads the owned workspaces from the tombstone
+// (account_deletions), and finishes what's left.
 //
 // It used to delete Firestore first and rely on the functions/ trigger
 // onNoteDeleted (never deployed by this pipeline) for the rest. Every step was
@@ -31,7 +32,9 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import noteStorageModule from '@algominutes/ai/note-storage.cjs';
-import { deleteAccountData, deleteAccountMirror, listStoragePurgesForUid, runStoragePurge } from '@algominutes/db';
+import {
+  deleteAccountData, deleteAccountMirror, completeAccountDeletion, listStoragePurgesForUid, runStoragePurge,
+} from '@algominutes/db';
 
 const { purgeWorkspaceObjects } = noteStorageModule;
 
@@ -84,8 +87,9 @@ export async function deleteAccountRoute(req, res, deps = {}) {
     if (!(await runStoragePurge({ bucket, firestore }, p, log))) summary.firestoreErrors += 1;
   }
 
-  // 3. The account's own docs and storage. On a retry the owned workspaces are
-  // gone from Postgres, so the personal workspace id (workspace_<uid>) is used.
+  // 3. The account's own docs and storage. The owned workspaces come from the
+  // tombstone (also on a retry). The personal id is added in case its
+  // workspace doc exists in Firestore without ever reaching Postgres.
   const ownWorkspaces = [...new Set([...pg.workspaceIds, `workspace_${uid}`])];
   summary.workspacesAffected = pg.workspaceIds.length;
   try {
@@ -93,14 +97,20 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   } catch (err) {
     summary.firestoreErrors += 1;
     log.error({ err, summary }, 'delete_account_mirror_failed');
-    return res.status(500).json({ error: 'delete_incomplete', summary });
   }
   for (const workspaceId of ownWorkspaces) {
     try {
       await purgeWorkspaceObjects({ bucket, workspaceId }, log);
     } catch (err) {
+      summary.firestoreErrors += 1;
       log.error({ err, workspaceId }, 'delete_account_storage_failed');
     }
+  }
+  if (summary.firestoreErrors) {
+    // Something outside Postgres is still there. Auth stays, so the client
+    // can retry, and the retry re-runs exactly what's left.
+    log.error({ summary }, 'delete_account_incomplete');
+    return res.status(500).json({ error: 'delete_incomplete', summary });
   }
 
   // 4. Auth last, so a failure above leaves the token usable for a retry.
@@ -116,7 +126,7 @@ export async function deleteAccountRoute(req, res, deps = {}) {
     }
   }
 
-  if (summary.firestoreErrors) log.error({ summary }, 'delete_account_purges_pending');
+  await completeAccountDeletion(uid).catch((err) => log.error({ err }, 'delete_account_tombstone_complete_failed'));
   log.info({ summary, pgDeleted: pg.deleted }, 'delete_account_complete');
   return res.status(200).json({ ok: true, summary });
 }
