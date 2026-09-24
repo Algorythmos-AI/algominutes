@@ -9,8 +9,9 @@
 # authoritative check. It matches the common one-liner idioms and allowlists the
 # known repo/mirror sites.
 #
-# ALLOWLIST (legitimate repo + mirror writers):
+# ALLOWLIST (legitimate repo + mirror writers), same as check-no-direct-firestore.mjs:
 #   - packages/db/src/notes-repo.ts             (the repo layer)
+#   - packages/ai/src/note-terminal.cjs         (terminal-failure writer: PG first, then mirror)
 #   - services/transcoder/src/firestore-mirror.js
 #   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
 #
@@ -27,12 +28,13 @@ TARGETS=(
   "$ROOT/services"
   "$ROOT/packages/db"
 )
+# One-line writes are covered syntax-aware by check-no-direct-firestore.mjs
+# (run at the end, which also catches multi-line writes). Kept here: any direct
+# reference to the notes collection outside the allowlisted layer.
 PATTERNS=(
-  '\.doc\([^)]*\)\.(set|update|delete)\('
-  'noteRef\.(set|update|delete)\('
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/ai/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do
@@ -49,8 +51,10 @@ done
 
 if [ "$found" -ne 0 ]; then
   echo
-  echo "ERROR: direct Firestore note mutation outside the repo/mirror layer."
-  echo "Route note writes through lib/notes-repo.ts (see CLAUDE.md §2)."
+  echo "ERROR: direct reference to the notes collection outside the repo/mirror layer."
+  echo "Route note writes through @algominutes/db (notes-repo) — CLAUDE.md §1."
   exit 1
 fi
-echo "OK: no direct Firestore note mutations outside the allowlisted layer."
+
+# Document writes (any formatting, multi-line included): syntax-aware.
+cd "$ROOT" && node scripts/check-no-direct-firestore.mjs
