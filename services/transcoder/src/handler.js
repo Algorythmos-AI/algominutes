@@ -33,6 +33,7 @@ function loadShared(name) {
   }
 }
 const noteTerminal = loadShared('note-terminal.cjs');
+const { NoteGoneError, isNoteGone } = require('./note-gone');
 
 const KICKOFF = 'kickoff';
 const STT_POLL = 'stt-poll';
@@ -40,14 +41,53 @@ const STT_POLL = 'stt-poll';
 async function handle(payload, deps) {
   if (!payload || typeof payload !== 'object') throw new Error('handle: empty payload');
   const kind = payload.kind;
-  if (kind === KICKOFF) return handleKickoff(payload, deps);
-  if (kind === STT_POLL) return handleSttPoll(payload, deps);
+  try {
+    if (kind === KICKOFF) return await handleKickoff(payload, deps);
+    if (kind === STT_POLL) return await handleSttPoll(payload, deps);
+  } catch (err) {
+    // A missing Firestore doc alone doesn't prove the note is gone: Firestore
+    // answers NOT_FOUND for a wrong project or database too, and a half-failed
+    // account deletion removes docs first. Ask Postgres, the source of truth.
+    // If the note is still there, this is a real failure, so retry and let it
+    // dead-letter visibly rather than drop a live note.
+    if (isNoteGone(err) && err.where === 'firestore') {
+      const c = await deps.db.pool().connect();
+      let live;
+      try { live = await deps.db.noteExists(c, { noteId: payload.noteId, workspaceId: payload.workspaceId }); }
+      finally { c.release(); }
+      if (live) {
+        deps.log.error({ noteId: payload.noteId, workspaceId: payload.workspaceId }, 'transcoder_mirror_doc_missing');
+        throw new Error('mirror_doc_missing_for_live_note');
+      }
+    }
+    // Deleted (or not in the task's workspace) while we worked: acknowledge.
+    // Retrying would re-create nothing useful, and the terminal path would
+    // dead-letter it and push "note failed" about a note the user deleted.
+    if (isNoteGone(err)) {
+      // `constraint` names the foreign key for a 23503, so a misclassified
+      // failure (some other FK) is visible in the log.
+      deps.log.warn(
+        { noteId: payload.noteId, workspaceId: payload.workspaceId, reason: err.code, constraint: err.constraint },
+        'transcoder_note_gone',
+      );
+      return undefined;
+    }
+    throw err;
+  }
   throw new Error(`handle: unknown kind ${kind}`);
 }
 
 async function handleKickoff(payload, deps) {
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType } = payload;
   const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
+
+  // Postgres first: a note deleted between kickoff and now must not be touched
+  // (the mirror below would otherwise be the first write, to a deleted note).
+  const pre = await db.pool().connect();
+  let exists;
+  try { exists = await db.noteExists(pre, { noteId, workspaceId }); }
+  finally { pre.release(); }
+  if (!exists) throw new NoteGoneError('postgres');
 
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'chunking' });
 
@@ -95,6 +135,7 @@ async function handleKickoff(payload, deps) {
     try {
       await db.upsertNoteStatus(client, {
         noteId,
+        workspaceId,
         status: decision === 'fast' ? 'transcribing' : 'chunking',
         durationSecProbed: durationSec,
       });
@@ -123,6 +164,9 @@ async function handleKickoff(payload, deps) {
       }
     }
   } catch (err) {
+    // A vanished note is acknowledged by handle(). Mirroring an error to it
+    // is exactly the write that must not happen.
+    if (isNoteGone(err)) throw err;
     log.error({ err, noteId }, 'kickoff_failed');
     await mirror.mirrorError({ workspaceId, noteId, errorMessage: 'Processing failed.' });
     throw err;
@@ -141,7 +185,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, status: 'transcribing', chunksTotal: plan.length });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: plan.length });
   } finally {
     client.release();
   }
@@ -439,7 +483,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, status: 'transcribing', chunksTotal: 1 });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: 1 });
   } finally {
     client.release();
   }

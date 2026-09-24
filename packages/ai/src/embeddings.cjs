@@ -72,6 +72,26 @@ function chunkTranscript(lines, log) {
   return out;
 }
 
+/**
+ * The note's transcript lines to embed, or null when the note is gone or isn't
+ * in the task's workspace. Scoped (CLAUDE.md §1): the embeddings are written
+ * under the task's workspace_id, so reading lines by note id alone would let a
+ * mismatched task index one workspace's words into another's search.
+ */
+async function loadTranscriptForEmbedding(pool, { noteId, workspaceId }) {
+  const note = await pool.query(
+    'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  if (!note.rowCount) return null;
+  const { rows } = await pool.query(
+    `SELECT speaker_tag AS "speakerTag", start_ms AS "startMs", end_ms AS "endMs", text
+       FROM transcript_lines WHERE note_id = $1 ORDER BY start_ms ASC`,
+    [noteId],
+  );
+  return rows;
+}
+
 function vectorToSqlText(values) {
   return '[' + values.join(',') + ']';
 }
@@ -169,6 +189,7 @@ async function indexEmbeddings({ pool, noteId, workspaceId, transcript, log, pro
 }
 
 module.exports = {
+  loadTranscriptForEmbedding,
   TARGET_CHARS,
   OVERLAP_CHARS,
   EMBED_MODEL,

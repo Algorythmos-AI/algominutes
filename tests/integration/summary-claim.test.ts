@@ -78,7 +78,7 @@ describe('summary regeneration claim (notes-repo)', () => {
     await pool.query(`UPDATE notes SET summary_requested_at = NOW() - INTERVAL '16 minutes' WHERE id = 'note-a'`);
     await claimSummaryRegeneration({ noteId: 'note-a', workspaceId: 'ws-a' }); // takeover: 5
     await releaseSummaryClaim({ noteId: 'note-a', workspaceId: 'ws-a', generation: 5 }); // enqueue failed
-    const fs = { doc: () => ({ set: async () => undefined }) } as never;
+    const fs = { doc: () => ({ update: async () => undefined }) } as never;
     const landed = await markSummaryReady(fs, {
       noteId: 'note-a', workspaceId: 'ws-a', expectedGeneration: 4,
       summary: { gist: 'A', actionItems: [], keyDecisions: [] },
@@ -88,10 +88,10 @@ describe('summary regeneration claim (notes-repo)', () => {
     expect(await note('note-a')).toMatchObject({ status: 'ready', summary_generation: 4 });
   });
 
-  it("mirrors 'summarizing' to the note's Firestore doc", async () => {
-    const writes: Array<{ path: string; data: any; opts: any }> = [];
-    const fs = { doc: (path: string) => ({ set: async (data: any, opts: any) => void writes.push({ path, data, opts }) }) } as never;
+  it("mirrors 'summarizing' to the note's Firestore doc, with update() so a deleted note stays deleted", async () => {
+    const writes: Array<{ path: string; data: any }> = [];
+    const fs = { doc: (path: string) => ({ update: async (data: any) => void writes.push({ path, data }) }) } as never;
     await mirrorSummarizing(fs, { noteId: 'note-a', workspaceId: 'ws-a' });
-    expect(writes).toEqual([{ path: 'workspaces/ws-a/notes/note-a', data: expect.objectContaining({ status: 'summarizing' }), opts: { merge: true } }]);
+    expect(writes).toEqual([{ path: 'workspaces/ws-a/notes/note-a', data: expect.objectContaining({ status: 'summarizing' }) }]);
   });
 });
