@@ -102,7 +102,8 @@ async function refundSafe(input, log) {
  * Where the tasks/notifier config is absent (local/dev) this skips with a log
  * line rather than crashing. Never throws.
  */
-async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log }) {
+async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: baseLog }) {
+  const log = baseLog.child({ userId: uid, workspaceId });
   const targetUrl = process.env.NOTIFIER_URL;
   const projectId = process.env.TASKS_PROJECT;
   const oidcServiceAccount = process.env.JOBS_SA_EMAIL;
@@ -124,7 +125,8 @@ async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log }) {
       queue,
       targetUrl,
       oidcServiceAccount,
-      payload: { type, noteId, workspaceId, uid, traceId },
+      payload: { type, noteId, workspaceId, uid },
+      traceId,
       log,
     });
     log.info({ type, noteId }, 'notify_enqueued');

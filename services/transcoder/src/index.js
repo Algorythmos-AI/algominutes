@@ -77,8 +77,15 @@ const rootLog = sharedLogger.logger.child({ svc: 'transcoder' });
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const traceId = sharedLogger.traceIdFrom(req.headers);
-  const log = rootLog.child({ traceId, kind: req.body && req.body.kind, jobId: req.body && req.body.jobId });
+  // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
+  const log = rootLog.child({
+    traceId,
+    kind: req.body && req.body.kind,
+    jobId: req.body && req.body.jobId,
+    noteId: req.body && req.body.noteId,
+    workspaceId: req.body && req.body.workspaceId,
+  });
 
   // §4.6 spend circuit breaker — this is the pipeline entry and the priciest
   // stage (paid STT). Halt before spending if today's cost hit the daily cap.
@@ -95,7 +102,7 @@ app.post('/', async (req, res) => {
     throw err;
   }
 
-  const tasks = tasksClient.makeClient({ env, log });
+  const tasks = tasksClient.makeClient({ env, log, traceId });
   // traceId is threaded into deps so the in-handler terminal paths (STT
   // exhaustion / errors, YouTube permanent failures) can propagate it across
   // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
