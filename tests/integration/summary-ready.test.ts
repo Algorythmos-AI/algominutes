@@ -33,6 +33,7 @@ const input = (over: Record<string, unknown> = {}) => ({
   model: 'gemini-3.5-flash',
   transcriptPreview: [{ speaker: 'Alice', text: 'hi', time: '00:01' }],
   transcriptTruncated: false,
+  expectedGeneration: 0,
   ...over,
 });
 
@@ -72,19 +73,34 @@ describe('markSummaryReady (summarizer final write)', () => {
   const expectUntouched = async (writes: unknown[]) => {
     expect(writes).toEqual([]);
     expect(await count(`SELECT 1 FROM summaries WHERE note_id = 'note-a'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM action_items WHERE note_id = 'note-a'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM key_decisions WHERE note_id = 'note-a'`)).toBe(0);
     expect((await pool.query(`SELECT status FROM notes WHERE id = 'note-a'`)).rows[0].status).toBe('summarizing');
   };
 
   it("writes nothing, anywhere, for a task naming another workspace", async () => {
     const { fs, writes } = fsStub();
-    expect(await markSummaryReady(fs, input({ workspaceId: 'ws-b' }), quietLog)).toEqual({ written: false });
+    expect(await markSummaryReady(fs, input({ workspaceId: 'ws-b' }), quietLog)).toEqual({ written: false, reason: 'not_found' });
     await expectUntouched(writes);
   });
 
   it('writes nothing (and resurrects no Firestore doc) for a note deleted mid-run', async () => {
     await pool.query(`UPDATE notes SET deleted_at = NOW() WHERE id = 'note-a'`);
     const { fs, writes } = fsStub();
-    expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: false });
+    expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: false, reason: 'not_found' });
     await expectUntouched(writes);
+  });
+
+  // The summarizer checks the task's generation before the Gemini call, which
+  // can take minutes. A regenerate claimed in that window bumps the generation.
+  // The older run must then write nothing, or it would put its (older-template)
+  // summary over the newer run's and mark the note ready while that run is live.
+  it('writes nothing for a run a newer generation superseded mid-call', async () => {
+    await pool.query(`UPDATE notes SET summary_generation = summary_generation + 1 WHERE id = 'note-a'`);
+    const { fs, writes } = fsStub();
+    expect(await markSummaryReady(fs, input({ expectedGeneration: 0 }), quietLog)).toEqual({ written: false, reason: 'superseded' });
+    await expectUntouched(writes);
+    // ...and the run that owns generation 1 still lands.
+    expect(await markSummaryReady(fs, input({ expectedGeneration: 1 }), quietLog)).toEqual({ written: true });
   });
 });
