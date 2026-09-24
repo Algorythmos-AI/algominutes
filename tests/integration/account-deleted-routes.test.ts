@@ -22,6 +22,8 @@ vi.mock('firebase-admin/auth', () => ({
 const { createUploadSessionRoute } = await import('../../services/api/src/routes/uploads.js');
 // @ts-expect-error: plain ESM module, no type declarations
 const { authMiddleware } = await import('../../services/api/src/middleware/auth.js');
+// @ts-expect-error: plain ESM module, no type declarations
+const { authMiddleware: billingAuth } = await import('../../services/billing/src/middleware/auth.js');
 
 beforeEach(async () => {
   await resetDb();
@@ -58,13 +60,13 @@ describe('routes and a deleted account', () => {
   });
 
   // Every authenticated route: a deleted account's still-valid token gets 401.
-  it('the auth middleware refuses a deleted account on every route', async () => {
+  it.each([['api', () => authMiddleware], ['billing', () => billingAuth]])('the %s auth middleware refuses a deleted account on every route', async (_svc, mw) => {
     const run = async (uid: string) => {
       const out = { status: 0, body: undefined as any, next: false };
       const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.body = b; return this; } };
       const noop = () => {};
       const log = { info: noop, warn: noop, error: noop, child: () => log };
-      await authMiddleware({ headers: { authorization: `Bearer ${uid}` }, log }, res, () => { out.next = true; });
+      await mw()({ headers: { authorization: `Bearer ${uid}` }, log }, res, () => { out.next = true; });
       return out;
     };
     expect((await run('alice')).next).toBe(true);

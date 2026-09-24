@@ -570,7 +570,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
   - ~~`js/insecure-helmet-configuration` ×2~~ **fixed (strict-csp PR):** both JSON services send
     `default-src 'none'` instead of disabling CSP (DECISIONS);
-  - `js/missing-rate-limiting` ×6 on billing (its webhooks need provider-aware limits);
+  - ~~`js/missing-rate-limiting` ×6 on billing~~ **fixed (billing-rate-limits PR):** billing uses the
+    shared limiter (`@algominutes/ai/rate-limit.cjs`): per client IP on everything but health (the store
+    webhooks included), per uid after auth. Its `trust proxy` is the hop count, not `true`. Its auth also
+    refuses a deleted account, as the api's does;
   - ~~`actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14~~ **fixed
     (harden-workflows PR):** every workflow has a least-privilege top-level `permissions` block
     (`promotion-guard` has none), and the six third-party actions are pinned to commit SHAs with
