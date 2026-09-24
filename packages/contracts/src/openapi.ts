@@ -148,7 +148,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/note`,
+    path: `${API_BASE_PATH}/notes/read`,
     summary: 'Full note + paginated transcript from Postgres.',
     tags: ['notes'],
     security: authed,
@@ -168,7 +168,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/update-note`,
+    path: `${API_BASE_PATH}/notes/update`,
     summary: 'Persist a manual note edit (title + summary) to Postgres.',
     tags: ['notes'],
     security: authed,
@@ -204,7 +204,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/export-note`,
+    path: `${API_BASE_PATH}/export`,
     summary: 'Server-rendered DOCX export. Returns raw bytes on success.',
     tags: ['notes'],
     security: authed,
@@ -269,7 +269,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/share-create`,
+    path: `${API_BASE_PATH}/shares/create`,
     summary: 'Mint a public read link. The raw token is returned here and nowhere else.',
     tags: ['share'],
     security: authed,
@@ -287,7 +287,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/share-revoke`,
+    path: `${API_BASE_PATH}/shares/revoke`,
     summary: 'Revoke a link (idempotent).',
     tags: ['share'],
     security: authed,
@@ -304,7 +304,7 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/shared-note`,
+    path: `${API_BASE_PATH}/shares/read`,
     summary: 'PUBLIC read of a shared note. No bearer token — the link token is the credential.',
     tags: ['share'],
     security: [], // the ONLY unauthenticated surface
@@ -319,7 +319,23 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
-    path: `${API_BASE_PATH}/delete-account`,
+    path: `${API_BASE_PATH}/account/delete`,
+    summary: 'Delete the caller’s account and all owned data (App Store + GDPR).',
+    tags: ['account'],
+    security: authed,
+    parameters: commonHeaders,
+    responses: {
+      200: { description: 'Deletion summary.', ...json(S.DeleteAccountResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      405: errorResponse('Method not allowed (POST or DELETE only).'),
+      500: { description: 'Partial failure with progress summary.', ...json(S.DeleteAccountError) },
+    },
+  });
+
+  // Same handler; DELETE is accepted as well as POST (delete-account.cjs).
+  registry.registerPath({
+    method: 'delete',
+    path: `${API_BASE_PATH}/account/delete`,
     summary: 'Delete the caller’s account and all owned data (App Store + GDPR).',
     tags: ['account'],
     security: authed,

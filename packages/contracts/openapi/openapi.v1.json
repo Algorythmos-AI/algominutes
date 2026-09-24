@@ -1406,7 +1406,7 @@
         }
       }
     },
-    "/v1/note": {
+    "/v1/notes/read": {
       "post": {
         "summary": "Full note + paginated transcript from Postgres.",
         "tags": [
@@ -1515,7 +1515,7 @@
         }
       }
     },
-    "/v1/update-note": {
+    "/v1/notes/update": {
       "post": {
         "summary": "Persist a manual note edit (title + summary) to Postgres.",
         "tags": [
@@ -1693,7 +1693,7 @@
         }
       }
     },
-    "/v1/export-note": {
+    "/v1/export": {
       "post": {
         "summary": "Server-rendered DOCX export. Returns raw bytes on success.",
         "tags": [
@@ -1952,7 +1952,7 @@
         }
       }
     },
-    "/v1/share-create": {
+    "/v1/shares/create": {
       "post": {
         "summary": "Mint a public read link. The raw token is returned here and nowhere else.",
         "tags": [
@@ -2041,7 +2041,7 @@
         }
       }
     },
-    "/v1/share-revoke": {
+    "/v1/shares/revoke": {
       "post": {
         "summary": "Revoke a link (idempotent).",
         "tags": [
@@ -2120,7 +2120,7 @@
         }
       }
     },
-    "/v1/shared-note": {
+    "/v1/shares/read": {
       "post": {
         "summary": "PUBLIC read of a shared note. No bearer token — the link token is the credential.",
         "tags": [
@@ -2175,8 +2175,66 @@
         }
       }
     },
-    "/v1/delete-account": {
+    "/v1/account/delete": {
       "post": {
+        "summary": "Delete the caller’s account and all owned data (App Store + GDPR).",
+        "tags": [
+          "account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed (POST or DELETE only).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Partial failure with progress summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
         "summary": "Delete the caller’s account and all owned data (App Store + GDPR).",
         "tags": [
           "account"
