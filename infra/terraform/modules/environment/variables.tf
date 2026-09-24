@@ -228,3 +228,18 @@ variable "wif_github_environment" {
     error_message = "wif_github_environment must be a plain GitHub Environment name."
   }
 }
+
+# ---------------------------------------------------------------------------
+# In-VPC proof VM (bastion.tf)
+# ---------------------------------------------------------------------------
+variable "enable_bastion" {
+  description = "Create the small in-VPC proof VM (IAP SSH only). For proving an environment from inside its VPC; turn off when done."
+  type        = bool
+  default     = false
+}
+
+variable "bastion_machine_type" {
+  description = "Machine type for the proof VM. e2-small (2 vCPU burst, 2 GB) fits npm ci + the integration suite."
+  type        = string
+  default     = "e2-small"
+}

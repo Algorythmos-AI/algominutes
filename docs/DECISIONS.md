@@ -3,6 +3,22 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## In-VPC proof VM for staging (2026-09-25)
+
+The owner asked to prove everything on staging. Cloud SQL is private-IP only
+and Vertex is pinned to Sydney, so the proof has to run inside the VPC.
+
+- **`bastion.tf`, off by default and on for staging.** It's an e2-small Debian
+  VM with SSH only over IAP, OS Login, a Shielded VM, and its own service
+  account (the DB-password secret and Vertex, nothing else). An ephemeral IP
+  gives it outbound installs; Cloud NAT stays off.
+- **`scripts/prove-staging.sh`** checks TLS enforcement, extensions, schema at
+  head, the **integration suite against Cloud SQL itself** (in a throwaway
+  database), leak-free cleanup, and the Vertex models in-region. The deploy
+  pipeline proves the running services.
+- **Operating cost:** roughly US$15/month while enabled. It's a proving tool, not
+  a permanent fixture, so switch it off when not in use (runbook).
+
 ## Gemini models: one registry, Sydney-only, gemini-3.5-flash first (2026-09-24, PR-10)
 
 The ladder was `gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash`. Per Google's

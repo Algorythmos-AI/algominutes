@@ -99,6 +99,10 @@ module "environment" {
 
   billing_account = var.billing_account
   monthly_budget  = 100
+
+  # In-VPC proof VM for proving staging (docs/runbooks/staging-proof.md).
+  # About US$15/month while on; set false and apply to remove it.
+  enable_bastion = true
 }
 
 # Re-export module outputs at the root for convenience.
@@ -119,6 +123,9 @@ output "service_account_emails" {
 }
 output "vpc_connector_id" {
   value = module.environment.vpc_connector_id
+}
+output "bastion_ssh_command" {
+  value = module.environment.bastion_ssh_command
 }
 output "db_password_secret_id" {
   value = module.environment.db_password_secret_id
