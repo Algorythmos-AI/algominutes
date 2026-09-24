@@ -271,6 +271,19 @@ where testable so the fix PR proves itself:
   actually used" (your call: it changes alert state), and let Google's own bump
   retire it. Don't force-override `uuid` under their libraries.
 
+## Dependency triage: planned upgrades (2026-09-24)
+
+These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because they are migrations, not bumps:
+
+- [ ] **Node 24 → 26 (base images + `engines`).** Node 26 enters LTS around late
+  October 2026. Move all 8 service images together, run the boot smoke plus a staging
+  deploy, and update `engines`. Never move to an odd major: Dependabot proposed
+  `node:25`, which is already EOL (#20, declined).
+- [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
+  async error handling (the `wrap()` adapters go away) but changes path syntax
+  (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
+  group, with the route-contract ratchet and the boot smoke as the safety net.
+
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
 Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all
