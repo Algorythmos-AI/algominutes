@@ -27,7 +27,6 @@ export const ALLOWLIST = new Map([
   ['packages/ai/src/note-terminal.cjs', 'terminal-failure writer: workspace-scoped Postgres, then the mirror'],
   ['services/transcoder/src/firestore-mirror.js', "the transcoder's mirror module"],
   ['services/summarizer/src/handler.js', 'Cloud Run mirror; tracked TODO: move behind notes-repo'],
-  ['services/api/src/routes/process-audio.js', 'legacy synchronous route, retired in plan PR-16'],
 ]);
 
 function* sourceFiles(dir) {

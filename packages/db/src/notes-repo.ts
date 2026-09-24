@@ -403,8 +403,10 @@ export async function releaseSummaryClaim(input: { noteId: string; workspaceId: 
 
 /**
  * Firestore half of a regeneration: Postgres was set to 'summarizing' by
- * claimSummaryRegeneration. Called once the task is enqueued, so the live UI
- * shows the note regenerating.
+ * claimSummaryRegeneration. Call it ONLY after a successful claim (and once the
+ * task is enqueued), so the live UI shows the note regenerating. On its own it
+ * would be a one-sided write. It is split out only so the enqueue can sit
+ * between the two halves.
  */
 export async function mirrorSummarizing(firestore: Firestore, input: { noteId: string; workspaceId: string }): Promise<void> {
   await firestore

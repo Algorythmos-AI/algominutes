@@ -8,9 +8,8 @@
 // double-tap guard — a second tap cannot match because the first flipped
 // status.
 //
-// Note writes (claim / release / mirror) go through @algominutes/db notes-repo.
-// (the claim/probe/unclaim SQL has no repo function and stays here, but runs on
-// the SHARED pool); enqueueTask → @algominutes/ai cloud-tasks.cjs; intelligence
+// Note writes (claim / probe / release / mirror) go through @algominutes/db
+// notes-repo; enqueueTask → @algominutes/ai cloud-tasks.cjs; intelligence
 // + summary-templates helpers → @algominutes/ai. SUMMARIZER_URL / JOBS_SA_EMAIL
 // / TASKS_* Firebase params become Cloud Run env vars (same defaults).
 

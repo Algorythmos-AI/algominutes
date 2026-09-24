@@ -9,8 +9,9 @@
 # authoritative check. It matches the common one-liner idioms and allowlists the
 # known repo/mirror sites.
 #
-# ALLOWLIST (legitimate repo + mirror writers):
+# ALLOWLIST (legitimate repo + mirror writers), same as check-no-direct-firestore.mjs:
 #   - packages/db/src/notes-repo.ts             (the repo layer)
+#   - packages/ai/src/note-terminal.cjs         (terminal-failure writer: PG first, then mirror)
 #   - services/transcoder/src/firestore-mirror.js
 #   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
 #
@@ -33,7 +34,7 @@ TARGETS=(
 PATTERNS=(
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/ai/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js|services/api/src/routes/process-audio\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/ai/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do
