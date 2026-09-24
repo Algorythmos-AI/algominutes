@@ -32,6 +32,7 @@ const MARKER = /firestore-write-ok:[ \t]*[^\s*]/;
 // The only files allowed to write Firestore documents, each with its reason.
 export const ALLOWLIST = new Map([
   ['packages/db/src/notes-repo.ts', 'the repo layer: Postgres first, then the Firestore mirror'],
+  ['packages/db/src/storage-purges-repo.ts', "the repo layer's deletion outbox: re-deletes a deleted note's mirror doc after Postgres"],
   ['packages/ai/src/note-terminal.cjs', 'terminal-failure writer: workspace-scoped Postgres, then the mirror'],
   ['services/transcoder/src/firestore-mirror.js', "the transcoder's mirror module"],
 ]);

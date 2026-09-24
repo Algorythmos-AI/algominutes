@@ -1295,6 +1295,45 @@
         "type": "string",
         "example": "ios/1.4.0"
       },
+      "DeleteNoteResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "noteId": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "noteId",
+          "deleted"
+        ]
+      },
+      "DeleteNoteRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
+      },
       "ProcessQueuedResponse": {
         "type": "object",
         "properties": {
@@ -2345,6 +2384,85 @@
           },
           "500": {
             "description": "Update failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes/delete": {
+      "post": {
+        "summary": "Delete a note: Postgres rows (search and chat stop returning it), the Firestore mirror, and its audio. Idempotent.",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The note is deleted (or already was); its audio is queued for purge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteNoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid noteId / workspaceId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a member of that workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Delete failed; safe to retry.",
             "content": {
               "application/json": {
                 "schema": {

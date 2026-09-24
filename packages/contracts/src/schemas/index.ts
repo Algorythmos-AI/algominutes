@@ -10,6 +10,7 @@ export * from './chat';
 export * from './export';
 export * from './share';
 export * from './updateNote';
+export * from './deleteNote';
 export * from './noteSpeakers';
 export * from './account';
 export * from './async';
