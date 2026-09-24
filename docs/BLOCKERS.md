@@ -232,12 +232,7 @@ A4 credentials + A11 build wiring.
   containerd I/O error) — CI (`.github/workflows/docker-build.yml`, matrix over all 8) is the
   authoritative build evidence. **`functions/`** Firebase deploy vendoring `@algominutes/ai` is still
   `TODO(build A11)`.
-- **Hard-invariant violation in dead code (defer to embedder PR-11/12):** `packages/db/src/embeddings.ts`
-  imports `@google/generative-ai` (the public Gemini client CLAUDE.md §1 forbids in Cloud Run). It is
-  imported by **no one** (the embedder uses the Vertex `packages/ai/src/embeddings.cjs`), so no image
-  breaks and the forbidden dep is left undeclared so any future import fails loudly. `check-no-genai-import.sh`
-  does **not** scope `packages/db`, which is why it slipped past CI — extend the checker to cover
-  `packages/db` and delete/rewrite the dead file when the embedder is worked on.
+- ~~**Hard-invariant violation in dead code.**~~ **Resolved (boot-crash fix PR, 2026-09-24):** `packages/db/src/embeddings.ts` was *not* dead — the `@algominutes/db` barrel re-exported it, so every image that imports the barrel (api, billing, notifier) crashed at boot with `ERR_MODULE_NOT_FOUND: @google/generative-ai` (the package was only declared by summarizer/transcoder and hoisting hid it locally). Deleted it and the unused `search-repo.ts` (api uses its own CJS search); dropped the forbidden dep from summarizer/transcoder manifests; `check-no-genai-import.sh` now scans `packages/db`. New guards: `scripts/check-declared-deps.mjs` (invariant: every workspace declares what it imports — also caught billing → `helmet`) and a CI **boot smoke** that starts every image.
 - ~~**iOS:** `xcodegen generate` succeeds, but a clean **build** needs A4 signing + SPM resolution.~~
   **Done (PR-05):** the iOS app **compiles for the first time** and all **161 unit tests pass** on the
   simulator (`xcodebuild test`, unsigned). `DEVELOPMENT_TEAM: NY9MS8GSBK` wired in `project.yml`. Fixed
