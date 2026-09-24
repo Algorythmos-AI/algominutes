@@ -39,7 +39,7 @@ import noteReadModule from './note-read.cjs';
 import exportNoteModule from './export-note.cjs';
 import searchAndChatModule from './search-and-chat.cjs';
 import sharedNoteModule from './shared-note.cjs';
-import deleteAccountModule from './delete-account.cjs';
+import { deleteAccountRoute } from './delete-account.js';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 import pgConfigModule from '@algominutes/ai/pg-config.cjs';
 import { getPool } from '@algominutes/db';
@@ -48,7 +48,6 @@ const { handleNoteRead } = noteReadModule;
 const { handleExportNote } = exportNoteModule;
 const { handleSearch, handleChatStream } = searchAndChatModule;
 const { handleSharedNote } = sharedNoteModule;
-const { handleDeleteAccount } = deleteAccountModule;
 const { pool } = pgQueryModule;
 const readPool = pool;
 const { pingPool } = pgConfigModule;
@@ -185,22 +184,12 @@ export function buildRouter() {
     return res.status(result.status).json(result.body);
   }));
 
-  // ── /v1/account/delete ── functions/delete-account.cjs ─────────────────
+  // ── /v1/account/delete ── the single deletion path (delete-account.js) ──
   //
-  // Self-authenticating (same verifyIdToken primitive) and self-managing its
-  // method envelope, so it is mounted raw rather than behind authMiddleware.
-  // CORS is applied globally, so the handler is handed a no-op applyCors. It
-  // accepts POST and DELETE, exactly as the source did.
-  const deleteAccountHandler = wrap(async (req, res) => {
-    await handleDeleteAccount({
-      req,
-      res,
-      pgPool: pool,
-      applyCors: () => {},
-      traceId: req.traceId,
-      log: req.log,
-    });
-  });
+  // Self-authenticating (verifyIdToken) and self-managing its method
+  // envelope, so it is mounted without authMiddleware; the client IP limit
+  // (app.js) covers it. It accepts POST and DELETE, as before.
+  const deleteAccountHandler = wrap((req, res) => deleteAccountRoute(req, res));
   router.post('/account/delete', deleteAccountHandler);
   router.delete('/account/delete', deleteAccountHandler);
 

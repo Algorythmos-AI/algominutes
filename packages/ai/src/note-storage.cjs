@@ -69,4 +69,26 @@ async function purgeNoteObjects({ bucket, workspaceId, noteId, storagePath, incl
   return [...names];
 }
 
-module.exports = { purgeNoteObjects, noteObjectSets, ownedStoragePath };
+/**
+ * Delete every content object of one WORKSPACE (account deletion): everything
+ * under `{recordings|imports|scans}/{workspaceId}/`, including uploads that
+ * never became a note. The trailing slash keeps `ws1` from matching `ws10`.
+ * Throws on an error, so the caller can log it for a retry.
+ */
+async function purgeWorkspaceObjects({ bucket, workspaceId }, log) {
+  if (typeof workspaceId !== 'string' || !ID.test(workspaceId)) {
+    throw new Error('note-storage: invalid workspaceId');
+  }
+  let n = 0;
+  for (const root of CONTENT_ROOTS) {
+    const [files] = await bucket.getFiles({ prefix: `${root}/${workspaceId}/` });
+    for (const f of files) {
+      await f.delete({ ignoreNotFound: true });
+      n += 1;
+    }
+  }
+  if (log) log.info({ workspaceId, objects: n }, 'workspace_storage_purged');
+  return n;
+}
+
+module.exports = { purgeNoteObjects, purgeWorkspaceObjects, noteObjectSets, ownedStoragePath };

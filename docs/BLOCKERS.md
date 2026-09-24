@@ -463,7 +463,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       PR-15 sweeper should also remove objects of notes that don't exist.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
-    - [ ] Account deletion reuses this path (below).
+    - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in
+      one transaction: a purge row per owned note, tagged with the uid (migration 015), then
+      `DELETE FROM users`, whose cascade removes the rest. Then the purges (each note's doc and audio),
+      the account's workspace docs, `rateLimits/{uid}`, and leftover uploads under its workspace
+      prefixes. Auth goes last. A Postgres or Firestore failure answers 500 with Auth intact, so the
+      client retries, and the retry finishes the job by uid. A purge that still fails is logged and left
+      queued for the sweeper.
     - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.
   - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
     - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped

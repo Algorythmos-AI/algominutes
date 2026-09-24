@@ -52,7 +52,7 @@ options (product-configurable, plan-aware):
 | **Embeddings** | Postgres `embeddings` | With the note | `ON DELETE CASCADE` |
 | **Audio chunk metadata** | Postgres `audio_chunks` | With the note | `ON DELETE CASCADE` |
 | **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | `POST /v1/notes/delete` (notes-repo `deleteNote`: Postgres first, then the Firestore mirror) / delete-account / retention job |
-| **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `delete-account` endpoint |
+| **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `POST /v1/account/delete`: Postgres first (the `users` cascade), then each note's doc + audio (`storage_purges`, tagged with the uid), the account's workspace docs + storage, and Auth last. 200 only when Postgres is gone; idempotent, so a retry finishes it |
 | **Workspace membership** | Postgres `workspace_members` | Until account deletion / removal | `delete-account` endpoint |
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |
 | **Billing/subscription state** | Stripe / App Store / Play + Postgres | Per payment-processor + tax/record-keeping law | see below |
