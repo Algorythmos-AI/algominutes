@@ -53,11 +53,23 @@ if [ "$svc" = "db-job" ]; then
   code=$?
   set -e
   echo "$out" | tail -5
-  if [ "$code" -eq 1 ] && echo "$out" | grep -qE 'head mismatch: this image ships [0-9]{3}_'; then
-    echo "boot-smoke $svc: ok (unknown job -> 64; migrate handler loads and sees its migrations)"
+  if ! { [ "$code" -eq 1 ] && echo "$out" | grep -qE 'head mismatch: this image ships [0-9]{3}_'; }; then
+    echo "boot-smoke $svc: FAILED migrate probe (exit $code)"
+    exit 1
+  fi
+  # vertex-smoke (deploy preflight): with no AIPLATFORM_LOCATION it must load
+  # every module it needs (models, gemini-call, templates, embeddings) and stop
+  # at the data-residency guard, with no network needed.
+  set +e
+  out=$(docker run --rm "${env_args[@]}" -e JOB_NAME=vertex-smoke "$image" 2>&1)
+  code=$?
+  set -e
+  echo "$out" | tail -3
+  if [ "$code" -eq 1 ] && echo "$out" | grep -q 'models.cjs is verified for australia-southeast1'; then
+    echo "boot-smoke $svc: ok (unknown job -> 64; migrate + vertex-smoke handlers load)"
     exit 0
   fi
-  echo "boot-smoke $svc: FAILED migrate probe (exit $code)"
+  echo "boot-smoke $svc: FAILED vertex-smoke probe (exit $code)"
   exit 1
 fi
 

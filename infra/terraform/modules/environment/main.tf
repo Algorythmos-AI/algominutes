@@ -426,6 +426,7 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
+      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall, debug-corpus
     ])
     # run-jobs is purely an invocation identity: common logging/trace roles only.
     # Its run.invoker grants are resource-level (per service, in cloud-run.tf).

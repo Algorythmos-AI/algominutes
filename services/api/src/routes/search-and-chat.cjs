@@ -22,6 +22,7 @@
 const { GoogleAuth } = require('google-auth-library');
 
 const { redactPII } = require('@algominutes/ai/redaction.cjs');
+const models = require('@algominutes/ai/models.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
 // so note-read and the other read-path handlers share one pool and one timeout
 // discipline. Moved verbatim; behaviour unchanged.
@@ -73,8 +74,9 @@ function vectorToSql(values) {
 
 const RRF_K = 60;
 const PER_LIST_LIMIT = 25;
-const EMBED_MODEL = 'text-embedding-004';
-const CHAT_MODEL = 'gemini-2.5-flash';
+// Model ids: packages/ai/src/models.cjs (lifecycle + Sydney availability).
+const EMBED_MODEL = models.EMBED_MODEL;
+const CHAT_MODEL = models.CHAT_MODEL;
 
 // Vertex AI embedding endpoint can hang on cold-start of the publisher
 // model. Without a client-side timeout the unbounded fetch blocks past

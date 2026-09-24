@@ -307,6 +307,26 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
   group, with the route-contract ratchet and the boot smoke as the safety net.
 
+## Model lifecycle (PR-10, 2026-09-24): queued
+
+- [ ] **Verify gemini-3.5-flash on staging before relying on it.** The first staging
+  deploy runs `vertex-smoke`, which is the real test. It checks that, with the
+  summarizer's schema and 16,384-token budget on a ~40-minute transcript, 3.5-flash
+  finishes with `STOP` rather than `MAX_TOKENS` (thinking counts against the
+  budget). If it truncates, raise `maxOutputTokens` or set a thinking budget, and
+  keep the smoke as the gate. **Hard deadline: 2026-10-20**, when 2.5-flash
+  retires and 3.5-flash is the only rung.
+- [ ] **Transcoder fast path sends audio inline to Gemini.** 3.5-flash lists audio
+  input as supported, but `vertex-smoke` only exercises text. Add an audio-fixture
+  call to the smoke, or verify a short recording end to end on staging.
+- [ ] **Embedding migration before 2027-04-01:** `text-embedding-004` → `gemini-embedding-001`
+  (served in Sydney; set `outputDimensionality: 768` to keep `vector(768)`). Vectors
+  from different models don't compare, so: add `embeddings.model` to every query,
+  re-embed all rows with a db-job backfill, then switch `EMBED_MODEL`. The
+  tripwire in `tests/models.test.ts` fires around mid-February 2027 as a backstop.
+- [ ] **Newer models (3.6/3.7/3.8-flash, flash-lite) are not served in Sydney.** If
+  quality or cost needs them, that's a data-residency decision for the owner.
+
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
 Everything below was structurally verified (files parse via `node --check` / `xcodegen generate`, all
