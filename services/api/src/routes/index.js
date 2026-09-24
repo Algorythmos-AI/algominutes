@@ -40,6 +40,8 @@ import searchAndChatModule from './search-and-chat.cjs';
 import sharedNoteModule from './shared-note.cjs';
 import deleteAccountModule from './delete-account.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
+import pgConfigModule from '@algominutes/ai/pg-config.cjs';
+import { getPool } from '@algominutes/db';
 
 const { handleNoteRead } = noteReadModule;
 const { handleExportNote } = exportNoteModule;
@@ -47,6 +49,8 @@ const { handleSearch, handleChatStream } = searchAndChatModule;
 const { handleSharedNote } = sharedNoteModule;
 const { handleDeleteAccount } = deleteAccountModule;
 const { pool } = pgQueryModule;
+const readPool = pool;
+const { pingPool } = pgConfigModule;
 
 const DOCX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -64,6 +68,19 @@ export function buildRouter() {
   // ── health ── (no auth, no version gate — see app.js exempt list) ──────
   router.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  // ── readiness ── proves BOTH Postgres pools this service uses can reach the
+  // database (the repo layer and the read-path pool). Used by the post-deploy
+  // smoke; kept separate from /health so uptime probes never touch the DB.
+  router.get('/health/ready', async (req, res) => {
+    try {
+      await Promise.all([pingPool(getPool()), pingPool(readPool())]);
+      res.json({ status: 'ok', db: 'ok' });
+    } catch (err) {
+      req.log.error({ err }, 'readiness_db_unreachable');
+      res.status(503).json({ status: 'degraded', db: 'unreachable' });
+    }
   });
 
   // ── POST /v1/process-audio ── server.ts /api/process-audio ─────────────

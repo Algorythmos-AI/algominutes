@@ -25,6 +25,7 @@ const API_PREFIX = '/v1';
 // present X-AlgoMinutes-Client.
 const VERSION_EXEMPT_PATHS = new Set([
   `${API_PREFIX}/health`,
+  `${API_PREFIX}/health/ready`,
   `${API_PREFIX}/shares/read`,
   `${API_PREFIX}/client-error`,
 ]);

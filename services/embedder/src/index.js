@@ -31,26 +31,9 @@ const terminalHooks = require('./terminal-hooks');
 let _pool = null;
 function pool() {
   if (_pool) return _pool;
-  // Cloud SQL pg_hba.conf rejects unencrypted connections from the VPC
-  // connector range. Same fix as services/transcoder/src/db.js:35.
-  // Without this the embedder fails every task with
-  // "pg_hba.conf rejects connection ... no encryption" and the
-  // alpha search/chat path has no embeddings to query (Bug 16).
-  const ssl = { rejectUnauthorized: false };
-  _pool = new Pool(
-    process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, ssl, max: 4, idleTimeoutMillis: 30000 }
-      : {
-          host: process.env.PGHOST,
-          port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-          database: process.env.PGDATABASE || 'postgres',
-          user: process.env.PGUSER || 'postgres',
-          password: process.env.PGPASSWORD,
-          ssl,
-          max: 4,
-          idleTimeoutMillis: 30000,
-        },
-  );
+  // Shared connection config (TLS policy + defaults): @algominutes/ai/pg-config.cjs.
+  const { buildPgConfig, attachPoolErrorLogger } = loadShared('pg-config.cjs');
+  _pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 4 })), loadShared('logger.cjs').logger, { pool: 'embedder' });
   return _pool;
 }
 

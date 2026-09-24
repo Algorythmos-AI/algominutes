@@ -166,6 +166,12 @@ resource "google_sql_database_instance" "pg" {
     ip_configuration {
       ipv4_enabled    = false # NO public IP
       private_network = google_compute_network.vpc.id
+      # Refuse unencrypted connections at the server. Every pool connects with
+      # TLS (packages/ai/src/pg-config.cjs + PGSSLMODE=require in cloud-run.tf),
+      # so this makes the policy enforced rather than assumed — the old
+      # "pg_hba.conf rejects connection ... no encryption" outage (Bug 16) was
+      # the server enforcing this while one client did not.
+      ssl_mode = "ENCRYPTED_ONLY"
     }
 
     backup_configuration {

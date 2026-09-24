@@ -23,20 +23,9 @@ let _pool = null;
 function pool() {
   if (_pool) return _pool;
   const { Pool } = require('pg');
-  _pool = new Pool(
-    process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, max: 4, idleTimeoutMillis: 30000 }
-      : {
-          host: process.env.PGHOST,
-          port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-          database: process.env.PGDATABASE || 'postgres',
-          user: process.env.PGUSER || 'postgres',
-          password: process.env.PGPASSWORD,
-          ssl: { rejectUnauthorized: false },
-          max: 4,
-          idleTimeoutMillis: 30000,
-        },
-  );
+  // Shared connection config (TLS policy + defaults): @algominutes/ai/pg-config.cjs.
+  const { buildPgConfig, attachPoolErrorLogger } = loadShared('pg-config.cjs');
+  _pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 4 })), loadShared('logger.cjs').logger, { pool: 'transcoder' });
   return _pool;
 }
 

@@ -1,9 +1,12 @@
 import pg from 'pg';
+import { createRequire } from 'node:module';
 
 // A test-owned pool for fixtures and assertions. Code under test uses its own
 // pools (the repo layer's singleton, the transcoder's injected client), all
-// pointed at the same DATABASE_URL.
-export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
+// pointed at the same DATABASE_URL — and all built by the ONE shared config, so
+// the suite honours PGSSLMODE exactly like production.
+const { buildPgConfig } = createRequire(import.meta.url)('@algominutes/ai/pg-config.cjs');
+export const pool = new pg.Pool(buildPgConfig({ max: 4 }));
 
 // Tables that are seeded by migrations and must survive a reset.
 const KEEP = new Set(['schema_migrations', 'plans']);

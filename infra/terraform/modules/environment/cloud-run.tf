@@ -66,10 +66,12 @@ locals {
     # a leftover migration toggle from the Firestore-only era. Unset, staging
     # would silently drop note writes and dead-letter rows.
     WRITE_POSTGRES = "true"
-    PGHOST         = google_sql_database_instance.pg.private_ip_address
-    PGPORT         = "5432"
-    PGDATABASE     = google_sql_database.app.name
-    PGUSER         = google_sql_user.app.name
+    # Every pool encrypts (pg-config.cjs); the instance is ENCRYPTED_ONLY.
+    PGSSLMODE  = "require"
+    PGHOST     = google_sql_database_instance.pg.private_ip_address
+    PGPORT     = "5432"
+    PGDATABASE = google_sql_database.app.name
+    PGUSER     = google_sql_user.app.name
   }
 
   # Per-service extra plain env, merged over common_env.
