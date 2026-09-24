@@ -43,23 +43,29 @@ pool/provider, and the `gha-deployer` SA all **created**.
 > URLs match: `terraform output cloud_run_service_urls`. If the project is on
 > legacy per-revision URLs, override the `*_URL` envs in the deploy step.
 
-## 2. Run migrations (the DB is empty — 0 tables)
+## 2. Migrations (automatic: the deploy runs them)
 
-The Cloud SQL instance has a private IP only, so run migrations from inside the
-VPC (a small jump box or Cloud Run Job) or over the Cloud SQL Auth Proxy:
+The DB is empty (0 tables) after a pause. Nothing to do by hand: every deploy
+(step 3) builds the `db-job` image at the deploying commit, runs
+`JOB_NAME=migrate` inside the VPC, and only then rolls out services. The first
+deploy applies `000..012`. The job:
+
+- runs as the Cloud SQL built-in user `algominutes_app` (a `cloudsqlsuperuser`
+  member, so `000_extensions.sql` can create `vector`/`pg_trgm`/`uuid-ossp`);
+- takes an advisory lock, so overlapping runs serialize;
+- caps DDL lock waits at 15s, failing the deploy rather than queueing behind
+  live traffic (re-run the deploy to retry);
+- refuses a file that changed after it was applied;
+- fails unless every file on disk is recorded afterwards.
+
+Independent check, or the manual fallback if the job can't run, over the
+Cloud SQL Auth Proxy:
 
 ```bash
-# from a host with the Cloud SQL Auth Proxy + the app password from Secret Manager:
 export DATABASE_URL="postgres://algominutes_app:$(gcloud secrets versions access latest \
   --secret=algominutes-staging-db-password)@127.0.0.1:5432/algominutes"
-npm run migrate            # applies migrations 000..012
-```
-
-Verify:
-
-```bash
-psql "$DATABASE_URL" -c '\dt'   # expect the notes/transcript_lines/… tables
-node scripts/check-migrations-applied.mjs
+node scripts/check-migrations-applied.mjs   # PASS = schema at head
+npm run migrate                             # fallback only: same runner as the job
 ```
 
 ## 3. Turn on the deploy pipeline (`.github/workflows/deploy-staging.yml`)
@@ -77,7 +83,7 @@ gh variable set DEPLOY_STAGING   --body true
 ```
 
 Then run the first full deploy by hand (every service still has the
-placeholder image):
+placeholder image). It runs build → migrate → rollout → smoke:
 
 ```bash
 gh workflow run deploy-staging.yml -f services=all

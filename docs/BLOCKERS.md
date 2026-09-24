@@ -227,7 +227,8 @@ where testable so the fix PR proves itself:
       - `services/api/src/routes/process-intelligence.js:268,272,289,317` set note status directly in
         Firestore, outside the repo layer (dual-write violation) → add `notesRepo.markQueued` and route the
         error branches through `markError`.
-      - **db-job's logger is always the fallback:** it calls `logger.cjs .forContext(...)`, which doesn't
+      - [x] **Fixed (migrate-before-rollout PR):** db-job now uses `logger.child(...)`; the dead
+        `backfill-pr-d` dispatch entry (no handler file) is gone. Was: **db-job's logger is always the fallback:** it calls `logger.cjs .forContext(...)`, which doesn't
         exist, so every run uses an ad-hoc stdout logger that writes `level` instead of `severity` (Cloud
         Logging may not treat errors as ERROR) and prints Error objects as `{}`.
       - **Errors logged under a key other than `err` lose message + stack** (logger only formats `err`):
