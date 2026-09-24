@@ -3,6 +3,27 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Primary GCP identity: algorythmos.france@gmail.com; billing is a full account (2026-09-25)
+
+Owner decision: **`algorythmos.france@gmail.com` is the official working account for
+Algorythmos' Google Cloud.** It already held Owner on both projects, Billing Account
+Administrator and the payments profile, so no IAM change is needed.
+`gcp-admin@algorythmos.com` keeps Organisation Admin, for org-level work and as
+break-glass.
+
+- **How tooling authenticates:**
+  - run `gcloud auth login algorythmos.france@gmail.com --no-activate` once per machine;
+  - Terraform uses `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token --account=…)`,
+    a token lasting about an hour;
+  - the operator's default gcloud account and ADC are never overwritten.
+- **Risk:** it's a consumer Gmail account (no org-managed recovery). Keep 2FA via an
+  authenticator or hardware key (not SMS), current recovery details, and gcp-admin
+  as the second path in.
+- **Trial end decided:** the billing account was upgraded to a full (paid) account.
+  The remaining credit ($411 of $432, as of 2026-09-25) is used first until
+  2026-11-14, then usage is billed pay-as-you-go. The budget alerts (PR-08c)
+  watch the spend.
+
 ## In-VPC proof VM for staging (2026-09-25)
 
 The owner asked to prove everything on staging. Cloud SQL is private-IP only

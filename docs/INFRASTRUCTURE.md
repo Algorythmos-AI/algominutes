@@ -94,8 +94,8 @@ audio.
 |---|---|
 | **Organisation** | `algorythmos.com` — **org ID `327264144426`** |
 | Created via | **Cloud Identity Free** (SKU `identitybasic`) — free tier, up to 50 users |
-| Org admin account | `gcp-admin@algorythmos.com` |
-| Secondary owner | `algorythmos.france@gmail.com` |
+| **Primary working account** (owner decision, 2026-09-25) | **`algorythmos.france@gmail.com`** |
+| Org admin account | `gcp-admin@algorythmos.com` (org-level admin + break-glass) |
 | Domain verification | TXT record on `algorythmos.com` — `google-site-verification=4k5baR-…` (Cloudflare) |
 
 **Cloud Identity provides identity only — no mailbox.** `gcp-admin@algorythmos.com` is a sign-in
@@ -105,10 +105,10 @@ identity; mail addressed to it lands in **Zoho** (§6). MX records were never to
 
 | Account | Role |
 |---|---|
-| `gcp-admin@algorythmos.com` | Organisation Admin · Owner on both projects · Billing Account Administrator. **Primary working account** |
-| `algorythmos.france@gmail.com` | Owner on both projects · Billing Account Administrator · owns the payments profile. **Recovery only** |
+| `algorythmos.france@gmail.com` | Owner on both projects · Billing Account Administrator · owns the payments profile. **Primary working account** since 2026-09-25 (owner decision). Terraform, deploys and operations run as this account. |
+| `gcp-admin@algorythmos.com` | Organisation Admin · Owner on both projects · Billing Account Administrator. Org-level administration and **break-glass**. |
 
-⚠️ **Access risk:** the org admin is a single account. Ensure 2FA (authenticator or hardware key,
+⚠️ **Access risk:** each of these accounts can do everything on its own, and the primary is a consumer Gmail account (no org-managed recovery). Ensure 2FA (authenticator or hardware key,
 **not SMS**), a recovery email that will still exist in three years, and printed backup codes.
 
 ### 4.2 Billing
