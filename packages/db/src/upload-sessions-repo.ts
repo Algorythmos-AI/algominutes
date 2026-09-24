@@ -74,7 +74,11 @@ export async function getUploadSession(input: { id: string; uid: string }, now: 
   const { rows } = await getPool().query(
     `SELECT id, uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at
        FROM upload_sessions
-      WHERE id = $1 AND uid = $2 AND expires_at > $3`,
+      WHERE id = $1 AND uid = $2 AND expires_at > $3
+        -- CLAUDE.md §1: still a member of the session's workspace (matters once
+        -- workspaces are shared and membership can be revoked).
+        AND EXISTS (SELECT 1 FROM workspace_members wm
+                     WHERE wm.workspace_id = upload_sessions.workspace_id AND wm.uid = $2)`,
     [input.id, input.uid, now],
   );
   const r = rows[0];

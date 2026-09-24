@@ -21,6 +21,7 @@ import { CreateUploadSessionRequest } from '@algominutes/contracts/schemas';
 import {
   createUploadSession,
   getUploadSession,
+  isPostgresEnabled,
   UploadSessionsUnavailableError,
   WorkspaceBoundaryError,
 } from '@algominutes/db';
@@ -96,6 +97,12 @@ export async function createUploadSessionRoute(req, res) {
   }
 
   const log = req.log.child({ noteId, workspaceId });
+  // Before asking GCS for a session: without Postgres there is nowhere to
+  // record it, and a minted-then-dropped session would just be orphaned.
+  if (!isPostgresEnabled()) {
+    log.error({}, 'upload_sessions_unavailable');
+    return res.status(503).json({ error: 'Uploads are unavailable until Postgres is provisioned.' });
+  }
   let sessionUri;
   try {
     const bucket = getStorage().bucket();
@@ -152,9 +159,10 @@ export async function getUploadStatusRoute(req, res) {
     return res.status(502).json({ error: "We couldn't check your upload. Please try again." });
   }
   if (!session) return notFound(res);
+  const log = req.log.child({ noteId: session.noteId, workspaceId: session.workspaceId, uploadId: session.id });
   const { sessionUri, totalBytes } = session;
   if (!isGcsSessionUri(sessionUri)) {
-    req.log.error({ uploadId: session.id }, 'upload_session_uri_not_gcs');
+    log.error({}, 'upload_session_uri_not_gcs');
     return res.status(500).json({ error: "We couldn't check your upload. Please try again." });
   }
   const total = Number(totalBytes);
@@ -173,12 +181,12 @@ export async function getUploadStatusRoute(req, res) {
       },
     });
   } catch (err) {
-    req.log.error({ err }, 'upload_status_probe_failed');
+    log.error({ err }, 'upload_status_probe_failed');
     return res.status(502).json({ error: "We couldn't check your upload. Please try again." });
   }
 
   if (resp.status === 200 || resp.status === 201) {
-    return res.json({ uploadId: req.params.uploadId, receivedBytes: Number.isFinite(total) ? total : 0, complete: true });
+    return res.json({ uploadId: session.id, receivedBytes: Number.isFinite(total) ? total : 0, complete: true });
   }
   // 308 Resume Incomplete — parse the acknowledged byte range.
   let receivedBytes = 0;
@@ -187,7 +195,7 @@ export async function getUploadStatusRoute(req, res) {
     const m = /bytes=0-(\d+)/.exec(range);
     if (m) receivedBytes = Number(m[1]) + 1; // Range is inclusive of the last byte.
   }
-  return res.json({ uploadId: req.params.uploadId, receivedBytes, complete: false });
+  return res.json({ uploadId: session.id, receivedBytes, complete: false });
 }
 
 export async function completeUploadRoute(req, res) {
@@ -199,6 +207,7 @@ export async function completeUploadRoute(req, res) {
     return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
   if (!session) return notFound(res);
+  const log = req.log.child({ noteId: session.noteId, workspaceId: session.workspaceId, uploadId: session.id });
   const { storagePath } = session; // the caller's own path, from our database
 
   // The bytes were PUT directly to GCS by the client; there is no server-side
@@ -209,14 +218,14 @@ export async function completeUploadRoute(req, res) {
     const bucket = getStorage().bucket();
     const [exists] = await bucket.file(storagePath).exists();
     if (!exists) {
-      req.log.warn({ storagePath }, 'complete_upload_object_missing');
+      log.warn({ storagePath }, 'complete_upload_object_missing');
       return res.status(409).json({ error: 'Upload is not complete yet.' });
     }
   } catch (err) {
-    req.log.error({ err, storagePath }, 'complete_upload_check_failed');
+    log.error({ err, storagePath }, 'complete_upload_check_failed');
     return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
 
-  req.log.info({ storagePath }, 'upload_completed');
-  return res.json({ uploadId: req.params.uploadId, storagePath, complete: true });
+  log.info({ storagePath }, 'upload_completed');
+  return res.json({ uploadId: session.id, storagePath, complete: true });
 }

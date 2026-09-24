@@ -40,6 +40,12 @@ describe('upload sessions (server-side)', () => {
     expect(await getUploadSession({ id, uid: 'mallory' })).toBeNull();
   });
 
+  it("losing membership of the session's workspace makes it unreadable (CLAUDE.md §1)", async () => {
+    const id = await createUploadSession(session(), quietLog);
+    await pool.query(`DELETE FROM workspace_members WHERE workspace_id = 'workspace_alice' AND uid = 'alice'`);
+    expect(await getUploadSession({ id, uid: 'alice' })).toBeNull();
+  });
+
   it('an expired session reads as not found', async () => {
     const id = await createUploadSession(session({ expiresAt: new Date(Date.now() - 1000) }), quietLog);
     expect(await getUploadSession({ id, uid: 'alice' })).toBeNull();
