@@ -13,7 +13,9 @@ on:
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
 
 jobs:
-  test:
+  # Unique name: ci.yml also has a `test` job, and branch protection matches
+  # required checks by NAME, so a shared name would be ambiguous.
+  ios-test:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
