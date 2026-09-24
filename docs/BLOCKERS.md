@@ -518,7 +518,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - `js/insecure-helmet-configuration` ×2 (the api disables CSP by design, since it serves JSON only);
     dismissing needs your yes;
   - `js/missing-rate-limiting` ×6 on billing (its webhooks need provider-aware limits);
-  - `actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14 (supply chain, public repo).
+  - ~~`actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14~~ **fixed
+    (harden-workflows PR):** every workflow has a least-privilege top-level `permissions` block
+    (`promotion-guard` has none), and the six third-party actions are pinned to commit SHAs with
+    version comments. Dependabot (`github-actions`) keeps them current.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
