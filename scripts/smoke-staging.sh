@@ -55,6 +55,14 @@ for pair in TRANSCODER_URL:transcoder SUMMARIZER_URL:summarizer EMBEDDER_URL:emb
   fi
 done
 
+wp=$(printf '%s\n' "$api_env" | sed -n 's/^WRITE_POSTGRES=//p')
+if [ "$wp" = "true" ]; then
+  echo "ok   WRITE_POSTGRES=true on api"
+else
+  echo "FAIL WRITE_POSTGRES is '${wp:-unset}' on api (Postgres paths would be silent no-ops)"
+  fail=1
+fi
+
 echo "== 2. public services reachable without auth =="
 api_url=$(describe api | jq -r .status.url)
 billing_url=$(describe billing | jq -r .status.url)

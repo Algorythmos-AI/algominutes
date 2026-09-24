@@ -13,6 +13,9 @@
 //             // at least one inner group must be fully present, e.g.
 //             // { label: 'a Postgres target', of: [['DATABASE_URL'],
 //             //   ['PGHOST','PGDATABASE','PGUSER','PGPASSWORD']] }
+//   exact:    { [name]: string }
+//             // must equal the value exactly, e.g. { WRITE_POSTGRES: 'true' } —
+//             // catches a flag that is unset AND one set to the wrong value
 //
 // On failure it logs a single structured `env_validation_failed` line naming
 // every problem, then exits 78 (EX_CONFIG) so the Cloud Run revision is marked
@@ -39,6 +42,13 @@ function requireEnv(service, spec, opts) {
     if (!satisfied) {
       const options = (group.of || []).map((set) => set.join('+')).join(' OR ');
       problems.push(`need ${group.label}: one of [${options}]`);
+    }
+  }
+
+  for (const [name, want] of Object.entries(spec.exact || {})) {
+    const got = process.env[name];
+    if (got !== want) {
+      problems.push(`env ${name} must be '${want}' (got ${got === undefined ? 'unset' : `'${got}'`})`);
     }
   }
 
