@@ -69,7 +69,15 @@ export async function runStoragePurge(
   purge: StoragePurge,
   log: { info: (o: any, m?: string) => void; error: (o: any, m?: string) => void },
 ): Promise<boolean> {
-  const fields = { noteId: purge.noteId, workspaceId: purge.workspaceId, purgeId: purge.id };
+  // The deleting request's traceId travels with the purge, so a later retry
+  // (the sweeper, with its own logger) still logs under it (CLAUDE.md §1).
+  // (Only when set: an undefined key would override the logger's own traceId.)
+  const fields = {
+    ...(purge.traceId ? { traceId: purge.traceId } : {}),
+    noteId: purge.noteId,
+    workspaceId: purge.workspaceId,
+    purgeId: purge.id,
+  };
   try {
     await purgeNoteObjects(
       {
@@ -79,7 +87,7 @@ export async function runStoragePurge(
         storagePath: purge.storagePath,
         includeScratch: purge.includeScratch,
       },
-      log,
+      { info: (o: any, m?: string) => log.info({ ...fields, ...o }, m) },
     );
     await getPool().query('DELETE FROM storage_purges WHERE id = $1', [purge.id]);
     return true;

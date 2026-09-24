@@ -139,13 +139,14 @@ describe('runStoragePurge', () => {
 
   it('keeps a failed purge queued, with the attempt and error recorded (and logged)', async () => {
     const { fs } = fsStub();
-    const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice', traceId: 't-2' }, quietLog);
     const bucket = fakeBucket(['recordings/ws-a/note-a.m4a'], { failOn: 'recordings/ws-a/note-a.m4a' });
     const purge = (await getStoragePurge((r as { purgeId: number }).purgeId))!;
     expect(await runStoragePurge(bucket, purge, log)).toBe(false);
     expect(await listPendingStoragePurges()).toEqual([
       expect.objectContaining({ noteId: 'note-a', attempts: 1, lastError: 'storage 503' }),
     ]);
-    expect(errors).toContainEqual(expect.objectContaining({ noteId: 'note-a', workspaceId: 'ws-a', attempts: 1 }));
+    // Logged under the deleting request's traceId, so a sweeper retry still traces to it.
+    expect(errors).toContainEqual(expect.objectContaining({ traceId: 't-2', noteId: 'note-a', workspaceId: 'ws-a', attempts: 1 }));
   });
 });
