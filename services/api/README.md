@@ -27,7 +27,6 @@ send them.
 | Method | Path | Auth | Source it came from |
 |---|---|---|---|
 | `GET`  | `/v1/health`         | none | `server.ts` `/api/health` |
-| `POST` | `/v1/process-audio`  | ID token | `server.ts` `/api/process-audio` (sync transcribe+summarize) |
 | `POST` | `/v1/process`        | ID token | `functions/index.js` `processIntelligence` (async kickoff) |
 | `POST` | `/v1/notes/read`     | ID token | `functions/note-read.cjs` `handleNoteRead` (= `server.ts` `/api/note`) |
 | `POST` | `/v1/notes/update`   | ID token | `server.ts` `/api/update-note` (updateNote twin, `applyNoteEdit`) |
@@ -162,8 +161,8 @@ TypeScript source directly and there is no build step yet. `PORT` defaults to
 | `PORT` | Listen port (default `8080`). |
 | `ALLOWED_ORIGINS` | Extra CORS origins, comma-separated (added to defaults). |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | Firebase/GCP project for ADC. |
-| `STORAGE_BUCKET` | Default GCS bucket (audio for `/v1/process-audio`). |
-| `GEMINI_API_KEY` | Gemini key for `/v1/process-audio`. Search/chat embed + generate via Vertex ADC. |
+| `STORAGE_BUCKET` | Default GCS bucket (recordings; uploads and the processing kickoff). |
+| `GEMINI_API_KEY` | Unused (vestigial parameter). Search/chat embed + generate via Vertex ADC. |
 | `WRITE_POSTGRES` | `true` enables the Postgres-backed paths; otherwise those routes 503. |
 | `PGHOST` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `DATABASE_URL` | Postgres connection (via `@algominutes/db`). |
 | `AIPLATFORM_LOCATION` | Vertex region for search/chat (default `us-central1`). |

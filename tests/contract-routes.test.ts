@@ -38,10 +38,7 @@ function specRoutes(): Set<string> {
 const KNOWN_SPEC_ONLY: string[] = [];
 
 // Served by the router but missing from the spec.
-const KNOWN_ROUTER_ONLY = [
-  // The legacy synchronous route, retired (not documented) in plan PR-16.
-  'POST /v1/process-audio',
-];
+const KNOWN_ROUTER_ONLY: string[] = []; // zero: every served route is documented
 
 describe('api routes vs OpenAPI contract (ratchet)', () => {
   const router = routerRoutes();

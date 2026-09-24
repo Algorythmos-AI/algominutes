@@ -324,7 +324,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6
   requires vite ^8). Do it in one apps/web PR, together with the tesseract-asset build
   fix above and a web-build CI job, so the result is actually verified.
-- [ ] **`@google/genai` 1 → 2** (#29 declined): its only user is
+- [x] **Resolved by removal (retire-process-audio PR):** the synchronous `/v1/process-audio` route and
+  the `@google/genai` dependency are gone. Was: **`@google/genai` 1 → 2** (#29 declined): its only user is
   `services/api/src/routes/process-audio.js`, the synchronous route plan PR-16 retires.
   Delete the dependency with that route; don't migrate it.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
@@ -379,6 +380,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
   Validate with the schemas in the contract-documentation PR.
 - [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
+
+## Clients still on the legacy `/api/*` surface (2026-09-25)
+
+- [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
+  `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so **neither client works
+  against the deployed backend yet.**
+  - **iOS:** plan PR-17 (the `/v1` client, built on the now-complete contract).
+  - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
+    (`POST /v1/uploads` + `/v1/process`, then Firestore status), and `lib/*` to the `/v1` paths.
 
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
