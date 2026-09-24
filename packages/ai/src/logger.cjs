@@ -10,6 +10,8 @@
  * to surface the right log level in the console.
  */
 
+const { randomUUID } = require('node:crypto');
+
 const SEVERITY = {
   trace: 'DEBUG',
   debug: 'DEBUG',
@@ -58,10 +60,10 @@ function makeLogger(base = {}) {
 function traceIdFrom(headers) {
   const raw = headers && (headers['x-cloud-trace-context'] || headers['X-Cloud-Trace-Context']);
   if (typeof raw === 'string' && raw.length) return raw.split('/')[0];
-  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+  // Node >= 24 everywhere (package.json engines), so randomUUID always exists.
+  // (The old Math.random() fallback was dead code, and CodeQL rightly flags it
+  // once the id travels in a task body.)
+  return randomUUID();
 }
 
 // A traceId we accept from a task body: Cloud Trace ids (32 hex), UUIDs, and
