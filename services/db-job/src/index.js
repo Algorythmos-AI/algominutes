@@ -27,6 +27,7 @@ function loadShared(name) {
 
 const HANDLERS = {
   'migrate':        () => require('./handlers/migrate.js'),
+  'sweep':          () => require('./handlers/sweep.js'),
   'vertex-smoke':   () => require('./handlers/vertex-smoke.js'),
   'verify-phase-0': () => require('./handlers/verify-phase-0.js'),
   'eval-recall':    () => require('./handlers/eval-recall.js'),

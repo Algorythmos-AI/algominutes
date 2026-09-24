@@ -371,6 +371,11 @@ locals {
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
     # run.invoker on each service (resource-level, in cloud-run.tf).
     "run-jobs" = "AlgoMinutes Cloud Tasks OIDC + invoker identity"
+    # The sweep (scheduler.tf): its own runtime SA, with only what the sweep
+    # does, and the identity Cloud Scheduler uses to start it, which may run
+    # that one job and nothing else.
+    "run-sweep"     = "AlgoMinutes db-sweep (Cloud Run Job runtime SA)"
+    "run-scheduler" = "AlgoMinutes Cloud Scheduler invoker (db-sweep only)"
   }
 
   # Roles common to every service.
@@ -443,6 +448,14 @@ locals {
       "roles/datastore.user",
       "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall, debug-corpus
     ])
+    "run-sweep" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor",
+      "roles/datastore.user",
+      # + a custom role for firebaseauth.users.delete, and objectAdmin on the
+      # recordings bucket only (scheduler.tf)
+    ])
+    "run-scheduler" = local.common_roles
     # run-jobs is purely an invocation identity: common logging/trace roles only.
     # Its run.invoker grants are resource-level (per service, in cloud-run.tf).
     "run-jobs" = local.common_roles

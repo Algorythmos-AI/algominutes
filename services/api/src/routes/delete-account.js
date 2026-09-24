@@ -12,8 +12,8 @@
 //      leftover uploads under its workspaces' storage prefixes.
 //   4. The Auth user, last. Then the tombstone is marked complete.
 // Only then 200. ANY failure in 2-4 answers 500 with Auth intact, so the
-// client retries. Nothing else retries a purge yet (the PR-15 sweeper), so a
-// 200 has to mean everything is gone.
+// client retries. If it never does, the sweeper (db-job JOB_NAME=sweep)
+// finishes the deletion from the tombstone. A 200 means everything is gone.
 //
 // Every step is idempotent. A retry after any failure finds the users row
 // already gone, reads the owned workspaces from the tombstone
@@ -31,13 +31,7 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import noteStorageModule from '@algominutes/ai/note-storage.cjs';
-import {
-  deleteAccountData, deleteAccountMirror, completeAccountDeletion, clearCancelledUploadSession,
-  listStoragePurgesForAccount, runStoragePurge,
-} from '@algominutes/db';
-
-const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorageModule;
+import { deleteAccountData, finishAccountDeletion } from '@algominutes/db';
 
 export async function deleteAccountRoute(req, res, deps = {}) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
@@ -82,65 +76,20 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   summary.notesDeleted = pg.notesQueued;
   summary.pgMembershipsDeleted = pg.membershipsDeleted;
 
-  // The owned workspaces come from the tombstone (also on a retry). The
-  // personal id is added in case its workspace doc exists in Firestore without
-  // ever reaching Postgres.
-  const ownWorkspaces = [...new Set([...pg.workspaceIds, `workspace_${uid}`])];
+  // 2-4 (account-repo finishAccountDeletion, shared with the sweeper): cancel
+  // the open upload sessions, run the purges, delete the account's own docs and
+  // storage, then the Auth user, only if everything before it worked.
   summary.workspacesAffected = pg.workspaceIds.length;
+  const done = await finishAccountDeletion(
+    { auth, firestore, bucket, fetch: deps.fetch },
+    { uid, workspaceIds: pg.workspaceIds, uploadSessionUris: pg.uploadSessionUris },
+    log,
+  );
+  summary.firestoreErrors = done.errors;
+  summary.authDeleted = done.authDeleted;
+  if (done.authFailed) return res.status(500).json({ error: 'auth_deletion_failed', summary });
+  if (!done.complete) return res.status(500).json({ error: 'delete_incomplete', summary });
 
-  // 2. Cancel the account's open GCS upload sessions first, so nothing lands
-  // after the sweep below. Then each note's mirror doc and audio, including
-  // purges left by an earlier attempt or an earlier single-note deletion.
-  for (const sessionUri of pg.uploadSessionUris) {
-    try {
-      await cancelResumableUpload(sessionUri, deps.fetch);
-      await clearCancelledUploadSession(uid, sessionUri);
-    } catch (err) {
-      summary.firestoreErrors += 1;
-      log.error({ err }, 'delete_account_upload_cancel_failed');
-    }
-  }
-  const purges = await listStoragePurgesForAccount({ uid, workspaceIds: ownWorkspaces });
-  for (const p of purges) {
-    if (!(await runStoragePurge({ bucket, firestore }, p, log))) summary.firestoreErrors += 1;
-  }
-
-  // 3. The account's own docs and storage.
-  try {
-    await deleteAccountMirror(firestore, { uid, workspaceIds: ownWorkspaces });
-  } catch (err) {
-    summary.firestoreErrors += 1;
-    log.error({ err, summary }, 'delete_account_mirror_failed');
-  }
-  for (const workspaceId of ownWorkspaces) {
-    try {
-      await purgeWorkspaceObjects({ bucket, workspaceId }, log);
-    } catch (err) {
-      summary.firestoreErrors += 1;
-      log.error({ err, workspaceId }, 'delete_account_storage_failed');
-    }
-  }
-  if (summary.firestoreErrors) {
-    // Something outside Postgres is still there. Auth stays, so the client
-    // can retry, and the retry re-runs exactly what's left.
-    log.error({ summary }, 'delete_account_incomplete');
-    return res.status(500).json({ error: 'delete_incomplete', summary });
-  }
-
-  // 4. Auth last, so a failure above leaves the token usable for a retry.
-  try {
-    await auth.deleteUser(uid);
-    summary.authDeleted = true;
-  } catch (err) {
-    if (err?.code === 'auth/user-not-found') {
-      summary.authDeleted = true; // an earlier attempt already did it
-    } else {
-      log.error({ err, summary }, 'delete_account_auth_failed');
-      return res.status(500).json({ error: 'auth_deletion_failed', summary });
-    }
-  }
-
-  await completeAccountDeletion(uid).catch((err) => log.error({ err }, 'delete_account_tombstone_complete_failed'));
   log.info({ summary, pgDeleted: pg.deleted }, 'delete_account_complete');
   return res.status(200).json({ ok: true, summary });
 }

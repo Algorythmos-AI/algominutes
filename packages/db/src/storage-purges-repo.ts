@@ -56,11 +56,24 @@ export async function getStoragePurge(id: number): Promise<StoragePurge | null> 
   return rows[0] ? toPurge(rows[0]) : null;
 }
 
-/** Purges still pending, oldest first (what the sweeper retries, and what an alert counts). */
-export async function listPendingStoragePurges(limit = 50): Promise<StoragePurge[]> {
+/**
+ * Purges still worth retrying (fewer than maxAttempts), oldest first: what the
+ * sweeper runs. Stuck ones are excluded, so they can never crowd out newer
+ * purges; listStuckStoragePurges reports them.
+ */
+export async function listPendingStoragePurges(limit = 50, maxAttempts = 10): Promise<StoragePurge[]> {
   const { rows } = await getPool().query(
-    `SELECT ${COLUMNS} FROM storage_purges ORDER BY created_at ASC, id ASC LIMIT $1`,
-    [limit],
+    `SELECT ${COLUMNS} FROM storage_purges WHERE attempts < $2 ORDER BY created_at ASC, id ASC LIMIT $1`,
+    [limit, maxAttempts],
+  );
+  return rows.map(toPurge);
+}
+
+/** Purges that have failed maxAttempts times: for a human (the alert counts them). */
+export async function listStuckStoragePurges(limit = 50, maxAttempts = 10): Promise<StoragePurge[]> {
+  const { rows } = await getPool().query(
+    `SELECT ${COLUMNS} FROM storage_purges WHERE attempts >= $2 ORDER BY created_at ASC, id ASC LIMIT $1`,
+    [limit, maxAttempts],
   );
   return rows.map(toPurge);
 }
