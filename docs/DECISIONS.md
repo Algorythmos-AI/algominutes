@@ -3,6 +3,25 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Postgres connections: a per-environment budget that fits the tier (2026-09-25)
+
+Owner decision: **cap the pools to fit the tier** rather than buy a bigger one. Staging's db-f1-micro allows
+25 connections (3 reserved). The services' pools used to add up to well over 100 at max scale (the api alone
+was 4 instances × 18), which fails with "remaining connection slots are reserved" under a burst.
+
+- **`infra/terraform/envs/<env>/connection-budget.json`** is the single source. For each service it sets max
+  instances, the pools its code opens, and `pool_max`, which becomes its `PG_POOL_MAX`: a cap on every pool
+  it opens, never a raise. Each job gets its connection count. Worst case = Σ instances × pools × pool_max +
+  jobs. That must fit `max_connections − reserved − operator_headroom`.
+- **Enforced three ways:** a Terraform precondition on the Cloud SQL instance (it fails the plan);
+  `tests/connection-budget.test.ts` (sum, tier, every service covered, pool counts matched against the code);
+  and CI runs the integration suite with every pool capped at 1.
+- **Why caps of 1 are safe:** that CI run proves no code holds a client while asking the same pool for
+  another. The sweep's advisory lock uses a dedicated connection outside the pool, and the budget counts it.
+  A small pool only queues; it never refuses.
+- **Staging:** api 1 instance (pools of 3), transcoder 2, the rest 1: worst case 19 of 20. **Prod**
+  (db-custom-1-3840, 100 connections): 83 of 95. Scaling past these is a tier change plus a budget edit.
+
 ## The JSON services send the strictest CSP, not none (2026-09-25)
 
 `services/api` and `services/billing` serve JSON (and file downloads), never HTML. Both had helmet's CSP

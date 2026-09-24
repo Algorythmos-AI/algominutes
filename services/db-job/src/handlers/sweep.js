@@ -46,18 +46,32 @@ function firebaseDeps(env) {
   };
 }
 
-async function run({ log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal() }) {
+async function openLockClient() {
+  const { Client } = require('pg');
+  const { buildPgConfig } = require('@algominutes/ai/pg-config.cjs');
+  const client = new Client(buildPgConfig());
+  await client.connect();
+  return client;
+}
+
+async function run({
+  log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal(),
+  connectLockClient = null,
+}) {
   const deps = injected || firebaseDeps(env);
   const {
-    getPool, listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
+    listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
     recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
-  // One sweep at a time. A session-level advisory lock on its own connection,
-  // released when the run ends (or the connection drops).
-  const lockClient = await getPool().connect();
+  // One sweep at a time: a session-level advisory lock, released when the run
+  // ends (or the connection drops). It's held on a DEDICATED connection, outside
+  // the repo pool, so the sweep works at any pool cap (PG_POOL_MAX): a lock
+  // client taken from a pool of 1 would leave no connection for the sweep's own
+  // queries. The connection budget counts it (connection-budget.json).
+  const lockClient = connectLockClient ? await connectLockClient() : await openLockClient();
   try {
     const { rows } = await lockClient.query('SELECT pg_try_advisory_lock(hashtext($1)) AS got', [LOCK_KEY]);
     if (!rows[0].got) {
@@ -71,7 +85,7 @@ async function run({ log, env, traceId, deps: injected, now = new Date(), repo =
         .catch((err) => log.error({ err }, 'sweep_unlock_failed'));
     }
   } finally {
-    lockClient.release();
+    await lockClient.end().catch((err) => log.error({ err }, 'sweep_lock_client_close_failed'));
   }
 
   async function sweepOnce() {
