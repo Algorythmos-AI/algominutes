@@ -14,6 +14,10 @@ name: deploy-staging
 #   scripts/check-migration-expand.mjs), so old images keep working on it. A failed migrate
 #   stops the deploy with every service still on its previous image.
 # - Keyless: authenticates via Workload Identity Federation as gha-deployer.
+#   Every job that authenticates runs in the `staging` GitHub Environment: the
+#   WIF provider only accepts tokens from refs/heads/integration in that
+#   environment (infra/terraform/modules/environment/cloud-run.tf), so no other
+#   branch, PR or workflow can deploy.
 # - Image-only: `gcloud run services update --image` changes ONLY the image;
 #   env, service account, VPC and limits stay owned by Terraform (which ignores
 #   the image field, so the two never fight).
@@ -95,6 +99,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    environment: staging
     permissions:
       contents: read
       id-token: write
@@ -127,6 +132,7 @@ jobs:
     needs: [changes, build]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    environment: staging
     timeout-minutes: 30
     permissions:
       contents: read
@@ -162,6 +168,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    environment: staging
     permissions:
       contents: read
       id-token: write
@@ -189,6 +196,7 @@ jobs:
     needs: [changes, rollout]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    environment: staging
     permissions:
       contents: read
       id-token: write
