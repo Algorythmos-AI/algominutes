@@ -9,6 +9,9 @@ on:
   pull_request:
     branches: [main]
 
+# Reads only the event payload: no token scopes at all.
+permissions: {}
+
 jobs:
   guard:
     runs-on: ubuntu-latest

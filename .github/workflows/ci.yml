@@ -9,6 +9,9 @@ on:
     branches: [integration, main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

@@ -10,6 +10,9 @@ on:
 # repos (Algorythmos-AI is an org); the CLI itself is free and unlimited and is
 # exactly what `npm run gitleaks` runs locally. Same engine, same empty
 # allowlist in .gitleaks.toml — no license, no allowlist widening (CLAUDE.md §6).
+permissions:
+  contents: read
+
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
