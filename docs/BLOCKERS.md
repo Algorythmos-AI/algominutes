@@ -288,7 +288,9 @@ where testable so the fix PR proves itself:
 - [x] **Done:** `check-no-console.sh` already scans `packages/db` + `packages/ai`; its stale `db.ts`
       allowlist entry is removed (db.ts moved to the structured logger in #15). Was: **`db.ts` used `console.error`** (fixed here → structured logger); `check-no-console.sh` should
       also scan `packages/db` + `packages/ai` — widen it.
-- [ ] **Contract drift**: only 4 api routes match `openapi.v1.json`; 7 spec paths are served under
+- [x] **Reconciled (#44 + the contract part-2 PR):** 28 operations documented, 0 spec-only, and the only
+  router-only route left is `POST /v1/process-audio`, which is retired rather than documented (PR-16). Was:
+  **Contract drift**: only 4 api routes match `openapi.v1.json`; 7 spec paths are served under
       other names and 24 routes are undocumented. Pinned by the ratchet `tests/contract-routes.test.ts`
       (fails on any new drift). Reconcile to zero before the iOS `/v1` client (plan PR-17).
 

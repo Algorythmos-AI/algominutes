@@ -40,6 +40,7 @@ import {
   WorkspaceBoundaryError,
 } from '@algominutes/db';
 import { toEntitlementResponse } from './entitlement.js';
+import { NoteType } from '@algominutes/contracts/schemas';
 
 const { MAX_AUDIO_BYTES, isValidId, publicErrorFor, enforceUsageBudget } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
@@ -64,7 +65,8 @@ export async function processIntelligenceRoute(req, res) {
 
   // ── Validate body (storagePath OR sourceUrl, not both) ────
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType: clientMime } = req.body || {};
-  if (!isValidId(noteId) || !isValidId(workspaceId) || !type) {
+  // `type` must be a published NoteType (the documented ProcessRequest contract).
+  if (!isValidId(noteId) || !isValidId(workspaceId) || !NoteType.safeParse(type).success) {
     return res.status(400).json({ error: 'Missing or invalid required fields' });
   }
   if (workspaceId !== `workspace_${callerUid}`) {
