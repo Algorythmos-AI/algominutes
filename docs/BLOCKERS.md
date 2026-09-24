@@ -367,7 +367,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   active, free floor). Was: **`EntitlementResponse` requires `state`, but `/v1/entitlement` (and `/v1/process`'s 402) never
   send it,** nor `trialEndsAt`. Live bodies fail `EntitlementResponse.parse`. This is a three-client
   contract change: decide whether the handler adds them or the schema drops them.
-- [ ] **Four handlers ignore stricter schemas that already exist:**
+- [x] **Fixed (validate-with-contract-schemas PR):** all four now `safeParse` with their published
+  schemas (integration-tested against Postgres). Support still trims to 4000 characters, and its schema
+  now says so instead of rejecting long messages. Was: **Four handlers ignore stricter schemas that already exist:**
   - accept-terms (only checks truthiness);
   - retention (accepts a missing field);
   - events (accepts any event name, when the `AnalyticsEvent` enum exists);
