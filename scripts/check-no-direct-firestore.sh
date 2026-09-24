@@ -13,7 +13,6 @@
 #   - packages/db/src/notes-repo.ts             (the repo layer)
 #   - packages/ai/src/note-terminal.cjs         (terminal-failure writer: PG first, then mirror)
 #   - services/transcoder/src/firestore-mirror.js
-#   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
 #
 # (services/api/src/routes/process-intelligence.js was allowlisted here as a
 #  "ported mirror" and hid six direct note-status writes plus an unguarded
@@ -34,7 +33,7 @@ TARGETS=(
 PATTERNS=(
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/ai/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/ai/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do

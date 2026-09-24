@@ -26,7 +26,6 @@ export const ALLOWLIST = new Map([
   ['packages/db/src/notes-repo.ts', 'the repo layer: Postgres first, then the Firestore mirror'],
   ['packages/ai/src/note-terminal.cjs', 'terminal-failure writer: workspace-scoped Postgres, then the mirror'],
   ['services/transcoder/src/firestore-mirror.js', "the transcoder's mirror module"],
-  ['services/summarizer/src/handler.js', 'Cloud Run mirror; tracked TODO: move behind notes-repo'],
 ]);
 
 function* sourceFiles(dir) {

@@ -414,6 +414,85 @@ export async function mirrorSummarizing(firestore: Firestore, input: { noteId: s
     .set({ status: 'summarizing', updatedAt: ISO_NOW() }, { merge: true });
 }
 
+export interface MarkSummaryReadyInput {
+  noteId: string;
+  workspaceId: string;
+  summary: { gist: string; actionItems: string[]; keyDecisions: string[] };
+  model?: string | null;
+  /** Redacted transcript preview for the live UI (the full transcript stays in Postgres). */
+  transcriptPreview: { speaker: string; text: string; time: string }[];
+  transcriptTruncated: boolean;
+}
+
+/**
+ * The summarizer's final write (the last pipeline stage). In one transaction,
+ * the note is marked 'ready' in the task's workspace, the manual-edit and
+ * regenerate flags are cleared (they described the summary being replaced),
+ * and the summary, action items and key decisions are replaced. Then the
+ * Firestore mirror is written.
+ *
+ * If the note is gone (deleted mid-run) or isn't in that workspace, nothing is
+ * written, in either store, and { written: false } is returned. Mirroring anyway
+ * would resurrect a phantom document. Idempotent on replay: everything is
+ * upserted or replaced.
+ */
+export async function markSummaryReady(
+  firestore: Firestore,
+  input: MarkSummaryReadyInput,
+  log: { error: (o: any, m?: string) => void },
+): Promise<{ written: boolean }> {
+  const written = await withTx(
+    async (client) => {
+      const note = await client.query(
+        `UPDATE notes
+            SET status = 'ready',
+                summary_manually_edited_at = NULL,
+                summary_requested_at = NULL,
+                updated_at = NOW()
+          WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+          RETURNING id`,
+        [input.noteId, input.workspaceId],
+      );
+      if (!note.rowCount) return false;
+      await client.query(
+        `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
+           VALUES ($1, $2, NULL, $3, $4)
+         ON CONFLICT (note_id) DO UPDATE
+           SET gist = EXCLUDED.gist, topics = EXCLUDED.topics,
+               model = EXCLUDED.model, generated_at = NOW()`,
+        [input.noteId, input.summary.gist || '', JSON.stringify(input.summary.actionItems || []), input.model || null],
+      );
+      await client.query('DELETE FROM action_items WHERE note_id = $1', [input.noteId]);
+      for (const text of input.summary.actionItems || []) {
+        await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
+      }
+      await client.query('DELETE FROM key_decisions WHERE note_id = $1', [input.noteId]);
+      for (const text of input.summary.keyDecisions || []) {
+        await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
+      }
+      return true;
+    },
+    { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
+  );
+  if (!written) return { written: false };
+
+  await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).set(
+    {
+      status: 'ready',
+      updatedAt: ISO_NOW(),
+      summary: {
+        gist: input.summary.gist || '',
+        actionItems: input.summary.actionItems || [],
+        keyDecisions: input.summary.keyDecisions || [],
+      },
+      transcript: input.transcriptPreview,
+      transcriptTruncated: input.transcriptTruncated,
+    },
+    { merge: true },
+  );
+  return { written: true };
+}
+
 /**
  * Persist a successful AI run. Postgres write happens first (when
  * enabled) so a failure leaves the Firestore note in 'processing' for

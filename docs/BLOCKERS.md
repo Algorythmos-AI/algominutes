@@ -362,8 +362,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   expiry, and the stored URI must be `https://storage.googleapis.com`.
 - [x] **Fixed (regenerate-via-repo PR):** regenerate-summary's claim, release and mirror now go
   through notes-repo (`claimSummaryRegeneration` / `releaseSummaryClaim` / `mirrorSummarizing`), and
-  the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Still allowlisted,
-  with reasons: `process-audio.js` (retired in PR-16) and `summarizer/handler.js` (tracked TODO). Was:
+  the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Since then,
+  process-audio was retired (#51) and the summarizer's final write moved to `markSummaryReady`, so the
+  only allowlisted writers are the repo layer, the terminal-failure writer and the transcoder mirror. Was:
   **`regenerate-summary.js:146` writes Firestore directly**.
 - [x] **Fixed (entitlement-contract PR):** the shaper now sends `state` and `trialEndsAt` (the resolver
   already computed `state`). A contract test parses the live body for every state (brand-new, trialing,
@@ -380,6 +381,22 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
   Validate with the schemas in the contract-documentation PR.
 - [ ] **Upload sessions accumulate:** expired rows are never deleted. Add cleanup to the PR-15 sweeper.
+- [ ] **The summarizer's generation guard is checked before Gemini, not at the write** (found by the
+  dual-write audit of the summarizer-via-repo PR). The run reads `summary_generation`, spends minutes in
+  Gemini, then `markSummaryReady` writes without re-checking it. If a newer regenerate claims the note in
+  that window, the older run can still land its summary and clear `summary_requested_at`. The fix is to pass
+  the task's generation to `markSummaryReady` and add it to the workspace-scoped `UPDATE … RETURNING id`, so
+  a stale run writes nothing. Queued as the next small PR.
+- [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
+  repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
+  it with PR-13 (map-reduce), which rewrites this handler anyway.
+- [ ] **Postgres connections vs `db-f1-micro` (staging).** That tier allows about 25 connections. Each
+  service's pools are lazy, and real use is bounded by request concurrency (the summarizer holds at most one
+  repo connection per request: 4 instances × concurrency 4 = 16). But the sum across services at max scale
+  is well over 25: api alone is 4 instances × (api-read 10 + repo 8). At low traffic this is fine. Under a
+  burst it fails with "remaining connection slots are reserved". Decide before external TestFlight: give
+  each service a connection budget (pool max × max instances ≤ the tier's limit), or move to a larger tier
+  (a cost decision, yours). The staging proof should watch `pg_stat_activity` under the e2e run.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

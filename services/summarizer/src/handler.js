@@ -14,6 +14,9 @@ function loadShared(name) {
 // The terminal-failure write started here and now lives in shared/, because the
 // transcoder needed the same thing and a second copy would have drifted.
 const sharedNoteTerminal = loadShared('note-terminal.cjs');
+// The final write goes through the repo layer (CLAUDE.md §1): this service
+// runs under tsx, so it imports @algominutes/db's TypeScript directly.
+const { markSummaryReady } = require('@algominutes/db');
 const terminalHooks = require('./terminal-hooks');
 
 let _pool = null;
@@ -79,11 +82,19 @@ async function handle(payload, deps) {
   try {
     // Same checkout as the transcript read — the generation and template live
     // on notes and are needed before any Gemini spend.
+    // Scoped to the task's workspace (CLAUDE.md §1). A note that is gone
+    // (deleted mid-pipeline) or not in this workspace is acknowledged, not
+    // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template FROM notes WHERE id = $1`,
-      [noteId],
+      `SELECT summary_generation, summary_template FROM notes
+        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+      [noteId, workspaceId],
     );
     noteRow = noteRes.rows[0] || null;
+    if (!noteRow) {
+      log.warn({ noteId, workspaceId }, 'summarizer_note_not_found');
+      return;
+    }
 
     const { rows } = await client.query(
       `SELECT speaker_tag AS "speakerTag", speaker_name AS "speakerName",
@@ -173,66 +184,22 @@ async function handle(payload, deps) {
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
 
-  const c2 = await pool().connect();
-  try {
-    await c2.query('BEGIN');
-    await c2.query(
-      `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-         VALUES ($1, $2, NULL, $3, $4)
-       ON CONFLICT (note_id) DO UPDATE
-         SET gist = EXCLUDED.gist, topics = EXCLUDED.topics,
-             model = EXCLUDED.model, generated_at = NOW()`,
-      [noteId, parsed.gist || '', JSON.stringify(parsed.actionItems || []), model || null],
-    );
-    await c2.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of parsed.actionItems || []) {
-      await c2.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, item]);
-    }
-    await c2.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of parsed.keyDecisions || []) {
-      await c2.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
-    }
-    // Clearing summary_manually_edited_at is what keeps the regenerate
-    // confirmation meaningful. The summary that existed a moment ago was
-    // hand-edited; the one just written is not, so the note is no longer in
-    // an edited state. Leaving the flag set makes every future rewrite
-    // re-prompt about edits that no longer exist, and a warning that always
-    // fires is one people learn to dismiss — which defeats the guard on the
-    // one occasion it matters.
-    //
-    // summary_requested_at clears with it: same statement, same reasoning.
-    // It is currently harmless only because the stale-lock takeover arm in
-    // /api/regenerate-summary is gated on status = 'summarizing'.
-    //
-    // Inside the open transaction, so the flag cannot clear unless the
-    // summary it refers to actually landed.
-    await c2.query(
-      `UPDATE notes
-          SET status = 'ready',
-              summary_manually_edited_at = NULL,
-              summary_requested_at = NULL,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [noteId],
-    );
-    await c2.query('COMMIT');
-  } catch (err) {
-    await c2.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'summarizer_rollback_failed'));
-    throw err;
-  } finally { c2.release(); }
-
-  // Firestore mirror.
-  await firestore().doc(`workspaces/${workspaceId}/notes/${noteId}`).set({
-    status: 'ready',
-    updatedAt: new Date().toISOString(),
-    summary: {
-      gist: parsed.gist || '',
-      actionItems: parsed.actionItems || [],
-      keyDecisions: parsed.keyDecisions || [],
-    },
-    transcript: redacted.slice(0, 200),
+  // Postgres (summary rows, 'ready', manual-edit flags cleared, all in one
+  // transaction), then the Firestore mirror: notes-repo markSummaryReady.
+  const { written } = await markSummaryReady(firestore(), {
+    noteId,
+    workspaceId,
+    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
+    model,
+    transcriptPreview: redacted.slice(0, 200),
     transcriptTruncated: redacted.length > 200,
-  }, { merge: true });
+  }, log);
+  if (!written) {
+    // Deleted (or moved) while we summarized: nothing was written anywhere,
+    // and there's nobody to notify.
+    log.warn({ noteId, workspaceId }, 'summarizer_note_gone_before_write');
+    return;
+  }
 
   log.info({ noteId, model, lines: lines.length }, 'summarizer_complete');
 
