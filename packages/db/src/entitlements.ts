@@ -28,6 +28,7 @@ export interface Entitlement {
   usedMinutes: number;
   remainingMinutes: number; // Infinity when includedMinutes is null
   overQuota: boolean;
+  trialEndsAt: string | null; // ISO; set only while trialing (reverse trial end)
 }
 
 export async function resolveEntitlement(uid: string): Promise<Entitlement> {
@@ -59,6 +60,7 @@ export async function resolveEntitlement(uid: string): Promise<Entitlement> {
     usedMinutes: used,
     remainingMinutes: remaining,
     overQuota: included != null && used >= included,
+    trialEndsAt: state === 'trialing' && sub?.trial_end ? new Date(sub.trial_end).toISOString() : null,
   };
 }
 

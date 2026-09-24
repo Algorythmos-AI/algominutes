@@ -15,6 +15,10 @@ import { resolveEntitlement } from '@algominutes/db';
  */
 export function toEntitlementResponse(ent) {
   return {
+    // Required by the EntitlementResponse contract (the paywall and reverse-
+    // trial UI key off it); it used to be dropped here, so live bodies failed
+    // EntitlementResponse.parse. Pinned by tests/integration/entitlement-contract.test.ts.
+    state: ent.state,
     plan: ent.plan,
     billingPeriod: ent.billingPeriod,
     includedMinutes: ent.includedMinutes,
@@ -22,6 +26,7 @@ export function toEntitlementResponse(ent) {
     // null (not Infinity) for unmetered plans, matching EntitlementResponse.
     remainingMinutes: ent.includedMinutes == null ? null : ent.remainingMinutes,
     overQuota: ent.overQuota,
+    trialEndsAt: ent.trialEndsAt ?? null,
   };
 }
 
