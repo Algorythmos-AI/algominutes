@@ -114,9 +114,8 @@ export async function processAudioRoute(req, res) {
     }
     if (probedSize > MAX_AUDIO_BYTES) {
       const userMsg = publicErrorFor(new Error('TOO_LARGE'));
-      await noteRef
-        .set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-        .catch((err) => reqLog.error({ err }, 'firestore_write_failed:too_large_mirror'));
+      await markError(firestore, { noteId, workspaceId, errorMessage: userMsg }, reqLog)
+        .catch((err) => reqLog.error({ err }, 'mark_error_failed:too_large'));
       return res.status(413).json({ error: userMsg });
     }
   }
@@ -126,9 +125,8 @@ export async function processAudioRoute(req, res) {
     await enforceUsageBudget(firestore, callerUid, probedSize);
   } catch (err) {
     const userMsg = publicErrorFor(err);
-    await noteRef
-      .set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-      .catch((mirrorErr) => reqLog.error({ err: mirrorErr }, 'firestore_write_failed:rate_limit_mirror'));
+    await markError(firestore, { noteId, workspaceId, errorMessage: userMsg }, reqLog)
+      .catch((mirrorErr) => reqLog.error({ err: mirrorErr }, 'mark_error_failed:rate_limit'));
     reqLog.warn({ reason: err.message, bytes: probedSize }, 'usage_budget_exceeded');
     return res.status(429).json({ error: userMsg });
   }

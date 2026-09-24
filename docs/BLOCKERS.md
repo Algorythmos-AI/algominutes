@@ -357,9 +357,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   PUT to whatever URI it contained, and `/complete` reported whether *any* object existed. Sessions now
   live server-side (migration 013). The id is a random UUID, reads are scoped to the owner's uid and
   expiry, and the stored URI must be `https://storage.googleapis.com`.
-- [ ] **`regenerate-summary.js:146` writes Firestore directly** (`db.doc(...).set(...)`), outside the
-  repo layer (CLAUDE.md §1). The grep gate misses the multi-line form. Route it through notes-repo, and
-  give `check-no-direct-firestore` the same AST treatment as the silent-catch gate.
+- [x] **Fixed (regenerate-via-repo PR):** regenerate-summary's claim, release and mirror now go
+  through notes-repo (`claimSummaryRegeneration` / `releaseSummaryClaim` / `mirrorSummarizing`), and
+  the release is now workspace-scoped. `check-no-direct-firestore` is syntax-aware. Still allowlisted,
+  with reasons: `process-audio.js` (retired in PR-16) and `summarizer/handler.js` (tracked TODO). Was:
+  **`regenerate-summary.js:146` writes Firestore directly**.
 - [ ] **`EntitlementResponse` requires `state`, but `/v1/entitlement` (and `/v1/process`'s 402) never
   send it,** nor `trialEndsAt`. Live bodies fail `EntitlementResponse.parse`. This is a three-client
   contract change: decide whether the handler adds them or the schema drops them.
