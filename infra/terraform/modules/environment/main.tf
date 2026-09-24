@@ -61,6 +61,7 @@ locals {
     "monitoring.googleapis.com",           # Cloud Monitoring
     "cloudresourcemanager.googleapis.com", # Resource Manager (IAM bindings)
     "billingbudgets.googleapis.com",       # Budgets + alerts (budget.tf)
+    "iap.googleapis.com",                  # IAP TCP forwarding (SSH to the proof VM, bastion.tf)
   ]
 }
 
