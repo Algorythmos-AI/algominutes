@@ -37,7 +37,9 @@ export async function deleteNoteRoute(req, res) {
     log.error({ err, purgeId: result.purgeId }, 'delete_note_purge_lookup_failed');
     return null;
   });
-  const purged = purge ? await runStoragePurge(getStorage().bucket(), purge, log) : false;
+  const purged = purge
+    ? await runStoragePurge({ bucket: getStorage().bucket(), firestore: getFirestore() }, purge, log)
+    : false;
 
   log.info({ deleted: result.deleted, purgeId: result.purgeId, purged }, 'delete_note_ok');
   return res.status(200).json({ ok: true, noteId, deleted: result.deleted });

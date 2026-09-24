@@ -420,7 +420,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     Postgres side works *if every step succeeds*. But each step is best-effort: a failure is logged, then
     Auth is deleted anyway and the request returns 200, so the user can never retry. GCS audio is removed
     only by that undeployed trigger. Non-note Firestore docs (`rateLimits/{uid}`) are never removed.
-  - **Done (note-deletion-path PR):** `POST /v1/notes/delete` → notes-repo `deleteNote`.
+  - **Done (note-deletion-path PR):** `POST /v1/notes/delete` → notes-repo `deleteNote`. The author or a
+    workspace owner/admin may delete. The note's upload sessions go in the same transaction. The purge also
+    re-deletes the mirror doc, so a crash between the commit and the doc delete can't leave it behind. A
+    client-supplied `storage_path` is honoured only if it's exactly this note's object name.
     - Postgres goes first, in one workspace-scoped transaction: a membership check, then the cascade.
       Search and chat can no longer return the note.
     - Then the Firestore mirror.
@@ -431,12 +434,22 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **Still open for M1:**
     - [ ] iOS calls the route instead of deleting the doc (PR-17). Then Firestore rules stop clients
       deleting note docs.
-    - [ ] Workers must not resurrect a deleted note. The transcoder mirrors `status: 'chunking'` with
-      `set(…, { merge: true })` *before* any Postgres write (handler.js:52), so a note deleted between
-      kickoff and transcoding comes back as a phantom doc. Its later Postgres writes then fail (NOTE_NOT_FOUND
-      / FK), so each retry re-creates the doc until the task dead-letters. Mirror with `update()` (which
-      fails on a missing doc), and treat a vanished note as an acknowledged no-op in the
-      transcoder and embedder.
+    - [ ] **Workers must not resurrect a deleted note** (the full list is from the dual-write audit of the
+      deletion PR). Each writes the mirror with `set(…, { merge: true })`, which re-creates a deleted doc:
+      - the transcoder's kickoff `chunking` (handler.js:52, *before* any Postgres write);
+      - its error mirror (handler.js:127, after NOTE_NOT_FOUND or a download of already-purged audio);
+      - every `firestore-mirror.js` helper (a delete landing just after a Postgres write);
+      - `markSummaryReady` (a delete between its commit and its mirror);
+      - `mirrorSummarizing`;
+      - `note-terminal.cjs` when its Postgres update errors.
+
+      Each retry re-creates the doc until the task dead-letters, and the terminal hook then pushes "note
+      failed" for a note the user deleted. Fix: mirror with `update()` (which fails on a missing doc), and
+      treat a vanished note (NOTE_NOT_FOUND, FK 23503, or a Firestore NOT_FOUND) as an acknowledged no-op in
+      the transcoder and embedder: no retry, no DLQ, no notification.
+    - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
+      server-side upload session is gone, so it can't be completed or processed, but the object lands. The
+      PR-15 sweeper should also remove objects of notes that don't exist.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
     - [ ] Account deletion reuses this path (below).

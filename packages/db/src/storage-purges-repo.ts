@@ -1,11 +1,15 @@
 /**
- * The queue of note audio to delete from Cloud Storage (migration 014).
+ * The queue of what a deleted note leaves outside Postgres (migration 014):
+ * its Cloud Storage objects, and its Firestore mirror doc.
  *
  * notesRepo.deleteNote writes a row in the same transaction that deletes the
- * note, so the purge can't be lost. runStoragePurge deletes the objects and
- * only then the row. A failure leaves the row with its attempt count and last
- * error, and the PR-15 sweeper retries anything left (listPendingStoragePurges).
+ * note, so the purge can't be lost. runStoragePurge deletes the mirror doc
+ * (again: deleteNote already did, unless the process died first) and the
+ * objects, and only then the row. A failure leaves the row with its attempt
+ * count and last error, and the PR-15 sweeper retries anything left
+ * (listPendingStoragePurges).
  */
+import type { Firestore } from 'firebase-admin/firestore';
 import { getPool } from './db';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
@@ -59,13 +63,13 @@ export async function listPendingStoragePurges(limit = 50): Promise<StoragePurge
 }
 
 /**
- * Delete one purge's objects, then its row. On failure the row stays, with the
+ * Delete one purge's mirror doc and objects, then its row. On failure the row stays, with the
  * attempt counted and the error recorded, and the error is logged. Returns
  * whether it completed; it never throws, because a failed purge is retried,
  * not surfaced to the user whose note is already gone.
  */
 export async function runStoragePurge(
-  bucket: unknown,
+  { bucket, firestore }: { bucket: unknown; firestore: Firestore },
   purge: StoragePurge,
   log: { info: (o: any, m?: string) => void; error: (o: any, m?: string) => void },
 ): Promise<boolean> {
@@ -79,6 +83,8 @@ export async function runStoragePurge(
     purgeId: purge.id,
   };
   try {
+    // Idempotent: deleting a missing doc succeeds.
+    await firestore.doc(`workspaces/${purge.workspaceId}/notes/${purge.noteId}`).delete();
     await purgeNoteObjects(
       {
         bucket,

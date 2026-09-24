@@ -39,12 +39,15 @@ describe('noteObjectSets', () => {
 });
 
 describe('ownedStoragePath', () => {
-  it("accepts only a path under this workspace's content roots", () => {
-    expect(ownedStoragePath('recordings/ws1/note1.m4a', 'ws1')).toBe('recordings/ws1/note1.m4a');
-    expect(ownedStoragePath('recordings/ws2/note1.m4a', 'ws1')).toBeNull();
-    expect(ownedStoragePath('recordings/ws1/../ws2/x', 'ws1')).toBeNull();
-    expect(ownedStoragePath('exports/ws1/note1.pdf', 'ws1')).toBeNull();
-    expect(ownedStoragePath(null, 'ws1')).toBeNull();
+  it("accepts only exactly this note's object name", () => {
+    expect(ownedStoragePath('recordings/ws1/note1.m4a', 'ws1', 'note1')).toBe('recordings/ws1/note1.m4a');
+    expect(ownedStoragePath('imports/ws1/note1', 'ws1', 'note1')).toBe('imports/ws1/note1');
+    // Another note's object in the same workspace (storage_path is client-supplied).
+    expect(ownedStoragePath('recordings/ws1/note2.m4a', 'ws1', 'note1')).toBeNull();
+    expect(ownedStoragePath('recordings/ws2/note1.m4a', 'ws1', 'note1')).toBeNull();
+    expect(ownedStoragePath('recordings/ws1/../ws2/x', 'ws1', 'note1')).toBeNull();
+    expect(ownedStoragePath('exports/ws1/note1.pdf', 'ws1', 'note1')).toBeNull();
+    expect(ownedStoragePath(null, 'ws1', 'note1')).toBeNull();
   });
 });
 

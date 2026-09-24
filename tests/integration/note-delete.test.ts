@@ -103,6 +103,34 @@ describe('deleteNote (the single deletion path)', () => {
     // The id now exists nowhere, so the retry may purge the scratch too.
     expect(await getStoragePurge((retry as { purgeId: number }).purgeId)).toMatchObject({ includeScratch: true });
   });
+
+  // Membership alone isn't enough: a plain member can't delete someone else's
+  // note. The author can, and an owner/admin can delete any note.
+  it("a plain member can delete their own note but not someone else's; the owner can delete any", async () => {
+    await seedUser('carol');
+    await pool.query(`INSERT INTO workspace_members (workspace_id, uid, role) VALUES ('ws-a', 'carol', 'member')`);
+    await seedNote('note-c', 'ws-a', 'carol');
+    const { fs } = fsStub();
+    expect(await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'carol' }, quietLog)).toEqual({ allowed: false });
+    expect(await rowsFor('note-a')).toEqual(ALL);
+    expect(await deleteNote(fs, { noteId: 'note-c', workspaceId: 'ws-a', uid: 'carol' }, quietLog)).toMatchObject({ deleted: true });
+    await seedNote('note-c2', 'ws-a', 'carol');
+    expect(await deleteNote(fs, { noteId: 'note-c2', workspaceId: 'ws-a', uid: 'alice' }, quietLog)).toMatchObject({ deleted: true });
+    // A plain member can't trigger cleanup of a note with no Postgres row.
+    expect(await deleteNote(fs, { noteId: 'never-processed', workspaceId: 'ws-a', uid: 'carol' }, quietLog)).toEqual({ allowed: false });
+  });
+
+  it("removes the note's upload sessions, so an unfinished upload can't be completed into it", async () => {
+    await pool.query(
+      `INSERT INTO upload_sessions (uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at)
+         VALUES ('alice', 'ws-a', 'note-a', 'recordings/ws-a/note-a.m4a', 'https://storage.googleapis.com/x', 1, NOW() + INTERVAL '1 day'),
+                ('bob', 'ws-b', 'note-b', 'recordings/ws-b/note-b.m4a', 'https://storage.googleapis.com/y', 1, NOW() + INTERVAL '1 day')`,
+    );
+    const { fs } = fsStub();
+    await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    expect(await count(`SELECT 1 FROM upload_sessions WHERE note_id = 'note-a'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM upload_sessions WHERE note_id = 'note-b'`)).toBe(1);
+  });
 });
 
 function fakeBucket(names: string[], { failOn }: { failOn?: string } = {}) {
@@ -124,17 +152,32 @@ describe('runStoragePurge', () => {
   const log = { info: () => {}, error: (o: unknown) => void errors.push(o) };
 
   it("deletes exactly the note's objects, then the purge row", async () => {
-    const { fs } = fsStub();
+    const { fs, deletes } = fsStub();
     const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    // Pretend the process died after the commit, before the doc delete: the purge still removes it.
+    deletes.length = 0;
     const bucket = fakeBucket([
       'recordings/ws-a/note-a.m4a', 'transcoder/note-a/chunk-000.flac',
       'recordings/ws-a/note-ab.m4a', // a different note whose id shares the prefix
       'recordings/ws-b/note-b.m4a',
     ]);
     const purge = (await getStoragePurge((r as { purgeId: number }).purgeId))!;
-    expect(await runStoragePurge(bucket, purge, log)).toBe(true);
+    expect(await runStoragePurge({ bucket, firestore: fs }, purge, log)).toBe(true);
     expect([...bucket.present].sort()).toEqual(['recordings/ws-a/note-ab.m4a', 'recordings/ws-b/note-b.m4a']);
+    expect(deletes).toEqual(['workspaces/ws-a/notes/note-a']);
     expect(await count('SELECT 1 FROM storage_purges')).toBe(0);
+  });
+
+  // notes.storage_path comes from the client at /v1/process and is only
+  // prefix-checked, so it can name another note's audio in the same workspace.
+  it("never deletes another note's object named by the recorded storage_path", async () => {
+    await pool.query(`UPDATE notes SET storage_path = 'recordings/ws-a/note-c.m4a' WHERE id = 'note-a'`);
+    const { fs } = fsStub();
+    const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    const bucket = fakeBucket(['recordings/ws-a/note-a.m4a', 'recordings/ws-a/note-c.m4a']);
+    const purge = (await getStoragePurge((r as { purgeId: number }).purgeId))!;
+    expect(await runStoragePurge({ bucket, firestore: fs }, purge, log)).toBe(true);
+    expect([...bucket.present]).toEqual(['recordings/ws-a/note-c.m4a']);
   });
 
   it('keeps a failed purge queued, with the attempt and error recorded (and logged)', async () => {
@@ -142,7 +185,7 @@ describe('runStoragePurge', () => {
     const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice', traceId: 't-2' }, quietLog);
     const bucket = fakeBucket(['recordings/ws-a/note-a.m4a'], { failOn: 'recordings/ws-a/note-a.m4a' });
     const purge = (await getStoragePurge((r as { purgeId: number }).purgeId))!;
-    expect(await runStoragePurge(bucket, purge, log)).toBe(false);
+    expect(await runStoragePurge({ bucket, firestore: fs }, purge, log)).toBe(false);
     expect(await listPendingStoragePurges()).toEqual([
       expect.objectContaining({ noteId: 'note-a', attempts: 1, lastError: 'storage 503' }),
     ]);

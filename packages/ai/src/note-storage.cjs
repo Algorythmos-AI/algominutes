@@ -36,10 +36,17 @@ function noteObjectSets({ workspaceId, noteId, includeScratch }) {
   return sets;
 }
 
-/** The note's own recorded object, if it sits where a note's content may. */
-function ownedStoragePath(storagePath, workspaceId) {
-  if (typeof storagePath !== 'string' || storagePath.includes('..')) return null;
-  return CONTENT_ROOTS.some((root) => storagePath.startsWith(`${root}/${workspaceId}/`)) ? storagePath : null;
+/**
+ * The note's recorded object, but only if its name is exactly this note's
+ * (`{root}/{ws}/{noteId}[.ext]`). notes.storage_path comes from the client at
+ * /v1/process and is checked only against the workspace prefix, so it could
+ * name ANOTHER note's audio in the same workspace. Trusting it would delete
+ * that note's audio.
+ */
+function ownedStoragePath(storagePath, workspaceId, noteId) {
+  if (typeof storagePath !== 'string') return null;
+  const sets = noteObjectSets({ workspaceId, noteId, includeScratch: false });
+  return sets.some((s) => s.matches(storagePath)) ? storagePath : null;
 }
 
 /**
@@ -53,7 +60,7 @@ async function purgeNoteObjects({ bucket, workspaceId, noteId, storagePath, incl
     const [files] = await bucket.getFiles({ prefix: set.prefix });
     for (const f of files) if (set.matches(f.name)) names.add(f.name);
   }
-  const own = ownedStoragePath(storagePath, workspaceId);
+  const own = ownedStoragePath(storagePath, workspaceId, noteId);
   if (own) names.add(own);
   for (const name of names) {
     await bucket.file(name).delete({ ignoreNotFound: true });

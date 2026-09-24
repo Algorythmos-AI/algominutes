@@ -60,7 +60,7 @@ describe('POST /v1/notes/delete', () => {
     expect(await call('alice', { noteId: 'note-a', workspaceId: 'ws-a' }))
       .toEqual({ status: 200, body: { ok: true, noteId: 'note-a', deleted: true } });
     expect(await count(`SELECT 1 FROM notes WHERE id = 'note-a'`)).toBe(0);
-    expect(fsDeletes).toEqual(['workspaces/ws-a/notes/note-a']);
+    expect(new Set(fsDeletes)).toEqual(new Set(['workspaces/ws-a/notes/note-a']));
     expect([...bucketState.present]).toEqual(['recordings/ws-a/note-ab.m4a']);
     expect(await count('SELECT 1 FROM storage_purges')).toBe(0);
   });

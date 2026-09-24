@@ -636,12 +636,17 @@ export type DeleteNoteResult =
  * it replaces the undeployed functions/ onNoteDeleted trigger.
  *
  * Postgres first, in one transaction:
- *   - the caller must be a member of the workspace;
+ *   - the caller must be the note's author, or an owner/admin of the
+ *     workspace (a plain member or viewer can't delete someone else's note);
  *   - the note row is deleted, scoped to that workspace, and ON DELETE CASCADE
  *     removes its transcript, summary, action items, decisions, embeddings,
  *     chunks and shares, so search and chat can't return it;
- *   - a storage_purges row records the audio to remove from Cloud Storage,
- *     which the caller then purges (see storage-purges-repo).
+ *   - its upload sessions go too, so an unfinished upload can't be completed
+ *     into a deleted note;
+ *   - a storage_purges row records what must go outside Postgres (the audio,
+ *     and the mirror doc again), which the caller then runs (see
+ *     storage-purges-repo). If the process dies before the Firestore delete
+ *     below, the purge still removes the doc.
  * Then the Firestore mirror doc is deleted.
  *
  * Idempotent: on a retry after a partial failure the Postgres row is already
@@ -657,16 +662,33 @@ export async function deleteNote(
   if (!isPostgresEnabled()) throw new Error('deleteNote needs Postgres (WRITE_POSTGRES=true)');
   const outcome = await withTx(
     async (client): Promise<DeleteNoteResult> => {
-      const member = await client.query(
-        'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND uid = $2',
+      const member = await client.query<{ role: string }>(
+        'SELECT role FROM workspace_members WHERE workspace_id = $1 AND uid = $2',
         [input.workspaceId, input.uid],
       );
       if (!member.rowCount) return { allowed: false };
+      const manager = ['owner', 'admin'].includes(member.rows[0]!.role);
       const gone = await client.query<{ storage_path: string | null }>(
-        'DELETE FROM notes WHERE id = $1 AND workspace_id = $2 RETURNING storage_path',
-        [input.noteId, input.workspaceId],
+        `DELETE FROM notes WHERE id = $1 AND workspace_id = $2 AND ($3::boolean OR author_uid = $4)
+         RETURNING storage_path`,
+        [input.noteId, input.workspaceId, manager, input.uid],
       );
       const deleted = (gone.rowCount ?? 0) > 0;
+      // Nothing deleted: either the note is someone else's and the caller
+      // doesn't manage the workspace, or there's no Postgres row (a retry, or
+      // a note never processed). Only a manager may clean up the latter, since
+      // authorship can no longer be checked.
+      if (!deleted) {
+        const here = await client.query(
+          'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2',
+          [input.noteId, input.workspaceId],
+        );
+        if (here.rowCount || !manager) return { allowed: false };
+      }
+      await client.query(
+        'DELETE FROM upload_sessions WHERE note_id = $1 AND workspace_id = $2',
+        [input.noteId, input.workspaceId],
+      );
       // The scratch prefix is keyed by note id alone. Purge it only if this
       // delete proves the id was this workspace's: its row went here, or no
       // workspace has a note with this id.
