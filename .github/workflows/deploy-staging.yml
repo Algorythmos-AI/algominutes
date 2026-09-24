@@ -96,6 +96,9 @@ jobs:
           echo "Deploying: $out"
 
   build:
+    # `image (<svc>)`, not `build (<svc>)`: docker-build.yml already reports
+    # `build (<svc>)` checks, and check names should be unambiguous.
+    name: image (${{ matrix.service }})
     needs: changes
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
