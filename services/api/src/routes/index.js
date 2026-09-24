@@ -103,7 +103,7 @@ export function buildRouter() {
   router.post('/notes/update', authed, wrap(updateNoteRoute));
 
   // ── /v1/notes/delete ── the single deletion path (notes-repo deleteNote) ──
-  router.post('/notes/delete', authMiddleware, wrap(deleteNoteRoute));
+  router.post('/notes/delete', authed, wrap(deleteNoteRoute));
 
   // ── POST /v1/notes/:id/speakers ── name diarised speakers (ADR 0005) ────
   router.post('/notes/:id/speakers', authed, wrap(setNoteSpeakersRoute));
