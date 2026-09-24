@@ -1,0 +1,31 @@
+name: terraform
+
+# Static checks for the infrastructure code: formatting + `terraform validate`
+# of every environment root. No backend, no credentials, so it never touches
+# state or GCP. It runs on every PR (not path-filtered) so it can be a required
+# check (plan rev 7, loophole #4). A real `plan` needs gcp-admin and stays a
+# human step (docs/runbooks/resume-staging-and-deploy.md).
+on:
+  pull_request:
+  push:
+    branches: [integration, main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+          terraform_wrapper: false
+      - name: Format
+        run: terraform fmt -check -diff -recursive infra/terraform
+      - name: Validate staging root
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate

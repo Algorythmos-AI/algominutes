@@ -36,6 +36,12 @@ variable "db_edition" {
   type    = string
   default = "ENTERPRISE"
 }
+# Not committed (public repo). The runbook derives it at plan time:
+#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-staging \
+#     --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+variable "billing_account" {
+  type = string
+}
 
 provider "google" {
   project = var.project_id
@@ -47,8 +53,23 @@ provider "google-beta" {
   region  = var.region
 }
 
+# The Budgets API rejects user ADC without a quota project. Scope the override
+# to this alias (used only by the budget) so nothing else changes behaviour.
+provider "google" {
+  alias                 = "billing"
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
+}
+
 module "environment" {
   source = "../../modules/environment"
+  providers = {
+    google         = google
+    google-beta    = google-beta
+    google.billing = google.billing
+  }
 
   env            = "staging"
   project_id     = var.project_id
@@ -67,6 +88,12 @@ module "environment" {
   bucket_force_destroy      = true # staging is disposable
 
   firestore_deletion_policy = "DELETE"
+
+  # Idle staging (db-f1-micro + a 2-instance VPC connector) is well under this;
+  # 50% is the "someone left something running" signal, forecast-100% the
+  # early warning. Gross cost, so it fires while the trial credit burns.
+  billing_account = var.billing_account
+  monthly_budget  = 100
 }
 
 # Re-export module outputs at the root for convenience.
