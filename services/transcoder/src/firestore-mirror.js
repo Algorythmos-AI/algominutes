@@ -4,6 +4,8 @@
 // SDK, which bypasses security rules — granting roles/datastore.user
 // to algominutes-jobs-sa is the supported pattern.
 
+const { NoteGoneError, isFirestoreNotFound } = require('./note-gone');
+
 let _initialized = false;
 function db() {
   if (!_initialized) {
@@ -15,23 +17,36 @@ function db() {
   return getFirestore();
 }
 
-async function mirrorStatus({ workspaceId, noteId, status, extra }) {
-  const ref = db().doc(`workspaces/${workspaceId}/notes/${noteId}`);
-  const patch = {
+// Every helper UPDATES the note's doc, never set()s it. The doc is created at
+// kickoff (notes-repo markQueued), so a missing doc means the note was deleted
+// while this job ran. set({ merge: true }) would silently re-create it as a
+// phantom. update() fails with NOT_FOUND instead, which becomes NoteGoneError
+// and the handler acknowledges the task.
+async function updateNote(fsdb, { workspaceId, noteId }, patch) {
+  try {
+    await fsdb.doc(`workspaces/${workspaceId}/notes/${noteId}`).update(patch);
+  } catch (err) {
+    if (isFirestoreNotFound(err)) throw new NoteGoneError('firestore');
+    throw err;
+  }
+}
+
+async function mirrorStatus({ workspaceId, noteId, status, extra }, fsdb = db()) {
+  await updateNote(fsdb, { workspaceId, noteId }, {
     status,
     updatedAt: new Date().toISOString(),
     ...(extra || {}),
-  };
-  await ref.set(patch, { merge: true });
+  });
 }
 
-async function mirrorReady({ workspaceId, noteId, summary, transcriptPreview }) {
-  const ref = db().doc(`workspaces/${workspaceId}/notes/${noteId}`);
+async function mirrorReady({ workspaceId, noteId, summary, transcriptPreview }, fsdb = db()) {
   const patch = {
     status: 'ready',
     updatedAt: new Date().toISOString(),
   };
-  if (summary) patch.summary = summary;
+  // Field paths, so the summary map is merged the way set({ merge: true })
+  // merged it (a Firestore-only summary.keyPoints survives).
+  if (summary) for (const [k, v] of Object.entries(summary)) patch[`summary.${k}`] = v;
   // Firestore docs cap at 1 MB — long transcripts live in Postgres.
   // We mirror up to 200 lines so the existing detail view keeps
   // rendering without a separate fetch.
@@ -39,24 +54,22 @@ async function mirrorReady({ workspaceId, noteId, summary, transcriptPreview }) 
     patch.transcript = transcriptPreview.slice(0, 200);
     patch.transcriptTruncated = transcriptPreview.length > 200;
   }
-  await ref.set(patch, { merge: true });
+  await updateNote(fsdb, { workspaceId, noteId }, patch);
 }
 
-async function mirrorError({ workspaceId, noteId, errorMessage }) {
-  const ref = db().doc(`workspaces/${workspaceId}/notes/${noteId}`);
-  await ref.set({
+async function mirrorError({ workspaceId, noteId, errorMessage }, fsdb = db()) {
+  await updateNote(fsdb, { workspaceId, noteId }, {
     status: 'error',
     errorMessage: errorMessage || 'Processing failed.',
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  });
 }
 
-async function mirrorProgress({ workspaceId, noteId, done, total }) {
-  const ref = db().doc(`workspaces/${workspaceId}/notes/${noteId}`);
-  await ref.set({
+async function mirrorProgress({ workspaceId, noteId, done, total }, fsdb = db()) {
+  await updateNote(fsdb, { workspaceId, noteId }, {
     progress: { done, total },
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  });
 }
 
 // `db` is exported so the terminal-failure helper can write the same Firestore

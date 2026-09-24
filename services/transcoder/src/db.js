@@ -29,14 +29,31 @@ function pool() {
   return _pool;
 }
 
-async function upsertNoteStatus(client, { noteId, status, durationSecProbed, chunksTotal, errorMessage }) {
-  const sets = ['status = $2', 'updated_at = NOW()'];
-  const params = [noteId, status];
-  let next = 3;
+/**
+ * Whether the task's note still exists in the task's workspace (deleted notes
+ * are gone from Postgres; see notes-repo deleteNote). Checked before the
+ * transcoder writes anything, so a note deleted after kickoff isn't touched.
+ */
+async function noteExists(client, { noteId, workspaceId }) {
+  const { rowCount } = await client.query(
+    'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rowCount > 0;
+}
+
+// Scoped to the task's workspace (CLAUDE.md §1): a note id from another
+// workspace, or a deleted note, matches nothing and throws NOTE_NOT_FOUND,
+// which the handler treats as "note gone".
+async function upsertNoteStatus(client, { noteId, workspaceId, status, durationSecProbed, chunksTotal, errorMessage }) {
+  if (!workspaceId) throw new Error('upsertNoteStatus: workspaceId is required');
+  const sets = ['status = $3', 'updated_at = NOW()'];
+  const params = [noteId, workspaceId, status];
+  let next = 4;
   if (durationSecProbed != null) { sets.push(`duration_sec_probed = $${next++}`); params.push(durationSecProbed); }
   if (chunksTotal != null) { sets.push(`chunks_total = $${next++}`); params.push(chunksTotal); }
   if (errorMessage !== undefined) { sets.push(`error_message = $${next++}`); params.push(errorMessage); }
-  const sql = `UPDATE notes SET ${sets.join(', ')} WHERE id = $1 RETURNING id`;
+  const sql = `UPDATE notes SET ${sets.join(', ')} WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL RETURNING id`;
   const { rows } = await client.query(sql, params);
   if (rows.length === 0) {
     const err = new Error(`note_missing_in_postgres:${noteId}`);
@@ -188,6 +205,7 @@ async function getChunkRow(client, chunkId) {
 }
 
 module.exports = {
+  noteExists,
   fetchPriorChunkEndMs,
   pool,
   upsertNoteStatus,

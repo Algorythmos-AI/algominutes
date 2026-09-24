@@ -396,7 +396,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     workspace scope and no `deleted_at` check. A task for a deleted note (or a mismatched payload)
     still updates it. (Also `startMs = intelligence.MODEL_LADDER && …` is a no-op guard; harmless while
     the ladder is exported, fragile if it moves.)
-  - `services/transcoder/src/db.js` (status, chunks), `packages/ai/src/note-edit.cjs:104-131`
+  - `services/transcoder/src/db.js` (chunks; its status write is now workspace-scoped, see the
+    workers-note-gone PR), `packages/ai/src/note-edit.cjs:104-131`
     (manual edits), `packages/ai/src/embeddings.cjs:137-142`, and `functions/index.js:117`
     (`workspace_id = COALESCE($2, workspace_id)`: a null workspace matches any note).
   - Fix with PR-12 (the transcoder rewrite): move the transcoder's writes into notes-repo with
@@ -434,19 +435,17 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **Still open for M1:**
     - [ ] iOS calls the route instead of deleting the doc (PR-17). Then Firestore rules stop clients
       deleting note docs.
-    - [ ] **Workers must not resurrect a deleted note** (the full list is from the dual-write audit of the
-      deletion PR). Each writes the mirror with `set(…, { merge: true })`, which re-creates a deleted doc:
-      - the transcoder's kickoff `chunking` (handler.js:52, *before* any Postgres write);
-      - its error mirror (handler.js:127, after NOTE_NOT_FOUND or a download of already-purged audio);
-      - every `firestore-mirror.js` helper (a delete landing just after a Postgres write);
-      - `markSummaryReady` (a delete between its commit and its mirror);
-      - `mirrorSummarizing`;
-      - `note-terminal.cjs` when its Postgres update errors.
-
-      Each retry re-creates the doc until the task dead-letters, and the terminal hook then pushes "note
-      failed" for a note the user deleted. Fix: mirror with `update()` (which fails on a missing doc), and
-      treat a vanished note (NOTE_NOT_FOUND, FK 23503, or a Firestore NOT_FOUND) as an acknowledged no-op in
-      the transcoder and embedder: no retry, no DLQ, no notification.
+    - [x] **Fixed (workers-note-gone PR): workers no longer resurrect a deleted note.**
+      - Every transcoder mirror helper, plus `markSummaryReady`, `mirrorSummarizing` and `note-terminal`,
+        now uses `update()`, which fails on a missing doc. A Firestore NOT_FOUND there means the note
+        is gone.
+      - The transcoder kickoff checks Postgres (workspace-scoped) before its first write. Any vanished-note
+        signal (NOT_FOUND, NOTE_NOT_FOUND, FK 23503) acknowledges the task: no retry, no error mirror, no
+        DLQ, no push. `markSummaryReady` answers `not_found`, so there's no "ready" push.
+      - The embedder reads the transcript scoped to the task's workspace and acknowledges a vanished note.
+        Before, a mismatched task could index one workspace's words under another's `workspace_id`.
+      - `transcoder/src/db.js upsertNoteStatus` is now workspace-scoped and `deleted_at`-aware.
+      - Tested, and mutation-checked.
     - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
       server-side upload session is gone, so it can't be completed or processed, but the object lands. The
       PR-15 sweeper should also remove objects of notes that don't exist.

@@ -1,0 +1,118 @@
+import { describe, it, expect } from 'vitest';
+import { createRequire } from 'node:module';
+
+// A note deleted while the transcoder works on it (POST /v1/notes/delete) must
+// stay deleted. The task is acknowledged: no phantom Firestore doc, no error
+// mirror, no retry, no dead letter, no "note failed" push.
+const require = createRequire(import.meta.url);
+const handler = require('../services/transcoder/src/handler.js');
+const mirror = require('../services/transcoder/src/firestore-mirror.js');
+const { NoteGoneError, isNoteGone } = require('../services/transcoder/src/note-gone.js');
+
+const notFound = () => Object.assign(new Error('5 NOT_FOUND: No document to update'), { code: 5 });
+
+function fakeFs({ missing = false } = {}) {
+  const updates: Array<{ path: string; data: any }> = [];
+  return {
+    updates,
+    doc: (path: string) => ({
+      update: async (data: any) => {
+        if (missing) throw notFound();
+        updates.push({ path, data });
+      },
+      set: async () => { throw new Error('set() would re-create a deleted note'); },
+    }),
+  };
+}
+
+describe('firestore-mirror', () => {
+  it('updates (never sets) the doc; a missing doc is NoteGoneError', async () => {
+    const fs = fakeFs();
+    await mirror.mirrorStatus({ workspaceId: 'w', noteId: 'n', status: 'chunking' }, fs);
+    expect(fs.updates[0]).toMatchObject({ path: 'workspaces/w/notes/n', data: { status: 'chunking' } });
+    await expect(mirror.mirrorError({ workspaceId: 'w', noteId: 'n' }, fakeFs({ missing: true }))).rejects.toBeInstanceOf(NoteGoneError);
+    await expect(mirror.mirrorProgress({ workspaceId: 'w', noteId: 'n', done: 1, total: 2 }, fakeFs({ missing: true }))).rejects.toBeInstanceOf(NoteGoneError);
+  });
+
+  it('mirrorReady writes the summary by field path, so a Firestore-only summary.keyPoints survives', async () => {
+    const fs = fakeFs();
+    await mirror.mirrorReady({ workspaceId: 'w', noteId: 'n', summary: { gist: 'g', actionItems: ['a'] }, transcriptPreview: [] }, fs);
+    expect(fs.updates[0].data).toMatchObject({ status: 'ready', 'summary.gist': 'g', 'summary.actionItems': ['a'] });
+    expect(fs.updates[0].data.summary).toBeUndefined();
+  });
+
+  it('other Firestore errors still propagate as themselves', async () => {
+    const fs = { doc: () => ({ update: async () => { throw new Error('UNAVAILABLE'); } }) };
+    await expect(mirror.mirrorStatus({ workspaceId: 'w', noteId: 'n', status: 'x' }, fs)).rejects.toThrow('UNAVAILABLE');
+  });
+});
+
+describe('isNoteGone', () => {
+  it('recognises the three signals, and nothing else', () => {
+    expect(isNoteGone(new NoteGoneError('x'))).toBe(true);
+    expect(isNoteGone(Object.assign(new Error(), { code: 'NOTE_NOT_FOUND' }))).toBe(true);
+    expect(isNoteGone(Object.assign(new Error(), { code: '23503' }))).toBe(true); // FK violation
+    expect(isNoteGone(new Error('boom'))).toBe(false);
+    expect(isNoteGone(Object.assign(new Error(), { code: '23505' }))).toBe(false);
+    expect(isNoteGone(null)).toBe(false);
+  });
+});
+
+describe('transcoder kickoff for a deleted note', () => {
+  function deps({ exists = true, upsertErr = null as Error | null, mirrorStatusErr = null as Error | null } = {}) {
+    const calls: string[] = [];
+    const warns: Array<{ o: any; m: string }> = [];
+    const client = { release: () => {}, query: async () => ({ rows: [], rowCount: 0 }) };
+    return {
+      calls,
+      warns,
+      deps: {
+        log: { info: () => {}, error: () => {}, warn: (o: any, m: string) => void warns.push({ o, m }) },
+        db: {
+          pool: () => ({ connect: async () => client }),
+          noteExists: async () => exists,
+          upsertNoteStatus: async () => { if (upsertErr) throw upsertErr; },
+        },
+        mirror: {
+          mirrorStatus: async () => { calls.push('mirrorStatus'); if (mirrorStatusErr) throw mirrorStatusErr; },
+          mirrorError: async () => { calls.push('mirrorError'); },
+          mirrorProgress: async () => { calls.push('mirrorProgress'); },
+        },
+        ffmpeg: { ensureTempDir: () => '/tmp/x', probeDuration: async () => 30, cleanupTempDir: () => {} },
+        storage: { downloadToLocal: async () => {} },
+        fastPath: { run: async () => { calls.push('fastPath'); } },
+        tasks: { enqueue: async () => { calls.push('enqueue'); } },
+        env: {},
+        stt: {},
+        youtube: {},
+        traceId: 't',
+      },
+    };
+  }
+  const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'recording', storagePath: 'recordings/w1/n1.m4a' };
+
+  it('checks Postgres first: a note that is gone is acknowledged before any write', async () => {
+    const d = deps({ exists: false });
+    await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
+    expect(d.calls).toEqual([]); // no phantom 'chunking' doc, nothing enqueued
+    expect(d.warns).toContainEqual(expect.objectContaining({ m: 'transcoder_note_gone' }));
+  });
+
+  it('deleted after the check (NOTE_NOT_FOUND on the status write): acknowledged, and no error mirror', async () => {
+    const d = deps({ upsertErr: Object.assign(new Error('note_missing_in_postgres:n1'), { code: 'NOTE_NOT_FOUND' }) });
+    await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
+    expect(d.calls).toEqual(['mirrorStatus']);
+    expect(d.calls).not.toContain('mirrorError');
+  });
+
+  it('the Firestore doc already gone: acknowledged', async () => {
+    const d = deps({ mirrorStatusErr: new NoteGoneError('firestore') });
+    await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
+  });
+
+  it('any other failure still mirrors the error and throws (so the task retries)', async () => {
+    const d = deps({ upsertErr: new Error('connection reset') });
+    await expect(handler.handle(kickoff, d.deps)).rejects.toThrow('connection reset');
+    expect(d.calls).toContain('mirrorError');
+  });
+});

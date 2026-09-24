@@ -419,9 +419,16 @@ export async function releaseSummaryClaim(input: { noteId: string; workspaceId: 
  * between the two halves.
  */
 export async function mirrorSummarizing(firestore: Firestore, input: { noteId: string; workspaceId: string }): Promise<void> {
+  // update(), never set(): a note deleted since the claim must not come back.
   await firestore
     .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
-    .set({ status: 'summarizing', updatedAt: ISO_NOW() }, { merge: true });
+    .update({ status: 'summarizing', updatedAt: ISO_NOW() });
+}
+
+/** Firestore's answer (gRPC NOT_FOUND) when update() targets a missing doc. */
+function isFirestoreNotFound(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  return !!e && (e.code === 5 || e.code === 'not-found' || /\bNOT_FOUND\b/.test(String(e.message ?? '')));
 }
 
 export interface MarkSummaryReadyInput {
@@ -505,20 +512,25 @@ export async function markSummaryReady(
   );
   if (!outcome.written) return outcome;
 
-  await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).set(
-    {
+  // update(), never set(): if the note was deleted between the commit above
+  // and here, set({ merge: true }) would re-create its doc (with the summary
+  // and transcript preview). update() fails on the missing doc instead, and
+  // the caller treats the note as gone (no "ready" push). The summary fields go
+  // by field path, merged exactly as set({ merge: true }) merged them.
+  try {
+    await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({
       status: 'ready',
       updatedAt: ISO_NOW(),
-      summary: {
-        gist: input.summary.gist || '',
-        actionItems: input.summary.actionItems || [],
-        keyDecisions: input.summary.keyDecisions || [],
-      },
+      'summary.gist': input.summary.gist || '',
+      'summary.actionItems': input.summary.actionItems || [],
+      'summary.keyDecisions': input.summary.keyDecisions || [],
       transcript: input.transcriptPreview,
       transcriptTruncated: input.transcriptTruncated,
-    },
-    { merge: true },
-  );
+    });
+  } catch (err) {
+    if (isFirestoreNotFound(err)) return { written: false, reason: 'not_found' };
+    throw err;
+  }
   return { written: true };
 }
 
