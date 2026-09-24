@@ -24,7 +24,11 @@ export function clientErrorRoute(req, res) {
   for (const [field, cap] of Object.entries(CLIENT_ERROR_FIELD_CAPS)) {
     const value = body[field];
     if (typeof value === 'string' && value.length > 0) {
-      report[field] = value.slice(0, cap);
+      // Control characters flattened (line breaks become ' | ', so a stack
+      // stays readable): an anonymous caller must not shape the log's layout.
+      // (CodeQL js/log-injection. The logger writes JSON, so this is defence
+      // in depth.)
+      report[field] = value.slice(0, cap).replace(/\r?\n|\r/g, ' | ').replace(/[\u0000-\u001f\u007f]/g, ' ');
     } else if (typeof value === 'number' && Number.isFinite(value)) {
       report[field] = value;
     }
