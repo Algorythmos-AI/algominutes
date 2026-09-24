@@ -73,4 +73,15 @@ describe('note-terminal markNoteFailed', () => {
     expect(calls).toEqual(['update']);
     expect(warns).toContain('test_note_gone');
   });
+
+  it("Postgres marked the note failed but its doc is missing: an error, not 'note gone'", async () => {
+    const firestore = {
+      doc: () => ({ update: async () => { throw Object.assign(new Error('5 NOT_FOUND: No document to update'), { code: 5 }); } }),
+    };
+    const errors: string[] = [];
+    const log = { error: (_o: unknown, m: string) => void errors.push(m), warn: () => {}, info: () => {} };
+    await markNoteFailed({ pool, firestore, noteId: 'note-a', workspaceId: 'ws-a', message: 'failed', log, event: 'test' });
+    expect(errors).toContain('test_mirror_doc_missing');
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'note-a'`)).rows[0].status).toBe('error');
+  });
 });

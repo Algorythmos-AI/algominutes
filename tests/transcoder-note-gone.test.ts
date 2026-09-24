@@ -59,18 +59,23 @@ describe('isNoteGone', () => {
 });
 
 describe('transcoder kickoff for a deleted note', () => {
-  function deps({ exists = true, upsertErr = null as Error | null, mirrorStatusErr = null as Error | null } = {}) {
+  // `exists`: what each successive noteExists call answers (the kickoff's
+  // pre-check, then any re-check after a missing Firestore doc).
+  function deps({ exists = [true] as boolean[], upsertErr = null as Error | null, mirrorStatusErr = null as Error | null } = {}) {
     const calls: string[] = [];
     const warns: Array<{ o: any; m: string }> = [];
+    const errors: Array<{ o: any; m: string }> = [];
+    const answers = [...exists];
     const client = { release: () => {}, query: async () => ({ rows: [], rowCount: 0 }) };
     return {
       calls,
       warns,
+      errors,
       deps: {
-        log: { info: () => {}, error: () => {}, warn: (o: any, m: string) => void warns.push({ o, m }) },
+        log: { info: () => {}, error: (o: any, m: string) => void errors.push({ o, m }), warn: (o: any, m: string) => void warns.push({ o, m }) },
         db: {
           pool: () => ({ connect: async () => client }),
-          noteExists: async () => exists,
+          noteExists: async () => (answers.length > 1 ? answers.shift() : answers[0]),
           upsertNoteStatus: async () => { if (upsertErr) throw upsertErr; },
         },
         mirror: {
@@ -92,7 +97,7 @@ describe('transcoder kickoff for a deleted note', () => {
   const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'recording', storagePath: 'recordings/w1/n1.m4a' };
 
   it('checks Postgres first: a note that is gone is acknowledged before any write', async () => {
-    const d = deps({ exists: false });
+    const d = deps({ exists: [false] });
     await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
     expect(d.calls).toEqual([]); // no phantom 'chunking' doc, nothing enqueued
     expect(d.warns).toContainEqual(expect.objectContaining({ m: 'transcoder_note_gone' }));
@@ -105,9 +110,19 @@ describe('transcoder kickoff for a deleted note', () => {
     expect(d.calls).not.toContain('mirrorError');
   });
 
-  it('the Firestore doc already gone: acknowledged', async () => {
-    const d = deps({ mirrorStatusErr: new NoteGoneError('firestore') });
+  it('the Firestore doc gone AND Postgres agrees (deleted mid-run): acknowledged', async () => {
+    const d = deps({ exists: [true, false], mirrorStatusErr: new NoteGoneError('firestore') });
     await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
+    expect(d.warns).toContainEqual(expect.objectContaining({ m: 'transcoder_note_gone' }));
+  });
+
+  // Firestore also answers NOT_FOUND for a wrong project or database, or a
+  // half-failed account deletion. A note still live in Postgres must not be
+  // silently dropped: fail, so the task retries and dead-letters visibly.
+  it('the Firestore doc missing for a note still live in Postgres: fails loudly, not acknowledged', async () => {
+    const d = deps({ exists: [true, true], mirrorStatusErr: new NoteGoneError('firestore') });
+    await expect(handler.handle(kickoff, d.deps)).rejects.toThrow('mirror_doc_missing_for_live_note');
+    expect(d.errors).toContainEqual(expect.objectContaining({ m: 'transcoder_mirror_doc_missing' }));
   });
 
   it('any other failure still mirrors the error and throws (so the task retries)', async () => {

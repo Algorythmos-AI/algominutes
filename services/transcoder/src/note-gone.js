@@ -7,10 +7,12 @@
 // letter, no "note failed" push.
 
 class NoteGoneError extends Error {
+  /** where: 'postgres' (the row is gone) or 'firestore' (the doc is gone; Postgres not yet asked). */
   constructor(where) {
     super(`note_gone: ${where}`);
     this.name = 'NoteGoneError';
     this.code = 'NOTE_GONE';
+    this.where = where;
   }
 }
 

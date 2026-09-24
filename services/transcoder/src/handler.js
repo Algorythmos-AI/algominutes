@@ -45,11 +45,31 @@ async function handle(payload, deps) {
     if (kind === KICKOFF) return await handleKickoff(payload, deps);
     if (kind === STT_POLL) return await handleSttPoll(payload, deps);
   } catch (err) {
+    // A missing Firestore doc alone doesn't prove the note is gone: Firestore
+    // answers NOT_FOUND for a wrong project or database too, and a half-failed
+    // account deletion removes docs first. Ask Postgres, the source of truth.
+    // If the note is still there, this is a real failure, so retry and let it
+    // dead-letter visibly rather than drop a live note.
+    if (isNoteGone(err) && err.where === 'firestore') {
+      const c = await deps.db.pool().connect();
+      let live;
+      try { live = await deps.db.noteExists(c, { noteId: payload.noteId, workspaceId: payload.workspaceId }); }
+      finally { c.release(); }
+      if (live) {
+        deps.log.error({ noteId: payload.noteId, workspaceId: payload.workspaceId }, 'transcoder_mirror_doc_missing');
+        throw new Error('mirror_doc_missing_for_live_note');
+      }
+    }
     // Deleted (or not in the task's workspace) while we worked: acknowledge.
     // Retrying would re-create nothing useful, and the terminal path would
     // dead-letter it and push "note failed" about a note the user deleted.
     if (isNoteGone(err)) {
-      deps.log.warn({ noteId: payload.noteId, workspaceId: payload.workspaceId, reason: err.code }, 'transcoder_note_gone');
+      // `constraint` names the foreign key for a 23503, so a misclassified
+      // failure (some other FK) is visible in the log.
+      deps.log.warn(
+        { noteId: payload.noteId, workspaceId: payload.workspaceId, reason: err.code, constraint: err.constraint },
+        'transcoder_note_gone',
+      );
       return undefined;
     }
     throw err;

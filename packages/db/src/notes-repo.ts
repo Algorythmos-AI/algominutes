@@ -528,7 +528,16 @@ export async function markSummaryReady(
       transcriptTruncated: input.transcriptTruncated,
     });
   } catch (err) {
-    if (isFirestoreNotFound(err)) return { written: false, reason: 'not_found' };
+    // The doc is gone. That means "deleted" only if Postgres agrees. Firestore
+    // also answers NOT_FOUND for a wrong project or database, and then this
+    // must fail loudly (retry, then dead-letter) instead of dropping the note.
+    if (isFirestoreNotFound(err)) {
+      const { rowCount } = await getPool().query(
+        'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+        [input.noteId, input.workspaceId],
+      );
+      if (!rowCount) return { written: false, reason: 'not_found' };
+    }
     throw err;
   }
   return { written: true };

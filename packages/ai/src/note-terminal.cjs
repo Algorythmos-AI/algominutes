@@ -84,8 +84,14 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       );
       mirrorOk = true;
     } catch (err) {
-      if (err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message || '')))) {
+      const notFound = err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message || '')));
+      if (notFound && !pgOk) {
+        // Postgres errored, so it can't say; most likely the note was deleted.
         log.warn({ noteId, workspaceId }, `${name}_note_gone`);
+      } else if (notFound) {
+        // Postgres just marked this LIVE note failed, yet its doc is missing: a
+        // wrong project/database or a half-done deletion, not a deleted note.
+        log.error({ err, noteId, workspaceId }, `${name}_mirror_doc_missing`);
       } else {
         log.error({ err, noteId, workspaceId }, `${name}_mirror_failed`);
       }

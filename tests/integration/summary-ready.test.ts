@@ -19,10 +19,12 @@ afterAll(async () => {
   await getPool().end();
 });
 
-function fsStub({ missing = false } = {}) {
+function fsStub({ missing = false, deleteNoteFirst = false } = {}) {
   const writes: Array<{ path: string; data: any }> = [];
   const update = async (path: string, data: any) => {
-    // What Firestore does for update() on a deleted doc.
+    // A delete (POST /v1/notes/delete) landing between the commit and the mirror.
+    if (deleteNoteFirst) await pool.query(`DELETE FROM notes WHERE id = 'note-a'`);
+    // What Firestore does for update() on a missing doc.
     if (missing) throw Object.assign(new Error('5 NOT_FOUND: No document to update'), { code: 5 });
     writes.push({ path, data });
   };
@@ -119,7 +121,14 @@ describe('markSummaryReady (summarizer final write)', () => {
   // Deleted (POST /v1/notes/delete) between this write's commit and its
   // mirror: the doc is gone, and must stay gone. No "ready" push either.
   it("doesn't re-create the doc of a note deleted between the commit and the mirror", async () => {
-    const { fs } = fsStub({ missing: true });
+    const { fs } = fsStub({ missing: true, deleteNoteFirst: true });
     expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: false, reason: 'not_found' });
+  });
+
+  // NOT_FOUND also means a wrong project/database. A note still live in
+  // Postgres must fail loudly (the summarizer retries, then dead-letters).
+  it('throws when the doc is missing but the note is still live in Postgres', async () => {
+    const { fs } = fsStub({ missing: true });
+    await expect(markSummaryReady(fs, input(), quietLog)).rejects.toThrow(/NOT_FOUND/);
   });
 });

@@ -74,7 +74,7 @@ app.post('/', async (req, res) => {
   } catch (err) {
     // Deleted mid-run: the embeddings INSERT hits the notes foreign key.
     if (err && err.code === '23503') {
-      log.warn({}, 'embedder_note_gone');
+      log.warn({ constraint: err.constraint }, 'embedder_note_gone');
       return res.status(200).json({ ok: true, skipped: 'note_gone' });
     }
     log.error({ err }, 'embedder_task_failed');

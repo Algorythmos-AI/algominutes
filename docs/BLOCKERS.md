@@ -446,6 +446,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         Before, a mismatched task could index one workspace's words under another's `workspace_id`.
       - `transcoder/src/db.js upsertNoteStatus` is now workspace-scoped and `deleted_at`-aware.
       - Tested, and mutation-checked.
+    - [ ] **Found by the dual-write audit of the workers-note-gone PR (pre-existing, queued):**
+      - **R1:** `markQueued` can bring back a note deleted between the api's doc check and its own
+        transaction. Its INSERT re-creates the Postgres row, its `set(merge)` re-creates the doc, and a job
+        is queued. Fix: `update()` for the doc (the route already proved it exists), and refuse inside the
+        transaction when a `storage_purges` row exists for the note.
+      - **R2:** the web client's `setDoc(…, { merge: true })` writes (`apps/web/src/lib/noteStatus.ts:4`,
+        `App.tsx`) can re-create a doc deleted from another device. That's fixed by the web's `/v1`
+        migration.
+      - **R3:** a YouTube permanent failure (`transcoder/handler.js`) mirrors `error` to Firestore only and
+        acknowledges the task. Postgres stays `queued`, so the idempotent kickoff treats the note as in flight
+        for 3 h and the user can't retry. It should call `noteTerminal.markNoteFailed` (Postgres first).
+        Also, `chunking` and `summarizing` are mirrored with no matching Postgres status write.
     - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
       server-side upload session is gone, so it can't be completed or processed, but the object lands. The
       PR-15 sweeper should also remove objects of notes that don't exist.
