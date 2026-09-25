@@ -159,7 +159,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
 
     /// A 4-hour recording is ~120 MB at 64 kbps mono AAC (ADTS). Refuse below about
     /// double that, leaving headroom for the OS so a recording cannot fill the disk.
-    static let minFreeBytesToRecord: Int64 = 250 * 1024 * 1024
+    nonisolated static let minFreeBytesToRecord: Int64 = 250 * 1024 * 1024
 
     /// Mid-recording floor: below this the recording stops and is kept, rather
     /// than the disk filling and the OS failing writes (the recorder's, and every
