@@ -54,7 +54,9 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
 
 **Infra (`TODO(A11)`):**
 - [ ] Cloud SQL PITR + Storage lifecycle/version expiry ≤30 days (makes the deletion promise true) + Cloud
-      Logging retention; the scheduled retention-enforcer + trial-expiry sweep jobs.
+      Logging retention. (The retention enforcer and the trial-expiry sweep are **done**: `db-sweep` steps
+      `retention` and `trials`, sweep-retention-and-trials PR. Before it, a user's retention choice was
+      stored and never enforced.)
 - [ ] Server-side attestation verification (DeviceCheck key / Play Integrity) so the #7 device hash is
       trusted, not just accepted; needs a real device to verify end-to-end.
 

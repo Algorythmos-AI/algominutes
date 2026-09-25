@@ -20,6 +20,14 @@
 //                        gave up after a 500) is finished here: the same steps
 //                        as the route (account-repo finishAccountDeletion).
 //   5. tombstones        completed ones older than TOMBSTONE_DAYS are pruned.
+//   6. retention         notes older than their author's retention choice
+//                        (users.retention_days) are deleted through deleteNote,
+//                        the manual-delete path, and purged right away as the
+//                        api does (DATA-RETENTION §2). Runs first, so its
+//                        purges' retries are the next run's.
+//   7. trials            elapsed trials are flipped to free_floor in the stored
+//                        state (reads already derive it; this keeps reporting
+//                        and the rails' view honest).
 
 'use strict';
 
@@ -62,7 +70,8 @@ async function run({
   const {
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
     recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
-    finishAccountDeletion, pruneCompletedAccountDeletions,
+    finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
+    expireElapsedTrials,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
@@ -99,6 +108,35 @@ async function run({
         log.error({ err, step: name }, 'sweep_step_failed');
       }
     };
+
+    await step('retention', async () => {
+      let deleted = 0;
+      let failed = 0;
+      for (const n of await listNotesPastRetention({ now, limit: 200 })) {
+        const noteLog = log.child({ userId: n.authorUid });
+        const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
+        try {
+          // As the author: deleteNote checks they may delete it.
+          const r = await deleteNote(deps.firestore, { noteId: n.noteId, workspaceId: n.workspaceId, uid: n.authorUid, traceId }, noteLog);
+          if (!r.allowed) {
+            noteLog.warn(fields, 'retention_delete_refused');
+            continue;
+          }
+          deleted += 1;
+          // The storage_purges step leaves a fresh purge for PURGE_GRACE_MS, so
+          // run it now, as the api's delete route does. A failure stays queued.
+          const purge = await getStoragePurge(r.purgeId);
+          const purged = purge ? await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, purge, noteLog) : false;
+          noteLog.info({ ...fields, purgeId: r.purgeId, purged, createdAt: n.createdAt.toISOString() }, 'note_deleted_retention');
+        } catch (err) {
+          // One note's failure must not skip the rest of the batch.
+          failed += 1;
+          noteLog.error({ err, ...fields }, 'retention_delete_failed');
+        }
+      }
+      if (failed) throw new Error(`${failed} retention deletion(s) failed`);
+      return deleted;
+    });
 
     await step('storage_purges', async () => {
       let done = 0;
@@ -173,6 +211,8 @@ async function run({
     });
 
     await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
+
+    await step('trials', () => expireElapsedTrials());
 
     log.info({ counts, failures }, 'sweep_done');
     if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);

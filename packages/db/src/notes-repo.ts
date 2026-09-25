@@ -751,6 +751,27 @@ export async function deleteNote(
 }
 
 /**
+ * Notes older than their author's retention choice (users.retention_days; NULL
+ * means keep until deleted), oldest first. The sweeper deletes them through
+ * deleteNote, the same path as a manual delete (DATA-RETENTION §2).
+ */
+export async function listNotesPastRetention(
+  input: { now?: Date; limit?: number } = {},
+): Promise<Array<{ noteId: string; workspaceId: string; authorUid: string; createdAt: Date }>> {
+  const { rows } = await getPool().query(
+    `SELECT n.id, n.workspace_id, n.author_uid, n.created_at
+       FROM notes n JOIN users u ON u.uid = n.author_uid
+      WHERE u.retention_days IS NOT NULL AND n.deleted_at IS NULL
+        AND n.created_at < $1::timestamptz - (u.retention_days * INTERVAL '1 day')
+      ORDER BY n.created_at ASC LIMIT $2`,
+    [(input.now ?? new Date()).toISOString(), input.limit ?? 200],
+  );
+  return rows.map((r) => ({
+    noteId: r.id, workspaceId: r.workspace_id, authorUid: r.author_uid, createdAt: new Date(r.created_at),
+  }));
+}
+
+/**
  * Notes stuck in an in-flight status (no progress written) for longer than
  * `olderThanMs`, oldest first: what the sweeper fails, so the user sees an
  * error and can retry instead of a spinner that never ends. The threshold
