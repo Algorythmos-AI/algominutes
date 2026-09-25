@@ -384,8 +384,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     expiry. Next: rebase #108 so its CI runs this on v181.
   - **#107 `pdfjs-dist` 4 → 6** (`services/extractor/src/extractors/pdf.js`,
     `apps/web/src/lib/documentText.ts`). Two majors, with changes to the module and worker setup.
-    `web-build` only proves the web bundle builds. Test first: the extractor on a small PDF built at test
-    time.
+    `web-build` only proves the web bundle builds. **Test in place (extractor-pdf-test PR):**
+    `tests/extractor-pdf.test.ts` runs the extractor through the real pdfjs-dist on a two-page PDF built at
+    test time. It pins each page's text, in order, with no OCR, and checks that a non-PDF is rejected. The
+    web's `documentText.ts` stays covered by `web-build` only; the web is moving to the extractor. Next:
+    rebase #107 so its CI runs this on v6.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
