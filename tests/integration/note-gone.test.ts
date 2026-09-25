@@ -6,8 +6,8 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 // Workers and a deleted (or mismatched) note, on real Postgres.
 const require = createRequire(import.meta.url);
 const transcoderDb = require('../../services/transcoder/src/db.js');
-const { loadTranscriptForEmbedding } = require('@algominutes/ai/embeddings.cjs');
-const { markNoteFailed } = require('@algominutes/ai/note-terminal.cjs');
+const { loadTranscriptForEmbedding } = require('@algominutes/db/embeddings-repo.cjs');
+const { markNoteFailed } = require('@algominutes/db/note-terminal.cjs');
 
 beforeEach(async () => {
   await resetDb();
