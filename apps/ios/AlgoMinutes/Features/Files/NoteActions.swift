@@ -46,7 +46,11 @@ struct NoteContextMenu: View {
         }
         Divider()
         Button(role: .destructive) {
-            env.notes.deleteNote(id: note.id)
+            let id = note.id
+            Task {
+                do { try await env.notes.deleteNote(id: id) }
+                catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+            }
         } label: {
             Label("Delete", systemImage: "trash")
         }

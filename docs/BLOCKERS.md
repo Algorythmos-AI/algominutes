@@ -489,8 +489,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       `onNoteDeleted` prefix sweep would have. A failed purge stays queued.
     - Idempotent, and tested (integration + route, mutation-checked).
   - **Still open for M1:**
-    - [ ] iOS calls the route instead of deleting the doc (PR-17). Then Firestore rules stop clients
-      deleting note docs.
+    - [x] iOS calls the route instead of deleting the doc (iOS PR-17 C), and the Firestore rules stop
+      clients deleting note docs (firestore-rules PR).
     - [x] **Fixed (workers-note-gone PR): workers no longer resurrect a deleted note.**
       - Every transcoder mirror helper, plus `markSummaryReady`, `mirrorSummarizing` and `note-terminal`,
         now uses `update()`, which fails on a missing doc. A Firestore NOT_FOUND there means the note
@@ -771,8 +771,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       URLSession and ID-token provider are injectable, and chat uses the injected session. `APIClientTests`
       checks every endpoint's method, host, path, headers and body with a URLProtocol stub. A "please update"
       screen is still to come (E).
-    - [ ] **C, delete through `POST /v1/notes/delete`** (the Firestore rules now refuse client deletes),
-      and the auto-retitle through `/v1/notes/update`.
+    - [x] **C, delete through `POST /v1/notes/delete` (ios-delete-via-v1 PR):** `NotesRepository.deleteNote`
+      calls the api (Postgres first, then the doc, then the audio). It hides the note at once and restores it,
+      with an alert, if the server refuses. All three delete buttons use it. The auto-retitle goes through
+      `/v1/notes/update`, so Postgres (search, chat, the transcript read) gets the title too.
     - [ ] **D, uploads through `/v1/uploads`** (the api's recordings bucket; the Firebase SDK uploads to the
       default bucket, which the api never reads), and **playback through a signed URL** (`/v1` has no audio
       route yet; the api's recordings bucket isn't a Firebase bucket).
