@@ -705,6 +705,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   only for a member of the note's workspace and only for the note's own object. `run-api` gets Token
   Creator on itself for signing (pending your apply). See DECISIONS. The iOS player switches in PR-17 D.
 
+- [x] **Fixed (embedder-failures-not-silent PR): a failed embedding was acknowledged, never retried.**
+  `indexEmbeddings` logged an embedding-call or write failure and returned `chunkCount: 0`, so the embedder
+  answered 200. Cloud Tasks never retried, the dead-letter path was unreachable, and the note silently stayed
+  out of Search and Chat. It now throws, after rolling back the write: the embedder answers 5xx, the last
+  attempt dead-letters (and alerts, #90), and a deleted note's foreign-key error is still acknowledged. A
+  vector count that doesn't match the chunks is an error too. Tested on Postgres; mutation-checked.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,

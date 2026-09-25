@@ -149,16 +149,19 @@ async function embedChunks({ chunks, log, project, location }) {
   return vectors;
 }
 
-async function indexEmbeddings({ pool, noteId, workspaceId, transcript, log, project, location }) {
+// Throws when embedding or the write fails, so the embedder answers 5xx: Cloud
+// Tasks retries, and the last attempt dead-letters (and alerts). It used to log
+// and return chunkCount 0, which the embedder answered 200: the note was never
+// retried and silently stayed out of Search and Chat. A deleted note surfaces
+// as the write's foreign-key error (23503), which the embedder acknowledges.
+// `embed` is a seam for tests.
+async function indexEmbeddings({ pool, noteId, workspaceId, transcript, log, project, location, embed = embedChunks }) {
   const chunks = chunkTranscript(transcript || [], log);
   if (chunks.length === 0) return { chunkCount: 0 };
 
-  let vectors;
-  try {
-    vectors = await embedChunks({ chunks, log, project, location });
-  } catch (err) {
-    log.error({ err, noteId }, 'embedding_call_failed');
-    return { chunkCount: 0 };
+  const vectors = await embed({ chunks, log, project, location });
+  if (!Array.isArray(vectors) || vectors.length !== chunks.length) {
+    throw new Error(`embedding returned ${Array.isArray(vectors) ? vectors.length : 'no'} vectors for ${chunks.length} chunks`);
   }
 
   const client = await pool.connect();
@@ -179,8 +182,7 @@ async function indexEmbeddings({ pool, noteId, workspaceId, transcript, log, pro
     await client.query('ROLLBACK').catch((rollbackErr) =>
       log.error({ err: rollbackErr, noteId }, 'embedding_rollback_failed'),
     );
-    log.error({ err, noteId }, 'embedding_write_failed');
-    return { chunkCount: 0 };
+    throw err;
   } finally {
     client.release();
   }
