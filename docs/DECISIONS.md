@@ -3,6 +3,23 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Alerts on the silent failures, by email (2026-09-25)
+
+PR-16c's first slice, `infra/terraform/modules/environment/alerting.tf`.
+- **What pages:** each silent-failure event the code already logs gets a log-based counter and an alert
+  policy: `storage_purge_stuck`, `delete_account_incomplete`, `sweep_step_failed`, `dead_letter_recorded`,
+  `note_failed` (more than 2 in 30 min), `gemini_model_unavailable` (a rung retired or not served in
+  Sydney: the 2026-10-20 cutover), and `auth_account_check_failed` / `readiness_db_unreachable` (Postgres
+  unreachable). A ninth policy watches Cloud Run's own 5xx count for the api and billing, so it fires even
+  when the app can't log. Each policy's documentation names the log line to read.
+- **No suppression** (CLAUDE.md §4.8): a stuck purge is re-logged every sweep, so its incident stays open
+  until fixed.
+- **Who:** email channels from `TF_VAR_alert_emails`, passed at plan time and never committed (public repo).
+  With none, incidents still open in the console.
+- **Cost:** log-based metrics on these low-volume events fall within the free allotment. Alerting bills per
+  condition per month (9 conditions per environment) at Cloud Monitoring's current rate; check the pricing
+  page before prod. Not a new service, so no new deploy, dashboard or on-call surface.
+
 ## Postgres connections: a per-environment budget that fits the tier (2026-09-25)
 
 Owner decision: **cap the pools to fit the tier** rather than buy a bigger one. Staging's db-f1-micro allows

@@ -514,8 +514,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - ~~Bucket versioning keeps "deleted" audio~~ **fixed (purge-all-object-versions PR):** the purges
         delete every generation, and a noncurrent-version lifecycle rule (7 days) is in Terraform, pending
         your apply. See DECISIONS.
-      - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
-        failing object blocks an account's deletion (fail closed), and must page someone.
+      - ~~Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c)~~ **done
+        (alerting-silent-failures PR, pending your apply):** `alerting.tf` has log-based counters and email
+        alerts for `storage_purge_stuck`, `delete_account_incomplete`, `sweep_step_failed`,
+        `dead_letter_recorded`, `note_failed` (>2 in 30 min), `gemini_model_unavailable`, and the api/billing
+        losing Postgres, plus an api/billing 5xx-rate alert. Set `TF_VAR_alert_emails` at plan time. The rest
+        of PR-16c (dashboard, uptime check, SLO doc, e2e workflow) is still open.
       - ~~Single-note deletion should also cancel the note's open upload session~~ **done
         (note-delete-cancels-upload PR)**: see the item above.
       - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today

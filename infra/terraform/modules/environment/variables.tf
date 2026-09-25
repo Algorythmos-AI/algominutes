@@ -195,6 +195,17 @@ variable "billing_account" {
   }
 }
 
+variable "alert_emails" {
+  description = "Email addresses the alert policies notify (alerting.tf). Passed at plan time (TF_VAR_alert_emails), never committed. Empty: incidents open in the console but nobody is emailed."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for e in var.alert_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
+    error_message = "alert_emails must be email addresses."
+  }
+}
+
 variable "monthly_budget" {
   description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
   type        = number
