@@ -172,6 +172,16 @@ describe('sweep', () => {
     expect((await pool.query(`SELECT note_id FROM deleted_notes`)).rows.map((r) => r.note_id)).toEqual(['recent']);
   });
 
+  it('prunes paid-work records (the spend cap reads 24 hours) older than 90 days, keeps recent ones', async () => {
+    const f = fakes();
+    await pool.query(
+      `INSERT INTO usage_events (event, audio_seconds, created_at) VALUES ('stt_call', 60, $1), ('stt_call', 60, $2)`,
+      [ago(91 * 24 * HOUR), ago(89 * 24 * HOUR)],
+    );
+    expect((await runSweep(f.deps)).usage_events).toBe(1);
+    expect(Number((await pool.query(`SELECT count(*) AS n FROM usage_events`)).rows[0].n)).toBe(1);
+  });
+
   it('a failing step is logged, the others still run, and the job fails visibly', async () => {
     const f = fakes();
     const broken = { ...repo, listStuckNotes: async () => { throw new Error('boom'); } };
