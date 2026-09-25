@@ -27,6 +27,10 @@ export async function meterMinutes(input: MeterInput): Promise<{ applied: boolea
  * Refund a note's metered minutes on pipeline failure (A7.4) — a reversal row,
  * never a delete. Reverses the note's current NET debit (so repeated calls with
  * the same idempotency_key, or after a prior reversal, do not over-refund).
+ *
+ * Keyed per run: the caller's key is suffixed with the note's latest debit (the
+ * run being refunded). A per-note key refunded a note's first failed run and
+ * then, after its re-queue charged it again, silently refused the next.
  */
 export async function reverseUsageForNote(input: {
   noteId: string;
@@ -39,10 +43,10 @@ export async function reverseUsageForNote(input: {
   // Net minutes still charged for this note (debits + prior reversals).
   const net = await pool.query(
     `SELECT COALESCE(SUM(minutes), 0)::float AS net,
-            (SELECT uid FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS uid,
-            (SELECT workspace_id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS workspace_id,
-            (SELECT billing_period FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS billing_period,
-            (SELECT id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS debit_id
+            (SELECT uid FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS uid,
+            (SELECT workspace_id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS workspace_id,
+            (SELECT billing_period FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS billing_period,
+            (SELECT id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS debit_id
        FROM usage_ledger WHERE note_id = $1`,
     [input.noteId],
   );
@@ -63,7 +67,7 @@ export async function reverseUsageForNote(input: {
       row.billing_period ?? currentBillingPeriod(),
       input.reason,
       row.debit_id ?? null,
-      input.idempotencyKey,
+      `${input.idempotencyKey}:${row.debit_id}`,
     ],
   );
   return rows.length ? { applied: true, minutesReversed: remaining } : { applied: false, minutesReversed: 0 };

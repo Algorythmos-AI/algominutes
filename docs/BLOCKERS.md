@@ -765,8 +765,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     A retry isn't charged again (the key is idempotent), but a user who gives up has paid for nothing.
     The sweeper refunds only in-flight notes. Refund on these paths, or enqueue through an outbox written
     with the debit.
-  - After a refund (transcode failure, summarizer, or the sweeper's `refund:stuck`), a re-queue of the same
-    note reuses the `${noteId}:ingest` key, so the re-run is free. Key the debit per run.
+  - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
+    free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
+    the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
+    refunded keeps its charge, and the retry isn't charged twice. Refund keys are suffixed with the debit
+    they reverse, so a second failed run is refunded too: the per-note key had silently refused it.
+    Tested on Postgres (two failed runs; an unrefunded failure; a replayed refund); three mutations
+    checked.
   - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
     different notes can both pass it.
 
@@ -1052,8 +1057,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **Billing (pre-existing, found by the same audit):**
     - Imports are debited 0 minutes against the user's quota, because the client sends no duration. Meter
       from the transcoder's probed duration.
-    - A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free. That is the
-      per-run debit key item under "Residuals" above.
+    - ~~A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free~~ **fixed
+      (metering-per-run PR)**, with the refund keys.
     - The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
       nothing. `markNoteFailed` now returns `{ failed }` to gate it with.
     - The dead-letter insert and the notify task aren't deduplicated.

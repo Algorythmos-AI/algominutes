@@ -347,15 +347,26 @@ export async function markQueued(
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
         if (input.meter) {
-          // Idempotent by key: a re-queue of the same note isn't charged twice.
-          await insertDebit(client, {
-            uid: input.authorUid,
-            workspaceId: input.workspaceId,
-            noteId: input.noteId,
-            minutes: input.meter.minutes,
-            reason: 'ingest',
-            idempotencyKey: input.meter.idempotencyKey,
-          });
+          // One debit per run, decided under this note's lock. A note whose
+          // last run was refunded (net 0) is charged again: its re-run is real
+          // work, and a per-note key made it free. One whose charge still
+          // stands (a failure that wasn't refunded) isn't charged twice.
+          const { rows: [led] } = await client.query(
+            `SELECT COALESCE(SUM(minutes), 0)::float8 AS net,
+                    COUNT(*) FILTER (WHERE entry_type = 'debit')::int AS debits
+               FROM usage_ledger WHERE note_id = $1`,
+            [input.noteId],
+          );
+          if (Number(led.net) <= 0) {
+            await insertDebit(client, {
+              uid: input.authorUid,
+              workspaceId: input.workspaceId,
+              noteId: input.noteId,
+              minutes: input.meter.minutes,
+              reason: 'ingest',
+              idempotencyKey: led.debits === 0 ? input.meter.idempotencyKey : `${input.meter.idempotencyKey}:${led.debits}`,
+            });
+          }
         }
         return { queued: true, status: 'queued' };
       },
