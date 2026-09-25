@@ -834,6 +834,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       The index.js last-attempt path keeps the old never-throw behaviour. Tested on Postgres with a
       trigger standing in for the outage (six cases, six mutations). Not covered by a test: the
       whole-file (AssemblyAI) poll sites and YouTube, which take the same flag.
+      - [ ] **Queued (pre-existing, from that PR's silent-catch audit):**
+        - The kickoff's outer catch mirrors `Processing failed.` to Firestore on *every* throw, the
+          retryable ones included (a test pins it). Until the retry writes `chunking` again, Firestore
+          says failed while Postgres says in progress. The fix is to drop that mirror and let the last
+          attempt's `markNoteFailed` mark both stores. That changes what the app shows during retries,
+          so check the iOS retry button first.
+        - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
+          Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
+          a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the
+          PR-15 spend reader: log it and answer 500.
+        - If the note write lands but `markChunkError` then fails, the retry logs a second `note_failed`
+          (the alert counts it). And if the speech job finishes before an exhausted poll's retry, that
+          retry completes the chunk and the note can go on to `ready`, with no refund or failure
+          notice sent. That's a good outcome, but the two stores briefly disagree.
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
       (`STT_PROVIDER=google`).
     - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
