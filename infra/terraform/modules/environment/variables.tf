@@ -109,6 +109,17 @@ variable "allowed_origins" {
   }
 }
 
+variable "public_site_url" {
+  description = "Origin of the public site (privacy, terms, support, share links, billing return pages), without a trailing slash. The api and billing read it as PUBLIC_SITE_URL."
+  type        = string
+  default     = "https://algominutes.algorythmos.com"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.public_site_url))
+    error_message = "public_site_url must be an https origin with no path or trailing slash."
+  }
+}
+
 variable "broadcast_capture" {
   description = "Server-side kill switch for iOS broadcast capture, served by GET /v1/config. \"off\" hides the feature in the app without a build."
   type        = string
