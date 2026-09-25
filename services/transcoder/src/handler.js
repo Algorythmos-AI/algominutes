@@ -77,6 +77,17 @@ async function handle(payload, deps) {
   throw new Error(`handle: unknown kind ${kind}`);
 }
 
+// A kickoff replayed by Cloud Tasks (after a crash or a timeout) resumes only a
+// note still being transcribed. One that moved on (summarizing, ready, error) is
+// acknowledged: rewriting its status would drag a finished note backwards.
+const KICKOFF_RESUMABLE = new Set(['queued', 'chunking', 'transcribing']);
+
+// Poll tasks carry a deterministic id, so a replayed kickoff or a duplicate poll
+// chain collapses into the running one instead of polling twice (cloud-tasks.cjs).
+function pollTaskId(chunkId, poll) {
+  return `${chunkId}-stt-poll-${poll}`;
+}
+
 async function handleKickoff(payload, deps) {
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType } = payload;
   const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
@@ -85,12 +96,16 @@ async function handleKickoff(payload, deps) {
   // (the mirror below would otherwise be the first write, to a deleted note),
   // and the mirror only ever shows a status Postgres holds.
   const pre = await db.pool().connect();
-  let exists;
+  let status;
   try {
-    exists = await db.noteExists(pre, { noteId, workspaceId });
-    if (exists) await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking' });
+    status = await db.noteStatus(pre, { noteId, workspaceId });
+    if (KICKOFF_RESUMABLE.has(status)) await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking' });
   } finally { pre.release(); }
-  if (!exists) throw new NoteGoneError('postgres');
+  if (status == null) throw new NoteGoneError('postgres');
+  if (!KICKOFF_RESUMABLE.has(status)) {
+    log.info({ noteId, workspaceId, status }, 'kickoff_replay_after_progress');
+    return;
+  }
 
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'chunking' });
 
@@ -137,7 +152,31 @@ async function handleKickoff(payload, deps) {
       throw new Error('kickoff: neither storagePath nor sourceUrl provided');
     }
 
-    const durationSec = await ffmpeg.probeDuration(inputLocal);
+    let durationSec;
+    try {
+      durationSec = await ffmpeg.probeDuration(inputLocal);
+    } catch (err) {
+      // Permanent: the same bytes won't have a length on a retry, and guessing
+      // one would send a long recording down the single-call fast path.
+      log.error({ err, noteId, workspaceId }, 'duration_unreadable');
+      await noteTerminal.markNoteFailed({
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        message: "We couldn't read this recording's length, so it may be damaged. Please record or upload it again.",
+        log,
+        event: 'duration_unreadable',
+      });
+      if (terminalHooks) {
+        await terminalHooks.onTranscodeTerminalFailure({
+          pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+          payload: { kind: 'kickoff', type, noteId, workspaceId, storagePath },
+          log,
+        });
+      }
+      return;
+    }
     const decision = route.routeForDuration(durationSec);
     log.info({ noteId, durationSec, decision }, 'transcoder_routed');
 
@@ -203,6 +242,34 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
   await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: plan.length });
 
   for (const slice of plan) {
+    const gcsPath = `transcoder/${noteId}/chunk-${slice.idx}.flac`;
+
+    // The row first (an upsert: a replay gets the same one), so a replayed
+    // kickoff can see how far the last attempt got.
+    let chunkId;
+    let row;
+    const c = await db.pool().connect();
+    try {
+      chunkId = await db.insertAudioChunkRow(c, {
+        noteId, idx: slice.idx, startSec: slice.startSec, endSec: slice.endSec,
+        storagePath: gcsPath,
+      });
+      row = await db.getChunkRow(c, chunkId);
+    } finally {
+      c.release();
+    }
+    if (row && row.status === 'done') {
+      log.info({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_done');
+      continue;
+    }
+    if (row && row.sttOperationId) {
+      // Its speech job is already running (and paid for): don't start another.
+      // Poll it; the task id folds this into the live poll chain when recent.
+      log.info({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_started');
+      await tasks.enqueue({ kind: STT_POLL, jobId: payloadJobId(), chunkId, noteId, workspaceId }, 60, pollTaskId(chunkId, 0));
+      continue;
+    }
+
     const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
     await ffmpeg.extractChunk({
       inputPath: inputLocal,
@@ -210,21 +277,8 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       endSec: slice.endSec,
       outputPath: localChunk,
     });
-
-    const gcsPath = `transcoder/${noteId}/chunk-${slice.idx}.flac`;
     const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
     fs.rmSync(localChunk, { force: true });
-
-    let chunkId;
-    const c = await db.pool().connect();
-    try {
-      chunkId = await db.insertAudioChunkRow(c, {
-        noteId, idx: slice.idx, startSec: slice.startSec, endSec: slice.endSec,
-        storagePath: gcsPath,
-      });
-    } finally {
-      c.release();
-    }
 
     const operationName = await stt.startLongRunning({
       recognizer: env.STT_RECOGNIZER || null,
@@ -241,7 +295,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       kind: STT_POLL,
       jobId: payloadJobId(),
       chunkId, noteId, workspaceId,
-    }, 60);
+    }, 60, pollTaskId(chunkId, 0));
   }
 }
 
@@ -323,6 +377,7 @@ async function handleSttPoll(payload, deps) {
     await tasks.enqueue(
       { kind: STT_POLL, jobId, chunkId, noteId, workspaceId, poll: poll + 1 },
       60,
+      pollTaskId(chunkId, poll + 1),
     );
     return;
   }
@@ -501,13 +556,26 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: 1 });
 
   let chunkId;
+  let row;
   const c = await db.pool().connect();
   try {
     chunkId = await db.insertAudioChunkRow(c, {
       noteId, idx: 0, startSec: 0, endSec: durationSec,
       storagePath: `wholefile:${provider.name}`,
     });
+    row = await db.getChunkRow(c, chunkId);
   } finally { c.release(); }
+  // A replayed kickoff: the file is already transcribed, or already submitted
+  // (and paid for). Don't submit it again; make sure it is polled.
+  if (row && row.status === 'done') {
+    plog.info({}, 'chunk_already_done');
+    return;
+  }
+  if (row && row.sttOperationId) {
+    plog.info({}, 'chunk_already_started');
+    await tasks.enqueue({ kind: STT_POLL, jobId: payloadJobId(), chunkId, noteId, workspaceId }, 60, pollTaskId(chunkId, 0));
+    return;
+  }
 
   const languageCodes = (env.LANGUAGE_CODES || 'en-US')
     .split(',').map((s) => s.trim()).filter(Boolean);
@@ -540,7 +608,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
     kind: STT_POLL,
     jobId: payloadJobId(),
     chunkId, noteId, workspaceId,
-  }, 60);
+  }, 60, pollTaskId(chunkId, 0));
 }
 
 // Poll a whole-file provider job (AssemblyAI). Mirrors the Google poll loop's
@@ -588,6 +656,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     await tasks.enqueue(
       { kind: STT_POLL, jobId, chunkId, noteId, workspaceId, poll: poll + 1 },
       60,
+      pollTaskId(chunkId, poll + 1),
     );
     return;
   }
@@ -623,4 +692,4 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   }
 }
 
-module.exports = { handle, handleKickoff, handleSttPoll, completeChunkAndAdvance, runWholeFilePath };
+module.exports = { handle, handleKickoff, handleSttPoll, completeChunkAndAdvance, runWholeFilePath, pollTaskId };

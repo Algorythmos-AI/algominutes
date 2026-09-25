@@ -788,6 +788,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - `speakerName` (a user-set label) goes to Gemini unscrubbed.
   - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
     tap to seek.
+## Long recordings: the transcoder on replay (plan rev 8, PR-12, 2026-09-25)
+
+- [x] **Fixed (transcoder-resumable-chunks PR): a replayed kickoff re-paid for speech it had already bought.**
+  A kickoff Cloud Tasks retried (after a crash or a timeout) restarted a Google speech job for every chunk,
+  finished ones included, and each restart added a second poll chain. The result was still correct
+  (the line writes and the completion gates are idempotent), but the audio was billed twice.
+  - The chunk row is written first. A chunk that is done is skipped. A chunk whose job already runs
+    isn't started again, only re-polled. The whole-file (AssemblyAI) path does the same.
+  - Poll tasks carry a deterministic id (`<chunkId>-stt-poll-<n>`). `enqueueTask` treats `ALREADY_EXISTS`
+    as done, so duplicate chains collapse into one.
+  - A replay only resumes a note still `queued`, `chunking` or `transcribing`. One that moved on is
+    acknowledged, not dragged back to `transcribing`, where the sweeper would later fail it.
+  - An unreadable duration is a permanent failure (note marked, terminal tail, no retry), and
+    `routeForDuration` never defaults an unknown length to the fast path.
+  - Tested on Postgres and in unit tests; six mutations checked.
+  - **Fan-out not needed, measured:** a 4 h recording (113 MB AAC) probes in 53 ms and extracts its 24 FLAC
+    chunks (543 MB) in 5.4 s on the dev Mac. Even at 5× on Cloud Run's 2 vCPU, plus the in-region
+    transfer, the serial kickoff is minutes against Cloud Tasks' 30-minute dispatch deadline. Recheck on
+    staging with a real 3 h upload (M1).
 
 ## Found while adding the audio smoke (2026-09-25)
 

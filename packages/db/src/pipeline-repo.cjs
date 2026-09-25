@@ -28,6 +28,18 @@ async function noteExists(client, { noteId, workspaceId }) {
   return rowCount > 0;
 }
 
+/**
+ * The note's status in the task's workspace, or null when it is gone or isn't
+ * there (the kickoff's replay guard).
+ */
+async function noteStatus(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? rows[0].status : null;
+}
+
 // Scoped to the task's workspace (CLAUDE.md §1): a note id from another
 // workspace, or a deleted note, matches nothing and throws NOTE_NOT_FOUND,
 // which the handler treats as "note gone".
@@ -275,6 +287,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
 
 module.exports = {
   noteExists,
+  noteStatus,
   fetchPriorChunkEndMs,
   upsertNoteStatus,
   insertAudioChunkRow,
