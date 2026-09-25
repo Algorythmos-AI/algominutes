@@ -70,10 +70,27 @@ describe('markSummaryReady (summarizer final write)', () => {
         'summary.gist': 'We agreed to ship.',
         'summary.actionItems': ['Ship it', 'Tell sales'],
         'summary.keyDecisions': ['Ship Friday'],
+        'summary.chapters': [],
         transcript: [{ speaker: 'Alice', text: 'hi', time: '00:01' }],
         transcriptTruncated: false,
       },
     }]);
+  });
+
+  it("stores a long recording's chapters with its summary, mirrors them, and a later summary replaces them", async () => {
+    const chapters = [
+      { startMs: 0, title: 'Intros', summary: 'Everyone joined.' },
+      { startMs: 1_800_000, title: 'Budget', summary: 'Numbers for Q4.' },
+    ];
+    const { fs, writes } = fsStub();
+    await markSummaryReady(fs, input({ summary: { ...input().summary, chapters } }), quietLog);
+    expect((await pool.query(`SELECT chapters FROM summaries WHERE note_id = 'note-a'`)).rows[0].chapters).toEqual(chapters);
+    expect(writes[0].data['summary.chapters']).toEqual(chapters);
+    // A regenerate of the same note that yields no chapters clears them in both stores.
+    await pool.query(`UPDATE notes SET summary_generation = 1 WHERE id = 'note-a'`);
+    await markSummaryReady(fs, input({ expectedGeneration: 1 }), quietLog);
+    expect((await pool.query(`SELECT chapters FROM summaries WHERE note_id = 'note-a'`)).rows[0].chapters).toEqual([]);
+    expect(writes[1].data['summary.chapters']).toEqual([]);
   });
 
   it('is idempotent on a replayed task (no duplicate rows)', async () => {
