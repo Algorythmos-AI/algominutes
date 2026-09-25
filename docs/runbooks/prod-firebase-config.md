@@ -20,9 +20,13 @@ terraform apply tfplan     # prod: deletion_protection ON, Firestore location PE
 
 ## 2. Firebase (console / CLI) — prod project
 - Enable Firebase on `algominutes-prod` (**Blaze** plan).
-- Enable **Google** sign-in (support email `gcp-admin@algorythmos.com`); add **Apple** once the Team ID exists.
-- Register the **Web** and **Android** apps (bundle/appId `com.algorythmos.algominutes`). Register **iOS**
-  only after the Apple Team ID lands (`TODO(A4-apple)`).
+- Enable the sign-in providers the app uses: **Anonymous** (every new user starts as a guest),
+  **Google** (support email `gcp-admin@algorythmos.com`), and **Apple** (Services ID, Key ID, `.p8`;
+  account deletion revokes Apple tokens through it).
+- Register the **iOS** app (bundle id `com.algorythmos.algominutes`, Team ID `NY9MS8GSBK`), and
+  the **Web** and **Android** apps. Upload an APNs auth key (`.p8`) for push.
+- The iOS `GoogleService-Info.plist` is prod's own (never staging's). It reaches Xcode Cloud's
+  Release workflow as that workflow's `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`).
 
 ## 3. Wire the configs — prod values only
 - **Android:** download a fresh `google-services.json` → `apps/android/app/google-services.json`

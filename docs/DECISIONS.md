@@ -3,6 +3,26 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Public services skip the invoker check instead of granting allUsers (2026-09-26, #169)
+
+- **Context.** api and billing are called without a Google identity: the app sends a Firebase ID
+  token, and the stores and Stripe send signed webhooks. So Cloud Run must admit unauthenticated
+  requests. They were made public with `roles/run.invoker` for `allUsers`. The organization enforces
+  `iam.allowedPolicyMemberDomains` (effective policy on `algominutes-staging`: only the org's own
+  customer id), which refuses that member at apply time, though `terraform plan` succeeds.
+- **Decision.** The public services set `invoker_iam_disabled = true` (Cloud Run's documented way
+  to serve publicly under domain-restricted sharing), and no binding names `allUsers` or
+  `allAuthenticatedUsers`. Every other service keeps the invoker check, so only `run-jobs` (Cloud
+  Tasks) may call it.
+- **Enforced by** `tests/tf-iam-contract.test.ts` (no `allUsers` in any `.tf`; the invoker check is off
+  for exactly api and billing) and `scripts/check-tfplan-env.mjs` (the same checks on a saved plan).
+- **Not changed.** Authentication stays at the application layer: the Firebase token on every
+  `/v1` route, and webhook signatures on billing.
+- **Open.** The managed constraint `run.managed.requireInvokerIam` would refuse this. It can't be
+  read from the project, so it's checked at the organization before the first apply (runbook
+  `resume-staging-and-deploy.md` §1). If it's enforced, the fallback is a project-level exception,
+  recorded here.
+
 ## Spend cap: paid work as it starts, new kickoffs only, and a failed note rather than a dropped task (2026-09-25, PR-15)
 
 The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the audio minutes the

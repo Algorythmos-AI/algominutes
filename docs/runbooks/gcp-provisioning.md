@@ -94,9 +94,12 @@ Put the web config values in the web build env (public, domain-restricted keys �
 - Vertex AI + STT use the service accounts' workload identity — **no API key** (CLAUDE.md: Vertex only from
   Cloud Run; the public Gemini client is banned).
 
-## 6. Run migrations against Cloud SQL
+## 6. Migrations (the deploy runs them)
 
-From a shell with Cloud SQL access (Auth Proxy or the bastion pattern):
+Every deploy runs `JOB_NAME=migrate` in the `db-job` Cloud Run Job, inside the VPC, before any
+service rolls out, and fails unless the database ends at the migration head on disk
+(`deploy-staging.yml`, runbook `resume-staging-and-deploy.md` §2). Nothing to run by hand.
+The manual fallback, over the Cloud SQL Auth Proxy or from the bastion:
 ```bash
 DATABASE_URL="postgres://…" npm run migrate      # applies every numbered migration up to the head
 ```
@@ -117,6 +120,8 @@ Migration `000_extensions.sql` runs `CREATE EXTENSION vector` (pgvector is a sup
 ## 8. Open items carried from INFRASTRUCTURE.md
 
 - Re-scope `algominutes-prod-budget` from the whole billing account to the prod project only.
-- Cloud Run **deploys** (build → Artifact Registry → deploy with SA + VPC connector + env incl.
-  `DAILY_SPEND_CAP_AUD`, `STORAGE_BUCKET`, `PG*`) are **A11**, per-service.
-- Apple half (Team ID → iOS Firebase app, App Store Connect) is blocked on enrolment — `TODO(A4-apple)`.
+- Staging deploys run from `deploy-staging.yml` (build → migrate → vertex-smoke → rollout → smoke).
+  Production gets its own workflow with the prod environment.
+- The Apple Team ID (`NY9MS8GSBK`) exists, and the iOS app is registered in `algominutes-staging`. Still
+  to do per environment: the App Store Connect record, and the Apple sign-in provider and APNs key in
+  Firebase (runbook `resume-staging-and-deploy.md` §3).
