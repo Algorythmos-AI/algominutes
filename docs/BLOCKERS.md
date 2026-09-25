@@ -202,9 +202,15 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
 - ~~**A7.2 background upload is gated OFF by default**~~ **done (#101):** every recording uploads through
   `/v1/uploads` on a background URLSession (the Firebase `putFile` path and its flag are gone). Still to
   prove on staging: the GCS resumable session against live GCS, and a device upload after the app is killed.
-- **A7.3 real push (plan rev 8, Wave 3):** the app has no `aps-environment` and sends the raw APNs token
-  where the notifier expects an FCM one. Needs the Push capability and an APNs `.p8` in Firebase (owner),
-  then FirebaseMessaging in the app. Local notifications work meanwhile. Android push is B2.
+- **A7.3 real push (plan rev 8, Wave 3):** ~~the app sends the raw APNs token where the notifier expects an
+  FCM one~~ **fixed (ios-fcm-token PR):** FirebaseMessaging exchanges the APNs token for the FCM token, and
+  `PushTokenRegistrar` registers it once per signed-in user (again for a new token or user, again after a
+  failure) and deletes it on sign-out, so the previous user's pushes stop reaching the device. Unit-tested.
+  - [ ] **Owner:** enable Push on the App ID and upload an APNs `.p8` to Firebase (staging, then prod).
+  - [ ] **Then (one line):** add `aps-environment` to `AlgoMinutes.entitlements`. Not before: an
+    entitlement the App ID lacks fails the archive's signing (M0). Until then APNs registration fails
+    harmlessly and local notifications carry the message. Prove it on a device (M1: "a push received").
+  - Android push is B2.
 - ~~**iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment**~~ **fixed
   (ios-m0-readiness PR):** one 500 MB cap in the api and the app (see "one upload cap" above).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;

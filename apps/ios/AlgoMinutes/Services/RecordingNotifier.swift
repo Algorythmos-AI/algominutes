@@ -45,13 +45,14 @@ enum RecordingNotifier {
     }
 
     /// A7.3: kick APNs registration. The token lands in the AppDelegate's
-    /// `didRegisterForRemoteNotificationsWithDeviceToken`. Triggered here so it
-    /// happens after the first recording (alongside the permission request),
-    /// never at launch.
+    /// `didRegisterForRemoteNotificationsWithDeviceToken`, which hands it to
+    /// FirebaseMessaging for the FCM token (`PushTokenRegistrar`). Triggered
+    /// here so it happens after the first recording (alongside the permission
+    /// request), never at launch.
     ///
-    /// TODO(A4-apple): this needs GoogleService-Info.plist + the APNs
-    /// capability/entitlement to actually succeed and to exchange for an FCM
-    /// token; until then it is a harmless no-op on device.
+    /// It succeeds only once the app is signed with the Push capability
+    /// (`aps-environment`, BLOCKERS A7.3); until then it fails harmlessly
+    /// (`apns_register_failed`) and local notifications carry the message.
     private static func registerForRemoteNotifications() {
         UIApplication.shared.registerForRemoteNotifications()
     }
