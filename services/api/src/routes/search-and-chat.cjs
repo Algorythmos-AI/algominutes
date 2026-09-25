@@ -22,6 +22,7 @@
 const { GoogleAuth } = require('google-auth-library');
 
 const { redactPII } = require('@algominutes/ai/redaction.cjs');
+const { isValidId } = require('@algominutes/ai/intelligence.cjs');
 const models = require('@algominutes/ai/models.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
 // so note-read and the other read-path handlers share one pool and one timeout
@@ -90,8 +91,11 @@ const EMBED_QUERY_TIMEOUT_MS = 8000;
 // Embed a single search query via Vertex AI text-embedding-004. The
 // `apiKey` arg is retained for call-site compatibility but ignored;
 // auth comes from ADC. `log` is a pino-style logger forwarded from
-// the request handler so timeouts surface in Cloud Logging.
-async function embedQuery(_apiKey, text, log) {
+// the request handler so timeouts surface in Cloud Logging. Its lines carry
+// the query's length, never its text: what users type into search is theirs,
+// scrubbed or not, as chat keeps meeting content out of logs. `fetchImpl` and
+// `authHeader` are for tests.
+async function embedQuery(_apiKey, text, log, { fetchImpl = fetch, authHeader = vertexAuthHeader } = {}) {
   const project = await getProjectId();
   const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
   const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${EMBED_MODEL}:predict`;
@@ -99,9 +103,9 @@ async function embedQuery(_apiKey, text, log) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), EMBED_QUERY_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
+    const resp = await fetchImpl(url, {
       method: 'POST',
-      headers: { Authorization: await vertexAuthHeader(), 'Content-Type': 'application/json' },
+      headers: { Authorization: await authHeader(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         instances: [{ task_type: 'RETRIEVAL_QUERY', content: text }],
       }),
@@ -122,7 +126,7 @@ async function embedQuery(_apiKey, text, log) {
     const ms = Date.now() - startedAt;
     if (err && err.name === 'AbortError') {
       if (log && typeof log.error === 'function') {
-        log.error({ ms, timeoutMs: EMBED_QUERY_TIMEOUT_MS, queryHead: text.slice(0, 60) }, 'embed_query_timeout');
+        log.error({ ms, timeoutMs: EMBED_QUERY_TIMEOUT_MS, queryLen: text.length }, 'embed_query_timeout');
       }
       const wrapped = new Error('embed_query_timeout');
       wrapped.cause = err;
@@ -130,7 +134,7 @@ async function embedQuery(_apiKey, text, log) {
       throw wrapped;
     }
     if (log && typeof log.error === 'function') {
-      log.error({ err, ms, queryHead: text.slice(0, 60) }, 'embed_query_failed');
+      log.error({ err, ms, queryLen: text.length }, 'embed_query_failed');
     }
     throw err;
   } finally {
@@ -280,10 +284,20 @@ function redactHits(hits) {
   return hits.map((h) => Object.assign({}, h, { chunkText: redactPII((h && h.chunkText) || '').text }));
 }
 
-async function handleSearch({ uid, body, apiKey, log }) {
+// A search or chat narrowed to one note logs with its noteId (CLAUDE.md §1),
+// bound once so every line below, the Postgres timing lines included, has it.
+// Only a well-formed id: it comes from the request body, and an arbitrary
+// string mustn't ride along on every line (as logger.cjs does for traceId).
+function noteLog(log, noteId) {
+  return noteId && isValidId(noteId) && log && typeof log.child === 'function' ? log.child({ noteId }) : log;
+}
+
+async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
   if (!postgresEnabled()) {
     return { status: 503, body: { error: 'Search is unavailable until Postgres is provisioned.' } };
   }
+  const noteId = body && body.noteId ? String(body.noteId) : undefined;
+  const log = noteLog(requestLog, noteId);
   const rawQuery = String(body && body.query || '').trim();
   if (!rawQuery) return { status: 400, body: { error: 'query is required' } };
   // CLAUDE.md §2: redact user input BEFORE it reaches the embedder (and
@@ -295,18 +309,17 @@ async function handleSearch({ uid, body, apiKey, log }) {
     log.info({ uid, queryRedactionCounts: queryCounts }, 'search_query_redacted');
   }
   const k = Number(body && body.k) || 10;
-  const noteId = body && body.noteId ? String(body.noteId) : undefined;
   try {
-    const hits = await hybridSearch({ uid, query, k, apiKey, log, noteId });
+    const hits = await hybridSearch({ uid, query, k, apiKey, log, noteId, ...(embed ? { embed } : {}) });
     // null means the note is not reachable by this caller. 404 for both
     // "no such note" and "not yours", matching /api/note — a 403 would
     // confirm the note exists to someone who cannot read it.
     if (hits === null) {
-      log.info({ uid, noteId }, 'search_note_not_found');
+      log.info({ uid }, 'search_note_not_found'); // noteId is bound when well-formed
       return { status: 404, body: { error: 'Note not found' } };
     }
-    // Log redacted query only — never raw user input.
-    log.info({ uid, userId: uid, query, hitCount: hits.length }, 'search_ok');
+    // The query's length, not its text (see embedQuery).
+    log.info({ uid, userId: uid, queryLen: query.length, hitCount: hits.length }, 'search_ok');
     return { status: 200, body: { hits } };
   } catch (err) {
     log.error({ err }, 'search_failed');
@@ -407,7 +420,7 @@ function createSseLineFeeder(onLine) {
  * the stream. The handler is invoked with (…, res) so it can write the
  * stream directly through the Express response.
  */
-async function handleChatStream({ uid, body, apiKey, log, res }) {
+async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   if (!postgresEnabled()) {
     res.status(503).json({ error: 'Chat is unavailable until Postgres is provisioned.' });
     return;
@@ -418,6 +431,7 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
     return;
   }
   const noteId = body && body.noteId ? String(body.noteId) : undefined;
+  const log = noteLog(requestLog, noteId);
   // CLAUDE.md §2: redact user-supplied question before embedder, before
   // Gemini prompt construction, before logs. The chat retrieval path
   // already redacts retrieved chunks (buildChatPrompt below); PR-A4
@@ -439,7 +453,7 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
   // context-free answer. Checked before any SSE header is written, because
   // once the stream opens the status is already committed.
   if (hits === null) {
-    log.info({ uid, noteId }, 'chat_note_not_found');
+    log.info({ uid }, 'chat_note_not_found'); // noteId is bound when well-formed
     res.status(404).json({ error: 'Note not found' });
     return;
   }
@@ -507,7 +521,7 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
     const feeder = createSseLineFeeder((rawLine) => {
       const parsed = parseSseDataLine(rawLine);
       if (parsed.type === 'parse_error') {
-        log.warn({ uid, noteId, errorName: parsed.errorName, payloadChars: parsed.payloadChars }, 'chat_stream_parse_failed');
+        log.warn({ uid, errorName: parsed.errorName, payloadChars: parsed.payloadChars }, 'chat_stream_parse_failed');
         return;
       }
       if (parsed.type === 'text') {
@@ -536,4 +550,4 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
   }
 }
 
-module.exports = { handleSearch, handleChatStream, hybridSearch, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { handleSearch, handleChatStream, hybridSearch, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
