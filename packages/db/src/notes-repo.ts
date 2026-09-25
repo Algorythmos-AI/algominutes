@@ -237,6 +237,15 @@ export async function getNoteQueueState(
 }
 
 /**
+ * Serialises everything that decides whether a note exists or is queued: the
+ * kickoff (markQueued) and deleteNote. Held until the transaction ends, and it
+ * works for a note id that has no row yet. Taken before any row lock.
+ */
+async function lockNoteId(client: import('pg').PoolClient, noteId: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`note-queue:${noteId}`]);
+}
+
+/**
  * Queue a note for processing (POST /v1/process). Postgres first (system of
  * record), then the Firestore 'queued' mirror.
  *
@@ -258,14 +267,33 @@ export async function markQueued(
   input: MarkQueuedInput,
   log: { error: (o: any, m?: string) => void },
   now: Date = new Date(),
-): Promise<{ queued: boolean; status: string | null }> {
+): Promise<{ queued: boolean; status: string | null; deleted?: true }> {
+  const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
   if (isPostgresEnabled()) {
     const outcome = await withTx(
-      async (client) => {
+      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true }> => {
         // Serialize kickoffs for this note id, including a brand-new note with
         // no row to lock yet: the second of two concurrent duplicates waits
-        // here, then sees the first's 'queued' row and backs off.
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`note-queue:${input.noteId}`]);
+        // here, then sees the first's 'queued' row and backs off. deleteNote
+        // takes the same lock, so a deletion either committed before this
+        // point or waits until this transaction ends.
+        await lockNoteId(client, input.noteId);
+        // No row: a note never queued, or one deleted since the route read its
+        // doc. A deletion leaves a purge row until the doc and the audio are
+        // gone, and after that the doc is missing. Either way it stays deleted:
+        // the INSERT below would bring the row back. Checked before any row
+        // lock, so the Firestore read holds only the note lock. (A row can't
+        // vanish meanwhile: deleteNote waits for that lock.)
+        const hasRow = await client.query('SELECT 1 FROM notes WHERE id = $1', [input.noteId]);
+        if (!hasRow.rowCount) {
+          const purging = await client.query(
+            'SELECT 1 FROM storage_purges WHERE note_id = $1 AND workspace_id = $2 LIMIT 1',
+            [input.noteId, input.workspaceId],
+          );
+          if (purging.rowCount || !(await noteDoc.get()).exists) {
+            return { queued: false, status: null, deleted: true };
+          }
+        }
         // The user row first, then the note row: the same order account
         // deletion takes them (users FOR UPDATE, then the cascade to notes), so
         // the two can't deadlock. It also refuses a deleted account.
@@ -342,9 +370,26 @@ export async function markQueued(
     if (!outcome.queued) return outcome;
   }
 
-  await firestore
-    .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
-    .set({ status: 'queued', updatedAt: ISO_NOW() }, { merge: true });
+  // update(), never a merge-set: a doc deleted after the commit above must not
+  // be re-created.
+  try {
+    await noteDoc.update({ status: 'queued', updatedAt: ISO_NOW() });
+  } catch (err) {
+    if (!isFirestoreNotFound(err)) throw err;
+    // deleteNote (and account deletion) waited for this transaction and then
+    // removed the row as well: the note is deleted, and nothing is enqueued.
+    // A live row means the doc went some other way (a legacy client deleting
+    // it directly, or a misconfigured project): throw, so the caller fails
+    // the note instead of leaving it 'queued' with no job.
+    if (isPostgresEnabled()) {
+      const live = await getPool().query(
+        'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2',
+        [input.noteId, input.workspaceId],
+      );
+      if (live.rowCount) throw err;
+    }
+    return { queued: false, status: null, deleted: true };
+  }
   return { queued: true, status: 'queued' };
 }
 
@@ -700,6 +745,9 @@ export async function deleteNote(
   if (!isPostgresEnabled()) throw new Error('deleteNote needs Postgres (WRITE_POSTGRES=true)');
   const outcome = await withTx(
     async (client): Promise<DeleteNoteResult> => {
+      // The kickoff's lock: a kickoff in flight commits first, and this then
+      // deletes the row it wrote (markQueued re-checks for this deletion).
+      await lockNoteId(client, input.noteId);
       const member = await client.query<{ role: string }>(
         'SELECT role FROM workspace_members WHERE workspace_id = $1 AND uid = $2',
         [input.workspaceId, input.uid],
