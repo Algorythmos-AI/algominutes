@@ -141,11 +141,13 @@ describe('applyNoteEdit (notes-repo)', () => {
   });
 });
 
-// Firestore stub that also records set() (markQueued mirrors with set/merge).
+// Firestore stub for markQueued: the note doc exists (clients create it before
+// the kickoff), and the mirror write is recorded.
 function firestoreSetStub() {
   const writes: Array<{ path: string; data: unknown }> = [];
   const fs = {
     doc: (path: string) => ({
+      get: async () => ({ exists: true }),
       set: async (data: unknown) => void writes.push({ path, data }),
       update: async (data: unknown) => void writes.push({ path, data }),
     }),

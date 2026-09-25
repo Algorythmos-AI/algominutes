@@ -450,10 +450,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - `transcoder/src/db.js upsertNoteStatus` is now workspace-scoped and `deleted_at`-aware.
       - Tested, and mutation-checked.
     - [ ] **Found by the dual-write audit of the workers-note-gone PR (pre-existing, queued):**
-      - **R1:** `markQueued` can bring back a note deleted between the api's doc check and its own
-        transaction. Its INSERT re-creates the Postgres row, its `set(merge)` re-creates the doc, and a job
-        is queued. Fix: `update()` for the doc (the route already proved it exists), and refuse inside the
-        transaction when a `storage_purges` row exists for the note.
+      - ~~**R1:** `markQueued` can bring back a note deleted between the api's doc check and its own
+        transaction~~ **fixed (markqueued-deleted-note PR):**
+        - `deleteNote` takes the kickoff's per-note lock, so the two serialise.
+        - With no row, `markQueued` refuses if a purge row exists, or once purged, if the doc is missing.
+          This check runs before any row lock, so the Firestore read holds only the note lock.
+        - The mirror is `update()`. On its NOT_FOUND, `markQueued` asks Postgres: the row gone means
+          deleted (the route answers 404 and enqueues nothing); a live row means a legacy client deleted the
+          doc, so it throws and the route fails the note instead of leaving it `queued`.
+        - Tested with a real concurrent kickoff and delete; each part mutation-checked.
+        - **Your call (billing policy):** a note deleted in the milliseconds after its kickoff commits keeps
+          its ingest debit, and nothing can refund it afterwards (`usage_ledger.note_id` is SET NULL on
+          delete). If that should be refunded, `deleteNote` would write the reversal in its own transaction
+          for a note still `queued`.
       - **R2:** the web client's `setDoc(…, { merge: true })` writes (`apps/web/src/lib/noteStatus.ts:4`,
         `App.tsx`) can re-create a doc deleted from another device. That's fixed by the web's `/v1`
         migration.

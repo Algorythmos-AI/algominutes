@@ -235,6 +235,11 @@ export async function processIntelligenceRoute(req, res) {
     await failNote(db, { noteId, workspaceId, userMsg, log, event: 'queue' });
     return res.status(500).json({ error: userMsg });
   }
+  if (queued.deleted) {
+    // Deleted while this request ran: it stays deleted, and nothing is queued.
+    log.info({}, 'process_note_deleted');
+    return res.status(404).json({ error: 'Note not found' });
+  }
   if (!queued.queued) {
     // Lost the race to a concurrent duplicate that queued first: that run owns
     // the note. Don't enqueue a second kickoff.
