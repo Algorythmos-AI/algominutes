@@ -35,6 +35,7 @@ import Waveform from './components/Waveform';
 import { authedFetch, setAuthExpiredHandler, setQuotaExceededHandler } from './lib/authedFetch';
 import SurfaceBoundary from './components/SurfaceBoundary';
 import { markNoteError } from './lib/noteStatus';
+import { watchdogPass } from './lib/noteWatchdog';
 import { draftFromNote, saveNoteEdits, renameNote, type EditableNoteFields } from './lib/noteEdit';
 import { motion, AnimatePresence } from 'motion/react';
 import { Capacitor } from './lib/native-shim/core';
@@ -245,6 +246,8 @@ export default function App() {
   const broadcastUploadInFlightRef = useRef<boolean>(false);
   const retryInFlightRef = useRef<Set<string>>(new Set());
   const stuckCheckRanForRef = useRef<Set<string>>(new Set());
+  // Server-owned notes past their budget: reported, never failed from here.
+  const [slowNoteIds, setSlowNoteIds] = useState<Set<string>>(new Set());
   // Notes for which we've already attempted an auto-retitle. Prevents
   // re-firing if the Firestore mirror of our own update echoes back
   // before the new title clears the PLACEHOLDER_TITLE_RE check.
@@ -709,69 +712,44 @@ export default function App() {
     };
   }, [user]);
 
-  // Stuck-processing watchdog. The backend SHOULD set status='error' when
-  // anything fails, but Cloud Run can crash mid-pipeline before writing back.
-  // Without this, a stuck note sits in 'processing' forever and the user has
-  // no Try Again button. We scan every 60s; per-status budgets are generous
-  // to avoid false-positiving in-progress jobs.
+  // Stuck-note watchdog, every 60 s (lib/noteWatchdog).
   //
-  // Race-safety: runTransaction reads current status server-side and only
-  // writes 'error' if the doc is still in the same stuck state. If the
-  // backend wrote 'ready' microseconds ago, the transaction sees that and
-  // bails out without flipping.
+  // A note the client owns (`processing`: created before the upload, so no
+  // server run exists yet) is failed here once its upload has gone quiet, or it
+  // would sit on "Working on it" with no Try Again, which renders only in the
+  // error branch. Uploads write `lastProgressAt`, so a live one isn't timed out.
+  // Race-safety: the transaction re-reads the doc and writes only if it is
+  // still `processing` (a kickoff may just have queued it).
   //
-  // This ran on native only. On web a note whose backend died mid-pipeline sat
-  // on "Working on it. This page updates live." permanently — no error, no
-  // timeout, and no Try Again, because that button renders only in the error
-  // branch. The exclusion was not for a web-specific reason; it was written
-  // during iOS bringup and scoped to native. What it did need first was for
-  // uploads to write `lastProgressAt`, since the note is created as
-  // 'processing' before the upload starts and would otherwise be timed out by
-  // its own client mid-upload.
+  // A note the server owns is only reported slow. Writing 'error' over it from
+  // the browser left Postgres in flight: a retry got "already in flight", and
+  // the note flipped back to 'error' 90 s later. The server's sweep fails a
+  // stuck run itself (Postgres first), as on iOS (#124).
   useEffect(() => {
     if (!user) return;
-    const STUCK_BUDGETS_MS: Record<string, number> = {
-      processing:   90_000,    // pre-kickoff client window
-      queued:       90_000,
-      chunking:    300_000,    // 5 min — ffmpeg slicing
-      transcribing: 480_000,   // 8 min — STT v2 chunked path baseline
-      summarizing: 240_000,    // 4 min — Gemini call ladder
-    };
     const tick = async () => {
-      const now = Date.now();
       const wsId = workspaceId(user.uid);
-      for (const note of notes) {
-        const budget = STUCK_BUDGETS_MS[note.status as keyof typeof STUCK_BUDGETS_MS];
-        if (!budget) continue;
-        // For long-audio jobs, scale transcribing budget to duration_sec * 3
-        // (a 60-min recording could legitimately need 30 min).
-        const effective = note.status === 'transcribing' && note.duration
-          ? Math.max(budget, note.duration * 1000 * 3)
-          : budget;
-        const lastSignal = note.lastProgressAt || note.updatedAt;
-        if (!lastSignal) continue;
-        const ageMs = now - new Date(lastSignal).getTime();
-        if (ageMs <= effective) continue;
-        if (stuckCheckRanForRef.current.has(note.id)) continue;
-        stuckCheckRanForRef.current.add(note.id);
+      const { toFail, slow } = watchdogPass(notes, Date.now());
+      setSlowNoteIds(new Set(slow));
+      for (const noteId of toFail) {
+        if (stuckCheckRanForRef.current.has(noteId)) continue;
+        stuckCheckRanForRef.current.add(noteId);
         try {
-          const noteRef = doc(db, `workspaces/${wsId}/notes`, note.id);
+          const noteRef = doc(db, `workspaces/${wsId}/notes`, noteId);
           await runTransaction(db, async (tx) => {
             const snap = await tx.get(noteRef);
             const data = snap.data() as Note | undefined;
-            // Only flip if status is STILL the stuck one (race-safety:
-            // backend may have just written 'ready' or 'error').
-            if (!data || data.status !== note.status) return;
+            if (!data || data.status !== 'processing') return;
             tx.update(noteRef, {
               status: 'error',
-              errorMessage: 'Processing took too long. Please try again.',
+              errorMessage: 'The upload stopped before it finished. Please try again.',
               diagnosticCode: 'CLIENT_TIMEOUT',
               updatedAt: new Date().toISOString(),
             });
           });
-          console.warn('[watchdog] flipped_stuck_to_error', { noteId: note.id, fromStatus: note.status, ageMs });
+          console.warn('[watchdog] upload_stalled_marked_error', { noteId });
         } catch (err) {
-          console.error('[watchdog] transaction_failed', { noteId: note.id, err });
+          console.error('[watchdog] transaction_failed', { noteId, err });
         }
       }
     };
@@ -2081,7 +2059,9 @@ export default function App() {
               <p style={{ color: '#8C8684', fontFamily: 'Titillium Web, sans-serif' }}>
                 {uploadProgress > 0 && uploadProgress < 100
                   ? `Uploading audio… ${uploadProgress}%`
-                  : 'Working on it. This page updates live.'}
+                  : slowNoteIds.has(selectedNote.id)
+                    ? "Taking longer than usual. It's still running, and this page updates when it's ready."
+                    : 'Working on it. This page updates live.'}
               </p>
             </div>
           ) : selectedNote.status === 'error' ? (

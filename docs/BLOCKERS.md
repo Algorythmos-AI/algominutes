@@ -957,8 +957,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
               doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds
               a `{ failed }` return for this).
-            - The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
-              while Postgres may be in flight (#124 fixed this on iOS).
+            - ~~The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
+              while Postgres may be in flight~~ **fixed (web-watchdog-reports-slow PR):** as on iOS
+              (#124), a note the server owns is reported slow ("Taking longer than usual"), never
+              failed from the browser; the sweep fails a stuck run, Postgres first. Only the client's own
+              `processing` note (before the kickoff, so no server run exists) is still failed once its
+              upload goes quiet. `lib/noteWatchdog.ts`, unit-tested; one mutation checked.
             - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
               fast path keeps an older summary's chapters in Postgres. And `applyNoteEdit` replaces the
               whole Firestore `summary` map, which drops `summary.chapters` there.
