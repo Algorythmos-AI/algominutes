@@ -121,6 +121,15 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
       AssemblyAI key + a labelled real recording. Not run in this session (no key, no network to the vendor).
       Must clear the DER/boundary gate before cutover — do NOT flip `STT_PROVIDER` without it.
 
+- [x] **Fixed (tester-grant PR): internal testers couldn't process a recording.** `FREE_FLOOR_MINUTES` is
+  unset (0), and a TestFlight build has no DeviceCheck token, so `ensureTrial` opens the user on the free
+  floor and the first `/v1/process` answered 402. A manual grant (`entitlement_grants`, migration 019)
+  now makes `resolveEntitlement` treat the user as `active` on Pro (1,500 min/month, or `GRANT_MINUTES`).
+  A real paid subscription still wins, and only Pro can be granted (team is unmetered). The owner adds
+  grants with the db-job `grant-tester` handler (runbook `resume-staging-and-deploy.md` §4); no tester
+  email goes into git or the logs. Tested (grant, expiry, another user, usage, paid wins, revoke, account
+  deletion, the handler); four mutations checked.
+
 ## 3. Business/engineering decisions deferred (safe default applied)
 
 Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to revisit:

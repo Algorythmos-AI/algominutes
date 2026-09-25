@@ -126,6 +126,23 @@ that touches a service redeploys only the services it affects.
 > an external `GET /healthz` returns a Google 404 before reaching the container.
 > Probe `/health` from outside.
 
+## 4. Give internal testers minutes
+
+A TestFlight build has no DeviceCheck trial and the free floor is 0 minutes, so a
+tester's first recording answers 402 until they have a grant (migration 019). The
+tester signs in to the app once (so their user row exists), then:
+
+```bash
+gcloud run jobs execute db-job --region australia-southeast1 --project algominutes-staging \
+  --account=algorythmos.france@gmail.com --wait \
+  --update-env-vars JOB_NAME=grant-tester,GRANT_EMAIL=tester@example.com
+```
+
+That grants Pro (1,500 minutes a month) for 90 days. `GRANT_UID` works instead of
+the email (an anonymous tester has no email); `GRANT_DAYS=0` never expires;
+`GRANT_MINUTES=3000` raises the allowance; `MODE=revoke` removes it. The log line
+carries the uid, never the email, and the email never goes into git.
+
 ## Budget alerts and the end of the free trial (14 Nov 2026)
 
 Terraform creates a monthly budget for the project (`budget.tf`): **A$100 of gross
