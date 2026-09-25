@@ -12,7 +12,7 @@ struct RecorderConsentFlow: View {
     @Binding var flow: RecorderFlowState
     let onNoteCreated: (String?) -> Void
 
-    private enum Step { case ready, consent }
+    private enum Step { case ready, consent, broadcast }
     @State private var step: Step = .ready
     @State private var permissionChecked = false
     @AppStorage("instant_recorder_consent_shown") private var consentShownBefore = false
@@ -68,9 +68,37 @@ struct RecorderConsentFlow: View {
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(!permissionChecked)
                     .opacity(permissionChecked ? 1 : 0.5)
+                    // The same consent covers capturing another app's audio.
+                    Button("Capture audio from another app") {
+                        consentShownBefore = true
+                        env.consentGate.acknowledge()
+                        withAnimation(.spring(duration: 0.3)) { step = .broadcast }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(!permissionChecked)
+                    .opacity(permissionChecked ? 1 : 0.5)
                     Button("Cancel") { dismiss() }
                         .buttonStyle(SecondaryButtonStyle())
                 }
+
+            case .broadcast:
+                Text("Capture another app")
+                    .font(Typography.heading(22, weight: .bold))
+                    .foregroundStyle(Theme.heading)
+                Text("For a call in another app: tap the button below, choose AlgoMinutes, keep the microphone on so your own voice is included, and tap Start Broadcast. Then switch to your call. To stop, tap the red indicator at the top of the screen. When you come back to AlgoMinutes, the recording becomes a note.")
+                    .font(Typography.body(15))
+                    .foregroundStyle(Theme.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer()
+                    BroadcastPickerView()
+                        .frame(width: 72, height: 72)
+                        .accessibilityLabel("Start capturing another app's audio")
+                    Spacer()
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(SecondaryButtonStyle())
             }
         }
         .padding(24)
