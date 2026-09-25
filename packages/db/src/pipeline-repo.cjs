@@ -328,12 +328,12 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
       );
     }
     await client.query(
-      `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-         VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO summaries (note_id, gist, long_summary, topics, model, chapters)
+         VALUES ($1, $2, $3, $4, $5, '[]'::jsonb)
        ON CONFLICT (note_id) DO UPDATE
          SET gist = EXCLUDED.gist, long_summary = EXCLUDED.long_summary,
              topics = EXCLUDED.topics, model = EXCLUDED.model,
-             generated_at = NOW()`,
+             chapters = EXCLUDED.chapters, generated_at = NOW()`,
       [noteId, summary.gist || '', null, JSON.stringify(summary.actionItems || []), model || null],
     );
     await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
