@@ -401,7 +401,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     the ladder is exported, fragile if it moves.)
   - `services/transcoder/src/db.js` (chunks; its status write is now workspace-scoped, see the
     workers-note-gone PR), `packages/ai/src/note-edit.cjs:104-131`
-    (manual edits), `packages/ai/src/embeddings.cjs:137-142`, and `functions/index.js:117`
+    (manual edits), `packages/ai/src/embeddings.cjs:137-142`, and ~~`functions/index.js:117`~~ (retired)
     (`workspace_id = COALESCE($2, workspace_id)`: a null workspace matches any note).
   - Fix with PR-12 (the transcoder rewrite): move the transcoder's writes into notes-repo with
     workspace-scoped, `deleted_at`-aware SQL, and route the fast-path's final write through
@@ -519,7 +519,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         (analytics-to-postgres PR):** it was the only server-side writer (`process_queued`). The event isn't
         in the contract's `AnalyticsEvent` funnel, and the `kickoff_enqueued` log line already carries every
         field, so the write is gone rather than moved. Account deletion still sweeps legacy docs.
-    - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.
+    - [x] **Done (retire-functions PR):** `functions/` is gone (its only export was `onNoteDeleted`, never
+      deployed, with an unsafe prefix sweep), along with the workspace and `firebase-functions` in the
+      lockfile. Deletion is `POST /v1/notes/delete` → `deleteNote` → `storage_purges`, and nothing else.
   - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
     - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped
       Postgres delete in one transaction, then the Firestore mirror, then a Cloud Task (idempotent, with a
@@ -537,7 +539,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   `enqueueTask({...})` call omits it. `traceIdFrom` now only takes a well-formed header id (with or
   without a span), so a malformed header can never make a strict enqueue fail a kickoff. The summarizer's
   lines, and every notify line, also gain `userId`; the worker loggers gain `workspaceId`.
-- [ ] **The note-delete cascade hop has no traceId.** `functions/index.js onNoteDeleted` is a Firestore
+- [x] **Resolved (retire-functions PR): the trigger is gone.** The deletion path runs in the api and its purge row
+  carries the request's `trace_id`. Was: **The note-delete cascade hop has no traceId.** `functions/index.js onNoteDeleted` is a Firestore
   trigger, so there's nowhere to carry the api's id. It gets fixed with plan PR-34 (the single deletion
   path): the api enqueues the cascade as a Cloud Task, which carries the id like every other hop.
 - [x] **Fixed (uid-across-task-hops PR):** the api's kickoff and regenerate tasks carry the caller's `uid`.
