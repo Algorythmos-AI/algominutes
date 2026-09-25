@@ -632,6 +632,17 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     locking it, so the racer is either deleted or rolled back. Regression test with a real uncommitted
     insert; mutation-checked.
 
+## Found while adding the audio smoke (2026-09-25)
+
+- [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**
+  The summarizer and the transcoder's fast path threw `GEMINI_API_KEY not set` before any work. The key is
+  a leftover from the public-API days: the ladder (`gemini-call.cjs`) ignores it and calls Vertex AI with
+  the service's identity (ADC), and nothing sets it (no Terraform, deploy workflow or runbook). So every
+  summary failed, and so did every clip of 10 minutes or less (the fast path, `FAST_PATH_MAX_SEC`). The gates
+  and the env plumbing are gone. The fast path's `startMs = intelligence.MODEL_LADDER && …` guard is now
+  plain `timeStrToMs`. `tests/integration/workers-vertex-auth.test.ts` runs both with no key; it fails on
+  the old code with the exact error.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
