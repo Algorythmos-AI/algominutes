@@ -65,6 +65,8 @@ describe('deleteNote (the single deletion path)', () => {
       noteId: 'note-a', workspaceId: 'ws-a', storagePath: 'recordings/ws-a/note-a.m4a', includeScratch: true, traceId: 't-1',
     });
     expect(await rowsFor('note-b')).toEqual(ALL);
+    // A tombstone outlives the purge row, so a stale client can't upload into the note (migration 018).
+    expect(await count(`SELECT 1 FROM deleted_notes WHERE note_id = 'note-a' AND workspace_id = 'ws-a'`)).toBe(1);
   });
 
   it("refuses a caller who isn't a member of the workspace, and touches nothing", async () => {
@@ -73,6 +75,7 @@ describe('deleteNote (the single deletion path)', () => {
     expect(await rowsFor('note-a')).toEqual(ALL);
     expect(deletes).toEqual([]);
     expect(await count('SELECT 1 FROM storage_purges')).toBe(0);
+    expect(await count('SELECT 1 FROM deleted_notes')).toBe(0);
   });
 
   // Postgres note ids are global. Naming another tenant's note under your own
@@ -86,6 +89,8 @@ describe('deleteNote (the single deletion path)', () => {
     expect(await getStoragePurge((r as { purgeId: number }).purgeId)).toMatchObject({
       noteId: 'note-b', workspaceId: 'ws-a', storagePath: null, includeScratch: false,
     });
+    // The manager's no-row cleanup tombstones the id in its own workspace only.
+    expect((await pool.query(`SELECT workspace_id FROM deleted_notes WHERE note_id = 'note-b'`)).rows).toEqual([{ workspace_id: 'ws-a' }]);
   });
 
   it('a retry after a failed Firestore delete finishes the job', async () => {
@@ -118,6 +123,8 @@ describe('deleteNote (the single deletion path)', () => {
     expect(await deleteNote(fs, { noteId: 'note-c2', workspaceId: 'ws-a', uid: 'alice' }, quietLog)).toMatchObject({ deleted: true });
     // A plain member can't trigger cleanup of a note with no Postgres row.
     expect(await deleteNote(fs, { noteId: 'never-processed', workspaceId: 'ws-a', uid: 'carol' }, quietLog)).toEqual({ allowed: false });
+    // A refused delete leaves no tombstone.
+    expect(await count(`SELECT 1 FROM deleted_notes WHERE note_id IN ('note-a', 'never-processed')`)).toBe(0);
   });
 
   it("removes the note's upload sessions, so an unfinished upload can't be completed into it", async () => {

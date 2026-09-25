@@ -51,6 +51,9 @@ describe('deleteAccountData (Postgres, first)', () => {
     expect((await pool.query(`SELECT note_id FROM storage_purges WHERE uid = 'alice'`)).rows.map((x) => x.note_id).sort())
       .toEqual(['a-in-b', 'a1', 'a2'].sort());
     expect((await pool.query(`SELECT workspace_ids FROM account_deletions WHERE uid = 'alice'`)).rows[0].workspace_ids).toEqual(['ws-a']);
+    // A tombstone per note, so a stale client can't upload into one once its purge is done.
+    expect((await pool.query(`SELECT note_id FROM deleted_notes`)).rows.map((x) => x.note_id).sort())
+      .toEqual(['a-in-b', 'a1', 'a2'].sort());
   });
 
   it('a retry is a no-op that still knows the owned workspaces (from the tombstone)', async () => {

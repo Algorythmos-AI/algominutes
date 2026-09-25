@@ -162,6 +162,16 @@ describe('sweep', () => {
     expect((await pool.query(`SELECT uid FROM account_deletions`)).rows.map((r) => r.uid).sort()).toEqual(['gone-recently', 'still-open']);
   });
 
+  it('prunes deleted-note tombstones older than 30 days, keeps recent ones', async () => {
+    const f = fakes();
+    await pool.query(
+      `INSERT INTO deleted_notes (note_id, workspace_id, deleted_at) VALUES ('old', 'ws', $1), ('recent', 'ws', $2)`,
+      [ago(31 * 24 * HOUR), ago(29 * 24 * HOUR)],
+    );
+    expect((await runSweep(f.deps)).note_tombstones).toBe(1);
+    expect((await pool.query(`SELECT note_id FROM deleted_notes`)).rows.map((r) => r.note_id)).toEqual(['recent']);
+  });
+
   it('a failing step is logged, the others still run, and the job fails visibly', async () => {
     const f = fakes();
     const broken = { ...repo, listStuckNotes: async () => { throw new Error('boom'); } };

@@ -14,6 +14,7 @@ import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
 import { lockNoteId } from './note-lock';
+import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { ownedStoragePath } = noteStorage as {
@@ -276,17 +277,14 @@ export async function markQueued(
         await lockNoteId(client, input.noteId);
         // No row: a note never queued, or one deleted since the route read its
         // doc. A deletion leaves a purge row until the doc and the audio are
-        // gone, and after that the doc is missing. Either way it stays deleted:
-        // the INSERT below would bring the row back. Checked before any row
-        // lock, so the Firestore read holds only the note lock. (A row can't
-        // vanish meanwhile: deleteNote waits for that lock.)
+        // gone, then a tombstone (and the doc is missing, unless a stale client
+        // wrote it again). Either way it stays deleted: the INSERT below would
+        // bring the row back. Checked before any row lock, so the Firestore
+        // read holds only the note lock. (A row can't vanish meanwhile:
+        // deleteNote waits for that lock.)
         const hasRow = await client.query('SELECT 1 FROM notes WHERE id = $1', [input.noteId]);
         if (!hasRow.rowCount) {
-          const purging = await client.query(
-            'SELECT 1 FROM storage_purges WHERE note_id = $1 AND workspace_id = $2 LIMIT 1',
-            [input.noteId, input.workspaceId],
-          );
-          if (purging.rowCount || !(await noteDoc.get()).exists) {
+          if (await isNoteDeleted(client, input) || !(await noteDoc.get()).exists) {
             return { queued: false, status: null, deleted: true };
           }
         }
@@ -803,6 +801,9 @@ export async function deleteNote(
         );
         if (here.rowCount || !manager) return { allowed: false };
       }
+      // Outlives the purge row, so a stale client can't upload into (or
+      // re-queue) the note once the purge is done.
+      await recordNoteDeleted(client, { noteId: input.noteId, workspaceId: input.workspaceId });
       // Their GCS session URIs stay valid for a week: the purge cancels them.
       const sessions = await client.query<{ session_uri: string }>(
         'DELETE FROM upload_sessions WHERE note_id = $1 AND workspace_id = $2 RETURNING session_uri',

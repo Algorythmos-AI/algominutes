@@ -65,6 +65,16 @@ describe('a kickoff racing the deletion of its note (R1)', () => {
     expect(await count(`SELECT 1 FROM usage_ledger`)).toBe(0);
   });
 
+  it('deleted and fully purged, but a stale client wrote the doc again: the tombstone refuses it', async () => {
+    await seedNote('n1', 'ws-a', 'alice');
+    await deleteNote(fs, { noteId: 'n1', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    await pool.query('DELETE FROM storage_purges');
+    docs.set(DOC, { authorId: 'alice', status: 'queued' }); // e.g. the web client's setDoc merge (BLOCKERS R2)
+    expect(await markQueued(fs, input, quietLog)).toEqual({ queued: false, status: null, deleted: true });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'n1'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM usage_ledger`)).toBe(0);
+  });
+
   const goneAtMirror = (onUpdate: () => Promise<void> = async () => {}) => ({
     doc: (path: string) => ({
       ...docRef(path),
