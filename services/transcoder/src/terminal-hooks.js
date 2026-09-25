@@ -133,7 +133,7 @@ async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: bas
  * The full A7.4 tail for a permanently-failed transcode: DLQ + refund + notify.
  * `payload` must be job METADATA only (no transcript/PII).
  */
-async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, refundReason = 'refund:transcode_failed' }) {
+async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, refundReason = 'refund:transcode_failed', deadLetterOnly = false, notify = true }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -145,13 +145,20 @@ async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err,
     attempts: attempts != null ? attempts : null,
     traceId: traceId || null,
   }, log);
+  // Only the record, for work lost on a note that isn't failed (ready anyway,
+  // or Postgres couldn't say): no refund, no "failed" notice.
+  if (deadLetterOnly) return;
+  // The refund runs for any failed note: it's net-guarded, so a second chunk,
+  // a retry or an earlier refund leaves it a no-op. The notice (`notify`) goes
+  // with a new failure only.
   await refundSafe({
     noteId,
-    // 'refund:spend_cap' for a note the cap stopped before any paid work: the
-    // spend reader nets those out (spend-repo.cjs).
+    // 'refund:spend_cap' for a note the cap stopped before any paid work
+    // (a label on the ledger row; nothing reads it today).
     reason: refundReason,
     idempotencyKey: `${noteId}:refund:transcode`,
   }, log);
+  if (!notify) return;
   await enqueueNotify({
     type: 'note_failed',
     noteId,

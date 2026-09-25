@@ -168,7 +168,11 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
       release: () => {},
-      query: async (sql: string, params: unknown[]) => { queries.push({ sql, params }); return { rows: [], rowCount: 1 }; },
+      query: async (sql: string, params: unknown[]) => {
+        queries.push({ sql, params });
+        // markNoteFailed's UPDATE returns the status it replaced.
+        return /SELECT prev_status, error_message FROM upd/.test(sql) ? { rows: [{ prev_status: 'queued' }], rowCount: 1 } : { rows: [], rowCount: 1 };
+      },
     };
     const mirrored: any[] = [];
     const hooks: string[] = [];
@@ -189,8 +193,8 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     };
     await expect(handler.handle({ kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'youtube', sourceUrl: 'https://youtu.be/x' }, deps))
       .resolves.toBeUndefined();
-    const failed = queries.find((q) => /UPDATE notes SET status = 'error'/.test(q.sql));
-    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1', null]);
+    const failed = queries.find((q) => /UPDATE notes n SET status = 'error'/.test(q.sql));
+    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1', null, null]);
     expect(mirrored).toEqual([{ path: 'workspaces/w1/notes/n1', data: expect.objectContaining({ status: 'error', errorMessage: 'This video is private.' }) }]);
     expect(hooks).toEqual(['terminal']);
   });

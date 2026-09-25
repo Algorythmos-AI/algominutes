@@ -47,30 +47,75 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  * `onlyIfStatus` narrows it to those statuses (the spend cap fails only a
  * note no paid work has started on).
  *
- * Returns `{ failed }`: whether Postgres moved the note to 'error' here, so a
- * caller runs its refund and notify hooks on that transition only.
+ * A note already 'error' keeps its first message: the user was told that one.
+ *
+ * Returns `{ failed, marked, pgErrored, exists }`:
+ * - `marked`: Postgres has the note at 'error' after this write (new or not).
+ *   The refund keys on this: it's net-guarded, so repeating it changes nothing.
+ *   A poll terminal that died after its commit is refunded on its retry (the
+ *   transcoder's re-drive); on the other paths such a crash still loses the
+ *   tail (BLOCKERS).
+ * - `failed`: this write moved the note to 'error' from something else. The
+ *   "failed" notice keys on this, so the author is told once.
+ * - `pgErrored`: Postgres couldn't be asked.
+ * - `exists`: the note is there in this workspace (ready, already failed, ...).
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return { failed: false };
+    return { failed: false, marked: false, pgErrored: false, exists: false };
   }
 
   let pgOk = false;
   let pgErrored = false;
+  let prevStatus = null;
+  let storedMessage = message;
+  let exists = false;
   try {
     const client = await pool.connect();
     try {
-      const { rowCount } = await client.query(
-        // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a
-        // note id from another workspace matches nothing.
-        `UPDATE notes SET status = 'error', error_message = $2, updated_at = NOW()
-          WHERE id = $1 AND workspace_id = $3 AND status <> 'ready'
-            AND ($4::text[] IS NULL OR status = ANY($4::text[]))`,
-        [noteId, message, workspaceId, onlyIfStatus],
+      // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a note
+      // id from another workspace matches nothing. `p` reads the status the
+      // UPDATE replaces, locked, so of two failures at once the second reads
+      // the first's 'error'. With `chunkId`, the chunk's error is written in
+      // the same statement, and only if the note's was: a poll's retry finds
+      // both or neither, and a note this doesn't fail keeps its chunk.
+      const { rows } = await client.query(
+        `WITH p AS (
+           SELECT id, status AS prev_status FROM notes
+            WHERE id = $1 AND workspace_id = $3 FOR NO KEY UPDATE
+         ), upd AS (
+           UPDATE notes n SET status = 'error',
+                  error_message = CASE WHEN p.prev_status = 'error' AND n.error_message IS NOT NULL
+                                       THEN n.error_message ELSE $2 END,
+                  updated_at = NOW()
+             FROM p
+            WHERE n.id = p.id AND n.status <> 'ready'
+              AND ($4::text[] IS NULL OR n.status = ANY($4::text[]))
+            RETURNING n.id, p.prev_status, n.error_message
+         ), chunk AS (
+           UPDATE audio_chunks c SET status = 'error' FROM upd WHERE c.id = $5 AND c.note_id = upd.id
+         )
+         SELECT prev_status, error_message FROM upd`,
+        [noteId, message, workspaceId, onlyIfStatus, chunkId],
       );
-      pgOk = rowCount > 0;
+      pgOk = rows.length > 0;
+      prevStatus = pgOk ? rows[0].prev_status : null;
+      if (pgOk && rows[0].error_message) storedMessage = rows[0].error_message;
+      exists = pgOk;
+      if (!pgOk) {
+        // Its own try: the UPDATE succeeded (it matched nothing), so a failure
+        // here isn't a Postgres error on the failure, and mustn't mirror one.
+        try {
+          exists = (await client.query(
+            'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2', [noteId, workspaceId],
+          )).rowCount > 0;
+        } catch (probeErr) {
+          log.error({ err: probeErr, noteId, workspaceId }, `${name}_exists_probe_failed`);
+          exists = true; // unknown: keep the dead letter
+        }
+      }
     } finally {
       client.release();
     }
@@ -95,7 +140,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       // was just deleted, set({ merge: true }) would re-create its doc as a
       // phantom 'error' note. update() fails on a missing doc instead.
       await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).update(
-        { status: 'error', errorMessage: message, updatedAt: new Date().toISOString() },
+        { status: 'error', errorMessage: storedMessage, updatedAt: new Date().toISOString() },
       );
       mirrorOk = true;
     } catch (err) {
@@ -117,12 +162,16 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // what the alerting in the runbook counts. Emitted whether or not the writes
   // landed — a note that failed and could not even be marked failed is the
   // worst case, not one to stay quiet about.
-  // (Not for an `onlyIfStatus` write that matched nothing: that note was never
-  // failed here, and the alert counts this line.)
-  if (pgOk || pgErrored || !onlyIfStatus) {
+  // Only for a new failure: not a note already 'error' (re-marked), and not one
+  // this matched nothing on (ready, gone, or an `onlyIfStatus` miss), since the
+  // alert counts this line.
+  const failed = pgOk && prevStatus !== 'error';
+  if (failed || pgErrored) {
     log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
+  } else {
+    log.info({ noteId, workspaceId, pgOk, prevStatus, exists }, `${name}_not_a_new_failure`);
   }
-  return { failed: pgOk };
+  return { failed, marked: pgOk, pgErrored, exists };
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };

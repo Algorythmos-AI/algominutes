@@ -42,6 +42,7 @@ const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
 const { spendGate } = require('./spend-gate');
+const { onLastAttempt } = require('./last-attempt');
 
 // §4.6: the daily cap reads the audio minutes sent to paid work in the last 24 hours.
 spendGuard.setDailySpendReader(spendRepo.createPaidWorkSpendReader({ pool: () => db.pool() }));
@@ -115,33 +116,10 @@ app.post('/', async (req, res) => {
     // Firestore, then dead-letter, refund and notify (the hooks below). The
     // kickoff mirrors nothing on the way out, so until here the app shows the
     // note processing; without this it would stay so until the stuck-note
-    // sweep (db-job, 3.5 h).
-    const { noteId, workspaceId } = req.body || {};
+    // sweep (db-job, 3.5 h). The ids come from the body (last-attempt.js).
     if (noteTerminal.isFinalAttempt(req.headers)) {
-      await noteTerminal.markNoteFailed({
-        pool: db.pool(),
-        firestore: mirror.db(),
-        noteId,
-        workspaceId,
-        message: 'We could not process this recording.',
-        log,
-        event: 'transcoder_mark_failed',
-      });
-      // A7.4 tail: dead-letter the exhausted job, refund the note's metered
-      // minutes, and notify the author. Best-effort — never masks the original
-      // failure. Transcoder SUCCESS is not terminal (the pipeline continues to
-      // summarize), so there is no note_ready here.
-      const attempts = Number((req.headers && req.headers['x-cloudtasks-taskretrycount']) || 0) + 1;
-      const b = req.body || {};
-      await terminalHooks.onTranscodeTerminalFailure({
-        pool: db.pool(),
-        noteId,
-        workspaceId,
-        err,
-        attempts,
-        traceId,
-        payload: { kind: b.kind, type: b.type, noteId, workspaceId, storagePath: b.storagePath, sourceUrl: b.sourceUrl, mimeType: b.mimeType },
-        log,
+      await onLastAttempt({
+        body: req.body, headers: req.headers, err, noteTerminal, terminalHooks, db, mirror, log, traceId,
       });
     }
     return res.status(500).json({ error: 'task_failed' });
