@@ -847,19 +847,66 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       with Firestore ahead of Postgres~~ **fixed (terminal-failure-retries PR):** every failure a handler
       decides on itself (YouTube, `duration_unreadable`, a chunk already failed, a poll chain run out, a
       speech job that errored, and the summarizer's "no speech") passes `retryOnPgError`. A Postgres error
-      then throws before anything is mirrored (tagged, so the kickoff's catch-all doesn't mirror its own
-      `Processing failed.` either; the dual-write audit caught that), and the task retries the decision.
+      then throws before anything is mirrored, and the task retries the decision. (The dual-write audit
+      caught the kickoff's catch-all mirroring `Processing failed.` on the way out; that catch-all no longer
+      mirrors anything, below.)
       The four poll paths
       mark the note before the chunk, since a chunk already marked `error` makes a retry return early.
       The index.js last-attempt path keeps the old never-throw behaviour. Tested on Postgres with a
       trigger standing in for the outage (six cases, six mutations). Not covered by a test: the
       whole-file (AssemblyAI) poll sites and YouTube, which take the same flag.
       - [ ] **Queued (pre-existing, from that PR's silent-catch audit):**
-        - The kickoff's outer catch still mirrors `Processing failed.` to Firestore on any other throw (a
-          transient download or Postgres error; a test pins it). Until the retry writes `chunking` again,
-          Firestore says failed while Postgres says in progress, and the api refuses a user retry as in
-          flight. The fix is to drop that mirror and let the last attempt's `markNoteFailed` mark both
-          stores. That changes what the app shows during retries, so check the iOS retry button first.
+        - ~~The kickoff's outer catch mirrors `Processing failed.` to Firestore on any other throw~~
+          **fixed (kickoff-no-error-mirror PR):** it rethrows and mirrors nothing. Before, until the retry
+          wrote `chunking` again, Firestore said failed while Postgres said in progress, and the api
+          refused the app's retry as in flight. Now the app shows the note processing (with E2's slow
+          notice if it takes long) until the queue's last attempt marks both stores through
+          `markNoteFailed`. `mirrorError`, which had no other caller, is gone. A mutation re-adding the
+          mirror fails three tests.
+          - **From its dual-write audit, fixed in the same PR:** the fast path can commit `ready` to
+            Postgres and then fail to mirror it. Its retry found the note finished and acked, so the doc
+            stayed at `chunking`: an endless spinner with no Try again. Before, it showed a wrong `error`.
+            A first fix repaired the doc from Postgres on that replay; its re-audit showed the repair was
+            itself racy. It could restore action items the user had since edited, overwrite a
+            regenerated summary, and refund a ready note if the repair kept failing. So it was reverted.
+            Now the fast path logs a failed mirror after its commit (`fast_path_ready_mirror_failed`)
+            instead of throwing. Throwing bought nothing and skipped the embedder, so the note was never
+            searchable. The doc stays behind Postgres until the sweep step below exists. Tested on
+            Postgres; two mutations checked.
+          - [ ] **Queued (pre-existing, from those audits):**
+            - **A sweep step that re-mirrors recently finished notes.** Three cases leave the doc behind
+              Postgres for good today:
+              - the fast path's mirror failing after its commit (logged `fast_path_ready_mirror_failed`);
+              - the last attempt's `markNoteFailed` missing its Firestore write;
+              - any other lost mirror write.
+
+              The sweep only looks at notes Postgres has in flight. The step must read one consistent
+              snapshot, take the action items from the rows rather than `summaries.topics` (which a user
+              edit leaves stale), and skip a note that moved since the read.
+            - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
+              spent and the note is never embedded.
+            - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
+              transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
+              the summary from Firestore, so it isn't affected. Fix: store a position.
+            - **Every** `completeChunkAndAdvance` caller (Google and AssemblyAI polls, not only Deepgram)
+              commits `summarizing` and spends the summarizer claim, then mirrors, then enqueues. A mirror
+              or enqueue that throws in between retries into `chunk already done` and returns, so the
+              summarizer never runs and the 3.5 h sweep fails a note whose transcript is fine. Fix: as the
+              fast path now does, log a failed mirror after the commit and enqueue first.
+            - `persistFastPathResult` writes `ready` without a status condition. So a duplicate kickoff
+              delivery that overlaps (or runs after) the first overwrites the finished note: a user's
+              edits to its action items are lost, and overlapping writes can leave Postgres and Firestore
+              with different summaries. Fix: `onlyIfStatus` in-progress there, so the second attempt gets
+              `NOTE_MOVED_ON`.
+            - The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
+              when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
+              doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds
+              a `{ failed }` return for this).
+            - The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
+              while Postgres may be in flight (#124 fixed this on iOS).
+            - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
+              fast path keeps an older summary's chapters in Postgres. And `applyNoteEdit` replaces the
+              whole Firestore `summary` map, which drops `summary.chapters` there.
         - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
           Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
           a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the
