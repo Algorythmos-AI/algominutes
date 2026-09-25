@@ -263,7 +263,7 @@ export async function finishAccountDeletion(
   }
   const purges = await listStoragePurgesForAccount({ uid, workspaceIds: ownWorkspaces });
   for (const p of purges) {
-    if (!(await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log))) errors += 1;
+    if (!(await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore, fetchImpl: deps.fetch }, p, log))) errors += 1;
   }
   try {
     await deleteAccountMirror(deps.firestore, { uid, workspaceIds: ownWorkspaces });

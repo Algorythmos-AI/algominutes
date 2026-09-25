@@ -473,9 +473,21 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
         retry isn't refused for 3 h. Still open: `chunking` and `summarizing` are mirrored with no matching
         Postgres status write.
-    - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
-      server-side upload session is gone, so it can't be completed or processed, but the object lands. The
-      PR-15 sweeper should also remove objects of notes that don't exist.
+    - [x] **Fixed (note-delete-cancels-upload PR):** `deleteNote` records the note's open GCS upload-session
+      URIs on its purge row (migration 017, expand-only), and the purge cancels them *before* it deletes the
+      doc and objects. An upload that finished first is removed with the objects, a finished or expired
+      session counts as cancelled. A failed cancel doesn't hold up the delete: the doc and objects still go,
+      and the row keeps only the failed URI for the sweeper's retry, which cancels it and deletes the objects
+      again. The cancel follows no redirects and gives up after 10 s. Tested and mutation-checked. Was: a
+      client still holding a session URI could finish uploading after the delete.
+      - [ ] **Verify on staging:** the status codes GCS returns to DELETE on a *finished*, a cancelled and an
+        expired resumable session. The code accepts 499/404/410/200/204; anything else leaves the purge row
+        retrying (the audio is deleted anyway). Put the real codes in `note-delete.test.ts`.
+      - [ ] Still open (from its audit): an upload session minted *during or after* `deleteNote` never
+        reaches a purge row (the GCS session is created before `createUploadSession`'s transaction), so its
+        object can land after the purge. Take the note lock in `createUploadSession` and refuse when a purge
+        row exists (cancelling the just-minted session), or have the sweeper remove objects of notes that
+        don't exist.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in
@@ -504,7 +516,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         your apply. See DECISIONS.
       - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
         failing object blocks an account's deletion (fail closed), and must page someone.
-      - Single-note deletion should also cancel the note's open upload session (account deletion does).
+      - ~~Single-note deletion should also cancel the note's open upload session~~ **done
+        (note-delete-cancels-upload PR)**: see the item above.
       - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today
         an owned workspace goes with its owner, members' notes included.
       - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
