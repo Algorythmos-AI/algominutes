@@ -568,7 +568,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     signature, and the bundle id / environment. The paywall stays hidden behind its flag until then.
 - [ ] **Still open in CodeQL** (triage next):
   - `js/polynomial-redos` in `redaction.cjs` (the PII pre-scrub runs over whole 2–4 h transcripts);
-  - `js/log-injection` in `client-error.js`;
+  - ~~`js/log-injection` in `client-error.js` (#62)~~ **fixed (client-error-log-sanitiser PR):** the
+    flattening already removed every line break, but CodeQL only recognises a global replace of `"\n"`
+    with `""` (its `StringReplaceSanitizer`), so that no-op step now ends the chain;
   - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
   - ~~`js/insecure-helmet-configuration` ×2~~ **fixed (strict-csp PR):** both JSON services send
     `default-src 'none'` instead of disabling CSP (DECISIONS);
