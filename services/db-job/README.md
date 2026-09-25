@@ -16,7 +16,6 @@ Dispatched by the `JOB_NAME` env var (`HANDLERS` in `src/index.js`):
 | `verify-phase-0`    | `src/handlers/verify-phase-0.js`  | Read-only verification queries. |
 | `eval-recall`       | `src/handlers/eval-recall.js`     | Retrieval eval. |
 | `eval-diarisation`  | `src/handlers/eval-diarisation.js`| Diarisation eval. |
-| `debug-corpus`      | `src/handlers/debug-corpus.js`    | Corpus inspection. |
 
 Add a handler: write `src/handlers/<name>.js` exporting
 `{ run({ log, traceId, env }) }` and register it in `HANDLERS`.
