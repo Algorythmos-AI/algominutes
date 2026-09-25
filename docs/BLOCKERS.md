@@ -826,6 +826,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - A kickoff of a note's previous run can continue into a re-queued note. Checking the kickoff's
       `jobId` needs `markQueued` to store it.
 
+## Observability (plan rev 8, PR-16c, 2026-09-25)
+
+- [x] **Done (observability-uptime-dashboard PR, pending your apply):**
+  - **Uptime check** on `GET /v1/health` every 5 min from several regions. It pages when it fails from
+    more than one region for 10 min.
+  - **Dashboard** *algominutes-&lt;env&gt;: pipeline*: api requests, api latency p95, worker requests, queue
+    depth, failed notes, dead letters, Cloud SQL CPU and connections. Its JSON was validated by the
+    Monitoring API in validate-only mode, before your apply.
+  - **Error Reporting now receives errors.** An error line carries a top-level `stack_trace`; nested
+    under `err`, none were ever reported.
+  - **`docs/SLO.md`**: six objectives, each with its signal and alert.
+- [ ] **The e2e workflow** (a custom-token test user; a 10-minute fixture nightly, a 3-hour one weekly;
+  fixtures in GCS): needs staging up.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**
