@@ -17,6 +17,7 @@ import { getStorage } from 'firebase-admin/storage';
 
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
+import noteStorageModule from '@algominutes/ai/note-storage.cjs';
 import { CreateUploadSessionRequest } from '@algominutes/contracts/schemas';
 import {
   createUploadSession,
@@ -135,6 +136,16 @@ export async function createUploadSessionRoute(req, res) {
     if (err?.code === 'ACCOUNT_DELETED') {
       log.warn({}, 'upload_account_deleted');
       return res.status(401).json({ error: 'account_deleted' });
+    }
+    if (err?.code === 'NOTE_DELETED') {
+      // Deleted while (or before) this request ran. The session we just minted
+      // is a capability to write into it: cancel it, then answer as for a note
+      // that doesn't exist. A failed cancel is logged; the session expires in a
+      // week and no kickoff can use the note.
+      await noteStorageModule.cancelResumableUpload(sessionUri)
+        .catch((cancelErr) => log.error({ err: cancelErr }, 'upload_deleted_note_cancel_failed'));
+      log.warn({}, 'upload_note_deleted');
+      return res.status(404).json({ error: 'Note not found' });
     }
     if (err instanceof WorkspaceBoundaryError || err?.code === 'WORKSPACE_BOUNDARY') {
       log.warn({ err }, 'upload_workspace_boundary');
