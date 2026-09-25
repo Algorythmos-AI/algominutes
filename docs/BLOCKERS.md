@@ -977,10 +977,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   replay guard), and each worker's last attempt (no retry left). The sweep doesn't look at
                   failed notes. Writing the reversal in the failure's own transaction, under
                   `lockNoteId`, covers every path (with the "kickoff racing a refund" item).
-                - **A failed regeneration refunds the whole recording:** a regeneration takes a `ready` note
-                  to `summarizing`; if the summarizer's last attempt fails it, the ingest debit is reversed
-                  (`refund:summary_failed`), and the next successful regeneration leaves it ready at net 0.
-                  A regeneration's failure shouldn't refund the transcription.
+                - ~~**A failed regeneration refunds the whole recording**~~ **fixed
+                  (regeneration-failure-keeps-charge PR):** the summarizer's last attempt refunds only a
+                  pipeline summary's failure; a regeneration's (its task carries `summaryGeneration`) is
+                  failed and told, and the recording's charge stands. Tested on the ledger through the real
+                  hooks; two mutations checked.
                 - `markNoteFailed` with a chunk locks note then chunk; `completeChunkGate` locks chunk then
                   note. Two poll chains on one chunk with opposite verdicts can deadlock (reproduced,
                   `40P01`; either victim retries into a consistent state). Taking the chunk lock first
