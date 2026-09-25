@@ -2,10 +2,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import express from 'express';
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
-// @ts-expect-error: plain ESM module, no type declarations
-import { clientRateLimit, userRateLimit, trustProxyHops } from '../services/api/src/middleware/rate-limit.js';
+import { createRequire } from 'node:module';
 
-// Request rate limits for /v1 (services/api/src/middleware/rate-limit.js),
+const { clientRateLimit, userRateLimit, trustProxyHops } = createRequire(import.meta.url)('@algominutes/ai/rate-limit.cjs');
+
+// Request rate limits for /v1 and billing (@algominutes/ai/rate-limit.cjs),
 // driven over real HTTP.
 const servers: Array<{ close: () => void }> = [];
 afterEach(() => { while (servers.length) servers.pop()!.close(); });
