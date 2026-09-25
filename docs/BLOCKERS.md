@@ -473,8 +473,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - [x] **Fixed (note-delete-cancels-upload PR):** `deleteNote` records the note's open GCS upload-session
       URIs on its purge row (migration 017, expand-only), and the purge cancels them *before* it deletes the
       doc and objects. An upload that finished first is removed with the objects, a finished or expired
-      session counts as cancelled, and a failed cancel keeps the purge queued for the sweeper. Tested and
-      mutation-checked. Was: a client still holding a session URI could finish uploading after the delete.
+      session counts as cancelled. A failed cancel doesn't hold up the delete: the doc and objects still go,
+      and the row keeps only the failed URI for the sweeper's retry, which cancels it and deletes the objects
+      again. The cancel follows no redirects and gives up after 10 s. Tested and mutation-checked. Was: a
+      client still holding a session URI could finish uploading after the delete.
+      - [ ] **Verify on staging:** the status codes GCS returns to DELETE on a *finished*, a cancelled and an
+        expired resumable session. The code accepts 499/404/410/200/204; anything else leaves the purge row
+        retrying (the audio is deleted anyway). Put the real codes in `note-delete.test.ts`.
+      - [ ] Still open (from its audit): an upload session minted *during or after* `deleteNote` never
+        reaches a purge row (the GCS session is created before `createUploadSession`'s transaction), so its
+        object can land after the purge. Take the note lock in `createUploadSession` and refuse when a purge
+        row exists (cancelling the just-minted session), or have the sweeper remove objects of notes that
+        don't exist.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in

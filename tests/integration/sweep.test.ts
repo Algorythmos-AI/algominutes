@@ -294,3 +294,25 @@ describe('sweep: retention and trials', () => {
     ]);
   });
 });
+
+describe('account deletion and a leftover note purge with upload sessions', () => {
+  it("cancels the note purge's sessions through the deletion's own fetch", async () => {
+    const f = fakes();
+    const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=xyz';
+    await seedNote('n-up', 'ws-a', 'alice');
+    await pool.query(
+      `INSERT INTO upload_sessions (uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at)
+         VALUES ('alice', 'ws-a', 'n-up', 'recordings/ws-a/n-up.m4a', $1, 1, NOW() + INTERVAL '1 day')`,
+      [SESSION],
+    );
+    // The note was deleted earlier; its purge never ran.
+    await repo.deleteNote(f.deps.firestore as never, { noteId: 'n-up', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    const d = await deleteAccountData({ uid: 'alice' }, quietLog);
+    const cancelled: string[] = [];
+    const fetch = async (url: string) => { cancelled.push(url); return { status: 499 }; };
+    const r = await repo.finishAccountDeletion({ ...f.deps, fetch } as never, { uid: 'alice', ...d }, log);
+    expect(r.complete).toBe(true);
+    expect(cancelled).toEqual([SESSION]);
+    expect(await count('SELECT 1 FROM storage_purges')).toBe(0);
+  });
+});

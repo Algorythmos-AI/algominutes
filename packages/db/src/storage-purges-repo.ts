@@ -118,11 +118,22 @@ export async function runStoragePurge(
     purgeId: purge.id,
   };
   try {
-    // First, so no upload can land after the objects are gone. A session
-    // already finished, expired or cancelled counts as done (note-storage.cjs).
-    for (const uri of purge.uploadSessionUris) await cancelResumableUpload(uri, fetchImpl);
     // Idempotent: deleting a missing doc succeeds.
     await firestore.doc(`workspaces/${purge.workspaceId}/notes/${purge.noteId}`).delete();
+    // The note's open upload sessions, before its objects, so an upload that
+    // lands first goes with them. A session already finished, expired or
+    // cancelled counts as done (note-storage.cjs). One that won't cancel
+    // doesn't hold up the delete: the row keeps just that URI, and each retry
+    // cancels it again and deletes the objects again.
+    const uncancelled: string[] = [];
+    for (const uri of purge.uploadSessionUris) {
+      try {
+        await cancelResumableUpload(uri, fetchImpl);
+      } catch (cancelErr) {
+        uncancelled.push(uri);
+        log.error({ err: cancelErr, ...fields }, 'note_upload_cancel_failed');
+      }
+    }
     await purgeNoteObjects(
       {
         bucket,
@@ -132,6 +143,10 @@ export async function runStoragePurge(
       },
       { info: (o: any, m?: string) => log.info({ ...fields, ...o }, m) },
     );
+    if (uncancelled.length) {
+      await getPool().query('UPDATE storage_purges SET upload_session_uris = $2 WHERE id = $1', [purge.id, uncancelled]);
+      throw new Error(`${uncancelled.length} upload session(s) not cancelled`);
+    }
     await getPool().query('DELETE FROM storage_purges WHERE id = $1', [purge.id]);
     return true;
   } catch (err) {
