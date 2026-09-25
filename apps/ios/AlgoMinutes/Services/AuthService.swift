@@ -29,6 +29,8 @@ final class AuthService: NSObject {
                 if user != nil {
                     await self?.ensureWorkspaceDoc()
                 }
+                // A7.3: the push token follows whoever is signed in.
+                await PushTokenRegistrar.shared.userChanged(uid: user?.uid)
             }
         }
     }
