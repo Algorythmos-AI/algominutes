@@ -42,7 +42,7 @@ struct ChatView: View {
 
                 inputBar
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(item: $selectedNoteId) { noteId in

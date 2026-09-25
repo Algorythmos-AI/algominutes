@@ -32,7 +32,7 @@ struct NoteDetailView: View {
                 EmptyStateView(icon: "doc.questionmark", message: "This note is no longer available.")
             }
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let note {

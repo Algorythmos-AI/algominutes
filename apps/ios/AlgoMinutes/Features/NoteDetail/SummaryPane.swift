@@ -14,7 +14,7 @@ struct SummaryPane: View {
 
     var body: some View {
         if let summary {
-            OwllCard {
+            AlgoMinutesCard {
                 VStack(alignment: .leading, spacing: 8) {
                     SectionLabel("Executive Summary")
                     Text(summary.gist.isEmpty ? "No summary." : summary.gist)
@@ -27,7 +27,7 @@ struct SummaryPane: View {
                 ChaptersCard(chapters: summary.chapters, onSeek: onSeek)
             }
             if !summary.actionItems.isEmpty {
-                OwllCard {
+                AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel("Action Items")
                         ForEach(summary.actionItems, id: \.self) { item in
@@ -38,7 +38,7 @@ struct SummaryPane: View {
                 .id(Self.actionItemsAnchor)
             }
             if !summary.keyDecisions.isEmpty {
-                OwllCard {
+                AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel("Key Decisions")
                         ForEach(summary.keyDecisions, id: \.self) { decision in
@@ -98,7 +98,7 @@ private struct ChaptersCard: View {
     let onSeek: ((TimeInterval) -> Void)?
 
     var body: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: 12) {
                 SectionLabel("Chapters")
                 ForEach(chapters) { chapter in

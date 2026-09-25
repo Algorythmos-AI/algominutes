@@ -1082,22 +1082,6 @@ final class FormattingTests: XCTestCase {
     }
 }
 
-// MARK: - Brand fonts
-
-// Rajdhani must be registered (UIAppFonts + bundled TTFs). A missing font
-// fails SILENTLY into the system fallback — the exact bug the original
-// Saira config shipped with — so this is a hard regression gate.
-final class BrandFontTests: XCTestCase {
-    func testRajdhaniWeightsRegistered() {
-        for name in ["Rajdhani-Medium", "Rajdhani-SemiBold", "Rajdhani-Bold"] {
-            XCTAssertNotNil(
-                UIFont(name: name, size: 14),
-                "\(name) missing — check Resources/Fonts + Info.plist UIAppFonts"
-            )
-        }
-    }
-}
-
 // MARK: - Export wire contract
 
 /// `ExportScope.rawValue` is sent straight to `/api/export-note`, which

@@ -32,7 +32,7 @@ struct ScanSheet: View {
                 }
 
                 if let busy = busyLabel {
-                    OwllCard {
+                    AlgoMinutesCard {
                         HStack(spacing: 12) {
                             ProgressView().tint(Theme.outline)
                             Text(busy)
@@ -133,7 +133,7 @@ struct ScanSheet: View {
     }
 
     private func rowLabel(icon: String, title: String, subtitle: String) -> some View {
-        OwllCard {
+        AlgoMinutesCard {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .semibold))

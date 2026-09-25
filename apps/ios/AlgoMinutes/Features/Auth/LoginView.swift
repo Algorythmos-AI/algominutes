@@ -99,7 +99,7 @@ struct LoginView: View {
             .padding(.top, 24)
             .padding(.bottom, 36)
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
     }
 }
 
