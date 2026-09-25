@@ -326,7 +326,8 @@ final class AppEnvironment {
                 workspaceId: wsId,
                 type: type,
                 storagePath: storagePath,
-                mimeType: mimeType
+                mimeType: mimeType,
+                durationSec: durationSeconds.map { Double($0) }
             ))
         } catch APIError.quotaExceeded {
             // A9.4: out of included minutes. Present the paywall rather than a
@@ -474,7 +475,8 @@ final class AppEnvironment {
         do {
             try await api.processAudio(.init(
                 noteId: noteId, workspaceId: wsId, type: type,
-                storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt
+                storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt,
+                durationSec: pending.durationSeconds.map { Double($0) }
             ))
             return .queued
         } catch APIError.quotaExceeded {
