@@ -43,28 +43,37 @@ export function playPackageName() {
 /**
  * Verify a subscription purchase token against Play. Returns the normalised
  * durable id + currentPeriodEnd + raw state used to decide activate/setStatus.
- * TODO(A11): verify against live Google — purchases.subscriptions.get.
+ *
+ * purchases.subscriptionsv2.get: Google is retiring v1 purchases.subscriptions,
+ * and googleapis 181 no longer has it. The v2 answer carries the expiry per
+ * line item (an RFC 3339 time), so the period end is this product's line item,
+ * or the latest-expiring one when Play reports a different product (a plan
+ * change).
+ * TODO(A11): verify against live Google.
  */
 export async function verifyPlaySubscription({ productId, purchaseToken }) {
   const pub = await androidPublisher();
-  const { data } = await pub.purchases.subscriptions.get({
+  const { data } = await pub.purchases.subscriptionsv2.get({
     packageName: playPackageName(),
-    subscriptionId: productId,
     token: purchaseToken,
   });
-  const currentPeriodEnd = data.expiryTimeMillis
-    ? new Date(Number(data.expiryTimeMillis)).toISOString()
-    : null;
+  const items = Array.isArray(data.lineItems) ? data.lineItems : [];
+  const expiry = (i) => (i && i.expiryTime ? Date.parse(i.expiryTime) : NaN);
+  const dated = items.filter((i) => Number.isFinite(expiry(i)));
+  const item = dated.find((i) => i.productId === productId)
+    || dated.sort((a, b) => expiry(b) - expiry(a))[0]
+    || null;
+  const expiresAt = expiry(item);
   return {
     purchaseToken,
-    productId,
-    currentPeriodEnd,
-    // paymentState: 0 pending, 1 received, 2 free trial, 3 pending deferred.
-    paymentState: typeof data.paymentState === 'number' ? data.paymentState : null,
-    // cancelReason present ⇒ user/system cancelled (still valid until expiry).
-    cancelReason: typeof data.cancelReason === 'number' ? data.cancelReason : null,
-    // 0 active/expired, 1 in grace period, 2 on hold, 3 paused, 4 pending.
+    productId: (item && item.productId) || productId,
+    currentPeriodEnd: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null,
+    // SUBSCRIPTION_STATE_ACTIVE | _IN_GRACE_PERIOD | _ON_HOLD | _PAUSED | _CANCELED | _EXPIRED | _PENDING.
+    subscriptionState: data.subscriptionState ?? null,
+    // ACKNOWLEDGEMENT_STATE_PENDING | ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED.
     acknowledgementState: data.acknowledgementState ?? null,
+    // Present once the user or the system cancelled (still valid until expiry).
+    canceled: !!data.canceledStateContext,
     raw: data,
   };
 }
