@@ -916,10 +916,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
             - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
               fast path keeps an older summary's chapters in Postgres. And `applyNoteEdit` replaces the
               whole Firestore `summary` map, which drops `summary.chapters` there.
-        - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
-          Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
-          a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the
-          PR-15 spend reader: log it and answer 500.
+        - ~~The spend guard's catch in both `index.js` files rethrows a non-cap error without logging
+          it~~ **fixed (spend-cap-reader PR):** `haltAtSpendCap` logs `spend_guard_failed` and answers 500.
         - If the note write lands but `markChunkError` then fails, the retry logs a second `note_failed`
           (the alert counts it). And if the speech job finishes before an exhausted poll's retry, that
           retry completes the chunk and the note can go on to `ready`, with no refund or failure
@@ -981,6 +979,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Queued:** the extension writes `.m4a` with AVAssetWriter, so if iOS kills it (a 50 MB memory
   limit) mid-capture, the capture is lost. AVAudioFile can write ADTS, but the two sources run on
   different clocks. Measure how often it happens before redesigning.
+
+## Spend cap (plan rev 8, PR-15, 2026-09-25)
+
+- [x] **Done (spend-cap-reader PR, the env var pending your apply):** the §4.6 daily cap was inert, because
+  its reader returned 0. It now estimates the last 24 hours' cost as the minutes debited in `usage_ledger`
+  times `COGS_AUD_PER_MINUTE` (default A$0.03), cached for a minute.
+  - At the cap, a kickoff's note (or a summary's) is failed, Postgres first, with "We've reached today's
+    processing limit". It is refunded, its author told, and the task acknowledged. Before, the task was
+    dropped and the note stayed in progress until the sweep.
+  - Poll tasks aren't gated: their speech job is already paid for.
+  - Found on the way: staging read as `production` (Cloud Run's `NODE_ENV`) and would have had prod's
+    A$200 cap. `ALGOMINUTES_ENV` is now set from `var.env`, which needs a re-plan.
+  - Tested: the gate as a unit, the reader and the transcoder gate on Postgres. Five mutations checked.
+    See DECISIONS "Spend cap".
+- [ ] **Yours / A11:** replace the default rate with the measured blended cost per minute (speech + Gemini +
+  storage), as `COGS_AUD_PER_MINUTE`. Also raise `DAILY_SPEND_CAP_AUD` on staging on heavy test days
+  (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day).
+- [ ] **Queued:** the api doesn't refuse a kickoff at the cap (the transcoder fails and refunds it), and the
+  embedder and chat aren't gated.
 
 ## Found while adding the audio smoke (2026-09-25)
 

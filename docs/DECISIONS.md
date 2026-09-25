@@ -3,6 +3,36 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Spend cap: a ledger estimate, kickoffs only, and a failed note rather than a dropped task (2026-09-25, PR-15)
+
+The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the minutes debited in
+`usage_ledger` over the last 24 hours, times a blended cost per minute** (`@algominutes/db/spend-repo.cjs`).
+- **Why the ledger:** every kickoff debits its recording's minutes before any paid work.
+  - `usage_events`, meant for per-call cost, is never written.
+  - The billing export lags by hours and needs setup.
+  - Refunds don't lower the figure, because a failed run was usually paid for.
+- **Why a rolling 24 hours, not a calendar day:** there is no midnight cliff and no time zone to choose.
+- **The rate:** `COGS_AUD_PER_MINUTE`, default **A$0.03/min**. That is deliberately high: Google speech is
+  about US$0.016/min, and the Gemini summary is a fraction of a cent per minute. Replace it with the
+  measured blended cost (BLOCKERS A11).
+  - With the default caps, staging (A$20) allows about 660 minutes a day, and prod (A$200) about 6,600.
+  - A heavy test day on staging (the 3 h M1 run plus the weekly 3 h e2e fixture) is about 360 minutes.
+    Raise `DAILY_SPEND_CAP_AUD` for more.
+- **Kickoffs only in the transcoder:** a poll task checks a speech job already paid for. Stopping it
+  would waste that spend and strand the note.
+- **At the cap, the note fails; it isn't deferred.** Its note is failed, Postgres first, with "We've
+  reached today's processing limit. Please try again tomorrow.". The worker's terminal hooks then
+  refund the minutes, record a dead letter and notify the author, and the task is acknowledged.
+  - Before, the task was acknowledged alone, and the note stayed in progress until the 3.5 h stuck-note
+    sweep.
+  - A `deferred` status with a re-drive would be a new note status. That is a three-client contract
+    change, for a state the user can resolve by retrying later.
+  - If Postgres misses the failed write, the answer is 500, so the task retries and checks the cap again.
+- **`ALGOMINUTES_ENV` is set on every service** (`var.env`). Cloud Run sets `NODE_ENV=production`, so
+  without it staging read as production and got prod's cap.
+- **Unchanged:** a reader error fails open (logged), and the budget alerts stay the backstop. The api
+  doesn't refuse a kickoff at the cap; the transcoder fails it and refunds.
+
 ## Audio playback through api-signed URLs, not Storage rules (2026-09-25)
 
 The api's recordings bucket (`algominutes-<env>-recordings`) isn't a Firebase Storage bucket, and the iOS
@@ -659,8 +689,8 @@ for short clips untouched.
   recordings lifecycle. Both ZONAL to start (REGIONAL HA is a later prod hardening).
 - **§4.6 circuit breaker fails OPEN on a meter-read error** — a broken cost meter logs loudly but does not
   halt the whole product; the sustained-outage backstop is the budget alerts + monitoring. Trip on a real
-  over-cap read is hard (non-retryable). The spend reader is a stub (returns 0) until A9 wires
-  usage_ledger/COGS, so the breaker is present-and-wired but inert now.
+  over-cap read is hard (non-retryable). The spend reader was a stub (returns 0) until PR-15 wired the
+  usage_ledger estimate (see "Spend cap", 2026-09-25).
 - **Budgets not managed in Terraform** — they already exist (INFRASTRUCTURE §4.4); recreating would
   conflict. The prod-budget re-scope stays a manual open item.
 - **Firebase configs regenerated per env via the CLI** (runbook step 4), never copied from the client

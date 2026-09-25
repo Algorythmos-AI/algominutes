@@ -29,8 +29,12 @@ const sharedIntelligence = loadShared('intelligence.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
 const spendGuard = loadShared('spend-guard.cjs');
+const spendRepo = loadShared('spend-repo.cjs');
 const handler = require('./handler');
 const terminalHooks = require('./terminal-hooks');
+
+// §4.6: the daily cap reads the minutes debited in the last 24 hours.
+spendGuard.setDailySpendReader(spendRepo.createLedgerSpendReader({ pool: () => handler.pool() }));
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));
@@ -53,17 +57,23 @@ app.post('/', async (req, res) => {
   });
 
   // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
-  // spend hit the daily cap.
-  try {
-    await spendGuard.assertUnderDailyCap({ log });
-  } catch (err) {
-    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
-      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
-      // Ack (200) so Cloud Tasks does not retry-storm while capped.
-      // TODO(A9): mark the note 'deferred', re-drive on reset, refund minutes (A7.4).
-      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
-    }
-    throw err;
+  // spend hit the daily cap. At the cap the note is failed, refunded and its
+  // author told (spend-guard haltAtSpendCap), instead of dropped.
+  {
+    const b = req.body || {};
+    const { noteId, workspaceId } = b;
+    const halted = await spendGuard.haltAtSpendCap({
+      log, noteId, workspaceId,
+      markFailed: () => handler.markNoteFailed({
+        noteId, workspaceId, message: spendGuard.SPEND_CAP_MESSAGE, log, retryOnPgError: true,
+      }),
+      onCapped: (err) => terminalHooks.onSummarizeTerminalFailure({
+        pool: handler.pool(), noteId, workspaceId, err, attempts: null, traceId,
+        payload: { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration },
+        log,
+      }),
+    });
+    if (halted) return res.status(halted.status).json(halted.body);
   }
 
   try {
