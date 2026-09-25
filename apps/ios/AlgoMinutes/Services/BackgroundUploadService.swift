@@ -3,12 +3,10 @@ import Foundation
 /// A7.2 — resumable, reboot-surviving uploads over a `URLSession` **background**
 /// configuration.
 ///
-/// GATED OFF by default (`AppFeatureFlags.backgroundResumableUpload`). This path
-/// cannot be built or exercised in this environment: it depends on server
-/// endpoints that do not exist yet (`APIClient.createUploadSession` /
-/// `uploadSessionStatus` / `completeUpload`). The Firebase `putFile` path in
-/// `UploadService` remains the documented, working fallback and stays the
-/// default until this is verified on a device.
+/// The only upload path (iOS PR-17 D). The api mints a GCS resumable session
+/// for the note's object in its recordings bucket (POST /v1/uploads); the bytes
+/// go straight to GCS; `complete` confirms them. The Firebase SDK upload wrote
+/// to Firebase's default bucket, which the api never reads.
 ///
 /// How it differs from the fallback:
 ///   - The transfer runs on a background `URLSession`, so it continues after the
@@ -67,39 +65,53 @@ final class BackgroundUploadService: NSObject {
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    /// Create (or resume) a session and transfer the remaining bytes, persisting
-    /// the offset after each chunk. Throws once retries are exhausted; the caller
-    /// keeps the local file and marks the recording `.failed`.
+    /// Upload a file into the note's object and return the object name the api
+    /// recorded (pass it to /v1/process). `pending` is a recording's sidecar: its
+    /// session is remembered, so a retry continues it from the server's byte
+    /// count. Without one (an import, a file the OS owns) a failed upload starts
+    /// over. Throws once retries are exhausted; the caller keeps the local file.
     func upload(
         fileURL: URL,
         noteId: String,
         workspaceId: String,
-        pending: RecordingStore.PendingRecording,
+        fileName: String,
         contentType: String,
+        pending: RecordingStore.PendingRecording?,
         onProgress: @escaping @MainActor (Int) -> Void
-    ) async throws {
+    ) async throws -> String {
         let total = Self.fileSize(fileURL)
         guard total > 0 else { throw UploadError.failed }
 
-        let created = try await api.createUploadSession(
-            noteId: noteId,
-            workspaceId: workspaceId,
-            fileName: pending.fileName,
-            contentType: contentType,
-            totalBytes: total
-        )
-
-        store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: pending.uploadedBytes ?? 0)
-
-        // Resume anchor: trust the server's count when we can reach it, else the
-        // last offset we persisted locally.
-        var offset = pending.uploadedBytes ?? 0
-        if let status = try? await api.uploadSessionStatus(uploadId: created.uploadId) {
-            offset = max(offset, status.receivedBytes)
-            if status.complete { offset = total }
+        // A session's bytes only count within that session: continue the
+        // recording's own session if the server still has it open, else start a
+        // new one from byte 0 (never a new session from an old offset).
+        var uploadId = pending?.uploadId
+        var sessionUri = pending?.uploadSessionUri
+        var offset: Int64 = 0
+        var chunkSize = Self.minChunkBytes
+        if let id = uploadId, sessionUri != nil,
+           let status = try? await api.uploadSessionStatus(uploadId: id) {
+            offset = status.complete ? total : min(status.receivedBytes, total)
+        } else {
+            let created = try await api.createUploadSession(
+                noteId: noteId,
+                workspaceId: workspaceId,
+                fileName: fileName,
+                contentType: contentType,
+                totalBytes: total
+            )
+            uploadId = created.uploadId
+            sessionUri = created.sessionUri
+            chunkSize = max(Self.minChunkBytes, Int64(created.chunkSize))
+            if let pending {
+                store.setUploadSession(fileName: pending.fileName, uploadId: created.uploadId, sessionUri: created.sessionUri)
+            }
+        }
+        guard let uploadId, let sessionUri else { throw UploadError.failed }
+        if let pending {
+            store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: offset)
         }
 
-        let chunkSize = max(Self.minChunkBytes, Int64(created.chunkSize))
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
 
@@ -108,16 +120,22 @@ final class BackgroundUploadService: NSObject {
             try handle.seek(toOffset: UInt64(offset))
             let data = handle.readData(ofLength: Int(end - offset))
             try await putChunkWithBackoff(
-                to: created.sessionUri, data: data, start: offset, end: end, total: total
+                to: sessionUri, data: data, start: offset, end: end, total: total
             )
             offset = end
-            store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: offset)
+            if let pending {
+                store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: offset)
+            }
             let percent = Int((Double(offset) / Double(total) * 100).rounded())
             onProgress(min(100, percent))
         }
 
-        _ = try await api.completeUpload(uploadId: created.uploadId)
-        store.setUploadState(fileName: pending.fileName, state: .processing, uploadedBytes: offset)
+        let done = try await api.completeUpload(uploadId: uploadId)
+        if let pending {
+            store.setUploadState(fileName: pending.fileName, state: .processing, uploadedBytes: offset)
+            store.setUploadSession(fileName: pending.fileName, uploadId: nil, sessionUri: nil)
+        }
+        return done.storagePath
     }
 
     // MARK: - Chunk transfer

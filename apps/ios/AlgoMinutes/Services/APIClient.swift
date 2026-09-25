@@ -281,6 +281,17 @@ final class APIClient: Sendable {
         try await post(path: "v1/account/delete", body: [:])
     }
 
+    /// A short-lived signed URL (15 minutes) to play a note's audio
+    /// (POST /v1/notes/audio-url). Clients never read the recordings bucket
+    /// directly. Don't log or persist the URL: it is a capability until it expires.
+    func noteAudioURL(noteId: String, workspaceId: String) async throws -> URL {
+        let json = try await post(path: "v1/notes/audio-url", body: ["noteId": noteId, "workspaceId": workspaceId])
+        guard let raw = json["url"] as? String, let url = URL(string: raw), url.scheme == "https" else {
+            throw APIError.invalidResponse
+        }
+        return url
+    }
+
     /// Delete a note: Postgres first, then its Firestore doc, then its audio
     /// (POST /v1/notes/delete). Clients can't delete note docs directly (the
     /// Firestore rules refuse it). Returns whether a Postgres row went.

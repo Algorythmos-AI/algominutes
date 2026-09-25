@@ -49,6 +49,10 @@ final class RecordingStore {
         var uploadedBytes: Int64?
         /// Last upload/processing failure, shown on the pending-recordings badge.
         var lastError: String?
+        /// The resumable session this recording's upload is using (POST /v1/uploads):
+        /// a retry continues it from the server's byte count instead of starting over.
+        var uploadId: String?
+        var uploadSessionUri: String?
 
         var id: String { recordingId }
         var isAssociated: Bool { noteId != nil }
@@ -166,6 +170,14 @@ final class RecordingStore {
         write(recording)
     }
 
+    /// Remember (or, with nils, forget) the upload session a recording is using.
+    func setUploadSession(fileName: String, uploadId: String?, sessionUri: String?) {
+        guard var recording = readSidecar(forFileName: fileName) else { return }
+        recording.uploadId = uploadId
+        recording.uploadSessionUri = sessionUri
+        write(recording)
+    }
+
     // MARK: - Queries
 
     func pendingRecording(forNoteId noteId: String) -> PendingRecording? {
@@ -243,5 +255,7 @@ extension RecordingStore.PendingRecording {
         state = try c.decodeIfPresent(RecordingState.self, forKey: .state) ?? .recorded
         uploadedBytes = try c.decodeIfPresent(Int64.self, forKey: .uploadedBytes)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        uploadId = try c.decodeIfPresent(String.self, forKey: .uploadId)
+        uploadSessionUri = try c.decodeIfPresent(String.self, forKey: .uploadSessionUri)
     }
 }

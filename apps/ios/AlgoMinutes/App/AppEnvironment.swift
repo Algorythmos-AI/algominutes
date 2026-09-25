@@ -10,7 +10,6 @@ final class AppEnvironment {
     let api: APIClient
     let auth: AuthService
     let notes: NotesRepository
-    let uploads: UploadService
     let recorder: RecorderService
     let recordingStore: RecordingStore
     /// A10 §5 consent seam. Shared between the pre-recording notice UI
@@ -23,9 +22,8 @@ final class AppEnvironment {
     /// A9.4/A9.5/A9.6 billing: entitlement, StoreKit, paywall + funnel. Views
     /// bind to this for the trial banner, paywall, and account prompt.
     let billing: BillingService
-    /// A7.2 resumable/background uploader. Gated OFF by
-    /// `AppFeatureFlags.backgroundResumableUpload`; `UploadService` stays the
-    /// default path until this is verified on a device.
+    /// The uploader (POST /v1/uploads → GCS resumable session): every
+    /// recording and import goes through it.
     let backgroundUploads: BackgroundUploadService
 
     /// Upload progress (0-100) for the note currently uploading, keyed by id.
@@ -51,7 +49,6 @@ final class AppEnvironment {
         self.api = api
         self.auth = AuthService()
         self.notes = NotesRepository(api: api)
-        self.uploads = UploadService()
         let store = RecordingStore()
         self.recordingStore = store
         let consentGate = SessionConsentGate()
@@ -59,7 +56,7 @@ final class AppEnvironment {
         self.recorder = RecorderService(store: store, consentGate: consentGate)
         let session = AudioSessionCoordinator()
         self.audioSession = session
-        self.player = AudioPlayerService(session: session, store: store)
+        self.player = AudioPlayerService(session: session, store: store, api: api)
         self.transcripts = TranscriptRepository(api: api)
         self.billing = BillingService(api: api)
         self.backgroundUploads = BackgroundUploadService(store: store, api: api)
@@ -270,9 +267,6 @@ final class AppEnvironment {
             return
         }
 
-        let storagePath = StoragePaths.path(kind: kind, workspaceId: wsId, noteId: noteId, ext: ext)
-        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-
         // Durably link the on-disk recording to this note BEFORE uploading, so a
         // failed or interrupted upload can be re-uploaded into the same note
         // rather than lost. Only recordings live in the store; imports/scans are
@@ -289,13 +283,17 @@ final class AppEnvironment {
         uploadProgress[noteId] = 0
         defer { uploadProgress[noteId] = nil }
 
+        // Through POST /v1/uploads into the api's recordings bucket; the object
+        // name comes back from the server (imports land under recordings/ too).
+        let storagePath: String
         do {
-            try await uploads.upload(
+            storagePath = try await backgroundUploads.upload(
                 fileURL: fileURL,
-                to: storagePath,
+                noteId: noteId,
+                workspaceId: wsId,
+                fileName: fileURL.lastPathComponent,
                 contentType: mimeType,
-                kind: kind,
-                applyTimeout: kind == .recording,
+                pending: kind == .recording ? recordingStore.pendingRecording(forNoteId: noteId) : nil,
                 onProgress: { [weak self] percent in
                     self?.uploadProgress[noteId] = percent
                 }
@@ -315,7 +313,9 @@ final class AppEnvironment {
         }
 
         // Upload confirmed — the bytes are safely in Storage, so the local copy
-        // is no longer the only copy and can go.
+        // is no longer the only copy and can go. The doc records where they are
+        // (the player asks the api to sign it).
+        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
         if kind == .recording {
             recordingStore.remove(fileURL: fileURL)
         }
@@ -419,7 +419,6 @@ final class AppEnvironment {
     ) async -> NotesRepository.RetryOutcome {
         guard let wsId = auth.workspaceId else { return .blocked(message: "Not signed in") }
         let fileURL = recordingStore.audioURL(for: pending)
-        let storagePath = StoragePaths.path(kind: .recording, workspaceId: wsId, noteId: noteId, ext: pending.ext)
 
         // Re-arm the stuck watchdog — the note is going back in-progress.
         notes.resetStuckGuard(noteId: noteId)
@@ -427,7 +426,6 @@ final class AppEnvironment {
         var fields: [String: Any] = [
             "status": NoteStatus.queued.rawValue,
             "errorMessage": NSNull(),
-            "storagePath": storagePath,
         ]
         if let retryAttempt { fields["retryAttempt"] = retryAttempt }
         notes.updateNote(id: noteId, fields: fields)
@@ -438,31 +436,19 @@ final class AppEnvironment {
         // A7.1: clear any prior failure and mark uploading before bytes move.
         recordingStore.setUploadState(fileName: pending.fileName, state: .uploading, lastError: .some(nil))
 
+        let storagePath: String
         do {
-            if AppFeatureFlags.backgroundResumableUpload {
-                // A7.2 resumable path — survives reboot via a persisted byte
-                // offset. Gated OFF; see AppFeatureFlags. Untested on device.
-                try await backgroundUploads.upload(
-                    fileURL: fileURL,
-                    noteId: noteId,
-                    workspaceId: wsId,
-                    pending: pending,
-                    contentType: pending.mimeType,
-                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
-                )
-            } else {
-                // Documented fallback: Firebase resumable putFile (resumes within
-                // a session; restarts from byte 0 across launches — which is why
-                // the bytes are kept on disk and re-driven here).
-                try await uploads.upload(
-                    fileURL: fileURL,
-                    to: storagePath,
-                    contentType: pending.mimeType,
-                    kind: .recording,
-                    applyTimeout: true,
-                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
-                )
-            }
+            // Continues the recording's own upload session when the server still
+            // has it open (its sidecar remembers it), else starts a new one.
+            storagePath = try await backgroundUploads.upload(
+                fileURL: fileURL,
+                noteId: noteId,
+                workspaceId: wsId,
+                fileName: pending.fileName,
+                contentType: pending.mimeType,
+                pending: pending,
+                onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
+            )
         } catch {
             let message = (error as? UploadError)?.errorDescription ?? UploadError.failed.errorDescription!
             recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
@@ -470,6 +456,7 @@ final class AppEnvironment {
             return .blocked(message: message)
         }
 
+        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
         recordingStore.remove(fileName: pending.fileName)
 
         do {
