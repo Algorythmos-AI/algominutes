@@ -53,6 +53,7 @@ locals {
     "cloudbuild.googleapis.com",           # Cloud Build (A11 image builds)
     "iam.googleapis.com",                  # IAM
     "iamcredentials.googleapis.com",       # IAM credentials / workload identity
+    "sts.googleapis.com",                  # Security Token Service: the deploy workflow's keyless (WIF) sign-in
     "serviceusage.googleapis.com",         # Service Usage
     "servicenetworking.googleapis.com",    # Private Services Access (Cloud SQL private IP)
     "vpcaccess.googleapis.com",            # Serverless VPC Access connector

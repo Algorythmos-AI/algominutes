@@ -14,9 +14,10 @@ run; each item has a safe reversible default already applied. Grouped by type.
 
 ## 2. A4 provisioning
 
-**Staging: ✅ DONE** — `terraform apply` live (111 resources), Firebase enabled (Blaze), Google sign-in on,
-Web + Android apps registered, `apps/web/.env` + `apps/android/app/google-services.json` wired (both
-git-ignored). **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
+**Staging: paused since 2026-08-27** (Cloud SQL `activation_policy` NEVER, no Cloud Run services). Firebase
+is enabled (Blaze), Google sign-in on, Web, Android and iOS apps registered (the configs are git-ignored).
+Resuming it is one reviewed `terraform apply` (runbook `resume-staging-and-deploy.md`), then the first
+deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both). **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
 
 - [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
       `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).
@@ -28,9 +29,9 @@ git-ignored). **Prod: ⏳ pending.** Remaining, all from a primary-account (`alg
 - [ ] **Re-scope `algominutes-prod-budget`** from the whole billing account to the prod project only
       (INFRASTRUCTURE open item #2 — still outstanding).
 - [ ] Confirm the domain registrar for `algominutes.com` / `.com.au` (INFRASTRUCTURE §6 TODO).
-- **iOS Firebase app pending the Apple Team ID (`TODO(A4-apple)`)** — can't register the iOS app or
-  download `GoogleService-Info.plist` until enrolment completes. Android upload keystore also pending
-  (Track B). Left untouched, as instructed.
+- ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
+  `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
+  `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).
 - Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes
   `https://wassup-meeting.web.app` as the prod API origin — a client reference to replace at rename time,
   and the web currently ignores `VITE_API_BASE_URL` on local/capacitor hosts in favour of it.
@@ -182,12 +183,12 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
      bucket — bounded and low-risk, noted for awareness.
 - **A9.4 blended cost-per-minute not measured** — gates pricing (needs A11 deployed pipeline). The
   1,500-min Pro tier at A$29 requires COGS well under 1¢/min. See PERFORMANCE-BUDGET.md.
-- **A7.2 background upload is gated OFF by default** — the new URLSession-background/chunked path can't be
-  built/tested here; verify on-device (A11) before flipping the default. Firebase `putFile` remains the
-  working fallback. The `/v1/uploads` GCS resumable-session endpoint is `TODO(A11)` (no GCS creds to test).
-- **A7.3 real push is `TODO(A4-apple)`** — iOS APNs/FCM registration needs the iOS Firebase app
-  (GoogleService-Info.plist), pending the Apple Team ID. The flow is coded; the notifier service can send
-  once tokens register. Android push is B2.
+- ~~**A7.2 background upload is gated OFF by default**~~ **done (#101):** every recording uploads through
+  `/v1/uploads` on a background URLSession (the Firebase `putFile` path and its flag are gone). Still to
+  prove on staging: the GCS resumable session against live GCS, and a device upload after the app is killed.
+- **A7.3 real push (plan rev 8, Wave 3):** the app has no `aps-environment` and sends the raw APNs token
+  where the notifier expects an FCM one. Needs the Push capability and an APNs `.p8` in Firebase (owner),
+  then FirebaseMessaging in the app. Local notifications work meanwhile. Android push is B2.
 - **iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment** — flagged by the A7 map;
   reconcile before finalising upload size limits (not changed this run).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
