@@ -1286,6 +1286,42 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   fast). **Yours:** the App Store Connect record, testers and agreements, connecting the repo, and creating
   the "Staging → TestFlight" workflow with the secret: `docs/runbooks/xcode-cloud.md`.
 
+## Staging's first apply and deploy (plan rev 9 debrief, #169, 2026-09-26)
+
+- [x] **Fixed (#169): the saved plan of 2026-09-25 would have failed three ways on its first run.**
+  - The apply: `allUsers` invoker bindings are refused by the org's `iam.allowedPolicyMemberDomains`.
+    api and billing now skip the invoker check instead (DECISIONS).
+  - The api's boot: `ALLOWED_ORIGINS=""` (exit 78). Both roots now set the public site, and a blank
+    value fails the plan.
+  - Search and chat: `run-api` had no `roles/aiplatform.user`, so both would have answered 403.
+  - Guards:
+    - `tests/tf-env-contract.test.ts` checks each service's `env-spec.cjs` against the env Terraform gives
+      it, with the same `checkEnv` the service runs at boot;
+    - `tests/tf-iam-contract.test.ts` checks each role against what the code calls;
+    - `scripts/check-tfplan-env.mjs` runs both on a saved plan before an apply. On the old plan it
+      reported all five problems.
+
+    18 mutations, each caught.
+  - Also:
+    - the sweeper's Scheduler job starts paused, and the deploy resumes it after the smoke;
+    - `BROADCAST_CAPTURE` and an optional `ADMIN_UIDS` reach the api;
+    - `prove-staging.sh` runs the suite at `PG_POOL_MAX=1`.
+- [x] **Re-planned:** `reviewed-361188d.tfplan` (93 add, 9 change, 0 destroy). `check-tfplan-env.mjs`
+  passes on it (9 services and jobs):
+  - `invoker_iam_disabled` is set on api and billing only;
+  - `ALLOWED_ORIGINS` is the public site;
+  - `run-api` holds `roles/aiplatform.user`;
+  - the sweep Scheduler job is paused;
+  - both alert channels are present;
+  - there are no `allUsers` members.
+
+  The superseded `reviewed-2026-09-25d.tfplan` is deleted.
+- [ ] **Yours, before the apply:** check at the organization that `run.managed.requireInvokerIam` isn't
+  enforced (runbook §1). Then apply `reviewed-361188d.tfplan` and run the first deploy in the same
+  sitting (§3).
+- [ ] **Yours, after your first sign-in:** re-plan with `TF_VAR_admin_uids` (runbook §5), so the
+  dead-letter view answers you.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
