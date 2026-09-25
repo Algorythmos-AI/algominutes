@@ -887,8 +887,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
               transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
               the summary from Firestore, so it isn't affected. Fix: store a position.
-            - The Deepgram path commits `summarizing` before enqueueing the summarizer. A throw in
-              between leaves the note to the 3.5 h sweep, because the claim is spent. Deepgram is off.
+            - **Every** `completeChunkAndAdvance` caller (Google and AssemblyAI polls, not only Deepgram)
+              commits `summarizing` and spends the summarizer claim, then mirrors, then enqueues. A mirror
+              or enqueue that throws in between retries into `chunk already done` and returns, so the
+              summarizer never runs and the 3.5 h sweep fails a note whose transcript is fine. Fix: as the
+              fast path now does, log a failed mirror after the commit and enqueue first.
+            - `persistFastPathResult` writes `ready` without a status condition. So a duplicate kickoff
+              delivery that overlaps (or runs after) the first overwrites the finished note: a user's
+              edits to its action items are lost, and overlapping writes can leave Postgres and Firestore
+              with different summaries. Fix: `onlyIfStatus` in-progress there, so the second attempt gets
+              `NOTE_MOVED_ON`.
+            - The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
+              when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
+              doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds
+              a `{ failed }` return for this).
             - The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
               while Postgres may be in flight (#124 fixed this on iOS).
             - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
