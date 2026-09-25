@@ -26,9 +26,12 @@ export function clientErrorRoute(req, res) {
     if (typeof value === 'string' && value.length > 0) {
       // Control characters flattened (line breaks become ' | ', so a stack
       // stays readable): an anonymous caller must not shape the log's layout.
-      // (CodeQL js/log-injection. The logger writes JSON, so this is defence
-      // in depth.)
-      report[field] = value.slice(0, cap).replace(/\r?\n|\r/g, ' | ').replace(/[\u0000-\u001f\u007f]/g, ' ');
+      // The logger writes JSON, so this is defence in depth.
+      const flat = value.slice(0, cap).replace(/\r?\n|\r/g, ' | ').replace(/[\u0000-\u001f\u007f]/g, ' ');
+      // A no-op by now, but it is the one shape CodeQL's js/log-injection
+      // treats as a sanitiser: a global replace of "\n" with "" (its
+      // StringReplaceSanitizer). Without it the alert stays open.
+      report[field] = flat.replace(/\n/g, '');
     } else if (typeof value === 'number' && Number.isFinite(value)) {
       report[field] = value;
     }
