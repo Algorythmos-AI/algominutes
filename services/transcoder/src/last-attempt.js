@@ -12,11 +12,20 @@ const { transcodeRefund } = require('./terminal-hooks');
 // embedder enqueue) gets the dead letter alone, the one lasting record that
 // work was lost, as does one Postgres couldn't be asked about. A note that is
 // gone gets nothing.
+//
+// A poll task's chunk fails with its note, as at the poll's own terminals, and
+// its dead letter keeps the chunk, job and poll count, so the admin view says
+// which part of the recording was lost.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function onLastAttempt({ body, headers, err, noteTerminal, terminalHooks, db, mirror, log, traceId }) {
   const b = body || {};
   const { noteId, workspaceId } = b;
+  // Only a well-formed id: a malformed one would fail the whole statement.
+  const chunkId = b.kind === 'stt-poll' && typeof b.chunkId === 'string' && UUID.test(b.chunkId) ? b.chunkId : null;
   const { failed, marked, pgErrored, exists } = await noteTerminal.markNoteFailed({
     refund: transcodeRefund(noteId),
+    chunkId,
     pool: db.pool(),
     firestore: mirror.db(),
     noteId,
@@ -46,7 +55,10 @@ async function onLastAttempt({ body, headers, err, noteTerminal, terminalHooks, 
     err,
     attempts,
     traceId,
-    payload: { kind: b.kind, type: b.type, noteId, workspaceId, storagePath: b.storagePath, sourceUrl: b.sourceUrl, mimeType: b.mimeType },
+    payload: {
+      kind: b.kind, type: b.type, noteId, workspaceId, storagePath: b.storagePath, sourceUrl: b.sourceUrl, mimeType: b.mimeType,
+      ...(b.kind === 'stt-poll' ? { chunkId: b.chunkId, jobId: b.jobId, poll: b.poll } : {}),
+    },
     log,
     deadLetterOnly,
     notify: failed,

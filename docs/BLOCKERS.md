@@ -1008,8 +1008,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   `markQueued` deleted it). Lock the chunk first in the same statement and require it.
                 - The chunk write has no status guard: a second poll chain for the same chunk can turn
                   `done` into `error`. Add `AND c.status = 'pending'`.
-                - A poll task's last attempt (`last-attempt.js`) passes no `chunkId`, and its dead letter
-                  drops the chunk, job and reason.
+                - ~~A poll task's last attempt (`last-attempt.js`) passes no `chunkId`, and its dead letter
+                  drops the chunk, job and reason~~ **fixed (poll-last-attempt-keeps-chunk PR):** its chunk
+                  fails with the note (a well-formed id only), and the dead letter keeps the chunk, job and
+                  poll count.
                 - The summarizer's "No speech was found" failure has no notice or dead letter (its refund
                   is fixed by the refund-in-failure-tx PR), and the sweep's `refund:stuck` path never
                   notifies.
