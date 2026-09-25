@@ -98,7 +98,9 @@ final class BillingService {
     /// Gate helper for metered call sites. If allowed, returns true. If gated,
     /// presents the paywall and returns false so the caller aborts.
     func guardMeteredAction() -> Bool {
-        if canStartMeteredAction { return true }
+        // With no paywall to offer, let the server decide: a refused kickoff
+        // marks the note with the quota message (KickoffFailure).
+        if canStartMeteredAction || !AppConfig.paywallEnabled { return true }
         presentPaywall(.meteredGate)
         return false
     }
@@ -106,6 +108,10 @@ final class BillingService {
     // MARK: - Paywall / prompt triggers
 
     func presentPaywall(_ context: PaywallContext) {
+        guard AppConfig.paywallEnabled else {
+            AppLog.info("paywall_suppressed context=\(context.rawValue)")
+            return
+        }
         paywallContext = context
         isPaywallPresented = true
         Task { await track(.paywallViewed, props: ["context": context.rawValue]) }

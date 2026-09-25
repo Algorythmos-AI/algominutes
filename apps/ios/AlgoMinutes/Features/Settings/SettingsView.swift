@@ -202,7 +202,7 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.heading)
                     }
                     Spacer()
-                    if env.billing.entitlement?.state != .active {
+                    if env.billing.entitlement?.state != .active, AppConfig.paywallEnabled {
                         Button("Go Pro") { env.billing.presentPaywall(.manual) }
                             .font(Typography.label(14))
                             .foregroundStyle(Theme.onInverse)

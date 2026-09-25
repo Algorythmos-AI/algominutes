@@ -918,9 +918,10 @@ final class StoragePathsTests: XCTestCase {
     }
 
     func testCaps() {
-        XCTAssertEqual(StorageKind.recording.maxBytes, 50 * 1024 * 1024)
+        // One cap, the server's (/v1/uploads refuses anything over 500 MB).
+        XCTAssertEqual(StorageKind.recording.maxBytes, 500 * 1024 * 1024)
         XCTAssertEqual(StorageKind.importFile.maxBytes, 500 * 1024 * 1024)
-        XCTAssertEqual(StorageKind.scan.maxBytes, 50 * 1024 * 1024)
+        XCTAssertEqual(StorageKind.scan.maxBytes, 500 * 1024 * 1024)
     }
 
     func testWorkspaceId() {
