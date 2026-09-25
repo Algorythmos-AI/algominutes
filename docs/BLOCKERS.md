@@ -780,7 +780,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       different reasons can both land~~ **fixed (refund-in-failure-tx PR):** every refund is written in the
       failure's own transaction (`markNoteFailed` / `failStuckNote` with `refund`, one reversal SQL in
       `ledger-reversal.cjs`), under the note's row lock. `markQueued` locks the same row, so a kickoff sees
-      the failure and its refund together; a second refunder waits, then finds the net at 0.
+      the failure and its refund together; a second refunder waits, then finds the net at 0. Where no
+      retry is left (a worker's last attempt), a refund that can't be written falls back to the failure
+      alone (`*_refund_lost`), so the two stores agree.
+      - [ ] **Queued (from its review, pre-existing):**
+        - The api's `failNote` → `markError` after `markQueued` has debited (an enqueue that failed) doesn't
+          refund.
+        - The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
+          regeneration rule.
+        - A failure can deadlock with account deletion (note row, then the ledger's foreign key on
+          `users`, against `users` then the cascade); Postgres picks the failure, which retries or, on a
+          last attempt, falls back as above. The note is being deleted anyway.
+        - `reverseUsageForNote` is still exported and takes no lock (only tests call it); a partial unique
+          index on `reverses_id` would enforce one reversal per debit.
     - [ ] `assertCanMeter` demands headroom for a retry that won't be charged (its earlier charge stands),
       so a user at their limit gets a 402 on that retry.
   - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of

@@ -356,8 +356,9 @@ export async function markQueued(
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
         if (input.meter) {
-          // One debit per run, decided under this note's lock (so against
-          // another kickoff; a refund runs outside it, BLOCKERS). A note whose
+          // One debit per run, decided under this note's row lock, which a
+          // failure also holds while it writes its refund (ledger-reversal.cjs):
+          // the ledger read here sees both or neither. A note whose
           // last run was refunded (net 0) is charged again: its re-run is real
           // work, and a per-note key made it free. One whose charge still
           // stands (a failure that wasn't refunded) isn't charged twice.
@@ -950,9 +951,10 @@ export async function listStuckNotes(
  * repeats the selection condition (in flight, unchanged for olderThanMs, same
  * workspace, not deleted), so a note that moved on since the listing (a chunk
  * finished, it became ready, the client re-queued it, it was deleted) is left
- * alone. The mirror, and the caller's dead letter and refund, happen only when
- * a row matched. Postgres first; the mirror uses update(), so a deleted note's
- * doc is never re-created.
+ * alone. With `refund`, the reversal is written in the same transaction. The
+ * mirror, and the caller's dead letter, happen only when a row matched.
+ * Postgres first; the mirror uses update(), so a deleted note's doc is never
+ * re-created.
  */
 export async function failStuckNote(
   firestore: Firestore,

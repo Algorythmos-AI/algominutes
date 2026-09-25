@@ -122,10 +122,12 @@ async function handle(payload, deps) {
     // fallback in stt.js). A note that will never finish must say so.
     log.warn({ noteId }, 'summarizer_no_transcript_lines');
     // Throws if Postgres misses the write, so the task retries (note-terminal).
-    // Refunded with the failure: the recording gave the user nothing.
+    // Refunded with the failure: the recording gave the user nothing. Not a
+    // regeneration's (its task carries summaryGeneration): that charge stands.
+    const regeneration = summaryGeneration !== undefined && summaryGeneration !== null;
     await markNoteFailed({
       noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
-      refund: terminalHooks.summaryRefund(noteId),
+      refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
     });
     return;
   }

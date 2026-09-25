@@ -121,6 +121,33 @@ describe('sweep', () => {
     expect(await count(`SELECT 1 FROM dead_letter WHERE queue = 'sweep' AND note_id = 'stuck'`)).toBe(1);
   });
 
+  it("one stuck note whose refund can't be written doesn't stop the rest", async () => {
+    const f = fakes();
+    for (const id of ['bad', 'good']) {
+      await seedNote(id, 'ws-a', 'alice');
+      await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = $1 WHERE id = $2`, [ago(4 * HOUR), id]);
+      await pool.query(
+        `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
+           VALUES ('alice', 'ws-a', $1, 'debit', 30, to_char(NOW(), 'YYYY-MM'), 'ingest', $2)`, [id, `${id}:ingest`],
+      );
+      f.docs.set(`workspaces/ws-a/notes/${id}`, {});
+    }
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_bad_refund() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.note_id = 'bad' THEN RAISE EXCEPTION 'ledger outage'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_bad_refund BEFORE INSERT ON usage_ledger FOR EACH ROW EXECUTE FUNCTION test_bad_refund();`);
+    try {
+      const counts = await runSweep(f.deps);
+      expect(counts.stuck_notes).toBe(1);
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS test_bad_refund ON usage_ledger; DROP FUNCTION IF EXISTS test_bad_refund();`);
+    }
+    const status = async (id: string) => (await pool.query('SELECT status FROM notes WHERE id = $1', [id])).rows[0].status;
+    expect(await status('good')).toBe('error');
+    expect(await status('bad')).toBe('transcribing'); // still stuck: the next run tries again
+    expect(errors).toContainEqual(expect.objectContaining({ m: 'sweep_stuck_note_failed' }));
+  });
+
   it('deletes expired upload sessions and keeps live ones', async () => {
     const f = fakes();
     await pool.query(

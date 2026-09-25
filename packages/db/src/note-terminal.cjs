@@ -77,50 +77,62 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let storedMessage = message;
   let exists = false;
   let refunded = false;
+  let minutesReversed = 0;
   try {
     const client = await pool.connect();
     try {
-      if (refund) await client.query('BEGIN');
+      // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a note
+      // id from another workspace matches nothing. `p` reads the status the
+      // UPDATE replaces, locked, so of two failures at once the second reads
+      // the first's 'error'. With `chunkId`, the chunk's error is written in
+      // the same statement, and only if the note's was: a poll's retry finds
+      // both or neither, and a note this doesn't fail keeps its chunk.
+      const failNote = () => client.query(
+        `WITH p AS (
+           SELECT id, status AS prev_status FROM notes
+            WHERE id = $1 AND workspace_id = $3 FOR NO KEY UPDATE
+         ), upd AS (
+           UPDATE notes n SET status = 'error',
+                  error_message = CASE WHEN p.prev_status = 'error' AND n.error_message IS NOT NULL
+                                       THEN n.error_message ELSE $2 END,
+                  updated_at = NOW()
+             FROM p
+            WHERE n.id = p.id AND n.status <> 'ready'
+              AND ($4::text[] IS NULL OR n.status = ANY($4::text[]))
+            RETURNING n.id, p.prev_status, n.error_message
+         ), chunk AS (
+           UPDATE audio_chunks c SET status = 'error' FROM upd WHERE c.id = $5 AND c.note_id = upd.id
+         )
+         SELECT prev_status, error_message FROM upd`,
+        [noteId, message, workspaceId, onlyIfStatus, chunkId],
+      );
       let rows;
-      try {
-        // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a note
-        // id from another workspace matches nothing. `p` reads the status the
-        // UPDATE replaces, locked, so of two failures at once the second reads
-        // the first's 'error'. With `chunkId`, the chunk's error is written in
-        // the same statement, and only if the note's was: a poll's retry finds
-        // both or neither, and a note this doesn't fail keeps its chunk.
-        ({ rows } = await client.query(
-          `WITH p AS (
-             SELECT id, status AS prev_status FROM notes
-              WHERE id = $1 AND workspace_id = $3 FOR NO KEY UPDATE
-           ), upd AS (
-             UPDATE notes n SET status = 'error',
-                    error_message = CASE WHEN p.prev_status = 'error' AND n.error_message IS NOT NULL
-                                         THEN n.error_message ELSE $2 END,
-                    updated_at = NOW()
-               FROM p
-              WHERE n.id = p.id AND n.status <> 'ready'
-                AND ($4::text[] IS NULL OR n.status = ANY($4::text[]))
-              RETURNING n.id, p.prev_status, n.error_message
-           ), chunk AS (
-             UPDATE audio_chunks c SET status = 'error' FROM upd WHERE c.id = $5 AND c.note_id = upd.id
-           )
-           SELECT prev_status, error_message FROM upd`,
-          [noteId, message, workspaceId, onlyIfStatus, chunkId],
-        ));
-        // The refund in the failure's transaction, while its row lock holds.
-        if (refund && rows.length > 0) {
-          refunded = (await reverseNoteUsage(client, {
-            noteId, reason: refund.reason, idempotencyKey: refund.idempotencyKey,
-          })).applied;
-        }
-        if (refund) await client.query('COMMIT');
-      } catch (err) {
-        refunded = false;
-        if (refund) {
+      if (!refund) {
+        ({ rows } = await failNote());
+      } else {
+        try {
+          await client.query('BEGIN');
+          ({ rows } = await failNote());
+          // The refund in the failure's transaction, while its row lock holds.
+          if (rows.length > 0) {
+            const r = await reverseNoteUsage(client, {
+              noteId, reason: refund.reason, idempotencyKey: refund.idempotencyKey,
+            });
+            refunded = r.applied;
+            minutesReversed = r.minutesReversed;
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          refunded = false;
+          minutesReversed = 0;
           await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, `${name}_rollback_failed`));
+          if (retryOnPgError) throw err; // the task retries both
+          // No retry left (a last attempt): fail the note without its refund,
+          // so the two stores agree, and say the refund was lost. A Postgres
+          // that's down fails this too, into the catch below.
+          log.error({ err, noteId, workspaceId, reason: refund.reason }, `${name}_refund_lost`);
+          ({ rows } = await failNote());
         }
-        throw err;
       }
       pgOk = rows.length > 0;
       prevStatus = pgOk ? rows[0].prev_status : null;
@@ -194,7 +206,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
     log.info({ noteId, workspaceId, pgOk, prevStatus, exists }, `${name}_not_a_new_failure`);
   }
   if (refund && pgOk) {
-    log.info({ noteId, workspaceId, applied: refunded, reason: refund.reason }, 'usage_refunded');
+    log.info({ noteId, workspaceId, applied: refunded, minutesReversed, reason: refund.reason }, 'usage_refunded');
   }
   return { failed, marked: pgOk, pgErrored, exists, refunded };
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
+import pg from 'pg';
 import * as repo from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 
@@ -37,7 +38,14 @@ const breakLedger = () => pool.query(`
   CREATE OR REPLACE FUNCTION test_ledger_outage() RETURNS trigger LANGUAGE plpgsql AS $$
   BEGIN RAISE EXCEPTION 'ledger outage'; END $$;
   CREATE TRIGGER test_ledger_outage BEFORE INSERT ON usage_ledger FOR EACH ROW EXECUTE FUNCTION test_ledger_outage();`);
-const heal = () => pool.query(`DROP TRIGGER IF EXISTS test_ledger_outage ON usage_ledger; DROP FUNCTION IF EXISTS test_ledger_outage();`);
+const heal = () => pool.query(`
+  DROP TRIGGER IF EXISTS test_ledger_outage ON usage_ledger; DROP FUNCTION IF EXISTS test_ledger_outage();
+  DROP TRIGGER IF EXISTS test_ledger_slow ON usage_ledger; DROP FUNCTION IF EXISTS test_ledger_slow();
+  DROP TRIGGER IF EXISTS test_commit_outage ON notes; DROP FUNCTION IF EXISTS test_commit_outage();`);
+const messages: string[] = [];
+const mirrored: any[] = [];
+const watchLog: any = { info: noop, warn: noop, error: (_o: unknown, m: string) => void messages.push(m), child: () => watchLog };
+const watchFs = { doc: () => ({ update: async (d: any) => void mirrored.push(d) }) };
 
 beforeEach(async () => {
   await heal();
@@ -76,6 +84,55 @@ describe('markNoteFailed with a refund', () => {
     expect(await fail({ retryOnPgError: true })).toMatchObject({ failed: true, refunded: true });
   });
 
+  it("no retry left (a last attempt): a refund that can't be written is lost, but the note is failed, so the stores agree", async () => {
+    await breakLedger();
+    messages.length = 0;
+    mirrored.length = 0;
+    const r = await fail({ log: watchLog, firestore: watchFs });
+    expect(r).toMatchObject({ failed: true, marked: true, pgErrored: false, refunded: false });
+    expect(await status()).toBe('error');
+    expect(mirrored.map((m) => m.status)).toEqual(['error']);
+    expect(await ledger()).toEqual(['debit 30']);
+    expect(messages).toContain('t_refund_lost');
+  });
+
+  it('a COMMIT that fails takes the refund with it: neither lands', async () => {
+    // Deferred to COMMIT, so only a refund on the same transaction rolls back.
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_commit_outage() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.status = 'error' THEN RAISE EXCEPTION 'commit outage'; END IF; RETURN NEW; END $$;
+      CREATE CONSTRAINT TRIGGER test_commit_outage AFTER UPDATE ON notes DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION test_commit_outage();`);
+    await expect(fail({ retryOnPgError: true })).rejects.toThrow('commit outage');
+    expect(await status()).toBe('transcribing');
+    expect(await ledger()).toEqual(['debit 30']);
+  });
+
+  it('a kickoff (it locks the note row) waits for the failure, then sees its refund too', async () => {
+    // Hold the failure between its UPDATE and its COMMIT.
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_ledger_slow() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_sleep(0.5); RETURN NEW; END $$;
+      CREATE TRIGGER test_ledger_slow BEFORE INSERT ON usage_ledger FOR EACH ROW EXECUTE FUNCTION test_ledger_slow();`);
+    const kickoff = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await kickoff.connect();
+    try {
+      const failing = fail();
+      await new Promise((r) => setTimeout(r, 150));
+      await kickoff.query('BEGIN');
+      await kickoff.query(`SELECT 1 FROM notes WHERE id = 'n1' FOR UPDATE`);
+      const seen = (await kickoff.query(
+        `SELECT (SELECT status FROM notes WHERE id = 'n1') AS status,
+                (SELECT COALESCE(SUM(minutes), 0)::float8 FROM usage_ledger WHERE note_id = 'n1') AS net`,
+      )).rows[0];
+      await kickoff.query('COMMIT');
+      await failing;
+      expect(seen).toEqual({ status: 'error', net: 0 });
+    } finally {
+      await kickoff.end();
+    }
+  });
+
   it('without a refund (a regeneration), the charge stands', async () => {
     expect(await fail({ refund: null })).toMatchObject({ failed: true, refunded: false });
     expect(await ledger()).toEqual(['debit 30']);
@@ -109,9 +166,27 @@ describe("the sweep's failStuckNote with a refund", () => {
     await expect(stuck()).rejects.toThrow('ledger outage');
     expect(await status()).toBe('transcribing');
   });
+
+  it('a COMMIT that fails takes the refund with it', async () => {
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_commit_outage() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.status = 'error' THEN RAISE EXCEPTION 'commit outage'; END IF; RETURN NEW; END $$;
+      CREATE CONSTRAINT TRIGGER test_commit_outage AFTER UPDATE ON notes DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION test_commit_outage();`);
+    await expect(stuck()).rejects.toThrow('commit outage');
+    expect(await ledger()).toEqual(['debit 30']);
+  });
 });
 
 describe('the summarizer', () => {
+  it('"No speech was found" on a regeneration keeps the charge', async () => {
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 3 WHERE id = 'n1'`);
+    const deps = { log, traceId: 't', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {} };
+    await summarizer.handle({ noteId: 'n1', workspaceId: 'ws', summaryGeneration: 3 }, deps);
+    expect(await status()).toBe('error');
+    expect(await ledger()).toEqual(['debit 30']);
+  });
+
   it('"No speech was found" refunds the recording with the failure', async () => {
     await pool.query(`UPDATE notes SET status = 'summarizing' WHERE id = 'n1'`);
     const deps = { log, traceId: 't', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {} };

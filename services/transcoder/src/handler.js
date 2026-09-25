@@ -345,11 +345,10 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
 }
 
 /**
- * The A7.4 tail after a terminal markNoteFailed: the dead letter, then the
- * refund for a note Postgres has failed (net-guarded, so a second chunk or a
- * retry after a crash past the commit changes nothing, or refunds what was
- * missed), and the "failed" notice for a new failure only. A note this didn't
- * fail (ready anyway) gets the dead letter alone; one that's gone, nothing.
+ * The A7.4 tail after a terminal markNoteFailed (which wrote the refund with
+ * the failure): the dead letter, and the "failed" notice for a new failure
+ * only. A note this didn't fail (ready anyway) gets the dead letter alone; one
+ * that's gone, nothing.
  */
 async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;

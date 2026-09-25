@@ -175,17 +175,25 @@ async function run({
         const noteLog = log.child({ userId: n.authorUid });
         // Re-checked at the UPDATE: a note that moved on since the listing is left
         // alone, with no dead letter and no refund.
-        const r = await failStuckNote(deps.firestore, {
-          noteId: n.noteId,
-          workspaceId: n.workspaceId,
-          olderThanMs: STUCK_NOTE_MS,
-          message: 'Processing took too long and was stopped. Please try again.',
-          // Written in the failure's transaction, under the note's row lock.
-          refund: { reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` },
-        }, noteLog);
+        let r;
+        try {
+          r = await failStuckNote(deps.firestore, {
+            noteId: n.noteId,
+            workspaceId: n.workspaceId,
+            olderThanMs: STUCK_NOTE_MS,
+            message: 'Processing took too long and was stopped. Please try again.',
+            // Written in the failure's transaction, under the note's row lock.
+            refund: { reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` },
+          }, noteLog);
+        } catch (err) {
+          // One note's failure (its refund included) mustn't stop the batch;
+          // it's still stuck, so the next run tries it again.
+          noteLog.error({ err, ...fields }, 'sweep_stuck_note_failed');
+          continue;
+        }
         if (!r.failed) continue;
         failed += 1;
-        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status }, 'note_failed_stuck');
+        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status, refunded: r.refunded }, 'note_failed_stuck');
         await recordDeadLetter({
           queue: 'sweep',
           noteId: n.noteId,
