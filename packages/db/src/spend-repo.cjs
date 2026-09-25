@@ -8,9 +8,9 @@
  * (usage_events, written by pipeline-repo recordPaidWork as each speech job or
  * fast-path Gemini call starts, with the duration it measured itself), times a
  * blended cost per minute. Not the usage_ledger debits: those come from the
- * duration the client reports (an import sends none, so it was debited 0), and
- * a note retried after a refund reuses its debit key, so its rerun was never
- * counted. A rolling 24 hours rather than a calendar day, so there is no
+ * duration the client reports (an import sends none, so it's debited 0), and a
+ * rerun of a failure that wasn't refunded rides on its first debit. A rolling
+ * 24 hours rather than a calendar day, so there is no
  * midnight cliff and no time zone to choose.
  *
  * The rate is COGS_AUD_PER_MINUTE, or a deliberately high default until the

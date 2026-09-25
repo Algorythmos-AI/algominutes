@@ -765,8 +765,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     A retry isn't charged again (the key is idempotent), but a user who gives up has paid for nothing.
     The sweeper refunds only in-flight notes. Refund on these paths, or enqueue through an outbox written
     with the debit.
-  - After a refund (transcode failure, summarizer, or the sweeper's `refund:stuck`), a re-queue of the same
-    note reuses the `${noteId}:ingest` key, so the re-run is free. Key the debit per run.
+  - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
+    free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
+    the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
+    refunded keeps its charge, and the retry isn't charged twice. Refund keys are suffixed with the debit
+    they reverse, so a second failed run is refunded too: the per-note key had silently refused it.
+    Tested on Postgres (two failed runs; an unrefunded failure; a replayed refund; a deleted note's key
+    met again, now logged `meter_debit_key_taken`); four mutations checked.
+    - [ ] **Deploy order (from its audit):** a new api with old workers charges a re-run and then refuses its
+      refund (old per-note refund key). Staging deploys all three together today (`fail-fast: false`, so a
+      failed rollout can leave the mix: re-run the failed service). **Production: roll out the transcoder and
+      summarizer before the api** (PR-35 runbook).
+    - [ ] A kickoff racing a refund makes the re-run free: the refund runs after the failure is written and
+      outside the note's lock, so a kickoff in that gap sees the charge still standing. Write the reversal in
+      the failure's transaction, under `lockNoteId`.
+    - [ ] Two refunds for the same run with different reasons (the sweeper's `refund:stuck` and a worker's)
+      can both land. A unique index on `usage_ledger(reverses_id) WHERE entry_type = 'reversal'` (new
+      migration; check existing rows for duplicates first) makes each debit reversible once.
+    - [ ] `assertCanMeter` demands headroom for a retry that won't be charged (its earlier charge stands),
+      so a user at their limit gets a 402 on that retry.
   - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
     different notes can both pass it.
 
@@ -1052,8 +1069,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **Billing (pre-existing, found by the same audit):**
     - Imports are debited 0 minutes against the user's quota, because the client sends no duration. Meter
       from the transcoder's probed duration.
-    - A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free. That is the
-      per-run debit key item under "Residuals" above.
+    - ~~A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free~~ **fixed
+      (metering-per-run PR)**, with the refund keys.
     - The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
       nothing. `markNoteFailed` now returns `{ failed }` to gate it with.
     - The dead-letter insert and the notify task aren't deduplicated.

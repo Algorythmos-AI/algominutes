@@ -347,15 +347,34 @@ export async function markQueued(
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
         if (input.meter) {
-          // Idempotent by key: a re-queue of the same note isn't charged twice.
-          await insertDebit(client, {
-            uid: input.authorUid,
-            workspaceId: input.workspaceId,
-            noteId: input.noteId,
-            minutes: input.meter.minutes,
-            reason: 'ingest',
-            idempotencyKey: input.meter.idempotencyKey,
-          });
+          // One debit per run, decided under this note's lock (so against
+          // another kickoff; a refund runs outside it, BLOCKERS). A note whose
+          // last run was refunded (net 0) is charged again: its re-run is real
+          // work, and a per-note key made it free. One whose charge still
+          // stands (a failure that wasn't refunded) isn't charged twice.
+          const { rows: [led] } = await client.query(
+            `SELECT COALESCE(SUM(minutes), 0)::float8 AS net,
+                    COUNT(*) FILTER (WHERE entry_type = 'debit')::int AS debits
+               FROM usage_ledger WHERE note_id = $1`,
+            [input.noteId],
+          );
+          if (Number(led.net) <= 0) {
+            const idempotencyKey = led.debits === 0 ? input.meter.idempotencyKey : `${input.meter.idempotencyKey}:${led.debits}`;
+            const debit = await insertDebit(client, {
+              uid: input.authorUid,
+              workspaceId: input.workspaceId,
+              noteId: input.noteId,
+              minutes: input.meter.minutes,
+              reason: 'ingest',
+              idempotencyKey,
+            });
+            // The count reads rows still linked to this note; a deleted note's
+            // rows aren't (note_id goes NULL), so a re-used note id can meet its
+            // old key and run free. Not expected; say so if it happens.
+            if (!debit.applied) {
+              log.error({ noteId: input.noteId, workspaceId: input.workspaceId, userId: input.authorUid, idempotencyKey }, 'meter_debit_key_taken');
+            }
+          }
         }
         return { queued: true, status: 'queued' };
       },
