@@ -32,7 +32,6 @@ const HANDLERS = {
   'verify-phase-0': () => require('./handlers/verify-phase-0.js'),
   'eval-recall':    () => require('./handlers/eval-recall.js'),
   'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
-  'debug-corpus':   () => require('./handlers/debug-corpus.js'),
   'grant-tester':   () => require('./handlers/grant-tester.js'),
 };
 

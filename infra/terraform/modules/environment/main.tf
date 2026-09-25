@@ -475,7 +475,7 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
-      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall, debug-corpus
+      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall
     ])
     "run-sweep" = concat(local.common_roles, [
       "roles/cloudsql.client",

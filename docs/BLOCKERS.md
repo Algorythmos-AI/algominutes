@@ -798,11 +798,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       scrub them the same way if that changes.
     - Tested (unit tests for both parsers, the label scrub and the chat parse; the summarizer on Postgres
       for the prompt); five mutations checked.
-  - [ ] **Queued (pre-existing, from that PR's audit):** the db-job `debug-corpus` handler is a dev
-    leftover (its defaults are `algominutes-dev` and us-central1). Its "global" query has no workspace
-    filter and logs the first 80 characters of the top chunks, with note titles, from any workspace.
-    Only an operator can run it, but on staging or prod it would copy users' meeting text into Cloud
-    Logging. Remove it, or scope it to one workspace and drop the text.
+  - [x] **Removed (remove-debug-corpus PR), pre-existing, from that PR's audit:** the db-job
+    `debug-corpus` handler, a dev leftover (its defaults were `algominutes-dev` and us-central1). Its
+    "global" query had no workspace filter and logged the first 80 characters of the top chunks, with
+    note titles, from any workspace, so an operator run on staging or prod would have copied users'
+    meeting text into Cloud Logging. `eval-recall` stays: it is scoped to the e2e test workspace.
   - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
     tap to seek.
 ## Long recordings: the transcoder on replay (plan rev 8, PR-12, 2026-09-25)
