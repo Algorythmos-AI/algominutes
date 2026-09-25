@@ -28,6 +28,8 @@ export interface BroadcastRecording {
 export interface BroadcastRecorderPlugin {
   isSupported(): Promise<{ supported: boolean; reason?: string }>;
   startBroadcast(): Promise<void>;
+  /** Android only (MediaProjection); optional, as App.tsx checks before calling. */
+  stopBroadcast?(): Promise<void>;
   getStatus(): Promise<BroadcastStatus>;
   getRecording(): Promise<BroadcastRecording>;
   clearRecording(): Promise<void>;

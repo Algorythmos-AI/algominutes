@@ -9,6 +9,7 @@ export const BillingRail = z
   .openapi('BillingRail');
 
 export const BillingPeriod = z.enum(['monthly', 'annual']).openapi('BillingPeriod');
+export type BillingPeriod = z.infer<typeof BillingPeriod>;
 
 /** A purchasable product, shown on the paywall. Store/Stripe prices are the source
  * of truth for charging; `priceDisplay` is for UI and must be kept in sync. */

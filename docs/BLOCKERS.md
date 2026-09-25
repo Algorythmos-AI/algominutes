@@ -737,7 +737,11 @@ A4 credentials + A11 build wiring.
 > the four shared TS libraries (`contracts`, `db`, `ai`, `tokens`) typecheck clean under a real root
 > `npm run typecheck`; `npm run contracts:openapi` runs and is deterministic (regenerated
 > `openapi.v1.json`, 46→50 schemas, zero dropped). **Still open, deferred to their own PRs:**
-> - **`apps/web` typecheck** — 14 `strictNullChecks` errors remain (missing `./plugins/BackgroundRecorder`
+> - ~~**`apps/web` typecheck**~~ **clean (web-typecheck PR), and CI's `web-build` job runs it.** Fixes: vite
+>   client types, the dead Firestore database id, the shim's `CapacitorHttp.request` signature, a
+>   `BillingPeriod` type export from the contracts, the home actions typed with `satisfies`, and
+>   `stopBroadcast` on the recorder shim. The deferred `noImplicitAny` / `noUncheckedIndexedAccess` stay off.
+>   Was: 14 `strictNullChecks` errors remain (missing `./plugins/BackgroundRecorder`
 >   + `./plugins/BroadcastRecorder` modules, `import.meta.env` needs `vite/client` types, `BillingPeriod`
 >   used as a type, a `NoteType` assignment, `authedFetch` arg count) **plus** the deliberately-deferred
 >   `noImplicitAny` (1181) / `noUncheckedIndexedAccess` (91) from `apps/web/tsconfig.json`. Not on the

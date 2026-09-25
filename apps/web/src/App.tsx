@@ -2238,12 +2238,13 @@ export default function App() {
   // ─────────────────────────────────────────────────────────────
   // HOME
   // ─────────────────────────────────────────────────────────────
-  const actions: { type: NoteType; title: string; sub: string; tags?: string[]; Icon: any }[] = [
+  type HomeAction = { type: NoteType; title: string; sub: string; tags?: string[]; Icon: any };
+  const actions: HomeAction[] = ([
     { type: 'recording',     title: 'Instant Recorder',      sub: 'Record and generate a short summary',    tags: ['Meetings','Lecture','Forum'], Icon: Mic   },
     { type: 'import_audio',  title: 'Import Files',          sub: 'Import audio and YouTube links',           tags: ['Audio','YouTube'], Icon: Plus  },
     { type: 'online_meeting',title: 'Record Online Meeting', sub: 'Google Meet and Microsoft Teams',         Icon: Bot  },
     { type: 'scan_text',     title: 'Scan Text',             sub: 'Read images, PDF, Word and create PDFs', tags: ['Image','PDF','DOCX'], Icon: Scan },
-  ].filter(
+  ] satisfies HomeAction[]).filter(
     // The web client is read-only and cannot capture another app's system audio,
     // so it must not advertise online-meeting recording (A6.6 / ADR 0002).
     (a) => !(platform === 'web' && a.type === 'online_meeting'),
