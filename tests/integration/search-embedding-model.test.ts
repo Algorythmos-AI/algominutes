@@ -7,7 +7,7 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 // and the text-embedding-004 → gemini-embedding-001 migration (due before
 // 2027-04-01) re-embeds in place, so both kinds of row will coexist.
 const require = createRequire(import.meta.url);
-const { hybridSearch } = require('../../services/api/src/routes/search-and-chat.cjs');
+const { hybridSearch, handleSearch } = require('../../services/api/src/routes/search-and-chat.cjs');
 const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 const readPool = require('@algominutes/ai/pg-query.cjs').pool();
 
@@ -48,5 +48,19 @@ describe('vector search and the embedding model', () => {
     expect(await hybridSearch({ uid: 'alice', query: 'planning', k: 10, log, embed, noteId: 'other-model' })).toEqual([]);
     const one = await hybridSearch({ uid: 'alice', query: 'planning', k: 10, log, embed, noteId: 'current' });
     expect(one.map((h: { noteId: string }) => h.noteId)).toEqual(['current']);
+  });
+});
+
+describe('the search log line', () => {
+  it("carries the query's length, not its text", async () => {
+    const lines: Array<{ o: any; m: string }> = [];
+    const at = (o: any, m: string) => void lines.push({ o, m });
+    const res = await handleSearch({
+      uid: 'alice', body: { query: 'zzqx Henderson renewal' }, log: { info: at, warn: at, error: at }, embed: async () => unit(1),
+    });
+    expect(res.status).toBe(200);
+    const ok = lines.find((l) => l.m === 'search_ok');
+    expect(ok?.o).toMatchObject({ queryLen: 'zzqx Henderson renewal'.length, hitCount: 1 });
+    expect(JSON.stringify(lines)).not.toContain('Henderson');
   });
 });

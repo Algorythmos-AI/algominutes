@@ -90,8 +90,11 @@ const EMBED_QUERY_TIMEOUT_MS = 8000;
 // Embed a single search query via Vertex AI text-embedding-004. The
 // `apiKey` arg is retained for call-site compatibility but ignored;
 // auth comes from ADC. `log` is a pino-style logger forwarded from
-// the request handler so timeouts surface in Cloud Logging.
-async function embedQuery(_apiKey, text, log) {
+// the request handler so timeouts surface in Cloud Logging. Its lines carry
+// the query's length, never its text: what users type into search is theirs,
+// scrubbed or not, as chat keeps meeting content out of logs. `fetchImpl` and
+// `authHeader` are for tests.
+async function embedQuery(_apiKey, text, log, { fetchImpl = fetch, authHeader = vertexAuthHeader } = {}) {
   const project = await getProjectId();
   const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
   const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${EMBED_MODEL}:predict`;
@@ -99,9 +102,9 @@ async function embedQuery(_apiKey, text, log) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), EMBED_QUERY_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
+    const resp = await fetchImpl(url, {
       method: 'POST',
-      headers: { Authorization: await vertexAuthHeader(), 'Content-Type': 'application/json' },
+      headers: { Authorization: await authHeader(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         instances: [{ task_type: 'RETRIEVAL_QUERY', content: text }],
       }),
@@ -122,7 +125,7 @@ async function embedQuery(_apiKey, text, log) {
     const ms = Date.now() - startedAt;
     if (err && err.name === 'AbortError') {
       if (log && typeof log.error === 'function') {
-        log.error({ ms, timeoutMs: EMBED_QUERY_TIMEOUT_MS, queryHead: text.slice(0, 60) }, 'embed_query_timeout');
+        log.error({ ms, timeoutMs: EMBED_QUERY_TIMEOUT_MS, queryLen: text.length }, 'embed_query_timeout');
       }
       const wrapped = new Error('embed_query_timeout');
       wrapped.cause = err;
@@ -130,7 +133,7 @@ async function embedQuery(_apiKey, text, log) {
       throw wrapped;
     }
     if (log && typeof log.error === 'function') {
-      log.error({ err, ms, queryHead: text.slice(0, 60) }, 'embed_query_failed');
+      log.error({ err, ms, queryLen: text.length }, 'embed_query_failed');
     }
     throw err;
   } finally {
@@ -280,7 +283,7 @@ function redactHits(hits) {
   return hits.map((h) => Object.assign({}, h, { chunkText: redactPII((h && h.chunkText) || '').text }));
 }
 
-async function handleSearch({ uid, body, apiKey, log }) {
+async function handleSearch({ uid, body, apiKey, log, embed }) {
   if (!postgresEnabled()) {
     return { status: 503, body: { error: 'Search is unavailable until Postgres is provisioned.' } };
   }
@@ -297,7 +300,7 @@ async function handleSearch({ uid, body, apiKey, log }) {
   const k = Number(body && body.k) || 10;
   const noteId = body && body.noteId ? String(body.noteId) : undefined;
   try {
-    const hits = await hybridSearch({ uid, query, k, apiKey, log, noteId });
+    const hits = await hybridSearch({ uid, query, k, apiKey, log, noteId, ...(embed ? { embed } : {}) });
     // null means the note is not reachable by this caller. 404 for both
     // "no such note" and "not yours", matching /api/note — a 403 would
     // confirm the note exists to someone who cannot read it.
@@ -305,8 +308,8 @@ async function handleSearch({ uid, body, apiKey, log }) {
       log.info({ uid, noteId }, 'search_note_not_found');
       return { status: 404, body: { error: 'Note not found' } };
     }
-    // Log redacted query only — never raw user input.
-    log.info({ uid, userId: uid, query, hitCount: hits.length }, 'search_ok');
+    // The query's length, not its text (see embedQuery).
+    log.info({ uid, userId: uid, queryLen: query.length, hitCount: hits.length }, 'search_ok');
     return { status: 200, body: { hits } };
   } catch (err) {
     log.error({ err }, 'search_failed');
@@ -536,4 +539,4 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
   }
 }
 
-module.exports = { handleSearch, handleChatStream, hybridSearch, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { handleSearch, handleChatStream, hybridSearch, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
