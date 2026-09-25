@@ -33,9 +33,12 @@ options (product-configurable, plan-aware):
 - **Auto-delete original audio after transcription** — keep transcript + summary, drop the
   source audio early (privacy-forward option).
 - **Scope:** a workspace-level default plus per-note override.
-- `TODO(A11):` The scheduled job that enforces auto-delete (a Cloud Scheduler → worker that
-  selects notes past their retention age and deletes the Firestore doc to fire the
-  `onNoteDeleted` cascade). Ships as infra; the *policy* is here, the *enforcer* is A11.
+- **Enforced** by the `db-sweep` job (Cloud Scheduler, every 15 min; `services/db-job/src/handlers/sweep.js`,
+  step `retention`). It selects notes older than their author's `users.retention_days`, deletes each through
+  notes-repo `deleteNote` (the manual-delete path: Postgres first, then the Firestore mirror, then the
+  audio purge, retried by the sweep until it succeeds), and logs `note_deleted_retention`. Today the setting
+  is per user (`POST /v1/account/retention`); the workspace default and per-note override are not built.
+  "Auto-delete original audio after transcription" is not built either.
 - `TODO(legal):` Whether any minimum or maximum retention is legally mandated (e.g. if the
   consent-log in CONSENT §4.3 becomes required, it may have its own retention rule).
 
@@ -146,7 +149,7 @@ Reference: iOS `apps/ios/AlgoMinutes/Services/RecordingStore.swift`.
 | Backup/PITR retention ≤ 30 days (Cloud SQL) (§4) | `TODO(A11)` — **blocking the promise** |
 | Storage lifecycle/version expiry ≤ 30 days (§4) | `TODO(A11)` — blocking the promise |
 | Cloud Logging retention config (§3, §4) | `TODO(A11)` |
-| Auto-delete enforcer job for user-set retention (§2) | `TODO(A11)` |
+| Auto-delete enforcer job for user-set retention (§2) | Done: `db-sweep` step `retention` (§2) |
 | Verification evidence that no backup outlives the window (§4) | `TODO(A11)` |
 | Billing/tax minimum-retention obligation (§3) | `TODO(legal)` |
 | Legally mandated min/max retention, incl. consent log (§2) | `TODO(legal)` |
