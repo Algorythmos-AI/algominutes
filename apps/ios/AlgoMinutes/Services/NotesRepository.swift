@@ -210,7 +210,8 @@ final class NotesRepository {
             noteId: note.id,
             workspaceId: wsId,
             type: note.type,
-            retryAttempt: nextAttempt
+            retryAttempt: nextAttempt,
+            durationSec: note.duration
         )
         if note.type == .youtube {
             guard let sourceUrl = note.sourceUrl, !sourceUrl.isEmpty else {

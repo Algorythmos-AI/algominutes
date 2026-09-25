@@ -708,9 +708,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       scheme archives Staging. The Google Sign-In scheme is written from the bundled `GoogleService-Info.plist`
       at build time, replacing the old project's 909388484461 client. `algominutes://` is registered.
       Staging and Release fail without the plist, and dSYMs upload for every non-Debug build.
-    - [ ] **B, the `/v1` client:** the version header, the `/v1` path table (GET entitlement, upload ids in
-      the path, billing's own host for purchases), a 426 "please update" state, `durationSec`, an injectable
-      URLSession with URLProtocol tests for every endpoint.
+    - [x] **B, the `/v1` client (ios-v1-client PR):** every call sends `X-AlgoMinutes-Client: ios/<version>`
+      and goes to its `/v1` route: GET entitlement, upload ids in the path, purchases on billing's own host,
+      and the new `deleteNote`. A 426 maps to `APIError.updateRequired`. The kickoff sends `durationSec`
+      (the quota meters on it) and no longer sends `retryAttempt`, which isn't in `ProcessRequest`. The
+      URLSession and ID-token provider are injectable, and chat uses the injected session. `APIClientTests`
+      checks every endpoint's method, host, path, headers and body with a URLProtocol stub. A "please update"
+      screen is still to come (E).
     - [ ] **C, delete through `POST /v1/notes/delete`** (the Firestore rules now refuse client deletes),
       and the auto-retitle through `/v1/notes/update`.
     - [ ] **D, uploads through `/v1/uploads`** (the api's recordings bucket; the Firebase SDK uploads to the
