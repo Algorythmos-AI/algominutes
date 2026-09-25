@@ -32,9 +32,10 @@ export function clientErrorRoute(req, res) {
       // treats as a sanitiser: a global replace of "\n" with "" (its
       // StringReplaceSanitizer). Without it the alert stays open.
       report[field] = flat.replace(/\n/g, '');
-    } else if (typeof value === 'number' && Number.isFinite(value)) {
-      report[field] = value;
     }
+    // Anything else (numbers included) is dropped: every capped field is a
+    // string, and a raw request value must never reach the log unsanitised.
+    // (The web beacon's one numeric field, `line`, isn't in the caps.)
   }
 
   // A stable event name so a log-based metric can count it. Logged as an

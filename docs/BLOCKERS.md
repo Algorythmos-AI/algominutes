@@ -574,7 +574,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - `js/polynomial-redos` in `redaction.cjs` (the PII pre-scrub runs over whole 2–4 h transcripts);
   - ~~`js/log-injection` in `client-error.js` (#62)~~ **fixed (client-error-log-sanitiser PR):** the
     flattening already removed every line break, but CodeQL only recognises a global replace of `"\n"`
-    with `""` (its `StringReplaceSanitizer`), so that no-op step now ends the chain;
+    with `""` (its `StringReplaceSanitizer`), so that no-op step now ends the chain. The alert stayed
+    open: numeric values were logged raw (a second, unsanitised flow). They are dropped now
+    (client-error-strings-only PR); no capped field is numeric;
   - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
   - ~~`js/insecure-helmet-configuration` ×2~~ **fixed (strict-csp PR):** both JSON services send
     `default-src 'none'` instead of disabling CSP (DECISIONS);
