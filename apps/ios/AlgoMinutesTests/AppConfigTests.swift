@@ -41,6 +41,16 @@ final class AppConfigTests: XCTestCase {
         XCTAssertNil(AppConfig.updateURL(info: [:]))
     }
 
+    /// Debug keeps the paywall (for development); Staging and Release set NO until
+    /// the products exist. Anything but YES is off.
+    func testPaywallFlag() {
+        XCTAssertTrue(AppConfig.paywallEnabled)
+        XCTAssertTrue(AppConfig.paywallEnabled(info: ["AlgoMinutesPaywallEnabled": "yes"]))
+        XCTAssertFalse(AppConfig.paywallEnabled(info: ["AlgoMinutesPaywallEnabled": "NO"]))
+        XCTAssertFalse(AppConfig.paywallEnabled(info: ["AlgoMinutesPaywallEnabled": "$(PAYWALL_ENABLED)"]))
+        XCTAssertFalse(AppConfig.paywallEnabled(info: [:]))
+    }
+
     /// The old Firebase project's Google client (909388484461) is gone, and the
     /// app's own deep-link scheme is registered.
     func testURLSchemes() {

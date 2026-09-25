@@ -81,6 +81,10 @@ final class BackgroundUploadService: NSObject {
     ) async throws -> String {
         let total = Self.fileSize(fileURL)
         guard total > 0 else { throw UploadError.failed }
+        // The server refuses it (413) before minting a session; say so without the round trip.
+        guard total <= StorageKind.serverMaxBytes else {
+            throw UploadError.tooLarge(limitLabel: StorageKind.serverMaxLabel, isRecording: pending != nil)
+        }
 
         // A session's bytes only count within that session: continue the
         // recording's own session if the server still has it open, else start a
