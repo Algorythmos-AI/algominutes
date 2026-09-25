@@ -238,7 +238,7 @@ struct NoteDetailView: View {
 
         switch viewModel.tab {
         case .summary:
-            SummaryPane(summary: note.summary)
+            SummaryPane(summary: note.summary, onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil)
                 // A9.6 + A6.3: the moment the first summary is actually on screen.
                 // Fires `first_summary_viewed` once and, for a guest, presents the
                 // account prompt (or the paywall if the trial is already over).

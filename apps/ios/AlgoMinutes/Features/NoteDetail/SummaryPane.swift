@@ -9,6 +9,8 @@ struct SummaryPane: View {
     static let actionItemsAnchor = "summary.actionItems"
 
     let summary: Summary?
+    /// Plays from a chapter's start; nil when the note has no playable audio.
+    var onSeek: ((TimeInterval) -> Void)? = nil
 
     var body: some View {
         if let summary {
@@ -20,6 +22,9 @@ struct SummaryPane: View {
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            if !summary.chapters.isEmpty {
+                ChaptersCard(chapters: summary.chapters, onSeek: onSeek)
             }
             if !summary.actionItems.isEmpty {
                 OwllCard {
@@ -84,5 +89,50 @@ struct BulletRow: View {
                 .foregroundStyle(Theme.body)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// A long recording's sections, in order. With audio, a tap plays from there.
+private struct ChaptersCard: View {
+    let chapters: [SummaryChapter]
+    let onSeek: ((TimeInterval) -> Void)?
+
+    var body: some View {
+        OwllCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionLabel("Chapters")
+                ForEach(chapters) { chapter in
+                    if let onSeek {
+                        Button { onSeek(TimeInterval(chapter.startMs) / 1000) } label: { row(chapter) }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Plays the recording from here")
+                    } else {
+                        row(chapter)
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ chapter: SummaryChapter) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
+            Text(chapter.clock)
+                .font(Typography.label(13).monospacedDigit())
+                .foregroundStyle(Theme.muted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chapter.title)
+                    .font(Typography.label(15))
+                    .foregroundStyle(Theme.heading)
+                if !chapter.summary.isEmpty {
+                    Text(chapter.summary)
+                        .font(Typography.body(14))
+                        .foregroundStyle(Theme.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }

@@ -35,6 +35,41 @@ struct Summary: Equatable, Sendable {
     var actionItems: [String]
     var keyDecisions: [String]
     var keyPoints: [String]?
+    /// Sections of a long recording (the summarizer adds them past 10 minutes).
+    var chapters: [SummaryChapter] = []
+}
+
+/// A section of a long recording: where it starts, a title, one line on it
+/// (contract `Chapter`, mirrored to the note doc's `summary.chapters`).
+struct SummaryChapter: Equatable, Sendable, Identifiable {
+    let startMs: Int
+    let title: String
+    let summary: String
+    var id: Int { startMs }
+
+    /// From the mirrored dictionary; nil when it has no start or title (the
+    /// server only writes valid ones, but a hand-edited doc might not be).
+    init?(_ d: [String: Any]) {
+        guard let start = (d["startMs"] as? NSNumber)?.intValue, start >= 0,
+              let title = d["title"] as? String, !title.isEmpty
+        else { return nil }
+        self.startMs = start
+        self.title = title
+        self.summary = d["summary"] as? String ?? ""
+    }
+
+    init(startMs: Int, title: String, summary: String) {
+        self.startMs = startMs
+        self.title = title
+        self.summary = summary
+    }
+
+    /// "12:34" under an hour, "1:02:03" past it (as the transcript shows times).
+    var clock: String {
+        let total = startMs / 1000
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
 }
 
 struct TranscriptLine: Equatable, Sendable, Identifiable {
@@ -147,7 +182,8 @@ extension Note {
                 gist: s["gist"] as? String ?? "",
                 actionItems: s["actionItems"] as? [String] ?? [],
                 keyDecisions: s["keyDecisions"] as? [String] ?? [],
-                keyPoints: s["keyPoints"] as? [String]
+                keyPoints: s["keyPoints"] as? [String],
+                chapters: (s["chapters"] as? [[String: Any]] ?? []).compactMap(SummaryChapter.init)
             )
         }
         if let lines = data["transcript"] as? [[String: Any]] {
