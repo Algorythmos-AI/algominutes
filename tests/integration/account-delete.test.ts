@@ -178,6 +178,11 @@ describe('POST /v1/account/delete', () => {
     expect(out.status).toBe(200);
     expect(out.body).toEqual({ ok: true, summary: expect.objectContaining({ notesDeleted: 3, workspacesAffected: 1, authDeleted: true, firestoreErrors: 0 }) });
     expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(0);
+    // Counted once, with no uid (ServerAnalyticsEvent), and a retry doesn't count it again.
+    expect((await pool.query(`SELECT uid, props FROM analytics_events WHERE event = 'account_deleted'`)).rows)
+      .toEqual([{ uid: null, props: { notes: 3 } }]);
+    await call(f.deps);
+    expect(await count(`SELECT 1 FROM analytics_events WHERE event = 'account_deleted'`)).toBe(1);
     expect([...f.docs.keys()].sort()).toEqual(BOBS_DOCS);
     expect([...f.objects].sort()).toEqual(BOBS_OBJECTS);
     expect(await count(`SELECT 1 FROM storage_purges WHERE uid = 'alice'`)).toBe(0);

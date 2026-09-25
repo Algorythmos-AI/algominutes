@@ -67,6 +67,16 @@ export const AnalyticsEvent = z
   ])
   .openapi('AnalyticsEvent');
 
+/**
+ * Events the SERVER records when it sees the fact happen (terms accepted,
+ * retention set, a support request, an account deleted). Kept out of
+ * AnalyticsEvent, so a client can't post them to /v1/events.
+ */
+export const ServerAnalyticsEvent = z
+  .enum(['terms_accepted', 'retention_set', 'support_requested', 'account_deleted'])
+  .openapi('ServerAnalyticsEvent');
+export type ServerAnalyticsEvent = z.infer<typeof ServerAnalyticsEvent>;
+
 export const TrackEventRequest = z
   .object({
     event: AnalyticsEvent,
