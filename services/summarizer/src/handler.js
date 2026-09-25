@@ -71,11 +71,12 @@ async function markNoteFailed({ noteId, workspaceId, message, log }) {
 async function handle(payload, deps) {
   const { noteId, workspaceId, summaryGeneration, template } = payload || {};
   if (!noteId || !workspaceId) throw new Error('summarizer.handle: missing noteId/workspaceId');
-  const { env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
+  const { sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
   let log = deps.log;
 
-  const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  // No API key: the ladder (gemini-call.cjs) calls Vertex AI with the
+  // service's own identity (ADC), in AIPLATFORM_LOCATION. A GEMINI_API_KEY
+  // gate here used to fail every summary, since nothing sets one.
 
   const client = await pool().connect();
   let lines = [];
@@ -163,7 +164,6 @@ async function handle(payload, deps) {
   // pins the shape so a degraded model can't sneak through; the
   // bumped budget gives genuinely long bullet/decision lists room.
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
-    apiKey,
     parts,
     deadlineMs: sharedIntelligence.RETRY_DEADLINE_MS,
     log,
