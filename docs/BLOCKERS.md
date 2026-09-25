@@ -376,8 +376,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     `Stripe-Version: 2024-06-20` our shapes depend on, the subscription and invoice fields the webhook reads,
     and signature checking. Next: rebase #52 so its CI runs this on v22.
   - **#108 `googleapis` 144 → 181** (`services/billing/src/lib/google-play.js` `verifyPlaySubscription`,
-    used by `routes/verify.js` and `webhooks/google.js`). The Android rail is Track B. Test first:
-    `verifyPlaySubscription` with the `androidpublisher` client stubbed.
+    used by `routes/verify.js` and `webhooks/google.js`). The Android rail is Track B. **Test in place
+    (billing-google-play-tests PR):** `tests/integration/billing-google-play.test.ts` runs it through the real
+    `androidpublisher` v3 client against a local stand-in (`PLAY_API_ROOT_URL`, unset when deployed, with a
+    static token so no credential is looked up). It pins the request path, the bearer header and the fields
+    read back, checks that a Play error is thrown, and checks that the verify route grants Pro until Play's
+    expiry. Next: rebase #108 so its CI runs this on v181.
   - **#107 `pdfjs-dist` 4 → 6** (`services/extractor/src/extractors/pdf.js`,
     `apps/web/src/lib/documentText.ts`). Two majors, with changes to the module and worker setup.
     `web-build` only proves the web bundle builds. Test first: the extractor on a small PDF built at test
