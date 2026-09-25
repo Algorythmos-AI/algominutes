@@ -14,11 +14,20 @@
 //      (a lastUpdateTime precondition).
 // A writer that commits Postgres before (2) shows in the read (a re-queue
 // reads 'queued', not finished, so nothing happens); one that commits after
-// (2) mirrors after (1), and the precondition refuses this write. A summary or
-// transcript already on the doc is never rewritten (it may carry the user's
-// edits); only a missing one is filled in.
+// (2) mirrors after (1), and the precondition refuses this write.
+//
+// The clients' Retry is the one writer that goes to the doc first ('queued',
+// then /v1/process moves Postgres), so a doc written in the last `settledMs`
+// is left alone: a doc behind a lost mirror hasn't been written for that long.
+//
+// Repairing to 'ready' writes the summary and transcript from Postgres, as
+// markSummaryReady does, rather than keeping what the doc has: that can be an
+// earlier run's (a regenerate, or a re-queue, whose 'ready' mirror was lost).
+// Edits aren't at risk: clients can't write either field (firestore.rules),
+// and applyNoteEdit writes Postgres first. Field paths keep summary.keyPoints.
 
 import type { Firestore } from 'firebase-admin/firestore';
+import redaction from '@algominutes/ai/redaction.cjs';
 import { getPool } from './db';
 
 export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' }
@@ -51,7 +60,11 @@ type Postgres = {
   transcript?: { speaker: string; text: string; time: string }[];
 };
 
-async function readPostgres(noteId: string, workspaceId: string): Promise<Postgres | null> {
+/**
+ * One snapshot of the note. Its content is read only if `docStatus` disagrees
+ * with a 'ready' note: most candidates are in step, and cost one query.
+ */
+async function readPostgres(noteId: string, workspaceId: string, docStatus: unknown): Promise<Postgres | null> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -62,7 +75,7 @@ async function readPostgres(noteId: string, workspaceId: string): Promise<Postgr
     );
     if (!note) { await client.query('COMMIT'); return null; }
     const out: Postgres = { status: note.status, errorMessage: note.error_message ?? null };
-    if (note.status === 'ready') {
+    if (note.status === 'ready' && docStatus !== 'ready') {
       const [summary, items, decisions, lines] = [
         await client.query('SELECT gist, topics, chapters FROM summaries WHERE note_id = $1', [noteId]),
         await client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
@@ -73,23 +86,34 @@ async function readPostgres(noteId: string, workspaceId: string): Promise<Postgr
           [noteId],
         ),
       ];
-      const s = summary.rows[0] || {};
-      // summaries.topics holds the generated action items in order, but an
-      // edit rewrites only the rows; the rows' own order is the insert's.
-      const topics = Array.isArray(s.topics) && s.topics.every((t: unknown) => typeof t === 'string') ? s.topics : null;
-      out.summary = {
-        gist: s.gist || '',
-        actionItems: !note.summary_manually_edited_at && topics ? topics : items.rows.map((r) => r.text),
-        keyDecisions: decisions.rows.map((r) => r.text),
-        chapters: Array.isArray(s.chapters) ? s.chapters : [],
-      };
-      out.transcript = lines.rows.map((l) => {
-        // The fast path stores "Speaker: text" with no chunk; a chunked line has
-        // a speaker tag (or none).
-        const labelled = l.chunk_id == null ? /^([^:\n]{1,40}): ([\s\S]*)$/.exec(l.text || '') : null;
-        const speaker = labelled ? String(labelled[1]) : (l.speaker_tag != null ? `Speaker ${l.speaker_tag}` : 'Speaker');
-        return { speaker, text: labelled ? String(labelled[2]) : String(l.text || ''), time: clock(Number(l.start_ms)) };
-      });
+      // No summary row (nothing summarised it): the doc's summary is left as is.
+      const s = summary.rows[0];
+      if (s) {
+        // summaries.topics holds the generated action items in order; an edit
+        // rewrites only the rows. Rows are read by created_at, then id, as the
+        // export and share views read them. One writer's rows share created_at,
+        // so among them that's the id's order, not the model's (BLOCKERS).
+        const topics = Array.isArray(s.topics) && s.topics.every((t: unknown) => typeof t === 'string') ? s.topics : null;
+        out.summary = {
+          gist: s.gist || '',
+          actionItems: !note.summary_manually_edited_at && topics ? topics : items.rows.map((r) => r.text),
+          keyDecisions: decisions.rows.map((r) => r.text),
+          chapters: Array.isArray(s.chapters) ? s.chapters : [],
+        };
+      }
+      if (lines.rows.length) {
+        // Stored lines are redacted chunk by chunk; this re-runs it across the
+        // whole transcript, as the summarizer's preview does, so a private key
+        // that spans two chunks is caught too.
+        const { texts } = redaction.redactLines(lines.rows.map((l) => String(l.text || '')));
+        out.transcript = lines.rows.map((l, i) => {
+          // The fast path stores "Speaker: text" with no chunk; a chunked line
+          // has a speaker tag (or none).
+          const labelled = l.chunk_id == null ? /^([^:\n]{1,40}): ([\s\S]*)$/.exec(texts[i]) : null;
+          const speaker = labelled ? String(labelled[1]) : (l.speaker_tag != null ? `Speaker ${l.speaker_tag}` : 'Speaker');
+          return { speaker, text: labelled ? String(labelled[2]) : texts[i], time: clock(Number(l.start_ms)) };
+        });
+      }
     }
     await client.query('COMMIT');
     return out;
@@ -102,37 +126,44 @@ async function readPostgres(noteId: string, workspaceId: string): Promise<Postgr
   }
 }
 
-export type RepairOutcome = 'in_step' | 'repaired' | 'moved' | 'gone' | 'not_finished';
+export type RepairOutcome = 'in_step' | 'repaired' | 'moved' | 'gone' | 'not_finished' | 'doc_recent';
 
-export async function repairNoteMirror(firestore: Firestore, input: { noteId: string; workspaceId: string }): Promise<RepairOutcome> {
+export async function repairNoteMirror(
+  firestore: Firestore,
+  input: { noteId: string; workspaceId: string },
+  opts: { settledMs?: number; now?: number } = {},
+): Promise<RepairOutcome> {
+  const settledMs = opts.settledMs ?? 10 * 60 * 1000;
   const ref = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
   const snap = await ref.get();
   if (!snap.exists) return 'gone';
-  const pg = await readPostgres(input.noteId, input.workspaceId);
+  // A client's Retry writes the doc before Postgres; give it time to land.
+  if (snap.updateTime && (opts.now ?? Date.now()) - snap.updateTime.toMillis() < settledMs) return 'doc_recent';
+  const doc = snap.data() || {};
+  const pg = await readPostgres(input.noteId, input.workspaceId, doc.status);
   if (!pg) return 'gone';
   if (pg.status !== 'ready' && pg.status !== 'error') return 'not_finished';
-  const doc = snap.data() || {};
   if (doc.status === pg.status) return 'in_step';
 
   const patch: Record<string, unknown> = { status: pg.status, updatedAt: new Date().toISOString() };
   if (pg.status === 'error') patch.errorMessage = pg.errorMessage;
-  if (pg.status === 'ready' && pg.summary && pg.transcript) {
-    if (!doc.summary || !doc.summary.gist) {
-      patch['summary.gist'] = pg.summary.gist;
-      patch['summary.actionItems'] = pg.summary.actionItems;
-      patch['summary.keyDecisions'] = pg.summary.keyDecisions;
-      patch['summary.chapters'] = pg.summary.chapters;
-    }
-    if (!Array.isArray(doc.transcript) || doc.transcript.length === 0) {
-      patch.transcript = pg.transcript.slice(0, 200);
-      patch.transcriptTruncated = pg.transcript.length > 200;
-    }
+  if (pg.summary) {
+    patch['summary.gist'] = pg.summary.gist;
+    patch['summary.actionItems'] = pg.summary.actionItems;
+    patch['summary.keyDecisions'] = pg.summary.keyDecisions;
+    patch['summary.chapters'] = pg.summary.chapters;
+  }
+  if (pg.transcript) {
+    patch.transcript = pg.transcript.slice(0, 200);
+    patch.transcriptTruncated = pg.transcript.length > 200;
   }
   try {
     await ref.update(patch, { lastUpdateTime: snap.updateTime });
   } catch (err: any) {
     // FAILED_PRECONDITION: a writer mirrored since the read; it is newer.
     if (err && (err.code === 9 || /FAILED_PRECONDITION/.test(String(err.message)))) return 'moved';
+    // NOT_FOUND: the note was deleted since the read.
+    if (err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message)))) return 'gone';
     throw err;
   }
   return 'repaired';

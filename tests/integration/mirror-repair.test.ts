@@ -4,16 +4,19 @@ import * as repo from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 
 // The sweep's mirror repair: a note Postgres finished whose Firestore doc
-// missed its mirror write is brought in line, but never over a newer write
-// (a lastUpdateTime precondition), never for a note Postgres doesn't call
-// finished, and never over a summary already on the doc. Real Postgres; the
-// Firestore fake honours update-time preconditions.
+// missed its mirror write is brought in line, content included, but never over
+// a newer write (a lastUpdateTime precondition), never over a doc written in
+// the last 10 minutes (a client's Retry), and never for a note Postgres doesn't
+// call finished. Real Postgres; the Firestore fake honours update-time
+// preconditions.
 const require = createRequire(import.meta.url);
 const sweep = require('../../services/db-job/src/handlers/sweep.js');
 const noteTerminal = require('@algominutes/db/note-terminal.cjs');
 const { listRecentlyFinishedNotes, repairNoteMirror } = repo;
 
-const docs = new Map<string, { data: any; updateTime: number }>();
+const MIN = 60_000;
+const ts = (ms: number) => ({ ms, toMillis: () => ms });
+const docs = new Map<string, { data: any; updateTime: { ms: number; toMillis: () => number } }>();
 let beforeUpdate: (() => void) | null = null;
 const DOC = 'workspaces/ws/notes/n1';
 const firestore: any = {
@@ -26,19 +29,19 @@ const firestore: any = {
       beforeUpdate?.();
       const d = docs.get(p);
       if (!d) throw Object.assign(new Error('5 NOT_FOUND'), { code: 5 });
-      if (pre && pre.lastUpdateTime !== undefined && pre.lastUpdateTime !== d.updateTime) {
+      if (pre && pre.lastUpdateTime !== undefined && (pre.lastUpdateTime as any).ms !== d.updateTime.ms) {
         throw Object.assign(new Error('9 FAILED_PRECONDITION'), { code: 9 });
       }
       for (const [k, v] of Object.entries(patch)) {
         if (k.includes('.')) { const [a, b] = k.split('.'); d.data[a] = { ...(d.data[a] || {}), [b]: v }; } else d.data[k] = v;
       }
-      d.updateTime += 1;
+      d.updateTime = ts(d.updateTime.ms + 1);
     },
   }),
 };
-const setDoc = (data: any) => docs.set(DOC, { data, updateTime: 100 });
+// Last written 20 minutes ago, unless `agoMs` says otherwise.
+const setDoc = (data: any, agoMs = 20 * MIN) => docs.set(DOC, { data, updateTime: ts(Date.now() - agoMs) });
 const doc = () => docs.get(DOC)!.data;
-const MIN = 60_000;
 const finish = (status: string, agoMs: number, errorMessage: string | null = null) => pool.query(
   `UPDATE notes SET status = $1, error_message = $2, updated_at = NOW() - ($3::bigint * INTERVAL '1 millisecond') WHERE id = 'n1'`,
   [status, errorMessage, agoMs],
@@ -101,21 +104,66 @@ describe('repairNoteMirror', () => {
   it('a doc already in step is left alone', async () => {
     await readyInPostgres();
     setDoc({ status: 'ready' });
+    const before = docs.get(DOC)!.updateTime.ms;
     expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('in_step');
-    expect(docs.get(DOC)!.updateTime).toBe(100);
+    expect(docs.get(DOC)!.updateTime.ms).toBe(before);
   });
 
-  it("a summary already on the doc (it may carry the user's edits) is never rewritten; only the status", async () => {
+  it("an earlier run's summary and transcript on the doc (a lost 'ready' mirror after a regenerate or re-queue): replaced from Postgres", async () => {
     await readyInPostgres();
-    setDoc({ status: 'chunking', summary: { gist: 'Edited by the user.', actionItems: ['Mine'] }, transcript: [{ speaker: 'A', text: 'x', time: '00:00' }] });
+    setDoc({ status: 'summarizing', summary: { gist: 'The old run.', actionItems: ['Old'], keyPoints: ['kept'] }, transcript: [{ speaker: 'A', text: 'old', time: '00:00' }] });
     expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('repaired');
-    expect(doc()).toMatchObject({ status: 'ready', summary: { gist: 'Edited by the user.', actionItems: ['Mine'] }, transcript: [{ speaker: 'A', text: 'x', time: '00:00' }] });
+    expect(doc()).toMatchObject({
+      status: 'ready',
+      summary: { gist: 'A short sync.', actionItems: ['Send the deck', 'Book the room'], keyDecisions: ['Ship Friday'], keyPoints: ['kept'] },
+      transcript: [{ speaker: 'Speaker 1', text: 'Hello all.' }, { speaker: 'Speaker 2', text: 'Hi.' }],
+    });
+  });
+
+  it('a ready note with no summary row or transcript lines: only the status; the doc keeps what it has', async () => {
+    await finish('ready', 20 * MIN);
+    setDoc({ status: 'chunking', summary: { gist: 'On the doc.' }, transcript: [{ speaker: 'A', text: 'x', time: '00:00' }] });
+    expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('repaired');
+    expect(doc()).toMatchObject({ status: 'ready', summary: { gist: 'On the doc.' }, transcript: [{ speaker: 'A', text: 'x', time: '00:00' }] });
+  });
+
+  it('the transcript is redacted across lines, as the preview is: a key spanning two chunks', async () => {
+    await pool.query(`INSERT INTO summaries (note_id, gist) VALUES ('n1', 'g')`);
+    const c = (idx: number) => pool.query(
+      `INSERT INTO audio_chunks (note_id, idx, start_sec, end_sec, storage_path, status) VALUES ('n1', $1, 0, 1, 'p', 'done') RETURNING id`, [idx]);
+    const [a, b] = [(await c(0)).rows[0].id, (await c(1)).rows[0].id];
+    // Built at runtime, so no key-shaped text sits in the source.
+    const dash = '-'.repeat(5);
+    const body = ['MIIEvQIBADAN', 'BgkqhkiG9w0B', 'AQEFAASCBKcw'].join('');
+    await pool.query(
+      `INSERT INTO transcript_lines (note_id, chunk_id, idx, start_ms, end_ms, text) VALUES
+         ('n1', $1, 0, 0, 0, $3), ('n1', $2, 0, 1000, 1000, $4), ('n1', $2, 1, 2000, 2000, $5)`,
+      [a, b, `${dash}BEGIN PRIVATE KEY${dash}`, body, `${dash}END PRIVATE KEY${dash}`],
+    );
+    await finish('ready', 20 * MIN);
+    setDoc({ status: 'chunking' });
+    expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('repaired');
+    expect(JSON.stringify(doc().transcript)).not.toContain(body);
+  });
+
+  it("a doc written in the last 10 minutes (a client's Retry, before Postgres moves): left alone", async () => {
+    await finish('error', 20 * MIN, 'old failure');
+    setDoc({ status: 'queued', errorMessage: null }, 30_000);
+    expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' }, { settledMs: 10 * MIN })).toBe('doc_recent');
+    expect(doc()).toEqual({ status: 'queued', errorMessage: null });
+  });
+
+  it('a note deleted between the read and the write: gone, not a failure', async () => {
+    await finish('error', 20 * MIN, 'x');
+    setDoc({ status: 'transcribing' });
+    beforeUpdate = () => { docs.delete(DOC); };
+    expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('gone');
   });
 
   it('a writer that mirrors between the read and the write wins: the repair backs off', async () => {
     await finish('error', 20 * MIN, 'x');
     setDoc({ status: 'transcribing' });
-    beforeUpdate = () => { const d = docs.get(DOC)!; d.data.status = 'queued'; d.updateTime += 1; };
+    beforeUpdate = () => { const d = docs.get(DOC)!; d.data.status = 'queued'; d.updateTime = ts(d.updateTime.ms + 1); };
     expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('moved');
     expect(doc().status).toBe('queued');
   });

@@ -52,6 +52,7 @@ const TOMBSTONE_DAYS = 30;
 const USAGE_EVENTS_DAYS = 90;
 const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
 const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
+const MIRROR_REPAIR_LIMIT = 200;
 const LOCK_KEY = 'algominutes:sweep';
 
 function firebaseDeps(env) {
@@ -202,13 +203,16 @@ async function run({
     // mirror-repair.ts): checked twice while 10-40 minutes old, repaired only
     // if Postgres says finished and the doc hasn't moved since it was read.
     await step('mirror_repair', async () => {
-      const notes = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: 200 });
+      const notes = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: MIRROR_REPAIR_LIMIT });
+      // Oldest first, so at the limit the newest of this window wait for the
+      // next run, and some may age out unchecked.
+      if (notes.length === MIRROR_REPAIR_LIMIT) log.warn({ limit: MIRROR_REPAIR_LIMIT }, 'mirror_repair_limit_reached');
       let repaired = 0;
       let failedRepairs = 0;
       for (const n of notes) {
         const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
         try {
-          const outcome = await repairNoteMirror(deps.firestore, n);
+          const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS });
           if (outcome === 'repaired') {
             repaired += 1;
             log.warn({ ...fields, status: n.status }, 'mirror_repaired');
