@@ -782,10 +782,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **From its PII audit, fixed in the same PR:** chapters are scrubbed whole and *then* trimmed. Trimming
     first could cut a card number or an email into a fragment the patterns no longer match, which was then
     stored. The salvage error no longer quotes the model's output, since it reaches logs and the dead letter.
-  - [ ] **Queued (pre-existing, from that audit):**
-    - the fast path's `parseGeminiJson` and the older `parseSummaryJson` still put Node's JSON error (about
-      10 characters of model output) in their message;
-    - `speakerName` (a user-set label) goes to Gemini unscrubbed.
+  - [x] **Fixed (pii-parse-errors-speaker-names PR), both pre-existing, from that audit:**
+    - the fast path's `parseGeminiJson` and the older `parseSummaryJson` put Node's JSON error (about
+      10 characters of model output) in their message. They now say `INVALID_JSON: unparseable model
+      output (N chars)`, like the salvage, and still map to the friendly error;
+    - `speakerName` (a user-set label, so possibly an email or a phone number) went to Gemini unscrubbed.
+      The summarizer now scrubs it with `redactPII`, once per distinct name. The embedder reads only
+      `speaker_tag` ("Speaker N"), and no chat call exists yet.
+    - Tested (a unit test for both parsers, the handler on Postgres for the prompt); three mutations checked.
   - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
     tap to seek.
 ## Long recordings: the transcoder on replay (plan rev 8, PR-12, 2026-09-25)

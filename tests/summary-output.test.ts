@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { parseClock, normalizeChapters, repairTruncatedJson, salvageSummaryJson } = require('@algominutes/ai/summary-output.cjs');
 const { redactSummaryOutput } = require('@algominutes/ai/redaction.cjs');
+const { parseGeminiJson, parseSummaryJson, publicErrorFor } = require('@algominutes/ai/intelligence.cjs');
 
 describe('parseClock', () => {
   it("reads the transcript's own marks", () => {
@@ -67,6 +68,18 @@ describe('repairTruncatedJson and salvageSummaryJson', () => {
     expect(() => salvageSummaryJson('Sure, jane@example.com is the owner')).toThrow(/^INVALID_JSON: unparseable model output \(\d+ chars\)$/);
     expect(repairTruncatedJson('{"gist": "a"} trailing')).toEqual({ gist: 'a' });
     expect(repairTruncatedJson('{"gist": 1 2}')).toBeNull();
+  });
+});
+
+describe('the older parsers (fast path, vertex-smoke)', () => {
+  it("never quote the model's text in their error, which still maps to the friendly message", () => {
+    for (const parse of [parseGeminiJson, parseSummaryJson]) {
+      let err: any;
+      try { parse('Sure! jane@example.com owns card 4111 1111 1111 1111'); } catch (e) { err = e; }
+      expect(err.message).toMatch(/^INVALID_JSON: unparseable model output \(\d+ chars\)$/);
+      expect(err.message).not.toMatch(/jane|4111|Sure/);
+      expect(publicErrorFor(err)).toBe('The AI returned an unexpected response. Please try again.');
+    }
   });
 });
 

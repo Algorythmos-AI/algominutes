@@ -152,8 +152,16 @@ async function handle(payload, deps) {
   // Line by line, carrying a private key that spans lines (redactLines), so a
   // key's later base64 lines are redacted along with its BEGIN line.
   const { texts: scrubbed } = sharedRedaction.redactLines(lines.map((l) => l.text || ''));
+  // A speaker name is a label the user typed, so it can be an email or a phone
+  // number: it is scrubbed too, once per distinct name.
+  const scrubbedNames = new Map();
+  const speakerLabel = (name) => {
+    if (!scrubbedNames.has(name)) scrubbedNames.set(name, sharedRedaction.redactPII(name).text);
+    return scrubbedNames.get(name);
+  };
   const redacted = lines.map((l, i) => {
-    const speaker = l.speakerName || (l.speakerTag ? `Speaker ${l.speakerTag}` : 'Speaker');
+    const speaker = l.speakerName ? speakerLabel(l.speakerName)
+      : (l.speakerTag ? `Speaker ${l.speakerTag}` : 'Speaker');
     return { speaker, text: scrubbed[i], time: fmtTime(l.startMs) };
   });
 
