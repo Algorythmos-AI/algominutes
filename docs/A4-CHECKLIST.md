@@ -110,7 +110,7 @@ code currently assumes.
 - **Format / defaults assumed (confirm or override):**
   - Cloud SQL Postgres instance: `algominutes-<env>-pg` · DB name `algominutes`
   - Buckets: `algominutes-<env>-recordings`, `algominutes-<env>-imports`, `algominutes-<env>-scans`
-  - Cloud Tasks: queue(s) `transcode`, `summarize`, `embed`, `extract`, `notify` in region `us-central1`
+  - Cloud Tasks: queue(s) `transcode`, `summarize`, `embed`, `extract`, `notify` in region `australia-southeast1` (Terraform)
   - Cloud Run services: `api`, `transcoder`, `summarizer`, `embedder`, `extractor`, `billing`, `notifier`
 - **VALUE (overrides, if any):** `__________`
 
