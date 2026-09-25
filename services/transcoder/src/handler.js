@@ -292,7 +292,7 @@ async function handleSttPoll(payload, deps) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
       const c2 = await db.pool().connect();
       try {
-        await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]);
+        await db.markChunkError(c2, chunkId);
       } finally { c2.release(); }
       // Terminal, and decided here rather than by a retry count — this loop
       // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
@@ -331,7 +331,7 @@ async function handleSttPoll(payload, deps) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
     const c2 = await db.pool().connect();
     try {
-      await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]);
+      await db.markChunkError(c2, chunkId);
     } finally { c2.release(); }
     await noteTerminal.markNoteFailed({
       pool: db.pool(),
@@ -570,7 +570,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     if (poll >= MAX_STT_POLLS) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
       const c2 = await db.pool().connect();
-      try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
+      try { await db.markChunkError(c2, chunkId); }
       finally { c2.release(); }
       await noteTerminal.markNoteFailed({
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
@@ -597,7 +597,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   if (op.error) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
     const c2 = await db.pool().connect();
-    try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
+    try { await db.markChunkError(c2, chunkId); }
     finally { c2.release(); }
     await noteTerminal.markNoteFailed({
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,

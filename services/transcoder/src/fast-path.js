@@ -68,45 +68,17 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
 
-  // Persist to Postgres.
-  const client = await db.pool().connect();
-  try {
-    await client.query('BEGIN');
-    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'ready' });
-    await db.deleteTranscriptLinesForNote(client, noteId);
-    for (let i = 0; i < redacted.length; i++) {
-      const l = redacted[i];
-      const startMs = embeddings.timeStrToMs(l.time);
-      await client.query(
-        `INSERT INTO transcript_lines (note_id, speaker_tag, start_ms, end_ms, text, confidence)
-           VALUES ($1, NULL, $2, $2, $3, NULL)`,
-        [noteId, startMs || 0, `${l.speaker || 'Speaker'}: ${l.text || ''}`],
-      );
-    }
-    await client.query(
-      `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-         VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (note_id) DO UPDATE
-         SET gist = EXCLUDED.gist, long_summary = EXCLUDED.long_summary,
-             topics = EXCLUDED.topics, model = EXCLUDED.model,
-             generated_at = NOW()`,
-      [noteId, parsed.gist || '', null, JSON.stringify(parsed.actionItems || []), model || null],
-    );
-    await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of parsed.actionItems || []) {
-      await client.query(`INSERT INTO action_items (note_id, text) VALUES ($1, $2)`, [noteId, item]);
-    }
-    await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of parsed.keyDecisions || []) {
-      await client.query(`INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)`, [noteId, dec]);
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
-    throw err;
-  } finally {
-    client.release();
-  }
+  // Persist to Postgres: one transaction in the repo layer (pipeline-repo.cjs).
+  await db.persistFastPathResult(db.pool(), {
+    noteId,
+    workspaceId,
+    lines: redacted.map((l) => ({
+      startMs: embeddings.timeStrToMs(l.time),
+      text: `${l.speaker || 'Speaker'}: ${l.text || ''}`,
+    })),
+    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
+    model,
+  }, log);
 
   await mirror.mirrorReady({
     workspaceId,

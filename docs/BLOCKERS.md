@@ -404,7 +404,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   write** (found by the dual-write audit of the summarizer-via-repo PR). The run read `summary_generation`,
   spent minutes in Gemini, then wrote without re-checking it, so an older run could land over a regenerate
   claimed in that window.
-- [ ] **Postgres note writes still bypass the repo layer** (found by the dual-write audit of the
+- [ ] **Postgres note writes still bypass the repo layer: the transcoder's are moved, and CI now gates it
+  (transcoder-sql-into-repo PR).** The transcoder's SQL (the chunk gates, status writes, `markChunkError`, and
+  the fast path's whole result in one transaction) now lives in `packages/db/src/pipeline-repo.cjs`. The new
+  gate `scripts/check-no-direct-pg-writes.mjs` (invariants workflow, syntax-aware) fails on any note-table
+  write outside `packages/db`; on the old code it reported 19. **Still to move** (allowlisted as
+  `PENDING_MOVE`, which may only shrink): `packages/ai/src/note-terminal.cjs`, `note-edit.cjs` and
+  `embeddings.cjs`. Was: **Postgres note writes still bypass the repo layer** (found by the dual-write audit of the
   generation-at-write PR; `check-no-direct-firestore` only sees Firestore, so nothing gates these):
   - `services/transcoder/src/fast-path.js:71-101`: the short-audio path writes transcript lines, the
     summary, action items and key decisions inline. It has no generation guard, and it sets status
