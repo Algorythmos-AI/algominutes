@@ -534,19 +534,14 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     await db.insertTranscriptLines(c4, { noteId, chunkId, lines, log });
   } finally { c4.release(); }
 
-  // Atomic completion gate.
+  // Atomic completion gate, one transaction (pipeline-repo completeChunkGate).
+  // Postgres holds 'summarizing' before the mirror shows it (below).
   const c5 = await db.pool().connect();
-  let allDone = false;
-  let summarizerClaimed = false;
-  let embedderClaimed = false;
+  let allDone;
+  let summarizerClaimed;
+  let embedderClaimed;
   try {
-    allDone = await db.markChunkDone(c5, { chunkId, noteId });
-    if (allDone) {
-      summarizerClaimed = await db.claimSummarizerEnqueue(c5, noteId);
-      embedderClaimed = await db.claimEmbedderEnqueue(c5, noteId);
-      // Postgres holds 'summarizing' before the mirror shows it (below).
-      if (summarizerClaimed) await db.upsertNoteStatus(c5, { noteId, workspaceId, status: 'summarizing' });
-    }
+    ({ allDone, summarizerClaimed, embedderClaimed } = await db.completeChunkGate(c5, { chunkId, noteId, workspaceId, log }));
   } finally { c5.release(); }
 
   // Past the commit above, a failed mirror is logged, not thrown: a retry of
@@ -568,12 +563,22 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     if (progress) await mirror.mirrorProgress({ workspaceId, noteId, done: progress.done || 0, total: progress.total || 0 });
   });
 
+  // Both enqueues run whatever the other does: their claims are spent, and a
+  // retry returns early, so a throw from the first used to drop the second too.
+  // The first failure is rethrown once both have been tried.
+  let enqueueErr = null;
+  const enqueueAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_enqueue_failed');
+      enqueueErr = enqueueErr || err;
+    }
+  };
   if (allDone && summarizerClaimed) {
     await mirrorAfterCommit('summarizing', () => mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' }));
-    await tasks.enqueueSummarizer({ noteId, workspaceId });
+    await enqueueAfterCommit('summarizer', () => tasks.enqueueSummarizer({ noteId, workspaceId }));
   }
   if (allDone && embedderClaimed) {
-    await tasks.enqueueEmbedder({ noteId, workspaceId });
+    await enqueueAfterCommit('embedder', () => tasks.enqueueEmbedder({ noteId, workspaceId }));
   }
 
   // Every chunk is transcribed, so the intermediate FLAC files have served
@@ -592,6 +597,7 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
   if (allDone) {
     await storage.deletePrefix(`transcoder/${noteId}/`, log);
   }
+  if (enqueueErr) throw enqueueErr;
 }
 
 // ── Whole-file provider path (AssemblyAI primary / Deepgram failover) ──────────

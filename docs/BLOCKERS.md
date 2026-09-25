@@ -893,13 +893,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               unqueued~~ **fixed (pipeline-no-lost-work-after-commit PR):** a failed mirror after that
               commit is logged (`chunk_complete_mirror_failed`), and the summarizer and embedder are still
               queued. The mirror still goes first, so a quick summarizer's `ready` can't be overwritten by
-              a late `summarizing`. An enqueue that itself throws after the claim is still lost (the
-              3.5 h sweep fails the note); a sweep that re-drives a `summarizing` note with a full
-              transcript would cover it.
+              a late `summarizing`. From that PR's audit, also fixed there:
+              - The gate itself was five or six autocommits, so an error part-way left the chunk done
+                with the gate unfinished, and the retry returned early. It is now one transaction
+                (`completeChunkGate`): a failure rolls the chunk back and the retry runs it all. Two
+                chunks completing at once still give exactly one completion (tested).
+              - A summarizer enqueue that threw also dropped the embedder. Both are now tried, and the
+                first failure is logged (`chunk_complete_enqueue_failed`) and rethrown.
+
+              Still lost: an enqueue that itself throws after its claim (the 3.5 h sweep fails the note).
+              A sweep that re-drives a `summarizing` note with a full transcript would cover it.
             - ~~`persistFastPathResult` writes `ready` without a status condition~~ **fixed (same PR):** it
               commits only over an in-progress note, so a duplicate delivery gets `NOTE_MOVED_ON` (acked)
               instead of overwriting the finished note and the user's edits since.
-              - Tested on Postgres (five cases); three mutations checked.
+              - Tested on Postgres (eight cases); five mutations checked.
             - The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
               when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
               doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds

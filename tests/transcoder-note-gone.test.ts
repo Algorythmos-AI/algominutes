@@ -207,10 +207,8 @@ describe('transcoder: the completion gate', () => {
       db: {
         pool: () => ({ connect: async () => client }),
         insertTranscriptLines: async () => {},
-        markChunkDone: async () => true,
-        claimSummarizerEnqueue: async () => true,
-        claimEmbedderEnqueue: async () => false,
-        upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+        // The gate's transaction (completeChunkGate) claims and writes 'summarizing'.
+        completeChunkGate: async () => { order.push('pg:summarizing'); return { allDone: true, summarizerClaimed: true, embedderClaimed: false }; },
         chunkProgress: async () => ({ done: 2, total: 2 }),
       },
       mirror: {
@@ -232,10 +230,7 @@ describe('transcoder: the completion gate', () => {
       db: {
         pool: () => ({ connect: async () => client }),
         insertTranscriptLines: async () => {},
-        markChunkDone: async () => true,
-        claimSummarizerEnqueue: async () => false,
-        claimEmbedderEnqueue: async () => false,
-        upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+        completeChunkGate: async () => ({ allDone: true, summarizerClaimed: false, embedderClaimed: false }),
         chunkProgress: async () => ({ done: 2, total: 2 }),
       },
       mirror: { mirrorProgress: async () => {}, mirrorStatus: async () => void order.push('mirror') },

@@ -92,6 +92,62 @@ describe('the last chunk completes the note', () => {
   });
 });
 
+describe('the completion gate is one transaction', () => {
+  const failSummarizing = () => pool.query(`
+    CREATE OR REPLACE FUNCTION test_gate_outage() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.status = 'summarizing' THEN RAISE EXCEPTION 'simulated outage'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER test_gate_outage BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION test_gate_outage();`);
+  const heal = () => pool.query(`DROP TRIGGER IF EXISTS test_gate_outage ON notes; DROP FUNCTION IF EXISTS test_gate_outage();`);
+
+  it("an error part-way rolls the chunk back to not-done, so the poll's retry runs the whole gate", async () => {
+    const chunkId = await lastChunk();
+    await failSummarizing();
+    try {
+      await expect(complete(chunkId, deps().d)).rejects.toThrow(/simulated outage/);
+      const row = (await pool.query(
+        `SELECT c.status, n.summarizer_enqueued_at IS NULL AS unclaimed FROM audio_chunks c JOIN notes n ON n.id = c.note_id WHERE c.id = $1`,
+        [chunkId],
+      )).rows[0];
+      expect(row).toEqual({ status: 'transcribing', unclaimed: true });
+    } finally { await heal(); }
+
+    const retry = deps();
+    await complete(chunkId, retry.d);
+    expect(retry.queued).toEqual(['summarizer', 'embedder']);
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('summarizing');
+  });
+
+  it('two last chunks completing at once: exactly one of them completes the note', async () => {
+    for (let round = 0; round < 5; round++) {
+      await pool.query(`DELETE FROM audio_chunks WHERE note_id = 'n1'`);
+      await pool.query(`UPDATE notes SET status = 'transcribing', chunks_total = 2, chunks_done = 0, summarizer_enqueued_at = NULL, embedder_enqueued_at = NULL WHERE id = 'n1'`);
+      const ids: string[] = [];
+      for (const idx of [0, 1]) {
+        const { rows } = await pool.query(
+          `INSERT INTO audio_chunks (note_id, idx, start_sec, end_sec, storage_path, status) VALUES ('n1', $1, 0, 1, 'gs://b/c', 'transcribing') RETURNING id`,
+          [idx],
+        );
+        ids.push(rows[0].id);
+      }
+      const gate = async (chunkId: string) => {
+        const c = await transcoderDb.pool().connect();
+        try { return await transcoderDb.completeChunkGate(c, { chunkId, noteId: 'n1', workspaceId: 'ws', log }); } finally { c.release(); }
+      };
+      const results = await Promise.all(ids.map(gate));
+      expect(results.filter((r: any) => r.summarizerClaimed)).toHaveLength(1);
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('summarizing');
+    }
+  });
+
+  it('a summarizer enqueue that throws still lets the embedder be queued, then surfaces', async () => {
+    const f = deps();
+    f.d.tasks.enqueueSummarizer = async () => { throw new Error('tasks down'); };
+    await expect(complete(await lastChunk(), f.d)).rejects.toThrow('tasks down');
+    expect(f.queued).toEqual(['embedder']);
+    expect(errors).toContain('chunk_complete_enqueue_failed');
+  });
+});
+
 describe("the fast path's commit", () => {
   const persist = () => transcoderDb.persistFastPathResult(transcoderDb.pool(), {
     noteId: 'n1', workspaceId: 'ws', model: 'm',

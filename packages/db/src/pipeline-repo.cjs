@@ -154,6 +154,37 @@ async function claimEmbedderEnqueue(client, noteId) {
   return rows.length > 0;
 }
 
+/**
+ * A chunk's completion gate, as one transaction: mark it done and, if that
+ * completes the note, spend both enqueue claims and move the note to
+ * 'summarizing'. As separate statements, an error part-way left the chunk done
+ * with the gate unfinished, and a retry (which returns early on a done chunk)
+ * never ran it again: the note waited 3.5 h for the sweep. Now a failure rolls
+ * the chunk back to not-done and the retry runs the whole gate.
+ *
+ * Concurrent completions stay correct: each locks its chunk row, then the note
+ * row, so the second's count runs after the first commits and exactly one of
+ * them sees the note complete.
+ */
+async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) {
+  await client.query('BEGIN');
+  try {
+    const allDone = await markChunkDone(client, { chunkId, noteId });
+    let summarizerClaimed = false;
+    let embedderClaimed = false;
+    if (allDone) {
+      summarizerClaimed = await claimSummarizerEnqueue(client, noteId);
+      embedderClaimed = await claimEmbedderEnqueue(client, noteId);
+      if (summarizerClaimed) await upsertNoteStatus(client, { noteId, workspaceId, status: 'summarizing' });
+    }
+    await client.query('COMMIT');
+    return { allDone, summarizerClaimed, embedderClaimed };
+  } catch (err) {
+    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId, chunkId }, 'chunk_gate_rollback_failed'));
+    throw err;
+  }
+}
+
 async function fetchTailWords(client, { noteId, fromMs }) {
   const { rows } = await client.query(
     `SELECT id, start_ms AS "startMs", end_ms AS "endMs", text, confidence, speaker_tag AS "speakerTag"
@@ -303,6 +334,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
 }
 
 module.exports = {
+  completeChunkGate,
   noteExists,
   noteStatus,
   fetchPriorChunkEndMs,
