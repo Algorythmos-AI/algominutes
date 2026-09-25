@@ -31,6 +31,7 @@ import { clientErrorRoute } from './client-error.js';
 import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
+import { appConfigRoute } from './app-config.js';
 import { trackEventRoute } from './events.js';
 import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
@@ -215,6 +216,8 @@ export function buildRouter() {
 
   // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
   router.get('/entitlement', authed, wrap(entitlementRoute));
+  // Server-side feature switches (broadcast capture's kill switch).
+  router.get('/config', authed, wrap(appConfigRoute));
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
   router.post('/events', authed, wrap(trackEventRoute));
   // ── A10 compliance ── compliance.js ────────────────────────────────────

@@ -1094,6 +1094,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Verify on a real iPhone (M1):** a FaceTime or Zoom call captured, and both sides in the transcript.
 - [ ] **Before App Store submission:** a server-side kill switch for broadcast (the top App Review risk),
   and review notes that explain the feature.
+  - [x] **Server side (api-broadcast-kill-switch PR):** `GET /v1/config` answers `{ broadcastCapture }`
+    (contract `AppConfigResponse`); `BROADCAST_CAPTURE=off` on the api turns it off, anything else leaves it
+    on. To flip it, add the variable to the api's env in `infra/terraform/modules/environment/cloud-run.tf`
+    (one line, then plan and apply); it isn't wired yet, to keep the saved staging plan current.
+  - [ ] **iOS:** read `/v1/config` at launch and on foreground, and hide *Capture audio from another app*
+    when it's off (keep the last answer; hidden until the first one).
 - [ ] **Queued:** the extension writes `.m4a` with AVAssetWriter, so if iOS kills it (a 50 MB memory
   limit) mid-capture, the capture is lost. AVAudioFile can write ADTS, but the two sources run on
   different clocks. Measure how often it happens before redesigning.
