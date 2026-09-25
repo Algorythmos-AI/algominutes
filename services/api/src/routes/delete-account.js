@@ -31,7 +31,7 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { deleteAccountData, finishAccountDeletion } from '@algominutes/db';
+import { deleteAccountData, finishAccountDeletion, trackEvent } from '@algominutes/db';
 
 export async function deleteAccountRoute(req, res, deps = {}) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
@@ -75,6 +75,12 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   }
   summary.notesDeleted = pg.notesQueued;
   summary.pgMembershipsDeleted = pg.membershipsDeleted;
+  // Counted once, when the account row actually went (a retry reports
+  // deleted: false). No uid: the user is gone. Never fails the deletion.
+  if (pg.deleted) {
+    await trackEvent({ uid: null, event: 'account_deleted', props: { notes: pg.notesQueued } })
+      .catch((err) => log.warn({ err }, 'analytics_write_failed'));
+  }
 
   // 2-4 (account-repo finishAccountDeletion, shared with the sweeper): cancel
   // the open upload sessions, run the purges, delete the account's own docs and

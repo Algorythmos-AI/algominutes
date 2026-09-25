@@ -65,7 +65,10 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
 - [x] **One account-deletion path:** `/v1/account/delete` (#69; Postgres first, retried by the sweeper), and
       the iOS client calls it (iOS PR-17 B). The old Cloud Function is gone with `functions/` (#84). The web's
       Settings modal moves with its `/v1` migration.
-- [ ] Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
+- [x] **Done (analytics-compliance-events PR):** the server records `terms_accepted`, `retention_set`,
+      `support_requested` and `account_deleted` (counted once, with no uid) after each succeeds. They form a
+      separate `ServerAnalyticsEvent` in the contracts, so a client can't post them to `/v1/events`, and the
+      client contract is unchanged. Was: Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
       without them).
 - [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7). Folded into iOS PR-17 D (see
       "Clients still on the legacy `/api/*` surface").
