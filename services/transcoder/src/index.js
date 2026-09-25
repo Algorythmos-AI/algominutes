@@ -30,6 +30,7 @@ requireEnv(
 );
 const noteTerminal = loadShared('note-terminal.cjs');
 const spendGuard = loadShared('spend-guard.cjs');
+const spendRepo = loadShared('spend-repo.cjs');
 const handler = require('./handler');
 const db = require('./db');
 const storage = require('./storage');
@@ -40,6 +41,10 @@ const mirror = require('./firestore-mirror');
 const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
+const { spendGate } = require('./spend-gate');
+
+// §4.6: the daily cap reads the audio minutes sent to paid work in the last 24 hours.
+spendGuard.setDailySpendReader(spendRepo.createPaidWorkSpendReader({ pool: () => db.pool() }));
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -87,20 +92,11 @@ app.post('/', async (req, res) => {
     userId: req.body && req.body.uid,
   });
 
-  // §4.6 spend circuit breaker — this is the pipeline entry and the priciest
-  // stage (paid STT). Halt before spending if today's cost hit the daily cap.
-  try {
-    await spendGuard.assertUnderDailyCap({ log });
-  } catch (err) {
-    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
-      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
-      // Ack (200) so Cloud Tasks does not retry-storm while capped.
-      // TODO(A9): mark the note 'deferred', re-drive when spend resets, and
-      // refund metered minutes (A7.4) rather than silently dropping the task.
-      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
-    }
-    throw err;
-  }
+  // §4.6 spend circuit breaker (spend-gate.js): kickoffs only.
+  const halted = await spendGate(req.body, {
+    db, mirror, log, traceId, terminalHooks, noteTerminal, spendGuard,
+  });
+  if (halted) return res.status(halted.status).json(halted.body);
 
   const tasks = tasksClient.makeClient({ env, log, traceId, uid: req.body && req.body.uid });
   // traceId is threaded into deps so the in-handler terminal paths (STT

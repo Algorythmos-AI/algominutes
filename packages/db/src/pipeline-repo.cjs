@@ -185,6 +185,31 @@ async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) 
   }
 }
 
+/**
+ * Paid work, recorded as it starts (usage_events, which the schema had for this
+ * and nothing wrote): a speech job, or the fast path's Gemini call, with the
+ * audio seconds the transcoder measured itself. The daily spend cap sums these
+ * (spend-repo.cjs), so it counts what was actually sent to be paid for, not
+ * what a client reported or a ledger key allowed. Best-effort: a failed write is
+ * logged and never fails the pipeline (the cap fails open the same way).
+ */
+async function recordPaidWork(queryable, { noteId, workspaceId, uid, event, audioSeconds, model, log }) {
+  try {
+    // A parent deleted meanwhile (note or account) becomes NULL rather than
+    // failing the foreign key: the speech was paid for either way.
+    await queryable.query(
+      `INSERT INTO usage_events (uid, workspace_id, note_id, event, model, audio_seconds)
+       VALUES ((SELECT uid FROM users WHERE uid = $1),
+               (SELECT id FROM workspaces WHERE id = $2),
+               (SELECT id FROM notes WHERE id = $3),
+               $4, $5, $6)`,
+      [uid || null, workspaceId || null, noteId || null, event, model || null, audioSeconds],
+    );
+  } catch (err) {
+    log.error({ err, noteId, workspaceId, userId: uid, event }, 'paid_work_record_failed');
+  }
+}
+
 async function fetchTailWords(client, { noteId, fromMs }) {
   const { rows } = await client.query(
     `SELECT id, start_ms AS "startMs", end_ms AS "endMs", text, confidence, speaker_tag AS "speakerTag"
@@ -335,6 +360,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
 
 module.exports = {
   completeChunkGate,
+  recordPaidWork,
   noteExists,
   noteStatus,
   fetchPriorChunkEndMs,

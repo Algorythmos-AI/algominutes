@@ -28,7 +28,6 @@ const sharedTemplates = loadShared('summary-templates.cjs');
 const sharedIntelligence = loadShared('intelligence.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
-const spendGuard = loadShared('spend-guard.cjs');
 const handler = require('./handler');
 const terminalHooks = require('./terminal-hooks');
 
@@ -52,19 +51,10 @@ app.post('/', async (req, res) => {
     userId: req.body && req.body.uid,
   });
 
-  // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
-  // spend hit the daily cap.
-  try {
-    await spendGuard.assertUnderDailyCap({ log });
-  } catch (err) {
-    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
-      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
-      // Ack (200) so Cloud Tasks does not retry-storm while capped.
-      // TODO(A9): mark the note 'deferred', re-drive on reset, refund minutes (A7.4).
-      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
-    }
-    throw err;
-  }
+  // §4.6: not gated here. The cap stops new work at the transcoder's kickoff;
+  // a note that reaches this far has its speech paid for, and failing it now
+  // would throw that away for the price of one Gemini call (DECISIONS "Spend
+  // cap"). Regenerations are rate-limited by the api.
 
   try {
     await handler.handle(req.body || {}, {

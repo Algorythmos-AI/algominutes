@@ -44,12 +44,17 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  *
  * The `status <> 'ready'` guard matters — a late-arriving failure from a
  * retried task must not walk back a note that has since succeeded.
+ * `onlyIfStatus` narrows it to those statuses (the spend cap fails only a
+ * note no paid work has started on).
+ *
+ * Returns `{ failed }`: whether Postgres moved the note to 'error' here, so a
+ * caller runs its refund and notify hooks on that transition only.
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return;
+    return { failed: false };
   }
 
   let pgOk = false;
@@ -61,8 +66,9 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
         // Scoped to the payload's workspace (CLAUDE.md §1 multi-tenancy): a
         // note id from another workspace matches nothing.
         `UPDATE notes SET status = 'error', error_message = $2, updated_at = NOW()
-          WHERE id = $1 AND workspace_id = $3 AND status <> 'ready'`,
-        [noteId, message, workspaceId],
+          WHERE id = $1 AND workspace_id = $3 AND status <> 'ready'
+            AND ($4::text[] IS NULL OR status = ANY($4::text[]))`,
+        [noteId, message, workspaceId, onlyIfStatus],
       );
       pgOk = rowCount > 0;
     } finally {
@@ -79,7 +85,9 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // When the UPDATE succeeded but matched no row, the note is already 'ready'
   // or belongs to another workspace — writing 'error' here would contradict
   // the system of record or create a phantom doc under the wrong workspace.
-  const shouldMirror = pgOk || pgErrored;
+  // (Not with `onlyIfStatus`: Postgres couldn't say whether the note was one
+  // to fail, so mirroring 'error' could contradict it.)
+  const shouldMirror = pgOk || (pgErrored && !onlyIfStatus);
   let mirrorOk = false;
   if (shouldMirror) {
     try {
@@ -109,7 +117,12 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // what the alerting in the runbook counts. Emitted whether or not the writes
   // landed — a note that failed and could not even be marked failed is the
   // worst case, not one to stay quiet about.
-  log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
+  // (Not for an `onlyIfStatus` write that matched nothing: that note was never
+  // failed here, and the alert counts this line.)
+  if (pgOk || pgErrored || !onlyIfStatus) {
+    log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
+  }
+  return { failed: pgOk };
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };
