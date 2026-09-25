@@ -762,7 +762,18 @@ export async function applyNoteEdit(
 
   const mirror: Record<string, unknown> = { updatedAt: ISO_NOW() };
   if (typeof input.title === 'string') mirror.title = input.title;
-  if (input.summary) mirror.summary = input.summary;
+  // Field paths, not the map: an edit carries the gist, action items and
+  // decisions (and key points, if sent). Replacing `summary` whole dropped
+  // `summary.chapters`, so editing one action item removed a long
+  // recording's chapters from the app.
+  if (input.summary) {
+    // Only the fields an edit carries: a caller that skipped sanitizeNoteEdit
+    // can't write any other `summary.*` path.
+    for (const k of ['gist', 'actionItems', 'keyDecisions', 'keyPoints'] as const) {
+      const v = input.summary[k];
+      if (v !== undefined) mirror[`summary.${k}`] = v;
+    }
+  }
   await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update(mirror);
 
   return { pgWritten };

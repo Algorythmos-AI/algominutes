@@ -99,6 +99,8 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
         gist: parsed.gist || '',
         actionItems: parsed.actionItems || [],
         keyDecisions: parsed.keyDecisions || [],
+        // A short recording has none; an earlier run's must not linger.
+        chapters: [],
       },
       transcriptPreview: redacted,
     });
