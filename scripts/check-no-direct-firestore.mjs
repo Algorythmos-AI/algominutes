@@ -35,6 +35,7 @@ export const ALLOWLIST = new Map([
   ['packages/db/src/storage-purges-repo.ts', "the repo layer's deletion outbox: re-deletes a deleted note's mirror doc after Postgres"],
   ['packages/db/src/account-repo.ts', "the repo layer's account deletion: removes the account's own docs after Postgres"],
   ['packages/db/src/note-terminal.cjs', 'the repo layer: the terminal-failure writer, workspace-scoped Postgres, then the mirror'],
+  ['packages/db/src/mirror-repair.ts', 'the repo layer: the sweep repairs a finished note\'s mirror from Postgres, under an update-time precondition'],
   ['services/transcoder/src/firestore-mirror.js', "the transcoder's mirror module"],
 ]);
 
