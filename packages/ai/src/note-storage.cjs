@@ -112,7 +112,14 @@ async function cancelResumableUpload(sessionUri, fetchImpl = fetch) {
   if (url.protocol !== 'https:' || url.hostname !== 'storage.googleapis.com') {
     throw new Error('refusing to cancel a non-GCS session uri');
   }
-  const res = await fetchImpl(url.href, { method: 'DELETE', headers: { 'Content-Length': '0' } });
+  // No redirects (the host check covers only this URL) and a bounded wait, so a
+  // hung GCS call can't hold up a delete request.
+  const res = await fetchImpl(url.href, {
+    method: 'DELETE',
+    redirect: 'error',
+    signal: AbortSignal.timeout(10_000),
+    headers: { 'Content-Length': '0' },
+  });
   if (![499, 404, 410, 200, 204].includes(res.status)) {
     throw new Error(`cancel resumable upload failed: HTTP ${res.status}`);
   }

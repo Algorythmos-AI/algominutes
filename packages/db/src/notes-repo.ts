@@ -771,8 +771,9 @@ export async function deleteNote(
         );
         if (here.rowCount || !manager) return { allowed: false };
       }
-      await client.query(
-        'DELETE FROM upload_sessions WHERE note_id = $1 AND workspace_id = $2',
+      // Their GCS session URIs stay valid for a week: the purge cancels them.
+      const sessions = await client.query<{ session_uri: string }>(
+        'DELETE FROM upload_sessions WHERE note_id = $1 AND workspace_id = $2 RETURNING session_uri',
         [input.noteId, input.workspaceId],
       );
       // The scratch prefix is keyed by note id alone. Purge it only if this
@@ -781,10 +782,13 @@ export async function deleteNote(
       const includeScratch = deleted
         || !(await client.query('SELECT 1 FROM notes WHERE id = $1', [input.noteId])).rowCount;
       const purge = await client.query<{ id: string }>(
-        `INSERT INTO storage_purges (note_id, workspace_id, storage_path, include_scratch, trace_id)
-           VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO storage_purges (note_id, workspace_id, storage_path, include_scratch, trace_id, upload_session_uris)
+           VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
-        [input.noteId, input.workspaceId, gone.rows[0]?.storage_path ?? null, includeScratch, input.traceId ?? null],
+        [
+          input.noteId, input.workspaceId, gone.rows[0]?.storage_path ?? null, includeScratch, input.traceId ?? null,
+          sessions.rows.map((r) => r.session_uri),
+        ],
       );
       return { allowed: true, deleted, purgeId: Number(purge.rows[0]!.id) };
     },

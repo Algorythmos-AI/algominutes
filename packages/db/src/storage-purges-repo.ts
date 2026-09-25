@@ -13,11 +13,12 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getPool } from './db';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
-const { purgeNoteObjects } = noteStorage as {
+const { purgeNoteObjects, cancelResumableUpload } = noteStorage as {
   purgeNoteObjects: (
     args: { bucket: unknown; workspaceId: string; noteId: string; includeScratch: boolean },
     log?: { info: (o: any, m?: string) => void },
   ) => Promise<string[]>;
+  cancelResumableUpload: (uri: string, fetchImpl?: unknown) => Promise<void>;
 };
 
 export interface StoragePurge {
@@ -29,12 +30,14 @@ export interface StoragePurge {
   /** Set when an account deletion queued it, so a retry can find it by uid. */
   uid: string | null;
   traceId: string | null;
+  /** The note's open GCS upload sessions when it was deleted: cancelled first (017). */
+  uploadSessionUris: string[];
   attempts: number;
   lastError: string | null;
   createdAt: Date;
 }
 
-const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, uid, trace_id, attempts, last_error, created_at`;
+const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, uid, trace_id, upload_session_uris, attempts, last_error, created_at`;
 
 function toPurge(r: any): StoragePurge {
   return {
@@ -45,6 +48,7 @@ function toPurge(r: any): StoragePurge {
     includeScratch: r.include_scratch,
     uid: r.uid ?? null,
     traceId: r.trace_id,
+    uploadSessionUris: r.upload_session_uris ?? [],
     attempts: r.attempts,
     lastError: r.last_error,
     createdAt: new Date(r.created_at),
@@ -100,7 +104,7 @@ export async function listStoragePurgesForAccount(input: { uid: string; workspac
  * not surfaced to the user whose note is already gone.
  */
 export async function runStoragePurge(
-  { bucket, firestore }: { bucket: unknown; firestore: Firestore },
+  { bucket, firestore, fetchImpl }: { bucket: unknown; firestore: Firestore; fetchImpl?: unknown },
   purge: StoragePurge,
   log: { info: (o: any, m?: string) => void; error: (o: any, m?: string) => void },
 ): Promise<boolean> {
@@ -116,6 +120,20 @@ export async function runStoragePurge(
   try {
     // Idempotent: deleting a missing doc succeeds.
     await firestore.doc(`workspaces/${purge.workspaceId}/notes/${purge.noteId}`).delete();
+    // The note's open upload sessions, before its objects, so an upload that
+    // lands first goes with them. A session already finished, expired or
+    // cancelled counts as done (note-storage.cjs). One that won't cancel
+    // doesn't hold up the delete: the row keeps just that URI, and each retry
+    // cancels it again and deletes the objects again.
+    const uncancelled: string[] = [];
+    for (const uri of purge.uploadSessionUris) {
+      try {
+        await cancelResumableUpload(uri, fetchImpl);
+      } catch (cancelErr) {
+        uncancelled.push(uri);
+        log.error({ err: cancelErr, ...fields }, 'note_upload_cancel_failed');
+      }
+    }
     await purgeNoteObjects(
       {
         bucket,
@@ -125,6 +143,10 @@ export async function runStoragePurge(
       },
       { info: (o: any, m?: string) => log.info({ ...fields, ...o }, m) },
     );
+    if (uncancelled.length) {
+      await getPool().query('UPDATE storage_purges SET upload_session_uris = $2 WHERE id = $1', [purge.id, uncancelled]);
+      throw new Error(`${uncancelled.length} upload session(s) not cancelled`);
+    }
     await getPool().query('DELETE FROM storage_purges WHERE id = $1', [purge.id]);
     return true;
   } catch (err) {
