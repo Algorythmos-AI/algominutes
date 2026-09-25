@@ -3704,6 +3704,26 @@
               }
             }
           },
+          "404": {
+            "description": "The note was deleted (its purge is pending).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "totalBytes is over the 500 MB limit (the kickoff enforces the same).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Could not start the upload.",
             "content": {
