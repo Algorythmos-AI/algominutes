@@ -20,11 +20,12 @@ describe('publicSiteUrl', () => {
     const fs = await import('node:fs');
     const shares = fs.readFileSync('services/api/src/routes/shares.js', 'utf8');
     expect(shares).toMatch(/`\$\{publicSiteUrl\(\)\}\/s\/\$\{raw\}`/);
+    expect(shares).not.toMatch(/['"`]https:\/\//);
     for (const f of ['checkout', 'portal']) {
       const src = fs.readFileSync(`services/billing/src/routes/${f}.js`, 'utf8');
       expect(src).toMatch(/publicSiteUrl\(\)\}\/billing/);
-      // A substring check: the old, unregistered domain is gone from the source.
-      expect(src.includes('algominutes.com')).toBe(false);
+      // No origin is hard-coded: every URL is built on the public site.
+      expect(src).not.toMatch(/['"`]https:\/\//);
     }
   });
 });
