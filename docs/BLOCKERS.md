@@ -344,9 +344,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   budget). If it truncates, raise `maxOutputTokens` or set a thinking budget, and
   keep the smoke as the gate. **Hard deadline: 2026-10-20**, when 2.5-flash
   retires and 3.5-flash is the only rung.
-- [ ] **Transcoder fast path sends audio inline to Gemini.** 3.5-flash lists audio
-  input as supported, but `vertex-smoke` only exercises text. Add an audio-fixture
-  call to the smoke, or verify a short recording end to end on staging.
+- [x] **Done (vertex-smoke-audio PR): the smoke also sends the fast path's call.** Each ladder rung
+  gets inline audio (a 2-second synthetic WAV tone, generated at runtime, no user data) with the fast
+  path's schema and budget. The deploy fails before rollout if a rung rejects audio, truncates, or answers
+  off-schema. Still to verify on staging: a real short recording end to end (the M1 proof).
+  Was: **Transcoder fast path sends audio inline to Gemini** and `vertex-smoke` only exercised text.
 - [ ] **Embedding migration before 2027-04-01:** `text-embedding-004` → `gemini-embedding-001`
   (served in Sydney; set `outputDimensionality: 768` to keep `vector(768)`). Vectors
   from different models don't compare, so: add `embeddings.model` to every query,
