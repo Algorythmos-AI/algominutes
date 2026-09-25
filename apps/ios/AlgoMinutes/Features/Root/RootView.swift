@@ -60,6 +60,8 @@ struct RootView: View {
             // Uploads killed while backgrounded resume from disk on return.
             if phase == .active, env.auth.user != nil {
                 Task { await env.resumePendingUploads() }
+                // A capture of another app ends while that app is in front.
+                Task { await env.claimBroadcastCapture() }
                 // Re-read entitlement: a subscription may have changed in the
                 // system Settings while we were backgrounded.
                 Task { await env.billing.refresh() }

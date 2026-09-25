@@ -965,6 +965,23 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Verify on a real iPhone (M1):** delete an Apple-linked test account, and the app disappears from
   Settings → Apple ID → Sign in with Apple.
 
+## Broadcast capture of another app (plan rev 8, PR-25, 2026-09-25)
+
+- [x] **Done in code (ios-broadcast-capture PR): the app can capture another app's call and make it a note.**
+  - After the same consent step, *Capture audio from another app* shows the system broadcast picker,
+    preset to the AlgoMinutes extension, with the microphone on. It goes through `CaptureKind.appAudio` on
+    the same gate.
+  - When the app returns to the foreground it claims the finished capture once, mixes the extension's
+    two tracks (app audio and microphone) into the one track the transcoder hears (verified: both
+    halves audible after the mix), and uploads it like a recording.
+  - A capture whose extension died (stale heartbeat) is reported, and its unreadable partial is removed.
+- [ ] **Verify on a real iPhone (M1):** a FaceTime or Zoom call captured, and both sides in the transcript.
+- [ ] **Before App Store submission:** a server-side kill switch for broadcast (the top App Review risk),
+  and review notes that explain the feature.
+- [ ] **Queued:** the extension writes `.m4a` with AVAssetWriter, so if iOS kills it (a 50 MB memory
+  limit) mid-capture, the capture is lost. AVAudioFile can write ADTS, but the two sources run on
+  different clocks. Measure how often it happens before redesigning.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**
