@@ -2,13 +2,13 @@
 
 // A7.4 terminal-failure hooks for the transcoder.
 //
-// When a transcode job fails permanently the note is already being flipped to
-// 'error' (note-terminal.cjs). This module ADDS the A7.4 reliability tail:
+// When a transcode job fails permanently the note is already flipped to
+// 'error', and its minutes refunded in the same transaction (note-terminal.cjs
+// with `refund`, transcodeRefund below). This module ADDS the rest of the A7.4
+// reliability tail:
 //   1. dead-letter the exhausted job so it is never silently lost (Cloud Tasks
-//      has no native DLQ sink),
-//   2. refund the note's metered minutes (a failed recording must not be
-//      charged), and
-//   3. notify the author that the recording failed.
+//      has no native DLQ sink), and
+//   2. notify the author that the recording failed.
 //
 // Everything here is BEST-EFFORT and never throws into the caller's failure
 // path — the same discipline as note-terminal.cjs: a failure to record the
@@ -80,17 +80,6 @@ async function recordDeadLetterSafe(input, log) {
   }
 }
 
-async function refundSafe(input, log) {
-  const fn = repoFn('usage-repo', 'reverseUsageForNote', log);
-  if (!fn) return;
-  try {
-    const r = await fn(input);
-    log.info({ noteId: input.noteId, applied: r && r.applied, minutesReversed: r && r.minutesReversed }, 'usage_refunded');
-  } catch (err) {
-    log.error({ err, noteId: input.noteId }, 'usage_refund_failed');
-  }
-}
-
 /**
  * Enqueue a `notify` Cloud Task (queue `notify`, target `NOTIFIER_URL`).
  * Where the tasks/notifier config is absent (local/dev) this skips with a log
@@ -130,10 +119,11 @@ async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: bas
 }
 
 /**
- * The full A7.4 tail for a permanently-failed transcode: DLQ + refund + notify.
+ * The A7.4 tail for a permanently-failed transcode: DLQ + notify (the refund
+ * is markNoteFailed's).
  * `payload` must be job METADATA only (no transcript/PII).
  */
-async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, refundReason = 'refund:transcode_failed', deadLetterOnly = false, notify = true }) {
+async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false, notify = true }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -148,16 +138,9 @@ async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err,
   // Only the record, for work lost on a note that isn't failed (ready anyway,
   // or Postgres couldn't say): no refund, no "failed" notice.
   if (deadLetterOnly) return;
-  // The refund runs for any failed note: it's net-guarded, so a second chunk,
-  // a retry or an earlier refund leaves it a no-op. The notice (`notify`) goes
+  // The refund isn't here: markNoteFailed writes it in the failure's own
+  // transaction (`refund`, transcodeRefund below). The notice (`notify`) goes
   // with a new failure only.
-  await refundSafe({
-    noteId,
-    // 'refund:spend_cap' for a note the cap stopped before any paid work
-    // (a label on the ledger row; nothing reads it today).
-    reason: refundReason,
-    idempotencyKey: `${noteId}:refund:transcode`,
-  }, log);
   if (!notify) return;
   await enqueueNotify({
     type: 'note_failed',
@@ -169,4 +152,14 @@ async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err,
   });
 }
 
-module.exports = { onTranscodeTerminalFailure, enqueueNotify, resolveNoteUid };
+/**
+ * The refund every transcoder failure passes to markNoteFailed, which writes it
+ * in the failure's transaction. One key per run (ledger-reversal.cjs suffixes
+ * the debit). 'refund:spend_cap' labels a note the cap stopped before any paid
+ * work.
+ */
+function transcodeRefund(noteId, reason = 'refund:transcode_failed') {
+  return { reason, idempotencyKey: `${noteId}:refund:transcode` };
+}
+
+module.exports = { onTranscodeTerminalFailure, enqueueNotify, resolveNoteUid, transcodeRefund };

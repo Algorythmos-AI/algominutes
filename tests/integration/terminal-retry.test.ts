@@ -96,7 +96,7 @@ describe('markNoteFailed with retryOnPgError', () => {
   it("with onlyIfStatus, a Postgres error mirrors nothing (Postgres couldn't say the note was one to fail)", async () => {
     await breakFailedWrites();
     const r = await markNoteFailed({ pool, firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log, event: 't', onlyIfStatus: ['queued'] });
-    expect(r).toEqual({ failed: false, marked: false, pgErrored: true, exists: false });
+    expect(r).toEqual({ failed: false, marked: false, pgErrored: true, exists: false, refunded: false });
     expect(mirrored).toEqual([]);
   });
 });

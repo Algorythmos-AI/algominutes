@@ -13,6 +13,15 @@ import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
+import ledgerReversal from '@algominutes/db/ledger-reversal.cjs';
+
+// The one copy of the refund SQL, written in a failure's own transaction.
+const { reverseNoteUsage } = ledgerReversal as {
+  reverseNoteUsage: (
+    queryable: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+    input: { noteId: string; reason: string; idempotencyKey: string },
+  ) => Promise<{ applied: boolean; minutesReversed: number }>;
+};
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
@@ -347,8 +356,9 @@ export async function markQueued(
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
         if (input.meter) {
-          // One debit per run, decided under this note's lock (so against
-          // another kickoff; a refund runs outside it, BLOCKERS). A note whose
+          // One debit per run, decided under this note's row lock, which a
+          // failure also holds while it writes its refund (ledger-reversal.cjs):
+          // the ledger read here sees both or neither. A note whose
           // last run was refunded (net 0) is charged again: its re-run is real
           // work, and a per-note key made it free. One whose charge still
           // stands (a failure that wasn't refunded) isn't charged twice.
@@ -941,23 +951,33 @@ export async function listStuckNotes(
  * repeats the selection condition (in flight, unchanged for olderThanMs, same
  * workspace, not deleted), so a note that moved on since the listing (a chunk
  * finished, it became ready, the client re-queued it, it was deleted) is left
- * alone. The mirror, and the caller's dead letter and refund, happen only when
- * a row matched. Postgres first; the mirror uses update(), so a deleted note's
- * doc is never re-created.
+ * alone. With `refund`, the reversal is written in the same transaction. The
+ * mirror, and the caller's dead letter, happen only when a row matched.
+ * Postgres first; the mirror uses update(), so a deleted note's doc is never
+ * re-created.
  */
 export async function failStuckNote(
   firestore: Firestore,
-  input: { noteId: string; workspaceId: string; olderThanMs: number; message: string },
+  input: {
+    noteId: string; workspaceId: string; olderThanMs: number; message: string;
+    /** Written in the failure's transaction (ledger-reversal.cjs), under its row lock. */
+    refund?: { reason: string; idempotencyKey: string };
+  },
   log: { error: (o: any, m?: string) => void },
-): Promise<{ failed: boolean }> {
-  const { rowCount } = await getPool().query(
-    `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
-      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
-        AND status = ANY($4::text[])
-        AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
-    [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
-  );
-  if (!rowCount) return { failed: false };
+): Promise<{ failed: boolean; refunded?: boolean }> {
+  const { failed, refunded } = await withTx(async (client) => {
+    const { rowCount } = await client.query(
+      `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
+        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+          AND status = ANY($4::text[])
+          AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
+      [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
+    );
+    if (!rowCount) return { failed: false, refunded: false };
+    const r = input.refund ? await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund }) : { applied: false };
+    return { failed: true, refunded: r.applied };
+  }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
+  if (!failed) return { failed: false };
   try {
     await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({
       status: 'error', errorMessage: input.message, updatedAt: ISO_NOW(),
@@ -967,5 +987,5 @@ export async function failStuckNote(
     // note) or briefly unavailable. The next read path reconciles from Postgres.
     log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'stuck_note_mirror_failed');
   }
-  return { failed: true };
+  return { failed: true, refunded };
 }

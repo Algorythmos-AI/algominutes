@@ -1,5 +1,7 @@
 'use strict';
 
+const { reverseNoteUsage } = require('./ledger-reversal.cjs');
+
 /**
  * Terminal failure state for a note — written to BOTH stores.
  *
@@ -52,19 +54,21 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  * Returns `{ failed, marked, pgErrored, exists }`:
  * - `marked`: Postgres has the note at 'error' after this write (new or not).
  *   The refund keys on this: it's net-guarded, so repeating it changes nothing.
- *   A poll terminal that died after its commit is refunded on its retry (the
- *   transcoder's re-drive); on the other paths such a crash still loses the
- *   tail (BLOCKERS).
+ *   With `refund` ({ reason, idempotencyKey }), the reversal is written in the
+ *   same transaction as the failure, under the note's row lock
+ *   (ledger-reversal.cjs): a crash can't commit one without the other, and a
+ *   kickoff or a second refunder sees both or neither.
  * - `failed`: this write moved the note to 'error' from something else. The
  *   "failed" notice keys on this, so the author is told once.
  * - `pgErrored`: Postgres couldn't be asked.
  * - `exists`: the note is there in this workspace (ready, already failed, ...).
+ * - `refunded`: a reversal was written (the note still had a net charge).
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return { failed: false, marked: false, pgErrored: false, exists: false };
+    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false };
   }
 
   let pgOk = false;
@@ -72,6 +76,8 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let prevStatus = null;
   let storedMessage = message;
   let exists = false;
+  let refunded = false;
+  let minutesReversed = 0;
   try {
     const client = await pool.connect();
     try {
@@ -81,7 +87,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       // the first's 'error'. With `chunkId`, the chunk's error is written in
       // the same statement, and only if the note's was: a poll's retry finds
       // both or neither, and a note this doesn't fail keeps its chunk.
-      const { rows } = await client.query(
+      const failNote = () => client.query(
         `WITH p AS (
            SELECT id, status AS prev_status FROM notes
             WHERE id = $1 AND workspace_id = $3 FOR NO KEY UPDATE
@@ -100,6 +106,34 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
          SELECT prev_status, error_message FROM upd`,
         [noteId, message, workspaceId, onlyIfStatus, chunkId],
       );
+      let rows;
+      if (!refund) {
+        ({ rows } = await failNote());
+      } else {
+        try {
+          await client.query('BEGIN');
+          ({ rows } = await failNote());
+          // The refund in the failure's transaction, while its row lock holds.
+          if (rows.length > 0) {
+            const r = await reverseNoteUsage(client, {
+              noteId, reason: refund.reason, idempotencyKey: refund.idempotencyKey,
+            });
+            refunded = r.applied;
+            minutesReversed = r.minutesReversed;
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          refunded = false;
+          minutesReversed = 0;
+          await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, `${name}_rollback_failed`));
+          if (retryOnPgError) throw err; // the task retries both
+          // No retry left (a last attempt): fail the note without its refund,
+          // so the two stores agree, and say the refund was lost. A Postgres
+          // that's down fails this too, into the catch below.
+          log.error({ err, noteId, workspaceId, reason: refund.reason }, `${name}_refund_lost`);
+          ({ rows } = await failNote());
+        }
+      }
       pgOk = rows.length > 0;
       prevStatus = pgOk ? rows[0].prev_status : null;
       if (pgOk && rows[0].error_message) storedMessage = rows[0].error_message;
@@ -171,7 +205,10 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   } else {
     log.info({ noteId, workspaceId, pgOk, prevStatus, exists }, `${name}_not_a_new_failure`);
   }
-  return { failed, marked: pgOk, pgErrored, exists };
+  if (refund && pgOk) {
+    log.info({ noteId, workspaceId, applied: refunded, minutesReversed, reason: refund.reason }, 'usage_refunded');
+  }
+  return { failed, marked: pgOk, pgErrored, exists, refunded };
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };

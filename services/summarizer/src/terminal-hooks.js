@@ -3,14 +3,15 @@
 // A7.3/A7.4 terminal hooks for the summarizer — the LAST pipeline stage.
 //
 //   onReady(...)                    → enqueue a `note_ready` notify task.
-//   onSummarizeTerminalFailure(...) → dead-letter the exhausted job, refund the
-//                                     note's metered minutes, and enqueue a
-//                                     `note_failed` notify task.
+//   onSummarizeTerminalFailure(...) → dead-letter the exhausted job and enqueue
+//                                     a `note_failed` notify task. (The refund
+//                                     is written with the failure: markNoteFailed
+//                                     with `refund`, summaryRefund below.)
 //
 // Everything is BEST-EFFORT and never throws into the caller: on the success
 // path a failed notify must not roll back a summary that landed; on the failure
-// path a failed DLQ/refund must not mask the original error. The A7.4 repo layer
-// (dead_letter, usage_ledger) is reached ONLY through @algominutes/db
+// path a failed DLQ must not mask the original error. The A7.4 repo layer
+// (dead_letter) is reached ONLY through @algominutes/db
 // (CLAUDE.md §Data plane), never re-implemented here.
 
 function loadShared(name) {
@@ -71,17 +72,6 @@ async function recordDeadLetterSafe(input, log) {
   }
 }
 
-async function refundSafe(input, log) {
-  const fn = repoFn('usage-repo', 'reverseUsageForNote', log);
-  if (!fn) return;
-  try {
-    const r = await fn(input);
-    log.info({ noteId: input.noteId, applied: r && r.applied, minutesReversed: r && r.minutesReversed }, 'usage_refunded');
-  } catch (err) {
-    log.error({ err, noteId: input.noteId }, 'usage_refund_failed');
-  }
-}
-
 async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: baseLog }) {
   const log = baseLog.child({ userId: uid, workspaceId });
   const targetUrl = process.env.NOTIFIER_URL;
@@ -129,8 +119,8 @@ async function onReady({ pool, noteId, workspaceId, uid, traceId, log }) {
   });
 }
 
-/** FINAL-ATTEMPT FAILURE: DLQ + refund + notify. `payload` is metadata only. */
-async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false, notify = true, refund = true }) {
+/** FINAL-ATTEMPT FAILURE: DLQ + notify. `payload` is metadata only. */
+async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false, notify = true }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -145,17 +135,9 @@ async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err,
   // Only the record, for work lost on a note that isn't failed (ready anyway,
   // or Postgres couldn't say): no refund, no "failed" notice.
   if (deadLetterOnly) return;
-  // The refund runs for any failed note: it's net-guarded, so a second chunk,
-  // a retry or an earlier refund leaves it a no-op. The notice (`notify`) goes
+  // The refund isn't here: markNoteFailed writes it in the failure's own
+  // transaction (`refund`, summaryRefund below). The notice (`notify`) goes
   // with a new failure only.
-  // Not for a regeneration's failure (last-attempt.js): the charge stands.
-  if (refund) {
-    await refundSafe({
-      noteId,
-      reason: 'refund:summary_failed',
-      idempotencyKey: `${noteId}:refund:summarize`,
-    }, log);
-  }
   if (!notify) return;
   await enqueueNotify({
     type: 'note_failed',
@@ -167,4 +149,9 @@ async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err,
   });
 }
 
-module.exports = { onReady, onSummarizeTerminalFailure, enqueueNotify, resolveNoteUid };
+/** The refund a summary failure passes to markNoteFailed (its transaction). */
+function summaryRefund(noteId) {
+  return { reason: 'refund:summary_failed', idempotencyKey: `${noteId}:refund:summarize` };
+}
+
+module.exports = { onReady, onSummarizeTerminalFailure, enqueueNotify, resolveNoteUid, summaryRefund };

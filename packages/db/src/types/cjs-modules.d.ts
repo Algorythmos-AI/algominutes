@@ -22,3 +22,7 @@ declare module '@algominutes/ai/redaction.cjs' {
   const mod: unknown;
   export default mod;
 }
+declare module '@algominutes/db/ledger-reversal.cjs' {
+  const mod: unknown;
+  export default mod;
+}

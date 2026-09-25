@@ -54,7 +54,7 @@ afterAll(async () => {
 });
 
 describe('transcoder spend gate', () => {
-  it('at the cap, a kickoff fails its note (Postgres, then Firestore), runs the refund hook once, and acks', async () => {
+  it('at the cap, a kickoff fails its note (Postgres, then Firestore), runs the hooks once, and acks', async () => {
     spendGuard.setDailySpendReader(async () => 12);
     const f = deps();
     expect(await spendGate(kickoff, f.d)).toEqual({ status: 200, body: { ok: false, reason: 'spend_cap' } });
@@ -63,10 +63,9 @@ describe('transcoder spend gate', () => {
     expect(f.terminal).toHaveLength(1);
     expect(f.terminal[0]).toMatchObject({ noteId: 'n1', workspaceId: 'ws', traceId: 't-cap', payload: { kind: 'kickoff', storagePath: 'recordings/ws/n1.aac' } });
     expect(f.terminal[0].err.code).toBe('SPEND_CAP_EXCEEDED');
-    expect(f.terminal[0].refundReason).toBe('refund:spend_cap');
   });
 
-  it("with the real hooks: the note's minutes come back as a cap refund, and a dead letter is kept", async () => {
+  it("the note's minutes come back as a cap refund (with the failure), and the real hooks keep a dead letter", async () => {
     await pool.query(
       `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
        VALUES ('u', 'ws', 'n1', 'debit', 42, '2026-09', 'ingest', 'n1:ingest')`,
