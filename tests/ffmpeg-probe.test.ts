@@ -23,12 +23,14 @@ describe('probeDuration failures', () => {
   });
 
   it.skipIf(!hasFfprobe)('a file the tools reject is permanent', async () => {
-    const f = path.join(os.tmpdir(), `garbage-${process.pid}.m4a`);
+    // A private directory (mkdtemp), not a predictable name in the shared temp dir.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-'));
+    const f = path.join(dir, 'garbage.m4a');
     fs.writeFileSync(f, Buffer.from('this is not audio at all'));
     try {
       await expect(ffmpeg.probeDuration(f)).rejects.toMatchObject({ transient: false });
     } finally {
-      fs.rmSync(f, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
