@@ -30,6 +30,10 @@ import type { Firestore } from 'firebase-admin/firestore';
 import redaction from '@algominutes/ai/redaction.cjs';
 import { getPool } from './db';
 
+const { redactLines } = redaction as {
+  redactLines: (texts: string[]) => { texts: string[]; counts: Record<string, number> };
+};
+
 export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' }
 
 /** Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first. */
@@ -105,13 +109,14 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
         // Stored lines are redacted chunk by chunk; this re-runs it across the
         // whole transcript, as the summarizer's preview does, so a private key
         // that spans two chunks is caught too.
-        const { texts } = redaction.redactLines(lines.rows.map((l) => String(l.text || '')));
+        const { texts } = redactLines(lines.rows.map((l) => String(l.text || '')));
         out.transcript = lines.rows.map((l, i) => {
+          const text = texts[i] ?? '';
           // The fast path stores "Speaker: text" with no chunk; a chunked line
           // has a speaker tag (or none).
-          const labelled = l.chunk_id == null ? /^([^:\n]{1,40}): ([\s\S]*)$/.exec(texts[i]) : null;
+          const labelled = l.chunk_id == null ? /^([^:\n]{1,40}): ([\s\S]*)$/.exec(text) : null;
           const speaker = labelled ? String(labelled[1]) : (l.speaker_tag != null ? `Speaker ${l.speaker_tag}` : 'Speaker');
-          return { speaker, text: labelled ? String(labelled[2]) : texts[i], time: clock(Number(l.start_ms)) };
+          return { speaker, text: labelled ? String(labelled[2]) : text, time: clock(Number(l.start_ms)) };
         });
       }
     }
