@@ -17,8 +17,8 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     // A full 4-hour recording at 64 kbps is ~115 MB (ADTS adds ~5% of frame
     // headers), well under the api's 500 MB upload cap. Warn 5 minutes before cap.
     // TODO(A9): source this from the user's plan entitlement, not a constant.
-    static let maxRecordingSeconds = 4 * 60 * 60
-    static let warnAfterSeconds = maxRecordingSeconds - 300
+    nonisolated static let maxRecordingSeconds = 4 * 60 * 60
+    nonisolated static let warnAfterSeconds = maxRecordingSeconds - 300
 
     private(set) var isRecording = false
     private(set) var elapsedSeconds = 0

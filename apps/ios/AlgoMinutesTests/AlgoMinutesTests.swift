@@ -960,7 +960,7 @@ final class RecordingStoreTests: XCTestCase {
         let b = store.makeRecordingURL()
         XCTAssertNotEqual(a, b)
         XCTAssertEqual(a.deletingLastPathComponent().path, tempDir.path)
-        XCTAssertEqual(a.pathExtension, "m4a")
+        XCTAssertEqual(a.pathExtension, "aac") // ADTS: a killed recording stays readable
         XCTAssertTrue(a.lastPathComponent.hasPrefix("recording_"))
     }
 
