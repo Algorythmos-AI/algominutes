@@ -63,4 +63,18 @@ describe('the search log line', () => {
     expect(ok?.o).toMatchObject({ queryLen: 'zzqx Henderson renewal'.length, hitCount: 1 });
     expect(JSON.stringify(lines)).not.toContain('Henderson');
   });
+
+  it('a search narrowed to one note logs its noteId; a malformed id is not echoed', async () => {
+    const lines: Array<{ o: any; m: string }> = [];
+    const logger = (bound: Record<string, unknown>): any => {
+      const at = (o: any, m: string) => void lines.push({ o: { ...bound, ...o }, m });
+      return { info: at, warn: at, error: at, child: (f: Record<string, unknown>) => logger({ ...bound, ...f }) };
+    };
+    await handleSearch({ uid: 'alice', body: { query: 'zzqx', noteId: 'current' }, log: logger({}), embed: async () => unit(1) });
+    expect(lines.find((l) => l.m === 'search_ok')?.o).toMatchObject({ noteId: 'current', hitCount: 1 });
+
+    lines.length = 0;
+    await handleSearch({ uid: 'alice', body: { query: 'zzqx', noteId: 'not an id <script>' }, log: logger({}), embed: async () => unit(1) });
+    expect(JSON.stringify(lines)).not.toContain('<script>');
+  });
 });

@@ -1097,8 +1097,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 ## From the log-fields audit of 2026-09-25 (queued)
 
 - [x] ~~`services/api/src/routes/search-and-chat.cjs` logs the user's scrubbed search text~~ **fixed
-  (search-logs-query-length PR):** `search_ok` and the embed lines carry `queryLen`, never the text. Tested
-  (unit: failure, timeout, success; integration: `search_ok`); one mutation checked.
+  (search-logs-query-length PR):** `search_ok` and the embed lines carry `queryLen`, never the text. A
+  search or chat narrowed to one note binds its `noteId` to the logger (well-formed ids only, so a body
+  can't put arbitrary text on every line; the not-found lines no longer echo the raw id). Tested (unit:
+  failure, timeout, success; integration: `search_ok`, the bound and the malformed id); two mutations checked.
+  - [ ] Unverified: whether a Vertex error body (200 characters, carried on `err` by `embed_query_failed`
+    and `chat_stream_failed`) can quote the input back.
 - [ ] `recordPaidWork` and `completeChunkGate` (`pipeline-repo.cjs`) call `log.error` in their catch without
   checking a logger was passed. Every caller passes one today; a missing one would turn a logged failure
   into a TypeError.
