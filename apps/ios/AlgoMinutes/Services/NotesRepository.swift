@@ -22,6 +22,10 @@ final class NotesRepository {
     private var stuckCheckRan = Set<String>()
     private var retitleAttempted = Set<String>()
     private var retryInFlight = Set<String>()
+    /// The last snapshot, and the notes a delete is in flight for: hidden at
+    /// once, shown again if the server refuses the delete.
+    private var snapshotNotes: [Note] = []
+    private var deletingIds = Set<String>()
 
     /// A7.3: previous per-note status, to detect a completion transition and post
     /// the local-notification fallback exactly once. Empty until the first
@@ -65,6 +69,8 @@ final class NotesRepository {
         stuckCheckRan.removeAll()
         retitleAttempted.removeAll()
         retryInFlight.removeAll()
+        snapshotNotes = []
+        deletingIds.removeAll()
         lastStatusById.removeAll()
         receivedFirstSnapshot = false
         resubscribeAttempts = 0
@@ -88,7 +94,8 @@ final class NotesRepository {
                     self.resubscribeAttempts = 0
                     let parsed = snapshot.documents.compactMap { Note(id: $0.documentID, data: $0.data()) }
                     self.notifyCompletedTransitions(newNotes: parsed)
-                    self.notes = parsed.sorted { $0.createdAt > $1.createdAt }
+                    self.snapshotNotes = parsed.sorted { $0.createdAt > $1.createdAt }
+                    self.notes = Self.visible(self.snapshotNotes, hiding: self.deletingIds)
                     self.autoRetitleReadyNotes()
                 }
             }
@@ -179,13 +186,26 @@ final class NotesRepository {
         }
     }
 
-    /// Deleting the doc triggers the backend `onNoteDeleted` cascade.
-    func deleteNote(id: String) {
-        guard let collection = notesCollection() else { return }
-        collection.document(id).delete { error in
-            if let error {
-                AppLog.error("note_delete_failed: \(error.localizedDescription)")
-            }
+    static func visible(_ notes: [Note], hiding ids: Set<String>) -> [Note] {
+        ids.isEmpty ? notes : notes.filter { !ids.contains($0.id) }
+    }
+
+    /// Deletes through POST /v1/notes/delete: Postgres first, then this doc,
+    /// then the audio. The Firestore rules refuse a client delete, and a doc
+    /// deleted alone used to leave the note searchable and its audio stored.
+    /// The note disappears at once; if the server refuses, it comes back and
+    /// this throws so the caller can say so.
+    func deleteNote(id: String) async throws {
+        guard let wsId else { throw APIError.notSignedIn }
+        deletingIds.insert(id)
+        notes = Self.visible(snapshotNotes, hiding: deletingIds)
+        do {
+            try await api.deleteNote(noteId: id, workspaceId: wsId)
+        } catch {
+            AppLog.error("note_delete_failed: \(error.localizedDescription)")
+            deletingIds.remove(id)
+            notes = Self.visible(snapshotNotes, hiding: deletingIds)
+            throw error
         }
     }
 
@@ -315,16 +335,15 @@ final class NotesRepository {
             guard !retitleAttempted.contains(note.id) else { continue }
             guard let title = TitleDeriver.derive(fromGist: note.summary?.gist) else { continue }
             retitleAttempted.insert(note.id)
-            guard let collection = notesCollection() else { return }
-            collection.document(note.id).updateData([
-                "title": title,
-                "updatedAt": Note.isoNow(),
-            ]) { [weak self] error in
-                if let error {
+            guard let wsId else { return }
+            // Through /v1/notes/update (Postgres first, then the mirror), so search,
+            // chat and the transcript read see the new title too.
+            Task { [weak self, api] in
+                do {
+                    try await api.updateNote(noteId: note.id, workspaceId: wsId, title: title)
+                } catch {
                     AppLog.error("retitle_failed: \(error.localizedDescription)")
-                    Task { @MainActor in
-                        self?.retitleAttempted.remove(note.id) // allow retry, parity with web
-                    }
+                    self?.retitleAttempted.remove(note.id) // allow retry, parity with web
                 }
             }
         }

@@ -337,7 +337,11 @@ struct NoteDetailView: View {
         // and an AVPlayer streaming a deleted object fails with a network
         // error rather than stopping cleanly.
         if env.player.currentNoteId == noteId { env.player.stop() }
-        env.notes.deleteNote(id: noteId)
+        let id = noteId
+        Task {
+            do { try await env.notes.deleteNote(id: id) }
+            catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+        }
         dismiss()
     }
 
