@@ -28,7 +28,7 @@ import {
   isAccountDeleted,
 } from '@algominutes/db';
 
-const { isValidId } = intelligenceModule;
+const { isValidId, MAX_AUDIO_BYTES } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
 
 // GCS requires resumable chunk lengths to be multiples of 256 KiB; 8 MiB is a
@@ -87,6 +87,13 @@ export async function createUploadSessionRoute(req, res) {
   // other authed route.
   if (workspaceId !== `workspace_${req.uid}`) {
     return res.status(403).json({ error: 'Workspace mismatch' });
+  }
+  // The size cap, before any session is minted: clients upload straight to GCS
+  // (no storage.rules in the way), and the kickoff refuses the same size later
+  // anyway, after the bytes were paid for.
+  if (totalBytes > MAX_AUDIO_BYTES) {
+    req.log.warn({ noteId, workspaceId, totalBytes }, 'upload_too_large');
+    return res.status(413).json({ error: 'That file is too large. The current limit is 500 MB.' });
   }
 
   const ext = extFromFileName(fileName);
