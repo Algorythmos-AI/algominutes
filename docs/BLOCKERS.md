@@ -53,10 +53,10 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
 - [ ] The public deletion-page domain + a support/privacy email address — blocks Play submission.
 
 **Infra (`TODO(A11)`):**
-- [ ] Cloud SQL PITR + Storage lifecycle/version expiry ≤30 days (makes the deletion promise true) + Cloud
-      Logging retention. (The retention enforcer and the trial-expiry sweep are **done**: `db-sweep` steps
-      `retention` and `trials`, sweep-retention-and-trials PR. Before it, a user's retention choice was
-      stored and never enforced.)
+- [x] **Done (retention-windows PR, pending your apply):** Cloud SQL keeps 7 daily backups and 7 days of PITR
+      logs; noncurrent object versions expire after 7 days (#70); the `_Default` log bucket keeps 30 days. All are
+      stated in Terraform so they can't drift past the 30-day deletion promise, and DATA-RETENTION §4 shows how
+      to verify them. The retention enforcer and trial-expiry sweep are also done (#81).
 - [ ] Server-side attestation verification (DeviceCheck key / Play Integrity) so the #7 device hash is
       trusted, not just accepted; needs a real device to verify end-to-end.
 

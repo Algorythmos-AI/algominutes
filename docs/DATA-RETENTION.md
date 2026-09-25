@@ -91,14 +91,19 @@ Mechanics:
   deleted **immediately** on the user action (§3 / §5).
 - **Backups** are not edited in place; instead, backup retention is **capped at the window**
   so any backup still containing the deleted item ages out within 30 days and is destroyed.
-- `TODO(A11):` **Infra config** to make the promise true and testable:
-  - Postgres automated-backup / PITR retention set to **≤ 30 days** (Cloud SQL backup +
-    transaction-log retention).
-  - Cloud Storage bucket **lifecycle rule** (and, if object versioning is enabled, a
-    noncurrent-version expiry) set to **≤ 30 days** so soft-deleted/older versions expire.
-  - Cloud Logging retention set to the §3 log window (recommend 30 days).
-  - A documented verification (query/log) proving no backup older than the window is
-    retained. Per CLAUDE.md, closure needs evidence, not a config screenshot.
+- **Infra config** that makes the promise true (Terraform, `infra/terraform/modules/environment`):
+  - Cloud SQL: 7 retained daily backups (`backup_retention_settings`), and 7 days of PITR transaction logs
+    where PITR is on (prod);
+  - the recordings bucket: noncurrent (deleted or overwritten) object versions expire after 7 days
+    (`noncurrent_version_retention_days`, validated 1–30). The api deletes every generation on a note or
+    account deletion anyway;
+  - Cloud Logging: the `_Default` bucket keeps 30 days (`google_logging_project_bucket_config`).
+  - Verification after apply:
+    ```bash
+    gcloud sql instances describe algominutes-<env>-pg --format='value(settings.backupConfiguration.backupRetentionSettings.retainedBackups,settings.backupConfiguration.transactionLogRetentionDays)'
+    gcloud logging buckets describe _Default --location=global --format='value(retentionDays)'
+    gcloud storage buckets describe gs://algominutes-<env>-recordings --format='value(lifecycle_config)'
+    ```
 
 ---
 
@@ -146,9 +151,9 @@ Reference: iOS `apps/ios/AlgoMinutes/Services/RecordingStore.swift`.
 
 | Item | Type |
 |---|---|
-| Backup/PITR retention ≤ 30 days (Cloud SQL) (§4) | `TODO(A11)` — **blocking the promise** |
-| Storage lifecycle/version expiry ≤ 30 days (§4) | `TODO(A11)` — blocking the promise |
-| Cloud Logging retention config (§3, §4) | `TODO(A11)` |
+| Backup/PITR retention ≤ 30 days (Cloud SQL) (§4) | Done: 7 backups, 7 days PITR (Terraform), pending apply |
+| Storage lifecycle/version expiry ≤ 30 days (§4) | Done: noncurrent versions expire after 7 days (Terraform), pending apply |
+| Cloud Logging retention config (§3, §4) | Done: `_Default` bucket 30 days (Terraform), pending apply |
 | Auto-delete enforcer job for user-set retention (§2) | Done: `db-sweep` step `retention` (§2) |
 | Verification evidence that no backup outlives the window (§4) | `TODO(A11)` |
 | Billing/tax minimum-retention obligation (§3) | `TODO(legal)` |
