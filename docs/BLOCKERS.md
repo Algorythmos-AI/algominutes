@@ -5,10 +5,10 @@ run; each item has a safe reversible default already applied. Grouped by type.
 
 ## 1. Needs your action before/at A4 (repo & infra)
 
-- [ ] **Push `main` + enable branch protection.** The repo is committed locally with the remote set to
-      `Algorythmos-AI/algominutes` but nothing has been pushed (see DECISIONS.md). When ready:
-      `git push -u origin main`, then protect `main` (require PR + CI green, no direct pushes). Default
-      applied: local-only commits.
+- [ ] **Enable branch protection (yours).** `main` and `integration` are pushed and in use (PRs into
+      `integration`, promotions to `main`). Neither branch is protected yet: the GitHub API answers "Branch not
+      protected". Run `scripts/github-settings.sh --apply` (required checks, no direct pushes, the approval-gated
+      `production` Environment).
 - [ ] **Rotate the exposed Gemini API key + purge source history** (EXTRACTION-AUDIT §5). Source-side,
       in `~/src/wasssup-meeting`; not touched by this run.
 
@@ -23,7 +23,8 @@ git-ignored). **Prod: ⏳ pending.** Remaining, all from a primary-account (`alg
 - [ ] **Prod Firebase:** enable Firebase (Blaze), Google sign-in, register Web + Android apps, download a
       **fresh** `google-services.json` + create a **prod** `apps/web/.env` — never reuse staging's values
       (runbook `prod-firebase-config.md`).
-- [ ] **Run migrations** against the staging Cloud SQL now (it's live) and prod after apply (runbook §6).
+- [x] **Migrations run on every deploy:** the db-job `migrate` handler runs before rollout (PR-08b), and
+      migrations are expand-only. Nothing to run by hand; staging just needs your apply first.
 - [ ] **Re-scope `algominutes-prod-budget`** from the whole billing account to the prod project only
       (INFRASTRUCTURE open item #2 — still outstanding).
 - [ ] Confirm the domain registrar for `algominutes.com` / `.com.au` (INFRASTRUCTURE §6 TODO).
@@ -61,8 +62,9 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       trusted, not just accepted; needs a real device to verify end-to-end.
 
 **Engineering follow-ups (no external input):**
-- [ ] Consolidate the two account-deletion paths (legacy Settings modal → Cloud Function vs new
-      `/delete-account` page → `/v1/account/delete`) onto one.
+- [x] **One account-deletion path:** `/v1/account/delete` (#69; Postgres first, retried by the sweeper), and
+      the iOS client calls it (iOS PR-17 B). The old Cloud Function is gone with `functions/` (#84). The web's
+      Settings modal moves with its `/v1` migration.
 - [ ] Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
       without them).
 - [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7). Folded into iOS PR-17 D (see
@@ -502,8 +504,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - [ ] Still open: a session for a note whose purge already *finished* (no purge row left) is allowed.
         Its object can't be processed (the kickoff refuses a missing doc), but it stays in the bucket. Have
         the sweeper remove `recordings/` objects whose note doesn't exist, or keep a deleted-note tombstone.
-    - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
-      the rows that stay stuck.
+    - [x] The sweeper drains `storage_purges` (#71; capped at 10 attempts), and a stuck row is logged every run
+      and alerts (`storage_purge_stuck`, #90).
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in
       one transaction: a purge row per owned note, tagged with the uid (migration 015), then
       `DELETE FROM users`, whose cascade removes the rest. Then the purges (each note's doc and audio),
