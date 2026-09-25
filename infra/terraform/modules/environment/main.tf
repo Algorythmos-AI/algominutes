@@ -45,6 +45,7 @@ locals {
     "aiplatform.googleapis.com",           # Vertex AI (Gemini)
     "speech.googleapis.com",               # Speech-to-Text v2
     "firestore.googleapis.com",            # Firestore
+    "firebaserules.googleapis.com",        # Firestore security rules (firebase-rules.tf)
     "firebase.googleapis.com",             # Firebase management
     "identitytoolkit.googleapis.com",      # Firebase Auth
     "fcm.googleapis.com",                  # Firebase Cloud Messaging (push)

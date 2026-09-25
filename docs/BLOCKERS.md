@@ -531,8 +531,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
         re-create the account, but a deleted account's token can still *read* (nothing is left) for up to
         an hour. Clients must sign out on the 200.
-      - Firestore rules (PR-11) should stop a signed-in client re-creating `workspaces/{ws}` docs after
-        deletion. The web app does that at sign-in (`App.tsx:648`).
+      - ~~Firestore rules (PR-11)~~ **done (firestore-rules PR, pending your apply):** rules in the repo,
+        released by Terraform, emulator-tested in CI. Clients can't delete notes. They can still re-create
+        their own `workspaces/{ws}` doc after an account deletion (the sign-in bootstrap), but the api refuses
+        the account (tombstone), and the doc holds nothing. Before the rules, staging denied every client request.
       - ~~The sweeper should prune tombstones and drain `storage_purges`~~ **done (sweeper PR):**
         a dedicated `db-sweep` Cloud Run Job (the db-job image with `JOB_NAME=sweep` baked in, its own
         least-privilege SA), run by Cloud Scheduler every 15 min (Terraform, pending your apply). It:

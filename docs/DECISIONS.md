@@ -3,6 +3,23 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Firestore security rules live in the repo, least privilege, released by Terraform (2026-09-25)
+
+Staging had **no rules released**, so every client request was denied: the app couldn't list, create or
+update a note doc. `infra/firebase/firestore.rules` is now the single source, released by Terraform
+(`modules/environment/firebase-rules.tf`), and tested against the emulator in CI (`firestore-rules`).
+- **Reads:** a user reads their own workspace doc and their own notes (the app lists by `authorId`).
+- **Creates:** the workspace doc at sign-in (`{name, ownerId, members:[uid]}`), and a note doc before its
+  upload, with a fixed field set, the caller as author, and status `processing`/`queued`. A scanned-text
+  note may be created `ready`, since it is the user's own text.
+- **Updates:** only what the app does itself: the upload path (which must be this note's own object), a
+  retry (`queued`), the watchdog giving up (`error`), and a retitle. Only the server (Admin SDK) marks
+  progress or `ready`, or writes a summary or transcript.
+- **Deletes:** never from a client. Deletion is `POST /v1/notes/delete`, Postgres first.
+- **Everything else** (rate limits, analytics, any other path) is unreachable from clients.
+- **Consequence:** the legacy web app's merge-writes (BLOCKERS R2) are refused until its `/v1` migration.
+  The iOS app's current writes all pass; its direct note delete is refused, which iOS PR-C replaces.
+
 ## Alerts on the silent failures, by email (2026-09-25)
 
 PR-16c's first slice, `infra/terraform/modules/environment/alerting.tf`.
