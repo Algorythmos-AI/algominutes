@@ -120,12 +120,38 @@
             "items": {
               "type": "string"
             }
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Chapter"
+            }
           }
         },
         "required": [
           "gist",
           "actionItems",
           "keyDecisions"
+        ]
+      },
+      "Chapter": {
+        "type": "object",
+        "properties": {
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "startMs",
+          "title",
+          "summary"
         ]
       },
       "FirestoreTranscriptLine": {
@@ -432,7 +458,8 @@
             "type": "string"
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/NoteStatus"
@@ -627,6 +654,12 @@
             "items": {
               "$ref": "#/components/schemas/KeyDecision"
             }
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Chapter"
+            }
           }
         },
         "required": [
@@ -634,7 +667,8 @@
           "model",
           "generatedAt",
           "actionItems",
-          "keyDecisions"
+          "keyDecisions",
+          "chapters"
         ]
       },
       "NoteReadResponse": {
