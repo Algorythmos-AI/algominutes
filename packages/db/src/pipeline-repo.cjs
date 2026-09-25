@@ -185,6 +185,39 @@ async function deleteTranscriptLinesForNote(client, noteId) {
   await client.query('DELETE FROM transcript_lines WHERE note_id = $1', [noteId]);
 }
 
+/**
+ * The note's chunk progress, for the progress mirror; null when the note is
+ * gone or isn't in the task's workspace (CLAUDE.md §1).
+ */
+async function chunkProgress(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    `SELECT chunks_done AS "done", chunks_total AS "total" FROM notes
+      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+    [noteId, workspaceId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * The note's author and workspace, for the dead-letter row and the author's
+ * notification when a task carried no uid. Scoped to the task's workspace when
+ * it has one (CLAUDE.md §1): a note id from another workspace matches nothing,
+ * so that note's author is never told about this task. A task without one gets
+ * the note's own workspace. Null when nothing matches.
+ */
+async function noteAuthor(client, { noteId, workspaceId }) {
+  const { rows } = workspaceId
+    ? await client.query(
+      'SELECT author_uid AS "uid", workspace_id AS "workspaceId" FROM notes WHERE id = $1 AND workspace_id = $2',
+      [noteId, workspaceId],
+    )
+    : await client.query(
+      'SELECT author_uid AS "uid", workspace_id AS "workspaceId" FROM notes WHERE id = $1',
+      [noteId],
+    );
+  return rows[0] || null;
+}
+
 async function getChunkRow(client, chunkId) {
   const { rows } = await client.query(
     `SELECT id, note_id AS "noteId", idx, start_sec AS "startSec", end_sec AS "endSec",
@@ -254,5 +287,7 @@ module.exports = {
   insertTranscriptLines,
   deleteTranscriptLinesForNote,
   getChunkRow,
+  chunkProgress,
+  noteAuthor,
   persistFastPathResult,
 };
