@@ -469,7 +469,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   Deliberate non-note writes carry a reasoned `// firestore-write-ok: <reason>` on the line or the line
   above. The two rate-limit counters are marked. The account-deletion cascade is marked as a tracked
   exception (below). Was: **The direct-Firestore gate misses batched and transactional writes.**
-- [ ] **⚠️ M1: deletion doesn't work on the new backend. A deleted note stays in Postgres, stays
+- [x] **Done for M1 (note-deletion-path, account-deletion-path, workers-note-gone, ios-delete-via-v1,
+  deleted-note-tombstone PRs):** a note is deleted through `POST /v1/notes/delete` (iOS since #114),
+  Postgres first, then the doc, then the audio, and a tombstone keeps a stale client from uploading into
+  it. Account deletion is one idempotent Postgres-first path. Open below, not on the M1 path: the web
+  client's `setDoc` merge writes (R2, the web `/v1` migration), and shared workspaces on account deletion.
+  Was: **⚠️ M1: deletion doesn't work on the new backend. A deleted note stays in Postgres, stays
   searchable, and its audio stays in GCS.** (Verified 2026-09-25.)
   - **Deleting a note:** the clients delete the Firestore doc (`NotesRepository.swift deleteNote`) and rely
     on the `functions/` trigger `onNoteDeleted` to delete the Postgres rows and GCS audio. Nothing in the
