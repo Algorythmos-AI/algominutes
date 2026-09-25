@@ -683,18 +683,26 @@ export async function markReady(
 
 export async function markError(
   firestore: Firestore,
-  input: MarkErrorInput,
+  input: MarkErrorInput & {
+    /** Written in the same transaction, under the note's row lock (ledger-reversal.cjs). */
+    refund?: { reason: string; idempotencyKey: string };
+  },
   log: { error: (o: any, m?: string) => void },
 ): Promise<void> {
   if (isPostgresEnabled()) {
     try {
-      await getPool().query(
-        // Scoped to the caller's workspace: an id from another workspace
-        // (e.g. after markReady rejected a cross-workspace write) matches nothing.
-        `UPDATE notes SET status='error', error_message=$3, updated_at=NOW()
-           WHERE id=$1 AND workspace_id=$2`,
-        [input.noteId, input.workspaceId, input.errorMessage],
-      );
+      await withTx(async (client) => {
+        const { rowCount } = await client.query(
+          // Scoped to the caller's workspace: an id from another workspace
+          // (e.g. after markReady rejected a cross-workspace write) matches nothing.
+          `UPDATE notes SET status='error', error_message=$3, updated_at=NOW()
+             WHERE id=$1 AND workspace_id=$2`,
+          [input.noteId, input.workspaceId, input.errorMessage],
+        );
+        if (rowCount && input.refund) {
+          await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund });
+        }
+      }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
     } catch (err) {
       log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'pg_mark_error_failed');
     }
