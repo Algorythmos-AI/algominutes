@@ -370,8 +370,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   the bump:
   - **#52 `stripe` 17 → 22** (`services/billing/src/lib/stripe.js`, used by `routes/portal.js` and
     `webhooks/stripe.js`). Every Stripe major pins a newer API version, which changes object shapes. It's the
-    web rail; M1 is StoreKit. Test first: a webhook signature check with a test secret, and a portal
-    session against a stubbed HTTP client.
+    web rail; M1 is StoreKit. **Test in place (billing-stripe-tests PR):** `tests/integration/billing-stripe.test.ts`
+    runs checkout, the portal and the webhook through the real SDK against a local stand-in for
+    api.stripe.com (`STRIPE_API_HOST`, unset when deployed). It pins the request paths and form fields, the
+    `Stripe-Version: 2024-06-20` our shapes depend on, the subscription and invoice fields the webhook reads,
+    and signature checking. Next: rebase #52 so its CI runs this on v22.
   - **#108 `googleapis` 144 → 181** (`services/billing/src/lib/google-play.js` `verifyPlaySubscription`,
     used by `routes/verify.js` and `webhooks/google.js`). The Android rail is Track B. Test first:
     `verifyPlaySubscription` with the `androidpublisher` client stubbed.
