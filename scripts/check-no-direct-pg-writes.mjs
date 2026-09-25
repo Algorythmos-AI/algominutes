@@ -3,34 +3,50 @@
  * CLAUDE.md §1: Postgres is the source of truth, "accessed only through the repo
  * layer in @algominutes/db", and "no service writes a table it does not own".
  * check-no-direct-firestore only sees Firestore, so nothing stopped a service
- * from writing note tables with raw SQL (the transcoder did, until its SQL
- * moved to packages/db/src/pipeline-repo.cjs).
+ * from writing tables with raw SQL (the transcoder did, until its SQL moved to
+ * packages/db/src/pipeline-repo.cjs).
  *
- * This fails on any string or template literal outside packages/db that
- * INSERTs into, UPDATEs or DELETEs FROM a note table. Syntax-aware (the
- * TypeScript parser), so comments and prose don't count.
+ * This fails on any string, template or literal `+` chain outside packages/db
+ * that writes a table (INSERT/UPDATE/DELETE/MERGE/TRUNCATE), including a
+ * `${table}` interpolated after the keyword. Syntax-aware (the TypeScript
+ * parser), so comments don't count, and the table must be followed by SQL, so
+ * prose doesn't either.
  *
  *   node scripts/check-no-direct-pg-writes.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { fileURLToPath } from 'node:url';
 
 const ROOTS = ['services', 'packages', 'apps/web/src', 'scripts'];
 // packages/db IS the repo layer. Tests, fixtures and the migrator are not services.
 const SKIP = /(^|\/)(node_modules|dist|build|generated|migrations|test|tests)(\/|$)|^packages\/db\/|\.test\.[cm]?[jt]sx?$|\.d\.ts$/;
-const TABLES = [
-  'notes', 'summaries', 'action_items', 'key_decisions', 'transcript_lines',
-  'audio_chunks', 'embeddings', 'note_speakers',
-];
-const WRITE = new RegExp(String.raw`\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(${TABLES.join('|')})\b`, 'i');
+// Any table: no service writes Postgres except through the repo layer. The table
+// may be ONLY-, schema- or quote-qualified, and must be followed by SQL (so prose
+// like "failed to update notes" doesn't count).
+const T = String.raw`(?:ONLY\s+)?(?:"?[A-Za-z_]\w*"?\.)?"?[A-Za-z_]\w*"?`;
+const ALIAS = String.raw`(?:\s+(?:AS\s+)?(?!SET\b|WHERE\b|USING\b|RETURNING\b)[A-Za-z_]\w*)?`;
+const WRITE = new RegExp([
+  String.raw`\bINSERT\s+INTO\s+${T}\s*(?:\(|VALUES\b|SELECT\b|DEFAULT\b)`,
+  String.raw`\bUPDATE\s+${T}${ALIAS}\s+SET\b`,
+  String.raw`\bDELETE\s+FROM\s+${T}${ALIAS}\s*(?:WHERE\b|USING\b|RETURNING\b|;|$)`,
+  String.raw`\bMERGE\s+INTO\s+${T}`,
+  String.raw`\bTRUNCATE(?:\s+TABLE)?\s+${T}\s*(?:;|,|$|CASCADE\b|RESTART\b)`,
+].join('|'), 'i');
+// A write whose table name is interpolated: `UPDATE ${table} SET ...`.
+const DYNAMIC = /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE(?:\s+TABLE)?)\s*$/i;
 
 // Shared packages/ai writers still to move into packages/db (BLOCKERS: "Postgres
-// note writes still bypass the repo layer"). Shrink this list; never grow it.
-const PENDING_MOVE = new Set([
-  'packages/ai/src/note-terminal.cjs',
-  'packages/ai/src/note-edit.cjs',
-  'packages/ai/src/embeddings.cjs',
+// note writes still bypass the repo layer"), with the number of write literals
+// each may still hold. A count may only go DOWN (and must be lowered here when it
+// does); a file off this list may hold none.
+const PENDING_MOVE = new Map([
+  ['packages/ai/src/note-terminal.cjs', 1],
+  ['packages/ai/src/note-edit.cjs', 9],
+  ['packages/ai/src/embeddings.cjs', 2],
+  ['packages/ai/src/share-links.cjs', 4],
+  ['packages/ai/src/note-feedback.cjs', 1],
 ]);
 
 function* sourceFiles(dir) {
@@ -43,17 +59,43 @@ function* sourceFiles(dir) {
   }
 }
 
+/** The text of a string-literal `+` chain, or null if any operand isn't a literal. */
+function concatenated(node) {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  if (ts.isParenthesizedExpression(node)) return concatenated(node.expression);
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const l = concatenated(node.left);
+    const r = l === null ? null : concatenated(node.right);
+    return r === null ? null : l + r;
+  }
+  return null;
+}
+
 export function findDirectWrites(file, text) {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const out = [];
+  const hit = (node, sql) => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    out.push({ file, line: line + 1, sql });
+  };
   const visit = (node) => {
-    let literal = null;
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literal = node.text;
-    else if (ts.isTemplateExpression(node)) literal = [node.head.text, ...node.templateSpans.map((s) => s.literal.text)].join(' ');
-    const m = literal && WRITE.exec(literal);
-    if (m) {
-      const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      out.push({ file, line: line + 1, sql: `${m[1].toUpperCase()} ${m[2]}` });
+    // A literal + literal chain is checked whole, once.
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const joined = concatenated(node);
+      if (joined !== null) {
+        const m = WRITE.exec(joined);
+        if (m) hit(node, m[0].replace(/\s+/g, ' ').trim());
+        return;
+      }
+    }
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      const m = WRITE.exec(node.text);
+      if (m) hit(node, m[0].replace(/\s+/g, ' ').trim());
+    } else if (ts.isTemplateExpression(node)) {
+      const parts = [node.head.text, ...node.templateSpans.map((sp) => sp.literal.text)];
+      const m = WRITE.exec(parts.join(' '));
+      if (m) hit(node, m[0].replace(/\s+/g, ' ').trim());
+      else if (parts.slice(0, -1).some((p) => DYNAMIC.test(p))) hit(node, 'write to an interpolated table');
     }
     ts.forEachChild(node, visit);
   };
@@ -61,32 +103,43 @@ export function findDirectWrites(file, text) {
   return out;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
   const hits = [];
-  const stale = new Set(PENDING_MOVE);
+  const budget = [];
+  const seen = new Set();
   let files = 0;
   for (const root of ROOTS) {
     for (const f of sourceFiles(root)) {
       files += 1;
       const found = findDirectWrites(f, fs.readFileSync(f, 'utf8'));
       if (PENDING_MOVE.has(f)) {
-        if (found.length) stale.delete(f);
+        seen.add(f);
+        const allowed = PENDING_MOVE.get(f);
+        if (found.length > allowed) budget.push(`${f}: ${found.length} writes, allowed ${allowed} (it may only shrink)`);
+        else if (found.length < allowed) budget.push(`${f}: now ${found.length}; lower PENDING_MOVE to ${found.length}${found.length ? '' : ' (remove it)'}`);
         continue;
       }
       hits.push(...found);
     }
   }
+  for (const f of PENDING_MOVE.keys()) if (!seen.has(f)) budget.push(`${f}: gone; remove it from PENDING_MOVE`);
   let failed = false;
+  if (files === 0) {
+    console.log('ERROR: scanned no files (run from the repo root).');
+    failed = true;
+  }
   if (hits.length) {
     for (const h of hits) console.log(`${h.file}:${h.line}: ${h.sql} outside the repo layer`);
-    console.log(`\nERROR: ${hits.length} Postgres note-table write(s) outside packages/db. Put the SQL in the`);
+    console.log(`\nERROR: ${hits.length} Postgres write(s) outside packages/db. Put the SQL in the`);
     console.log('repo layer (@algominutes/db) and call it (CLAUDE.md §1).');
     failed = true;
   }
-  if (stale.size) {
-    console.log(`\nERROR: remove from PENDING_MOVE (no longer writes, or moved): ${[...stale].join(', ')}`);
+  if (budget.length) {
+    for (const b of budget) console.log(`PENDING_MOVE: ${b}`);
     failed = true;
   }
   if (failed) process.exit(1);
-  console.log(`OK: no Postgres note-table writes outside the repo layer (${files} files; ${PENDING_MOVE.size} pending move).`);
+  const pending = [...PENDING_MOVE.values()].reduce((a, b) => a + b, 0);
+  console.log(`OK: no Postgres writes outside the repo layer (${files} files; ${pending} pending move in ${PENDING_MOVE.size} files).`);
 }
