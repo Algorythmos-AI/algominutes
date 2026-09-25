@@ -11,6 +11,15 @@
  */
 import { getPool, isPostgresEnabled } from './db.js';
 import { currentBillingPeriod, insertDebit, type MeterInput } from './ledger.js';
+import ledgerReversal from '@algominutes/db/ledger-reversal.cjs';
+
+// The one copy of the reversal SQL (a failure writes it in its own transaction).
+const { reverseNoteUsage } = ledgerReversal as {
+  reverseNoteUsage: (
+    queryable: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+    input: { noteId: string; reason: string; idempotencyKey: string },
+  ) => Promise<{ applied: boolean; minutesReversed: number }>;
+};
 
 export { currentBillingPeriod, type MeterInput } from './ledger.js';
 
@@ -39,38 +48,7 @@ export async function reverseUsageForNote(input: {
   idempotencyKey: string;
 }): Promise<{ applied: boolean; minutesReversed: number }> {
   if (!isPostgresEnabled()) return { applied: false, minutesReversed: 0 };
-  const pool = getPool();
-  // Net minutes still charged for this note (debits + prior reversals).
-  const net = await pool.query(
-    `SELECT COALESCE(SUM(minutes), 0)::float AS net,
-            (SELECT uid FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS uid,
-            (SELECT workspace_id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS workspace_id,
-            (SELECT billing_period FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS billing_period,
-            (SELECT id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id DESC LIMIT 1) AS debit_id
-       FROM usage_ledger WHERE note_id = $1`,
-    [input.noteId],
-  );
-  const row = net.rows[0];
-  const remaining = Number(row?.net ?? 0);
-  if (!row || !row.uid || remaining <= 0) return { applied: false, minutesReversed: 0 };
-  const { rows } = await pool.query(
-    `INSERT INTO usage_ledger
-       (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, reverses_id, idempotency_key)
-     VALUES ($1, $2, $3, 'reversal', $4, $5, $6, $7, $8)
-     ON CONFLICT (idempotency_key) DO NOTHING
-     RETURNING id`,
-    [
-      row.uid,
-      row.workspace_id ?? null,
-      input.noteId,
-      -remaining,
-      row.billing_period ?? currentBillingPeriod(),
-      input.reason,
-      row.debit_id ?? null,
-      `${input.idempotencyKey}:${row.debit_id}`,
-    ],
-  );
-  return rows.length ? { applied: true, minutesReversed: remaining } : { applied: false, minutesReversed: 0 };
+  return reverseNoteUsage(getPool(), input);
 }
 
 /** Net minutes used by a user in a billing period (debits − reversals). */

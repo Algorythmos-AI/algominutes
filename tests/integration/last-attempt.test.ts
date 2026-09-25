@@ -112,6 +112,17 @@ describe('the transcoder, last attempt', () => {
     }
   });
 
+  it('on the ledger: refunded with the failure', async () => {
+    await pool.query(`UPDATE notes SET status = 'transcribing' WHERE id = 'n1'`);
+    await pool.query(
+      `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
+         VALUES ('u', 'ws', 'n1', 'debit', 30, to_char(NOW(), 'YYYY-MM'), 'ingest', 'n1:ingest')`,
+    );
+    await transcoder().run(kickoff);
+    expect((await pool.query(`SELECT reason FROM usage_ledger WHERE note_id = 'n1' AND entry_type = 'reversal'`)).rows)
+      .toEqual([{ reason: 'refund:transcode_failed' }]);
+  });
+
   it('a note that is gone: nothing to fail, no hooks', async () => {
     const t = transcoder();
     expect(await t.run({ ...kickoff, noteId: 'gone' })).toEqual({ failed: false });
@@ -140,7 +151,7 @@ describe('the summarizer, last attempt', () => {
     await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 2 WHERE id = 'n1'`);
     const s = summarizerRun();
     expect(await s.run({ noteId: 'n1', workspaceId: 'ws', summaryGeneration: 2 })).toEqual({ failed: true });
-    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify, h.refund])).toEqual([[false, true, false]]);
+    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, true]]);
   });
 
   it('on the ledger, through the real hooks: a pipeline summary failure is refunded, a regeneration failure is not', async () => {

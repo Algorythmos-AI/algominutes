@@ -104,8 +104,15 @@ describe('sweep', () => {
     await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = $1 WHERE id = 'busy'`, [ago(HOUR)]);
     await pool.query(`UPDATE notes SET status = 'ready', updated_at = $1 WHERE id = 'done'`, [ago(10 * HOUR)]);
     f.docs.set('workspaces/ws-a/notes/stuck', {});
+    await pool.query(
+      `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
+         VALUES ('alice', 'ws-a', 'stuck', 'debit', 30, to_char(NOW(), 'YYYY-MM'), 'ingest', 'stuck:ingest')`,
+    );
     const counts = await runSweep(f.deps);
     expect(counts.stuck_notes).toBe(1);
+    // Refunded with the failure (failStuckNote's transaction).
+    expect((await pool.query(`SELECT reason, minutes::float8 AS m FROM usage_ledger WHERE note_id = 'stuck' AND entry_type = 'reversal'`)).rows)
+      .toEqual([{ reason: 'refund:stuck', m: -30 }]);
     const status = async (id: string) => (await pool.query('SELECT status FROM notes WHERE id = $1', [id])).rows[0].status;
     expect(await status('stuck')).toBe('error');
     expect(await status('busy')).toBe('transcribing');

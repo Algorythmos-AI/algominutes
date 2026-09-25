@@ -306,6 +306,26 @@ describe('the real tail, on the ledger', () => {
     );
   });
 
+  for (const [site, op, polls, opId] of [
+    ['Google, speech job errored', 'google-error', 0, 'operations/9'],
+    ['Google, poll budget spent', 'google-pending', MAX_STT_POLLS, 'operations/9'],
+    ['whole-file, job errored', 'assembly-error', 0, 'assemblyai:job-9'],
+    ['whole-file, poll budget spent', 'assembly-pending', MAX_STT_POLLS, 'assemblyai:job-9'],
+  ] as const) {
+    it(`${site}: the note is refunded with its failure`, async () => {
+      if (op === 'google-pending') googleOp = { done: false };
+      if (op === 'assembly-pending') assemblyOp = { done: false, error: null, lines: [] };
+      const c = await seedChunk(2, opId);
+      await handler.handleSttPoll(
+        { kind: 'stt-poll', jobId: 'j', chunkId: c, noteId: 'n1', workspaceId: 'ws', poll: polls },
+        { db: transcoderDb, stt: { checkOperation: async () => googleOp }, tasks: { enqueue: async () => {} },
+          mirror: { db: () => fsStub }, log: tailLog, storage: {}, env: { STT_PROVIDER: 'assemblyai', ASSEMBLYAI_API_KEY: 'test' },
+          traceId: 't', terminalHooks: realHooks },
+      );
+      expect(await ledger()).toEqual(['debit 30', 'reversal -30']);
+    });
+  }
+
   it('two chunks fail and one attempt is re-driven: refunded once, one notice, a dead letter each', async () => {
     await poll(c1);
     googleOp = { done: false };

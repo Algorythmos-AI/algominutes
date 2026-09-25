@@ -776,12 +776,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       refund (old per-note refund key). Staging deploys all three together today (`fail-fast: false`, so a
       failed rollout can leave the mix: re-run the failed service). **Production: roll out the transcoder and
       summarizer before the api** (PR-35 runbook).
-    - [ ] A kickoff racing a refund makes the re-run free: the refund runs after the failure is written and
-      outside the note's lock, so a kickoff in that gap sees the charge still standing. Write the reversal in
-      the failure's transaction, under `lockNoteId`.
-    - [ ] Two refunds for the same run with different reasons (the sweeper's `refund:stuck` and a worker's)
-      can both land. A unique index on `usage_ledger(reverses_id) WHERE entry_type = 'reversal'` (new
-      migration; check existing rows for duplicates first) makes each debit reversible once.
+    - [x] ~~A kickoff racing a refund makes the re-run free~~ and ~~two refunds for the same run with
+      different reasons can both land~~ **fixed (refund-in-failure-tx PR):** every refund is written in the
+      failure's own transaction (`markNoteFailed` / `failStuckNote` with `refund`, one reversal SQL in
+      `ledger-reversal.cjs`), under the note's row lock. `markQueued` locks the same row, so a kickoff sees
+      the failure and its refund together; a second refunder waits, then finds the net at 0.
     - [ ] `assertCanMeter` demands headroom for a retry that won't be charged (its earlier charge stands),
       so a user at their limit gets a 402 on that retry.
   - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
@@ -972,11 +971,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               Postgres error. Tested on Postgres (both workers' last attempts; 13 poll cases, one holding
               the note's lock; the ledger through the real hooks); mutations checked.
               - [ ] **Queued (from its re-reviews):**
-                - **A crash after the commit still loses the tail outside the poll terminals:** the
-                  kickoff's YouTube and unreadable-length failures and the spend cap (the retry hits the
-                  replay guard), and each worker's last attempt (no retry left). The sweep doesn't look at
-                  failed notes. Writing the reversal in the failure's own transaction, under
-                  `lockNoteId`, covers every path (with the "kickoff racing a refund" item).
+                - ~~**A crash after the commit loses the refund**~~ **fixed (refund-in-failure-tx PR):** the
+                  refund commits with the failure on every path. What a crash after the commit still loses
+                  outside the poll terminals (the kickoff's YouTube and unreadable-length failures, the
+                  spend cap, each worker's last attempt) is the dead letter and the notice.
                 - ~~**A failed regeneration refunds the whole recording**~~ **fixed
                   (regeneration-failure-keeps-charge PR):** the summarizer's last attempt refunds only a
                   pipeline summary's failure; a regeneration's (its task carries `summaryGeneration`) is
@@ -999,8 +997,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   `done` into `error`. Add `AND c.status = 'pending'`.
                 - A poll task's last attempt (`last-attempt.js`) passes no `chunkId`, and its dead letter
                   drops the chunk, job and reason.
-                - The summarizer's "No speech was found" failure has no refund, notice or dead letter,
-                  and the sweep's `refund:stuck` path never notifies.
+                - The summarizer's "No speech was found" failure has no notice or dead letter (its refund
+                  is fixed by the refund-in-failure-tx PR), and the sweep's `refund:stuck` path never
+                  notifies.
             - ~~The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
               while Postgres may be in flight~~ **fixed (web-watchdog-reports-slow PR):** as on iOS
               (#124), a note the server owns is reported slow ("Taking longer than usual"), never

@@ -13,6 +13,15 @@ import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
+import ledgerReversal from '@algominutes/db/ledger-reversal.cjs';
+
+// The one copy of the refund SQL, written in a failure's own transaction.
+const { reverseNoteUsage } = ledgerReversal as {
+  reverseNoteUsage: (
+    queryable: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+    input: { noteId: string; reason: string; idempotencyKey: string },
+  ) => Promise<{ applied: boolean; minutesReversed: number }>;
+};
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
@@ -947,17 +956,26 @@ export async function listStuckNotes(
  */
 export async function failStuckNote(
   firestore: Firestore,
-  input: { noteId: string; workspaceId: string; olderThanMs: number; message: string },
+  input: {
+    noteId: string; workspaceId: string; olderThanMs: number; message: string;
+    /** Written in the failure's transaction (ledger-reversal.cjs), under its row lock. */
+    refund?: { reason: string; idempotencyKey: string };
+  },
   log: { error: (o: any, m?: string) => void },
-): Promise<{ failed: boolean }> {
-  const { rowCount } = await getPool().query(
-    `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
-      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
-        AND status = ANY($4::text[])
-        AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
-    [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
-  );
-  if (!rowCount) return { failed: false };
+): Promise<{ failed: boolean; refunded?: boolean }> {
+  const { failed, refunded } = await withTx(async (client) => {
+    const { rowCount } = await client.query(
+      `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
+        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+          AND status = ANY($4::text[])
+          AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
+      [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
+    );
+    if (!rowCount) return { failed: false, refunded: false };
+    const r = input.refund ? await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund }) : { applied: false };
+    return { failed: true, refunded: r.applied };
+  }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
+  if (!failed) return { failed: false };
   try {
     await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({
       status: 'error', errorMessage: input.message, updatedAt: ISO_NOW(),
@@ -967,5 +985,5 @@ export async function failStuckNote(
     // note) or briefly unavailable. The next read path reconciles from Postgres.
     log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'stuck_note_mirror_failed');
   }
-  return { failed: true };
+  return { failed: true, refunded };
 }

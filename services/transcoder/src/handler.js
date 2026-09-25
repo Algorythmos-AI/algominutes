@@ -33,6 +33,8 @@ function loadShared(name) {
   }
 }
 const noteTerminal = loadShared('note-terminal.cjs');
+// The refund markNoteFailed writes in the failure's transaction.
+const { transcodeRefund } = require('./terminal-hooks');
 const { NoteGoneError, isNoteGone } = require('./note-gone');
 
 const KICKOFF = 'kickoff';
@@ -140,6 +142,7 @@ async function handleKickoff(payload, deps) {
           // error mirror left Postgres at 'queued', so the idempotent kickoff
           // saw the note as still in flight and refused a retry for 3 h.
           const outcome = await noteTerminal.markNoteFailed({
+            refund: transcodeRefund(noteId),
             pool: db.pool(),
             firestore: mirror.db(),
             noteId,
@@ -177,6 +180,7 @@ async function handleKickoff(payload, deps) {
       // one would send a long recording down the single-call fast path.
       log.error({ err, noteId, workspaceId }, 'duration_unreadable');
       const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
         pool: db.pool(),
         firestore: mirror.db(),
         noteId,
@@ -293,6 +297,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       // the note (idempotent) rather than restart or re-poll a failed run.
       log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_failed');
       await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
       });
@@ -389,6 +394,7 @@ async function handleSttPoll(payload, deps) {
   if (chunkRow.status === 'error') {
     log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
     const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for part of this recording.',
       log, event: 'stt_poll_chunk_failed', retryOnPgError: true, chunkId, onlyIfStatus: ['error'],
@@ -430,6 +436,7 @@ async function handleSttPoll(payload, deps) {
       // neither written, so the retry decides again. The tail (terminalTail)
       // tells the author only if this is what failed the note.
       const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
         pool: db.pool(),
         firestore: mirror.db(),
         noteId, workspaceId,
@@ -464,6 +471,7 @@ async function handleSttPoll(payload, deps) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
     // One statement for the chunk and the note, as for stt_poll_exhausted above.
     const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
       pool: db.pool(),
       firestore: mirror.db(),
       noteId, workspaceId,
@@ -667,6 +675,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   if (row && row.status === 'error') {
     plog.warn({}, 'chunk_already_failed');
     await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
     });
@@ -742,6 +751,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
       // One statement for the chunk and the note, as in handleSttPoll.
       const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
         log, event: 'stt_poll_exhausted', retryOnPgError: true, chunkId,
@@ -766,6 +776,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
     // One statement for the chunk and the note, as in handleSttPoll.
     const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
       log, event: 'stt_operation_errored', retryOnPgError: true, chunkId,
