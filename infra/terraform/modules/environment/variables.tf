@@ -100,9 +100,30 @@ variable "connection_budget" {
 }
 
 variable "allowed_origins" {
-  description = "Comma-separated CORS allowlist for services/api (ALLOWED_ORIGINS). Set per env in tfvars once the web origin is confirmed; empty falls back to the api's baked-in localhost/capacitor allowlist."
+  description = "Comma-separated CORS allowlist for services/api (ALLOWED_ORIGINS), added to the api's baked-in localhost/capacitor list. Required: the api refuses to boot on a blank value (services/api/src/env-spec.cjs)."
   type        = string
-  default     = ""
+
+  validation {
+    condition     = trimspace(var.allowed_origins) != ""
+    error_message = "allowed_origins must name at least one origin: the api exits at boot on a blank ALLOWED_ORIGINS."
+  }
+}
+
+variable "broadcast_capture" {
+  description = "Server-side kill switch for iOS broadcast capture, served by GET /v1/config. \"off\" hides the feature in the app without a build."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.broadcast_capture)
+    error_message = "broadcast_capture must be \"on\" or \"off\"."
+  }
+}
+
+variable "admin_uids" {
+  description = "Firebase uids allowed on the api's operator routes (/v1/admin/*, ADMIN_UIDS). Passed at plan time as TF_VAR_admin_uids, never committed. Empty leaves ADMIN_UIDS unset, so every admin route answers 403."
+  type        = list(string)
+  default     = []
 }
 
 variable "enable_nat" {
@@ -279,7 +300,7 @@ variable "noncurrent_version_retention_days" {
 }
 
 variable "enable_sweeper" {
-  description = "Create the db-sweep Cloud Run Job and the Cloud Scheduler job that runs it (scheduler.tf)."
+  description = "Create the db-sweep Cloud Run Job and the Cloud Scheduler job that runs it (scheduler.tf). The Scheduler job is created paused, and the deploy resumes it once a real image has rolled out and passed the smoke."
   type        = bool
   default     = true
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import path from 'node:path';
 import { createRequire } from 'node:module';
+import { srcFiles } from './helpers/terraform';
 
 // The Postgres connection budget (infra/terraform/envs/<env>/connection-budget.json,
 // docs/DECISIONS.md). Terraform also enforces the sum with a precondition on the
@@ -18,16 +18,6 @@ type Budget = {
 const ENVS = ['staging', 'prod'];
 const budget = (env: string): Budget =>
   JSON.parse(fs.readFileSync(`infra/terraform/envs/${env}/connection-budget.json`, 'utf8'));
-
-function srcFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...srcFiles(p));
-    else if (/\.(c|m)?js$/.test(e.name)) out.push(fs.readFileSync(p, 'utf8'));
-  }
-  return out;
-}
 
 /** The pools a service's code opens: the repo pool, its own pg.Pool, the api's read pool. */
 function poolsInCode(service: string): number {

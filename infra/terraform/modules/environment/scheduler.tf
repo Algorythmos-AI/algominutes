@@ -122,6 +122,13 @@ resource "google_cloud_scheduler_job" "sweep" {
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s" # starting the job; the sweep itself runs in the job
 
+  # Created paused: until the first deploy, db-sweep runs the placeholder image,
+  # which never exits cleanly, so every tick would burn its 900 s timeout. The
+  # deploy workflow resumes it once a real image has rolled out and passed the
+  # smoke (deploy-staging.yml, "Resume the sweeper"). Terraform doesn't fight
+  # that: it sets `paused` at creation only.
+  paused = true
+
   retry_config {
     retry_count = 0 # the next tick is the retry
   }
@@ -134,6 +141,10 @@ resource "google_cloud_scheduler_job" "sweep" {
       service_account_email = google_service_account.runtime["run-scheduler"].email
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
+  }
+
+  lifecycle {
+    ignore_changes = [paused]
   }
 
   depends_on = [google_project_service.apis, google_cloud_run_v2_job_iam_member.scheduler_runs_sweep]

@@ -63,12 +63,7 @@ async function main() {
   const { requireEnv } = loadShared('require-env.cjs');
   requireEnv(
     'db-job',
-    {
-      exact: { WRITE_POSTGRES: 'true' },
-      oneOf: [
-        { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      ],
-    },
+    require('./env-spec.cjs'),
     { logger: log, exit: false },
   );
 

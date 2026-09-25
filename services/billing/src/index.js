@@ -10,6 +10,7 @@ import { initFirebase } from './firebase.js';
 import { buildApp } from './app.js';
 import { rootLogger } from './middleware/trace.js';
 import requireEnvMod from '@algominutes/ai/require-env.cjs';
+import envSpec from './env-spec.cjs';
 
 const { requireEnv } = requireEnvMod;
 
@@ -22,13 +23,7 @@ const PORT = Number(process.env.PORT) || 8080;
 // boot before that work exists.
 requireEnv(
   'billing',
-  {
-    exact: { WRITE_POSTGRES: 'true' },
-    oneOf: [
-      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
-    ],
-  },
+  envSpec,
   { logger: rootLogger },
 );
 

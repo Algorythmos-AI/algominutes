@@ -15,13 +15,7 @@ const sharedLogger = loadShared('logger.cjs');
 const { requireEnv } = loadShared('require-env.cjs');
 requireEnv(
   'embedder',
-  {
-    exact: { WRITE_POSTGRES: 'true' },
-    oneOf: [
-      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
-    ],
-  },
+  require('./env-spec.cjs'),
   { logger: sharedLogger.logger },
 );
 // The transcript read and the embeddings write live in the repo layer.

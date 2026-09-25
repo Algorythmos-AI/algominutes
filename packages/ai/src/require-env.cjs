@@ -21,24 +21,25 @@
 // every problem, then exits 78 (EX_CONFIG) so the Cloud Run revision is marked
 // unhealthy rather than serving with bad config. `exit: false` throws instead
 // (used by tests).
-function present(name) {
-  const v = process.env[name];
+function present(env, name) {
+  const v = env[name];
   return typeof v === 'string' && v.trim() !== '';
 }
 
-function requireEnv(service, spec, opts) {
-  const { logger, exit = true } = opts || {};
-  if (!logger || typeof logger.error !== 'function') {
-    throw new Error('requireEnv: a structured logger is required');
-  }
+/**
+ * Every way `env` fails `spec`, as messages; empty when it passes. Pure, so
+ * the boot check, the Terraform contract test and the saved-plan check
+ * (scripts/check-tfplan-env.mjs) all apply exactly the same rules.
+ */
+function checkEnv(spec, env) {
   const problems = [];
 
   for (const name of spec.required || []) {
-    if (!present(name)) problems.push(`missing required env ${name}`);
+    if (!present(env, name)) problems.push(`missing required env ${name}`);
   }
 
   for (const group of spec.oneOf || []) {
-    const satisfied = (group.of || []).some((set) => set.every(present));
+    const satisfied = (group.of || []).some((set) => set.every((name) => present(env, name)));
     if (!satisfied) {
       const options = (group.of || []).map((set) => set.join('+')).join(' OR ');
       problems.push(`need ${group.label}: one of [${options}]`);
@@ -46,11 +47,21 @@ function requireEnv(service, spec, opts) {
   }
 
   for (const [name, want] of Object.entries(spec.exact || {})) {
-    const got = process.env[name];
+    const got = env[name];
     if (got !== want) {
       problems.push(`env ${name} must be '${want}' (got ${got === undefined ? 'unset' : `'${got}'`})`);
     }
   }
+
+  return problems;
+}
+
+function requireEnv(service, spec, opts) {
+  const { logger, exit = true } = opts || {};
+  if (!logger || typeof logger.error !== 'function') {
+    throw new Error('requireEnv: a structured logger is required');
+  }
+  const problems = checkEnv(spec, process.env);
 
   if (problems.length > 0) {
     logger.error({ service, problems }, 'env_validation_failed');
@@ -61,4 +72,4 @@ function requireEnv(service, spec, opts) {
   }
 }
 
-module.exports = { requireEnv };
+module.exports = { requireEnv, checkEnv };

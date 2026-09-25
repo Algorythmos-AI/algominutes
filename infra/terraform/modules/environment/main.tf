@@ -428,6 +428,7 @@ locals {
       "roles/secretmanager.secretAccessor",
       "roles/cloudtasks.enqueuer",
       "roles/datastore.user",
+      "roles/aiplatform.user", # /v1/search and /v1/chat embed the query and stream the answer on Vertex
     ])
     "run-transcoder" = concat(local.common_roles, [
       "roles/cloudsql.client",

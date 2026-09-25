@@ -100,3 +100,27 @@ describe('requireEnv', () => {
     expect(() => requireEnv('svc', { required: [] }, {} as never)).toThrow(/logger is required/);
   });
 });
+
+// checkEnv is the pure rule set requireEnv applies at boot; the Terraform
+// contract test and scripts/check-tfplan-env.mjs call it on the env Terraform
+// would give a service, so all three agree.
+describe('checkEnv', () => {
+  const { checkEnv } = require('@algominutes/ai/require-env.cjs');
+  const spec = {
+    required: ['A'],
+    exact: { W: 'true' },
+    oneOf: [{ label: 'a target', of: [['URL'], ['H', 'U']] }],
+  };
+
+  it('passes a complete env, reading only the env it is given', () => {
+    expect(checkEnv(spec, { A: 'x', W: 'true', H: 'h', U: 'u' })).toEqual([]);
+  });
+
+  it('reports every problem: blank, wrong exact value, no oneOf group', () => {
+    expect(checkEnv(spec, { A: '  ', W: 'false', H: 'h' })).toEqual([
+      'missing required env A',
+      'need a target: one of [URL OR H+U]',
+      "env W must be 'true' (got 'false')",
+    ]);
+  });
+});
