@@ -63,6 +63,7 @@ options (product-configurable, plan-aware):
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |
 | **Billing/subscription state** | Stripe / App Store / Play + Postgres | Per payment-processor + tax/record-keeping law | see below |
 | **Server logs** (traceId, uid, noteId, workspaceId, error events) | Cloud Logging | **Log retention window** — recommend **30 days** operational, then purge | Logging retention config |
+| **Error Reporting** (error groups, from error-level server logs) | Cloud Error Reporting | Google keeps error events 30 days | Automatic. The group's title is the error's first line. Error messages can carry short fragments of model output (the fast path's JSON parse error quotes about 10 characters; queued in BLOCKERS) |
 | **Backups** | Postgres automated backups / PITR; Storage object versioning if enabled | **Backup retention window** — see §4 | lifecycle expiry |
 
 - `TODO(legal):` Billing/tax records may have a **legally required minimum** retention
