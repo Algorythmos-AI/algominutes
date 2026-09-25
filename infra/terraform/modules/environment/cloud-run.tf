@@ -367,3 +367,12 @@ resource "google_compute_router_nat" "nat" {
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 }
+
+# POST /v1/notes/audio-url signs a short-lived GET for a note's audio. On Cloud
+# Run the storage client signs through the IAM Credentials API (signBlob) as the
+# service's own identity, which needs Token Creator on itself, and nothing wider.
+resource "google_service_account_iam_member" "api_signs_audio_urls" {
+  service_account_id = google_service_account.runtime["run-api"].name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.runtime["run-api"].email}"
+}

@@ -186,6 +186,23 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
+    path: `${API_BASE_PATH}/notes/audio-url`,
+    summary: "A short-lived signed URL to play a note's audio (the note's own object only). Never log or persist it.",
+    tags: ['notes'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.NoteAudioUrlRequest) },
+    responses: {
+      200: { description: 'A V4 signed GET, valid for 15 minutes.', ...json(S.NoteAudioUrlResponse) },
+      400: errorResponse('Invalid noteId / workspaceId.'),
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('No such note in a workspace the caller belongs to, or it has no audio.'),
+      502: errorResponse('Signing failed; safe to retry.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
     path: `${API_BASE_PATH}/notes/delete`,
     summary: 'Delete a note: Postgres rows (search and chat stop returning it), the Firestore mirror, and its audio. Idempotent.',
     tags: ['notes'],
