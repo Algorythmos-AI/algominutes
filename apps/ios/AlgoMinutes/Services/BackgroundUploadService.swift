@@ -54,6 +54,13 @@ final class BackgroundUploadService: NSObject {
         Self.shared = self
     }
 
+    /// How a failed POST /v1/uploads reaches the caller. Its only 404 is a deleted
+    /// note (services/api uploads.js), typed so the caller doesn't retry into it.
+    nonisolated static func sessionError(_ error: Error) -> Error {
+        if case APIError.http(let status, _) = error, status == 404 { return UploadError.noteGone }
+        return error
+    }
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
         // A recording is worth finishing promptly; don't let the OS defer it.
@@ -97,13 +104,18 @@ final class BackgroundUploadService: NSObject {
            let status = try? await api.uploadSessionStatus(uploadId: id) {
             offset = status.complete ? total : min(status.receivedBytes, total)
         } else {
-            let created = try await api.createUploadSession(
-                noteId: noteId,
-                workspaceId: workspaceId,
-                fileName: fileName,
-                contentType: contentType,
-                totalBytes: total
-            )
+            let created: APIClient.CreateUploadSessionResponse
+            do {
+                created = try await api.createUploadSession(
+                    noteId: noteId,
+                    workspaceId: workspaceId,
+                    fileName: fileName,
+                    contentType: contentType,
+                    totalBytes: total
+                )
+            } catch {
+                throw Self.sessionError(error)
+            }
             uploadId = created.uploadId
             sessionUri = created.sessionUri
             chunkSize = max(Self.minChunkBytes, Int64(created.chunkSize))

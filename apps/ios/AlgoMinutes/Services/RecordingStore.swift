@@ -143,6 +143,15 @@ final class RecordingStore {
         remove(fileName: fileURL.lastPathComponent)
     }
 
+    /// Removes the recording still waiting on this device for a note, if any
+    /// (the note was deleted). Returns whether there was one.
+    @discardableResult
+    func removeRecording(forNoteId noteId: String) -> Bool {
+        guard let pending = pendingRecording(forNoteId: noteId) else { return false }
+        remove(fileName: pending.fileName)
+        return true
+    }
+
     // MARK: - Upload state (A7.1 / A7.2)
 
     /// Read the sidecar for a specific file, if one exists. Callers mutate the
