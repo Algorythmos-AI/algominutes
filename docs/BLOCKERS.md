@@ -1157,6 +1157,24 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   checking a logger was passed~~ **fixed (pipeline-repo-log-guard PR):** they, and `persistFastPathResult`'s
   rollback catch, fall back to the shared structured logger. Unit-tested; one mutation checked.
 
+## Long recordings: crash-safe capture (plan rev 8, PR-22, 2026-09-25)
+
+- [x] **Fixed (ios-crash-safe-recording PR, with probe-adts-exact #129 on the server): a killed recording was lost,
+  and the recorder stopped at 2 h.**
+  - The recorder wrote `.m4a`, whose `moov` atom only `stop()` writes. A crash, a jetsam kill or the phone
+    dying (no `willTerminate`) left a file nothing could open, and M1's 3 h meeting passed the 2 h cap.
+  - Recordings are now **AAC in ADTS (`.aac`)**, 64 kbps constant bitrate, with a **4 h cap** (about
+    120 MB, under the 500 MB upload cap).
+  - Measured on a file cut at 60%: ADTS decoded all 72.0 s in ffmpeg, AVAudioFile and AVAsset; the `.m4a`
+    opened in none.
+  - Gemini (both ladder rungs) transcribes ADTS as it's sent today. The server measures ADTS durations by
+    decoding (#129).
+  - Recovery finds `.aac` and older `.m4a` recordings, each uploaded as its own type.
+  - Segmenting was the plan; ADTS makes it unnecessary: no joins, no hand-off gaps, no change to the
+    interruption logic.
+  - [ ] **Verify on a real iPhone (M1):** a 3 h locked-screen recording with a call mid-way; force-quit
+    mid-recording, relaunch, and the recording is offered and uploads; playback seeks accurately.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**

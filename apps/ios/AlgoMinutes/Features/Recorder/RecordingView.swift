@@ -13,7 +13,7 @@ struct RecordingView: View {
     static func capWarning(secondsLeft: Int) -> String {
         let minutes = Int((Double(secondsLeft) / 60).rounded(.up))
         let left = minutes <= 1 ? "Less than a minute" : "About \(minutes) minutes"
-        return "\(left) left — recording stops automatically at 2 hours"
+        return "\(left) left — recording stops automatically at \(RecorderService.maxRecordingSeconds / 3600) hours"
     }
 
     @Environment(AppEnvironment.self) private var env
@@ -272,8 +272,8 @@ struct RecordingView: View {
             // failure (for retry) and removes it only after a confirmed upload.
             await env.uploadAndProcess(
                 fileURL: result.fileURL,
-                mimeType: "audio/mp4",
-                ext: "m4a",
+                mimeType: RecordingFormat.mimeType(forExt: result.fileURL.pathExtension),
+                ext: result.fileURL.pathExtension.lowercased(),
                 type: .recording,
                 kind: .recording,
                 durationSeconds: result.durationSeconds,

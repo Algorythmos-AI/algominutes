@@ -4,7 +4,7 @@ import UserNotifications
 /// Tells the user when a recording stopped without them asking it to.
 ///
 /// `UNUserNotificationCenter` appeared nowhere in this app. Every automatic
-/// stop — the 2-hour cap, an un-resumable interruption, a lost microphone, the
+/// stop — the recording cap, an un-resumable interruption, a lost microphone, the
 /// disk filling up — set a flag whose only consumer was a sheet in
 /// `RecordingView`. If the phone was in a pocket, the sheet was raised behind a
 /// locked screen and nothing was uploaded until the app was next opened. The

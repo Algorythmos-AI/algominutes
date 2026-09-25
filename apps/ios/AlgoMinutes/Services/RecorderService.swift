@@ -2,9 +2,11 @@ import AVFoundation
 import Foundation
 import UIKit
 
-/// Native port of `BackgroundRecorderPlugin.swift` — AAC .m4a, 44.1 kHz mono
-/// 64 kbps, background-audio capable, interruption auto-resume, orphan-file
-/// recovery. Adds live metering for the waveform and elapsed-time tracking.
+/// Native port of `BackgroundRecorderPlugin.swift` — AAC in ADTS (.aac, see
+/// `RecordingFormat`: a killed recording stays decodable), 44.1 kHz mono 64 kbps
+/// constant bitrate, background-audio capable, interruption auto-resume,
+/// orphan-file recovery. Adds live metering for the waveform and elapsed-time
+/// tracking.
 @Observable
 @MainActor
 final class RecorderService: NSObject, AVAudioRecorderDelegate {
@@ -12,10 +14,11 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     // DEFAULT_MAX_RECORDING_SECONDS in @algominutes/contracts (the single source);
     // Swift can't import the TS const, so it is duplicated here with a TODO to
     // read the signed-in user's plan cap once entitlements land (A9).
-    // A full 2-hour recording at 64 kbps AAC is ~57 MB. Warn 5 minutes before cap.
+    // A full 4-hour recording at 64 kbps is ~115 MB (ADTS adds ~5% of frame
+    // headers), well under the api's 500 MB upload cap. Warn 5 minutes before cap.
     // TODO(A9): source this from the user's plan entitlement, not a constant.
-    static let maxRecordingSeconds = 2 * 60 * 60
-    static let warnAfterSeconds = maxRecordingSeconds - 300
+    nonisolated static let maxRecordingSeconds = 4 * 60 * 60
+    nonisolated static let warnAfterSeconds = maxRecordingSeconds - 300
 
     private(set) var isRecording = false
     private(set) var elapsedSeconds = 0
@@ -63,7 +66,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
                 : "No audio had been captured yet."
             switch reason {
             case .hardCap:
-                return "Recording reached the 2-hour limit and stopped. \(kept)"
+                return "Recording reached the \(RecorderService.maxRecordingSeconds / 3600)-hour limit and stopped. \(kept)"
             case .interruptionNotResumable:
                 return "Recording stopped because another app took over the microphone. \(kept)"
             case .sessionReactivationFailed:
@@ -144,9 +147,9 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
         }
     }
 
-    /// A 2-hour recording is ~57 MB at 64 kbps mono AAC. Refuse below double
-    /// that, leaving headroom for the OS so a recording cannot fill the disk.
-    static let minFreeBytesToRecord: Int64 = 120 * 1024 * 1024
+    /// A 4-hour recording is ~120 MB at 64 kbps mono AAC (ADTS). Refuse below about
+    /// double that, leaving headroom for the OS so a recording cannot fill the disk.
+    static let minFreeBytesToRecord: Int64 = 250 * 1024 * 1024
 
     /// Free space on the volume holding the recordings directory.
     ///
@@ -192,12 +195,15 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
         // starts. Recovery of unfinished recordings is handled by RecordingStore.
         let fileURL = store.makeRecordingURL()
 
+        // The .aac URL makes the recorder write ADTS (RecordingFormat). Constant
+        // bitrate keeps seeking by time accurate, since ADTS has no index.
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
             AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
             AVEncoderBitRateKey: 64_000,
+            AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
         ]
 
         do {
@@ -485,13 +491,14 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     /// Synchronous on purpose. Termination gives single-digit seconds and there
     /// is no guarantee a `Task { @MainActor in ... }` hop is ever scheduled, so
     /// the `AVAudioRecorder.stop()` that writes the moov atom has to happen
-    /// right here. Without it a force-quit mid-recording leaves an `.m4a` with no
-    /// sample tables — unplayable, unrepairable, and previously offered back to
-    /// the user as "Upload it".
+    /// right here. With the old `.m4a` format a force-quit left a file with no
+    /// sample tables: unplayable and unrepairable. Recordings are now ADTS
+    /// (`RecordingFormat`), which stays decodable without this; stopping still
+    /// flushes the last buffered frames.
     ///
     /// `assumeIsolated` is sound: `willTerminate` is delivered on the main
-    /// thread. It is not delivered at all on a crash or a jetsam — that case is
-    /// not solvable without segmented recording, and is tracked separately.
+    /// thread. It is not delivered at all on a crash or a jetsam, and ADTS is
+    /// what makes that case lose only the last partial frame.
     @objc private nonisolated func handleWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             guard self.isRecording, let recorder = self.recorder else { return }
