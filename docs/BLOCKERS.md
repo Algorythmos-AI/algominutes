@@ -1057,6 +1057,16 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       nothing. `markNoteFailed` now returns `{ failed }` to gate it with.
     - The dead-letter insert and the notify task aren't deduplicated.
 
+## Embedder: batches and retries (plan rev 8, PR-14, 2026-09-25)
+
+- [x] **Done (embedder-batch-and-retry PR):** the embedder made one Vertex `:predict` call per ~2,000-character
+  chunk. That is about 80 sequential calls for a 3-hour transcript, and any 429 or 5xx failed the whole note;
+  the task's retry then redid every call. Chunks now go 20 per call, so a 3-hour note is about 4 calls, with
+  vectors checked for count and order. A 429, 5xx or dropped connection is retried in place with backoff (up
+  to 4 attempts), and a refused request (other 4xx) fails at once. Unit-tested with a fake fetch and token;
+  two mutations checked. The M1 check "minute-170 content found by search and chat" depends on this path
+  indexing the whole transcript; nothing truncates it.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**
