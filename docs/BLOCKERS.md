@@ -898,10 +898,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               the sweep's `mirror_repair` step (`packages/db` `mirror-repair.ts`) checks notes Postgres finished
               10-40 minutes ago. It reads the doc first, then Postgres in one snapshot, and writes only if
               Postgres says finished, the doc disagrees, and the doc hasn't changed since its read (an
-              update-time precondition). A summary or transcript already on the doc is never rewritten; only
-              a missing one is filled. It covers the fast path's failed mirror after its commit, a last
-              attempt's lost `error` mirror, and any other lost mirror write. Tested on Postgres with a
-              precondition-honouring fake; three mutations checked.
+              update-time precondition). Repairing to `ready` writes the summary and transcript from Postgres,
+              as `markSummaryReady` does (the doc can hold an earlier run's), with the transcript redacted
+              across lines like the summarizer's preview. A doc written in the last 10 minutes is left alone,
+              because the clients' Retry writes `queued` there before Postgres moves. It covers the fast
+              path's failed mirror after its commit, a last attempt's lost `error` mirror, and any other lost
+              mirror write. Tested on Postgres with a precondition-honouring fake (13 cases); eight mutations
+              checked.
+              - [ ] **Queued (from its audit):** a run lists at most 200 notes, oldest first, and warns
+                (`mirror_repair_limit_reached`) when it hits that; past it, newer notes can age out of the
+                window unchecked (page by `(updated_at, id)` or keep a watermark). The listing uses
+                `notes_status_idx`, which doesn't narrow `ready`/`error`; a partial index on `updated_at` for
+                finished notes (new migration) would stop it scanning every finished note. Whether Firestore
+                answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
+                The repaired lists share the `created_at, id` ordering item below.
             - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
               spent and the note is never embedded.
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
