@@ -5,7 +5,7 @@
  * client. resolveEntitlement reads the live grant.
  */
 import type { PlanId } from '@algominutes/contracts';
-import { getPool } from './db';
+import { getPool, isPostgresEnabled } from './db';
 
 export interface EntitlementGrant {
   uid: string;
@@ -30,6 +30,7 @@ const GRANTABLE: readonly string[] = ['pro'];
 
 /** The user's grant, if one is live at `now`. */
 export async function getActiveGrant(uid: string, now: Date = new Date()): Promise<EntitlementGrant | null> {
+  if (!isPostgresEnabled()) return null;
   const { rows } = await getPool().query(
     `SELECT uid, plan, included_minutes, reason, granted_at, expires_at
        FROM entitlement_grants
@@ -89,9 +90,9 @@ export async function grantEntitlement(input: {
   return uid;
 }
 
-/** Remove a user's grant. Returns whether one existed. */
-export async function revokeEntitlement(who: { uid?: string; email?: string }): Promise<boolean> {
+/** Remove a user's grant. Returns their uid, and whether a grant existed. */
+export async function revokeEntitlement(who: { uid?: string; email?: string }): Promise<{ uid: string; revoked: boolean }> {
   const uid = await resolveUid(who);
   const { rowCount } = await getPool().query('DELETE FROM entitlement_grants WHERE uid = $1', [uid]);
-  return (rowCount ?? 0) > 0;
+  return { uid, revoked: (rowCount ?? 0) > 0 };
 }

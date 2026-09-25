@@ -18,12 +18,13 @@ async function run({ log, env, repo = loadRepo(), now = new Date() }) {
   if (!who.uid && !who.email) throw new Error('set GRANT_EMAIL or GRANT_UID');
 
   if (env.MODE === 'revoke') {
-    const revoked = await repo.revokeEntitlement(who);
-    log.info({ revoked }, 'entitlement_grant_revoked');
-    return { revoked };
+    const { uid, revoked } = await repo.revokeEntitlement(who);
+    log.info({ userId: uid, revoked }, 'entitlement_grant_revoked');
+    return { uid, revoked };
   }
 
-  const days = env.GRANT_DAYS === undefined ? 90 : Number(env.GRANT_DAYS);
+  // Unset or blank means the default: a blank must not silently mean "never expires".
+  const days = env.GRANT_DAYS === undefined || env.GRANT_DAYS.trim() === '' ? 90 : Number(env.GRANT_DAYS);
   if (!Number.isInteger(days) || days < 0) throw new Error('GRANT_DAYS must be a whole number of days');
   const minutes = env.GRANT_MINUTES ? Number(env.GRANT_MINUTES) : null;
   const expiresAt = days === 0 ? null : new Date(now.getTime() + days * 24 * 60 * 60 * 1000);

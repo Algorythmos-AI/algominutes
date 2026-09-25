@@ -129,6 +129,12 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
   grants with the db-job `grant-tester` handler (runbook `resume-staging-and-deploy.md` §4); no tester
   email goes into git or the logs. Tested (grant, expiry, another user, usage, paid wins, revoke, account
   deletion, the handler); four mutations checked.
+  - [ ] **Queued (audit of that PR): say where an `active` entitlement comes from.** A grant reports
+    `active` like a paid subscription, so iOS `BillingService` logs a `purchase` event when a grant starts
+    (and `cancellation` when it ends), and the web paywall offers only "Manage subscription", whose portal
+    answers 409 (no Stripe customer). Fix: an additive `source` field on `EntitlementResponse`
+    (`subscription` | `grant` | `trial` | `free`), a contract change for all three clients, and have the
+    clients skip funnel events and the portal for a grant. Not on the M1 path (internal testers).
 
 ## 3. Business/engineering decisions deferred (safe default applied)
 

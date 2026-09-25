@@ -10,8 +10,10 @@
 -- into git. The grant goes with the account (ON DELETE CASCADE).
 CREATE TABLE IF NOT EXISTS entitlement_grants (
   uid              TEXT PRIMARY KEY REFERENCES users(uid) ON DELETE CASCADE,
-  plan             TEXT NOT NULL,              -- a PlanId; only 'pro' is granted (team is unmetered)
-  included_minutes INTEGER,                    -- NULL = the plan's monthly minutes
+  -- Only Pro: team's monthly minutes are unmetered, so a team grant (even one
+  -- inserted by hand) would be unlimited processing cost.
+  plan             TEXT NOT NULL CHECK (plan = 'pro'),
+  included_minutes INTEGER CHECK (included_minutes IS NULL OR included_minutes > 0), -- NULL = the plan's monthly minutes
   reason           TEXT NOT NULL,
   granted_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at       TIMESTAMPTZ                 -- NULL = until revoked

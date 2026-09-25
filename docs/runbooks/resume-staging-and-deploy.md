@@ -143,6 +143,10 @@ the email (an anonymous tester has no email); `GRANT_DAYS=0` never expires;
 `GRANT_MINUTES=3000` raises the allowance; `MODE=revoke` removes it. The log line
 carries the uid, never the email, and the email never goes into git.
 
+Prefer `GRANT_UID` when you have it: the email match trusts the sign-in token's
+email claim, and the job execution (and its audit log) records the env vars you
+pass. Check that the uid in the `entitlement_granted` log line is your tester's.
+
 ## Budget alerts and the end of the free trial (14 Nov 2026)
 
 Terraform creates a monthly budget for the project (`budget.tf`): **A$100 of gross
