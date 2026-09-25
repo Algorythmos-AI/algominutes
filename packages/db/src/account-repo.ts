@@ -32,6 +32,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { listStoragePurgesForAccount, runStoragePurge } from './storage-purges-repo';
+import { recordNoteDeleted } from './deleted-notes-repo';
 import { AccountDeletedError, ensureUser, ensureWorkspaceAccess } from './workspace-access';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
@@ -104,6 +105,7 @@ export async function deleteAccountData(
              VALUES ($1, $2, $3, TRUE, $4, $5)`,
           [n.id, n.workspace_id, n.storage_path, input.uid, input.traceId ?? null],
         );
+        await recordNoteDeleted(client, { noteId: n.id, workspaceId: n.workspace_id });
       }
       await client.query(
         'DELETE FROM dead_letter WHERE workspace_id = ANY($1::text[]) OR note_id = ANY($2::text[])',

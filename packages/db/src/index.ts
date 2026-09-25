@@ -14,3 +14,4 @@ export * from './note-speakers-repo.js';
 export * from './upload-sessions-repo.js';
 export * from './storage-purges-repo.js';
 export * from './account-repo.js';
+export * from './deleted-notes-repo.js';
