@@ -48,6 +48,14 @@ describe('applyNoteEdit: the mirror', () => {
     });
   });
 
+  it('writes only the fields an edit carries, even if handed more', async () => {
+    await applyNoteEdit(firestore, {
+      noteId: 'n1', workspaceId: 'ws',
+      summary: { gist: 'g', actionItems: [], keyDecisions: [], chapters: [] } as never,
+    }, quietLog);
+    expect(docs.get(DOC).summary.chapters).toEqual(chapters);
+  });
+
   it('a rename touches only the title', async () => {
     await applyNoteEdit(firestore, { noteId: 'n1', workspaceId: 'ws', title: 'Renamed' }, quietLog);
     expect(docs.get(DOC)).toMatchObject({ title: 'Renamed', summary: { gist: 'Old gist.', chapters } });

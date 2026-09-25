@@ -767,7 +767,10 @@ export async function applyNoteEdit(
   // `summary.chapters`, so editing one action item removed a long
   // recording's chapters from the app.
   if (input.summary) {
-    for (const [k, v] of Object.entries(input.summary)) {
+    // Only the fields an edit carries: a caller that skipped sanitizeNoteEdit
+    // can't write any other `summary.*` path.
+    for (const k of ['gist', 'actionItems', 'keyDecisions', 'keyPoints'] as const) {
+      const v = input.summary[k];
       if (v !== undefined) mirror[`summary.${k}`] = v;
     }
   }
