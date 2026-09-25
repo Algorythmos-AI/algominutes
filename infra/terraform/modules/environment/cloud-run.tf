@@ -37,6 +37,10 @@ locals {
 
   # Env every service shares.
   common_env = {
+    # Which environment this is (staging | prod). The spend cap's default is
+    # per environment (spend-guard.cjs); without it every environment read as
+    # 'production' (NODE_ENV) and staging got prod's cap.
+    ALGOMINUTES_ENV                = var.env
     NODE_ENV                       = "production"
     GOOGLE_CLOUD_PROJECT           = var.project_id
     GCLOUD_PROJECT                 = var.project_id
