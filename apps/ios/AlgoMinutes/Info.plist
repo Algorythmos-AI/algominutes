@@ -57,6 +57,8 @@
 	<string>$(BILLING_BASE_URL)</string>
 	<key>AlgoMinutesUpdateURL</key>
 	<string>$(UPDATE_URL)</string>
+	<key>AlgoMinutesPaywallEnabled</key>
+	<string>$(PAYWALL_ENABLED)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -71,8 +71,9 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       separate `ServerAnalyticsEvent` in the contracts, so a client can't post them to `/v1/events`, and the
       client contract is unchanged. Was: Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
       without them).
-- [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7). Folded into iOS PR-17 D (see
-      "Clients still on the legacy `/api/*` surface").
+- [x] **Fixed (ios-m0-readiness PR):** one upload cap. The api refuses anything over 500 MB at
+      `/v1/uploads` (#97), and the app now checks the same 500 MB before it starts (`StorageKind.maxBytes`).
+      Was: iOS `StoragePaths.maxBytes` said 50 MB against a 120 MB doc.
 
 ## Diarisation launch blockers — needs YOU (AssemblyAI go-live)
 
@@ -978,8 +979,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - [ ] **E2, the client watchdog:** it flips a note to `error` in Firestore only after 90 s `queued`,
       but the server refuses a re-queue for 3 h and fails a stuck note itself at 3.5 h (the sweep, Postgres
       first). Make it local-only ("taking longer than usual") and leave failing to the server.
-    - Recording cap: iOS `StoragePaths` says 50 MB (its comment and copy say 120 MB). `/v1/uploads` bypasses
-      `storage.rules`, and `CreateUploadSessionRequest.totalBytes` has no maximum. The server must cap it (D).
+    - ~~Recording cap~~ **done:** the api caps `/v1/uploads` at 500 MB (#97), and the app checks the same cap
+      first (ios-m0-readiness PR).
   - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
     (`POST /v1/uploads` + `/v1/process`, then Firestore status), and `lib/*` to the `/v1` paths.
 

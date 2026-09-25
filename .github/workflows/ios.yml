@@ -22,6 +22,14 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+      # The newest stable Xcode on the image, so tests build with what releases
+      # (Xcode Cloud) use, not the image's older default.
+      - name: Select the newest stable Xcode
+        run: |
+          set -euo pipefail
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project

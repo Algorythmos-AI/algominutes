@@ -42,10 +42,13 @@ settings:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
+      PAYWALL_ENABLED: "YES"
     Staging:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
+      # No paywall until the products exist and purchases verify (PR-32).
+      PAYWALL_ENABLED: "NO"
     Release:
       # TODO(prod): the production origins once prod is applied (BLOCKERS: domain).
       API_BASE_URL: https://api.algominutes.com
@@ -53,6 +56,7 @@ settings:
       # The update screen's button (426). TestFlight until the App Store
       # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
       UPDATE_URL: itms-beta://
+      PAYWALL_ENABLED: "NO"
 
 targets:
   AlgoMinutes:
@@ -111,7 +115,13 @@ targets:
       - name: Upload dSYMs to Crashlytics
         script: |
           if [ "${CONFIGURATION}" != "Debug" ]; then
-            "${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+            RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+            if [ -x "$RUN" ]; then
+              "$RUN"
+            else
+              # Visible in the build log; the archive still succeeds.
+              echo "warning: Crashlytics upload script not found at $RUN; dSYMs were not uploaded"
+            fi
           fi
         inputFiles:
           - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}

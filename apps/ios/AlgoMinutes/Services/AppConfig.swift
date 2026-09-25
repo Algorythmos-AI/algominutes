@@ -8,6 +8,17 @@ enum AppConfig {
     static let apiBaseURLKey = "AlgoMinutesAPIBaseURL"
     static let billingBaseURLKey = "AlgoMinutesBillingBaseURL"
     static let updateURLKey = "AlgoMinutesUpdateURL"
+    static let paywallEnabledKey = "AlgoMinutesPaywallEnabled"
+
+    /// PAYWALL_ENABLED per configuration. Off in Staging and Release until the
+    /// App Store products exist and purchases are verified (PR-32): a paywall
+    /// offering products that can't be bought is a dead end. Missing or not
+    /// "YES" means off.
+    static let paywallEnabled = paywallEnabled(info: Bundle.main.infoDictionary)
+
+    static func paywallEnabled(info: [String: Any]?) -> Bool {
+        (info?[paywallEnabledKey] as? String)?.trimmingCharacters(in: .whitespaces).uppercased() == "YES"
+    }
 
     /// Used only if a build's Info.plist lacks a valid value (never expected).
     static let fallbackBaseURL = URL(string: "https://api.algominutes.com")!

@@ -1,10 +1,12 @@
 import Foundation
 
-/// Upload path + size-cap rules, mirroring `storage.rules`.
+/// Upload path + size-cap rules. Every upload goes through `/v1/uploads`, which
+/// refuses anything over 500 MB (services/api uploads.js, `MAX_AUDIO_BYTES`), so
+/// that is the one cap the app checks before it starts.
 enum StorageKind {
-    case recording   // recordings/{ws}/{noteId}.{ext}  — < 120 MB, audio/*
-    case importFile  // imports/{ws}/{noteId}.{ext}     — < 500 MB
-    case scan        // scans/{ws}/{noteId}.{ext}       — < 50 MB
+    case recording   // recordings/{ws}/{noteId}.{ext}
+    case importFile  // imports/{ws}/{noteId}.{ext}
+    case scan        // scans/{ws}/{noteId}.{ext}
 
     var prefix: String {
         switch self {
@@ -14,17 +16,10 @@ enum StorageKind {
         }
     }
 
-    var maxBytes: Int64 {
-        switch self {
-        // FLAG(A7.2 — do not fix here): the doc comment on `case recording`
-        // above and the user-facing copy in UploadService.tooLarge both state a
-        // 120 MB recording cap, but this returns 50 MB. `storage.rules` is the
-        // source of truth — reconcile these three before relying on maxBytes for
-        // a pre-flight size guard. Left as-is to avoid changing behaviour blind.
-        case .recording, .scan: return 50 * 1024 * 1024
-        case .importFile: return 500 * 1024 * 1024
-        }
-    }
+    /// The server's cap, for every kind.
+    var maxBytes: Int64 { Self.serverMaxBytes }
+    static let serverMaxBytes: Int64 = 500 * 1024 * 1024
+    static let serverMaxLabel = "500 MB"
 }
 
 enum StoragePaths {
