@@ -111,8 +111,10 @@ async function haltAtSpendCap({ log, noteId, workspaceId, markFailed, onCapped }
       log.error({ err, noteId, workspaceId }, 'spend_guard_failed');
       return { status: 500, body: { error: 'spend_guard_failed' } };
     }
-    log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
-    if (!noteId || !workspaceId) return { status: 200, body: { ok: false, reason: 'spend_cap' } };
+    if (!noteId || !workspaceId) {
+      log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
+      return { status: 200, body: { ok: false, reason: 'spend_cap' } };
+    }
     let failed;
     try {
       ({ failed } = await markFailed());
@@ -120,7 +122,11 @@ async function haltAtSpendCap({ log, noteId, workspaceId, markFailed, onCapped }
       log.error({ err: markErr, noteId, workspaceId }, 'spend_cap_note_write_failed');
       return { status: 500, body: { error: 'note_write_failed' } };
     }
-    if (!failed) return null;
+    if (!failed) {
+      log.warn({ noteId, workspaceId }, 'spend_cap_tripped_note_carries_on');
+      return null;
+    }
+    log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
     try {
       await onCapped(err);
     } catch (hookErr) {

@@ -21,7 +21,7 @@ const redaction = loadShared('redaction.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
 const embeddings = loadShared('embeddings.cjs');
 
-async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps }) {
+async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork = async () => {} }) {
   const { db, mirror, tasks } = deps;
 
   // No API key: the ladder calls Vertex AI with the service's identity (ADC),
@@ -38,6 +38,9 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   // Bug 14 surface: short clips ask Gemini for transcript + summary in one
   // call. Without responseSchema + maxOutputTokens=16384, chatty content
   // truncates mid-JSON and parseGeminiJson throws. PR-C closure.
+  // What the daily spend cap counts: the whole clip goes to Gemini, paid for
+  // whether or not the answer is usable (handler.js recordPaidWork).
+  await recordPaidWork('gemini_call', durationSec, 'fast-path');
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
     generationConfig: {

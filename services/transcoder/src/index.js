@@ -43,8 +43,8 @@ const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
 const { spendGate } = require('./spend-gate');
 
-// §4.6: the daily cap reads the minutes debited in the last 24 hours.
-spendGuard.setDailySpendReader(spendRepo.createLedgerSpendReader({ pool: () => db.pool() }));
+// §4.6: the daily cap reads the audio minutes sent to paid work in the last 24 hours.
+spendGuard.setDailySpendReader(spendRepo.createPaidWorkSpendReader({ pool: () => db.pool() }));
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));

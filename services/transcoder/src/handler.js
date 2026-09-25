@@ -100,6 +100,11 @@ function pollTaskId(chunkId, poll) {
 
 async function handleKickoff(payload, deps) {
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType } = payload;
+  // §4.6: what the daily spend cap counts, recorded as each paid step starts
+  // (pipeline-repo recordPaidWork).
+  const recordPaidWork = (event, audioSeconds, model) => deps.db.recordPaidWork(deps.db.pool(), {
+    noteId, workspaceId, uid: payload.uid, event, audioSeconds, model, log: deps.log,
+  });
   const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
 
   // Postgres first: a note deleted between kickoff and now must not be touched
@@ -211,7 +216,7 @@ async function handleKickoff(payload, deps) {
 
     if (decision === 'fast') {
       await fastPath.run({
-        noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps,
+        noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork,
       });
     } else {
       // Long path. STT_PROVIDER decides the engine: Google (null) keeps the
@@ -221,11 +226,11 @@ async function handleKickoff(payload, deps) {
       const provider = sttProvider.getProvider(env);
       if (provider) {
         await runWholeFilePath({
-          noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps,
+          noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps, recordPaidWork,
         });
       } else {
         await runChunkedPath({
-          noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps,
+          noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps, recordPaidWork,
         });
       }
     }
@@ -247,7 +252,7 @@ async function handleKickoff(payload, deps) {
   }
 }
 
-async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps }) {
+async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps, recordPaidWork = async () => {} }) {
   const { db, storage, ffmpeg, stt, mirror, tasks } = deps;
 
   const plan = route.planChunks(durationSec);
@@ -326,6 +331,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
     const c2 = await db.pool().connect();
     try { await db.setChunkOperation(c2, { chunkId, operationName }); }
     finally { c2.release(); }
+    await recordPaidWork('stt_call', slice.endSec - slice.startSec, 'google-stt');
 
     await tasks.enqueue({
       kind: STT_POLL,
@@ -607,7 +613,7 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
 // tails are reused unchanged. There is no ffmpeg chunking, no GCS chunk upload,
 // no per-chunk offset math, and no overlap dedup — the provider diarises the
 // whole file in one pass and returns absolute-ms lines with GLOBAL speaker tags.
-async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps }) {
+async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps, recordPaidWork = async () => {} }) {
   const { db, mirror, tasks } = deps;
   // Bind correlation fields so the low-level provider client's log lines carry
   // noteId/workspaceId (CLAUDE.md §logging), which the generic client can't know.
@@ -678,6 +684,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   const c2 = await db.pool().connect();
   try { await db.setChunkOperation(c2, { chunkId, operationName }); }
   finally { c2.release(); }
+  await recordPaidWork('stt_call', durationSec, provider.name);
 
   await tasks.enqueue({
     kind: STT_POLL,

@@ -3,17 +3,23 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
-## Spend cap: a ledger estimate, new kickoffs only, and a failed note rather than a dropped task (2026-09-25, PR-15)
+## Spend cap: paid work as it starts, new kickoffs only, and a failed note rather than a dropped task (2026-09-25, PR-15)
 
-The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the minutes debited in
-`usage_ledger` over the last 24 hours, times a blended cost per minute** (`@algominutes/db/spend-repo.cjs`).
-- **Why the ledger:** every kickoff debits its recording's minutes before any paid work.
-  - `usage_events`, meant for per-call cost, is never written.
-  - The billing export lags by hours and needs setup.
-  - Refunds don't lower the figure, because a failed run was usually paid for. The exception is the cap's own
-    (`refund:spend_cap`): that note never started, so it nets out, and a stream of capped uploads can't hold
-    the cap shut.
-- **Why a rolling 24 hours, not a calendar day:** there is no midnight cliff and no time zone to choose.
+The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the audio minutes the
+transcoder sent to paid work in the last 24 hours, times a blended cost per minute**
+(`@algominutes/db/spend-repo.cjs`).
+- **Where the minutes come from:** the transcoder writes a `usage_events` row as each paid step starts:
+  each chunk's speech job, a whole-file job, or the fast path's Gemini call. Each row carries the audio
+  seconds the transcoder measured itself (`pipeline-repo` `recordPaidWork`). The schema had this table
+  for per-call cost; nothing wrote it.
+- **Why not the `usage_ledger` debits** (the first version): the debit is the duration the client reports.
+  An import sends none, so it was debited 0 minutes and never counted, and a client could under-report.
+  A note retried after a refund also reuses its debit key, so the rerun was never counted.
+- **Best-effort:** a failed write is logged (`paid_work_record_failed`), never fatal. A reader error fails
+  open.
+- **Window:** a rolling 24 hours rather than a calendar day, so there is no midnight cliff and no time zone
+  to choose. No index on `usage_events.created_at` yet: a few rows per recording, read once a minute per
+  instance. Add one when volume warrants it.
 - **The rate:** `COGS_AUD_PER_MINUTE`, default **A$0.03/min**. That is deliberately high: Google speech is
   about US$0.016/min, and the Gemini summary is a fraction of a cent per minute. Replace it with the
   measured blended cost (BLOCKERS A11).
@@ -21,7 +27,8 @@ The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **t
   - A heavy test day on staging (the 3 h M1 run plus the weekly 3 h e2e fixture) is about 360 minutes.
     Raise `DAILY_SPEND_CAP_AUD` for more.
 - **Only a kickoff whose note is still `queued` is stopped.** Nothing has been paid for at that point.
-  - A kickoff replayed mid-run carries on: its speech is partly paid for.
+  - A kickoff replayed mid-run carries on: its speech is partly paid for. A replay that failed before its
+    speech started (status already `chunking`) also carries on, a leak bounded to that one note.
   - A poll task checks a job already paid for, so it isn't gated.
   - **The summarizer isn't gated.** A note that reaches it has its speech paid for, and failing it would
     throw that away for the price of one Gemini call. A regeneration would fail a note that already has
@@ -38,11 +45,12 @@ The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **t
     change, for a state the user can resolve by retrying later.
   - If Postgres misses the failed write, the answer is 500, so the task retries and checks the cap again.
     On the last attempt the task is dropped with the note still queued in both stores. The stuck-note
-    sweep then fails and refunds it; that beats guessing at the mirror without Postgres.
+    sweep then fails and refunds it (as `refund:stuck`, without a notice); that beats guessing at the
+    mirror without Postgres.
 - **`ALGOMINUTES_ENV` is set on every service** (`var.env`). Cloud Run sets `NODE_ENV=production`, so
   without it staging read as production and got prod's cap.
-- **Unchanged:** a reader error fails open (logged), and the budget alerts stay the backstop. The api
-  doesn't refuse a kickoff at the cap; the transcoder fails it and refunds.
+- **Unchanged:** the budget alerts stay the backstop. The api doesn't refuse a kickoff at the cap; the
+  transcoder fails it and refunds.
 
 ## Audio playback through api-signed URLs, not Storage rules (2026-09-25)
 

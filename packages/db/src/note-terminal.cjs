@@ -85,7 +85,9 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // When the UPDATE succeeded but matched no row, the note is already 'ready'
   // or belongs to another workspace — writing 'error' here would contradict
   // the system of record or create a phantom doc under the wrong workspace.
-  const shouldMirror = pgOk || pgErrored;
+  // (Not with `onlyIfStatus`: Postgres couldn't say whether the note was one
+  // to fail, so mirroring 'error' could contradict it.)
+  const shouldMirror = pgOk || (pgErrored && !onlyIfStatus);
   let mirrorOk = false;
   if (shouldMirror) {
     try {

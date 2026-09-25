@@ -92,6 +92,13 @@ describe('markNoteFailed with retryOnPgError', () => {
     await markNoteFailed({ pool, firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log, event: 't' });
     expect(mirrored.map((m) => m.status)).toEqual(['error']);
   });
+
+  it("with onlyIfStatus, a Postgres error mirrors nothing (Postgres couldn't say the note was one to fail)", async () => {
+    await breakFailedWrites();
+    const r = await markNoteFailed({ pool, firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log, event: 't', onlyIfStatus: ['queued'] });
+    expect(r).toEqual({ failed: false });
+    expect(mirrored).toEqual([]);
+  });
 });
 
 describe('the transcoder retries a failure it decided on, when Postgres missed it', () => {

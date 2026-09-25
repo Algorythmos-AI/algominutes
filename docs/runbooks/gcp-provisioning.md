@@ -108,9 +108,11 @@ Migration `000_extensions.sql` runs `CREATE EXTENSION vector` (pgvector is a sup
 - [ ] Buckets exist; staging recordings bucket shows the 7-day lifecycle rule.
 - [ ] Five Cloud Tasks queues exist per env.
 - [ ] **Backup restore test (§4.7):** restore a Cloud SQL backup into a throwaway instance at least once.
-- [ ] **Spend circuit breaker (§4.6):** in staging, wire the A9 spend reader to a value ≥ A$20 and confirm
-      the transcoder/summarizer ack with `deferred: spend_cap` and do not process. (Until the A9 reader
-      exists the breaker is inert — see `packages/ai/src/spend-guard.cjs`.)
+- [ ] **Spend circuit breaker (§4.6):** in staging, set `DAILY_SPEND_CAP_AUD` below the last 24 hours'
+      paid audio × `COGS_AUD_PER_MINUTE` (the reader: `packages/db/src/spend-repo.cjs`, over `usage_events`),
+      kick off a recording, and confirm the transcoder answers `{ ok: false, reason: 'spend_cap' }`, the note
+      shows "We've reached today's processing limit", its minutes come back as a `refund:spend_cap` reversal,
+      and no speech job starts. Then restore the cap. (DECISIONS "Spend cap".)
 
 ## 8. Open items carried from INFRASTRUCTURE.md
 

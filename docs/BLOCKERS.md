@@ -983,12 +983,17 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 ## Spend cap (plan rev 8, PR-15, 2026-09-25)
 
 - [x] **Done (spend-cap-reader PR, the env var pending your apply):** the §4.6 daily cap was inert, because
-  its reader returned 0. It now estimates the last 24 hours' cost as the minutes debited in `usage_ledger`
-  times `COGS_AUD_PER_MINUTE` (default A$0.03), cached for a minute.
+  its reader returned 0. It now reads the audio minutes the transcoder sent to paid work in the last
+  24 hours times `COGS_AUD_PER_MINUTE` (default A$0.03), cached for a minute.
+  - The minutes come from `usage_events`, which the transcoder now writes as each speech job, whole-file
+    job or fast-path Gemini call starts, with the duration it measured itself. The first version read
+    the ledger debits. Its second audit showed imports are debited 0 minutes (the client sends no
+    duration), and a note retried after a refund is never debited again. So the ledger missed real
+    spend.
   - At the cap, a kickoff whose note is still `queued` is failed, Postgres first, with "We've reached today's
-    processing limit". Only on that transition is it refunded (`refund:spend_cap`, which the reader nets
-    out), dead-lettered and its author told, and the task acknowledged. Before, the task was dropped and
-    the note stayed in progress until the sweep.
+    processing limit". Only on that transition is it refunded (`refund:spend_cap`), dead-lettered and its
+    author told, and the task acknowledged. Before, the task was dropped and the note stayed in progress
+    until the sweep.
   - A replay mid-run, a note that moved on, a poll task and the summarizer aren't stopped: their speech
     is already paid for (DECISIONS "Spend cap").
   - Found on the way: staging read as `production` (Cloud Run's `NODE_ENV`) and would have had prod's
@@ -996,28 +1001,33 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - Tested:
     - the gate as a unit;
     - the reader on Postgres;
+    - the recording at every paid step, including that a replay adds nothing;
     - the transcoder gate on Postgres, including the real refund hook, replays, and each in-progress status.
 
-    Eight mutations checked. See DECISIONS "Spend cap".
-  - **From its dual-write audit, fixed in the same PR:** the first version ran the refund, dead letter
-    and notice even when it failed nothing, and it failed notes past `queued`, including summarizing and
-    regenerating ones. Its cap refunds also kept the cap shut.
+    Mutations checked for each. See DECISIONS "Spend cap".
+  - **From its two dual-write audits, fixed in the same PR:**
+    - The hooks ran even when the gate failed nothing, and it failed notes past `queued`, including
+      summarizing and regenerating ones.
+    - A hook's throw went unhandled.
+    - The halt was logged for kickoffs that carried on.
+    - A latent blind Firestore mirror existed with `onlyIfStatus`.
+    - The runbook still described the old `deferred` answer.
 - [ ] **Yours / A11:** replace the default rate with the measured blended cost per minute (speech + Gemini +
   storage), as `COGS_AUD_PER_MINUTE`. Also raise `DAILY_SPEND_CAP_AUD` on staging on heavy test days
-  (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day).
+  (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day). Verify the trip on staging
+  (runbook `gcp-provisioning.md`, spend circuit breaker).
 - [ ] **Queued:**
   - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
-  - The embedder and chat aren't gated.
-  - **Pre-existing, from the audit:**
-    - A note refunded at the cap and retried re-queues with the same `${noteId}:ingest` key, so the
-      rerun is free and the reader never sees it. This is the per-run debit key item under "Residuals"
-      above; the cap makes it likelier.
+  - The embedder, chat and the summarizer's Gemini call aren't metered or gated. They are cents next to
+    speech.
+  - **Billing (pre-existing, found by the same audit):**
+    - Imports are debited 0 minutes against the user's quota, because the client sends no duration. Meter
+      from the transcoder's probed duration.
+    - A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free. That is the
+      per-run debit key item under "Residuals" above.
     - The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
-      nothing. For example, a note that is `ready` but whose later embedder enqueue kept failing is
-      refunded and told it failed. `markNoteFailed` now returns `{ failed }`; gate the hooks on it once
-      that branch is testable (extract it the way `spend-gate.js` was).
-    - The dead-letter insert and the notify task aren't deduplicated, so any replayed terminal path
-      adds a row and a push.
+      nothing. `markNoteFailed` now returns `{ failed }` to gate it with.
+    - The dead-letter insert and the notify task aren't deduplicated.
 
 ## Found while adding the audio smoke (2026-09-25)
 

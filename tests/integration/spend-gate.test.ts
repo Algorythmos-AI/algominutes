@@ -66,7 +66,7 @@ describe('transcoder spend gate', () => {
     expect(f.terminal[0].refundReason).toBe('refund:spend_cap');
   });
 
-  it("with the real hooks: the note's minutes come back as a cap refund (which the spend reader nets out), and a dead letter is kept", async () => {
+  it("with the real hooks: the note's minutes come back as a cap refund, and a dead letter is kept", async () => {
     await pool.query(
       `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
        VALUES ('u', 'ws', 'n1', 'debit', 42, '2026-09', 'ingest', 'n1:ingest')`,

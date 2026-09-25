@@ -1,64 +1,52 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
-import { pool, resetDb, seedUser, seedWorkspace } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 
-// The spend reader behind the daily cap: minutes debited in usage_ledger over
-// the last 24 hours, times a blended cost per minute. Real Postgres.
+// The spend reader behind the daily cap: the audio minutes the transcoder sent
+// to paid work in the last 24 hours (usage_events), times a blended cost per
+// minute. Real Postgres.
 const require = createRequire(import.meta.url);
-const { createLedgerSpendReader, cogsPerMinuteAUD, DEFAULT_COGS_AUD_PER_MINUTE } = require('@algominutes/db/spend-repo.cjs');
+const { createPaidWorkSpendReader, cogsPerMinuteAUD, DEFAULT_COGS_AUD_PER_MINUTE } = require('@algominutes/db/spend-repo.cjs');
 
-let n = 0;
-const entry = (uid: string, type: 'debit' | 'reversal', minutes: number, ago = '1 hour', reason = type === 'debit' ? 'ingest' : 'refund:transcode_failed') => pool.query(
-  `INSERT INTO usage_ledger (uid, entry_type, minutes, billing_period, reason, idempotency_key, created_at)
-   VALUES ($1, $2, $3, '2026-09', $6, $4, NOW() - $5::interval)`,
-  [uid, type, minutes, `k${n++}`, ago, reason],
+const paid = (noteId: string, seconds: number | null, ago = '1 hour', event = 'stt_call') => pool.query(
+  `INSERT INTO usage_events (uid, workspace_id, note_id, event, audio_seconds, created_at)
+   VALUES ('alice', 'ws-a', $1, $4, $2, NOW() - $3::interval)`,
+  [noteId, seconds, ago, event],
 );
 
 beforeEach(async () => {
   await resetDb();
   await seedUser('alice');
-  await seedUser('bob');
   await seedWorkspace('ws-a', 'alice');
+  await seedNote('n1', 'ws-a', 'alice');
+  await seedNote('n2', 'ws-a', 'alice');
 });
 afterAll(async () => { await pool.end(); });
 
-describe('createLedgerSpendReader', () => {
-  it("sums the last 24 hours' debits across accounts; refunds and older debits don't count", async () => {
-    await entry('alice', 'debit', 60);
-    await entry('bob', 'debit', 30, '23 hours');
-    await entry('alice', 'reversal', -60);
-    await entry('bob', 'debit', 500, '25 hours');
-    const read = createLedgerSpendReader({ pool: () => pool, ratePerMinute: 0.1 });
-    expect(await read()).toBeCloseTo(9);
-  });
-
-  it("a note the cap stopped nets out (nothing was paid for), so capped uploads can't hold the cap shut", async () => {
-    await entry('alice', 'debit', 60);
-    await entry('alice', 'debit', 40);
-    await entry('alice', 'reversal', -40, '1 hour', 'refund:spend_cap');
-    const read = createLedgerSpendReader({ pool: () => pool, ratePerMinute: 1 });
-    expect(await read()).toBe(60);
-  });
-
-  it("a cap refund that outlives its debit in the window doesn't go below 0", async () => {
-    await entry('alice', 'reversal', -40, '1 hour', 'refund:spend_cap');
-    expect(await createLedgerSpendReader({ pool: () => pool, ratePerMinute: 1 })()).toBe(0);
+describe('createPaidWorkSpendReader', () => {
+  it("sums the last 24 hours' paid audio across notes; older work and rows without audio don't count", async () => {
+    await paid('n1', 600);
+    await paid('n2', 300, '23 hours', 'gemini_call');
+    await paid('n1', 6000, '25 hours');
+    await paid('n2', null);
+    const read = createPaidWorkSpendReader({ pool: () => pool, ratePerMinute: 0.1 });
+    expect(await read()).toBeCloseTo(1.5);
   });
 
   it('caches for a minute, then reads again', async () => {
     let t = 1_000_000;
-    const read = createLedgerSpendReader({ pool: () => pool, ratePerMinute: 1, now: () => t });
-    await entry('alice', 'debit', 10);
+    const read = createPaidWorkSpendReader({ pool: () => pool, ratePerMinute: 1, now: () => t });
+    await paid('n1', 600);
     expect(await read()).toBe(10);
-    await entry('alice', 'debit', 5);
+    await paid('n1', 300);
     t += 59_000;
     expect(await read()).toBe(10);
     t += 2_000;
     expect(await read()).toBe(15);
   });
 
-  it('an empty ledger is 0, not null', async () => {
-    expect(await createLedgerSpendReader({ pool: () => pool })()).toBe(0);
+  it('nothing paid for is 0, not null', async () => {
+    expect(await createPaidWorkSpendReader({ pool: () => pool })()).toBe(0);
   });
 });
 
