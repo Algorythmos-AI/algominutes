@@ -39,6 +39,39 @@ const JSON_CONTRACT = `Return ONLY valid JSON with this exact structure — no m
   "keyDecisions": ["decision 1", "decision 2"]
 }`;
 
+// Chapters, for a recording long enough to have sections (the summarizer adds
+// them past 10 minutes). The one nested field: parse (summary-output.cjs),
+// redaction, the summaries.chapters column and the Swift decode all handle it
+// explicitly. Its own prompt part, so every template's prompt stays as it was.
+const CHAPTERS_SCHEMA = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      start: { type: 'STRING' },
+      title: { type: 'STRING' },
+      summary: { type: 'STRING' },
+    },
+    required: ['start', 'title'],
+  },
+};
+
+const CHAPTERS_INSTRUCTION = `
+
+Also return "chapters": the recording's sections in order, from 3 for a short meeting up to 20 for a long one. For each chapter:
+- "start": the timestamp of the transcript line where the section begins, copied exactly as it appears in the transcript (for example "12:34" or "1:02:03")
+- "title": a short heading, at most 8 words
+- "summary": one or two sentences on what was covered`;
+
+/** A template's schema with chapters added, last, so a cut-off answer keeps the rest. */
+function withChapters(schema) {
+  return {
+    ...schema,
+    properties: { ...schema.properties, chapters: CHAPTERS_SCHEMA },
+    propertyOrdering: [...Object.keys(schema.properties), 'chapters'],
+  };
+}
+
 const TEMPLATES = {
   // Byte-identical to buildSummaryPrompt() in shared/intelligence.cjs. A note
   // summarised with the default template must produce exactly what it
@@ -207,6 +240,9 @@ function templateIds() {
 }
 
 module.exports = {
+  CHAPTERS_SCHEMA,
+  CHAPTERS_INSTRUCTION,
+  withChapters,
   TEMPLATES,
   DEFAULT_TEMPLATE_ID,
   BASE_SCHEMA,

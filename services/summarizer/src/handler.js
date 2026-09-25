@@ -14,6 +14,12 @@ function loadShared(name) {
 // The terminal-failure write started here and now lives in shared/, because the
 // transcoder needed the same thing and a second copy would have drifted.
 const sharedNoteTerminal = loadShared('note-terminal.cjs');
+const summaryOutput = loadShared('summary-output.cjs');
+
+// Past this, a recording has sections worth navigating: the summary gets
+// chapters. (The transcoder's fast path, which writes its own summary, covers
+// everything shorter.)
+const CHAPTERS_MIN_MS = 10 * 60 * 1000;
 // The final write goes through the repo layer (CLAUDE.md §1): this service
 // runs under tsx, so it imports @algominutes/db's TypeScript directly.
 const { markSummaryReady } = require('@algominutes/db');
@@ -153,8 +159,10 @@ async function handle(payload, deps) {
 
   const transcriptStr = redacted.map((l) => `[${l.time}] ${l.speaker}: ${l.text}`).join('\n');
 
+  const lastMs = lines[lines.length - 1].endMs || lines[lines.length - 1].startMs || 0;
+  const wantChapters = lastMs >= CHAPTERS_MIN_MS;
   const parts = [
-    { text: chosen.promptBody },
+    { text: chosen.promptBody + (wantChapters ? sharedTemplates.CHAPTERS_INSTRUCTION : '') },
     { text: `\n\nTranscript:\n${transcriptStr}\n` },
   ];
 
@@ -169,18 +177,25 @@ async function handle(payload, deps) {
     log,
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: chosen.responseSchema,
+      responseSchema: wantChapters ? sharedTemplates.withChapters(chosen.responseSchema) : chosen.responseSchema,
       maxOutputTokens: 16384,
     },
   });
   if (!rawText) throw error || new Error('gemini_empty');
 
-  const parsed = sharedIntelligence.parseSummaryJson(rawText);
+  // A cut-off answer keeps the fields it completed (chapters come last, so the
+  // gist, action items and decisions survive), instead of failing the note.
+  const { result: parsed, partial } = summaryOutput.salvageSummaryJson(rawText);
+  if (partial) log.warn({ noteId, workspaceId, model }, 'summary_salvaged_partial');
 
   // Defense-in-depth: the transcript is scrubbed before Gemini, but redact the
   // summary OUTPUT too before persist + mirror (the model can still echo PII).
+  // Scrub the chapters whole, THEN trim them (normalizeChapters caps lengths):
+  // trimming first can cut a card number or an email so the patterns no longer
+  // match, and the fragment would be stored.
   const outRedaction = sharedRedaction.redactSummaryOutput({
     gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions,
+    chapters: wantChapters ? parsed.chapters : [],
   });
   if (Object.keys(outRedaction.counts).length) {
     log.info({ noteId, workspaceId, redactionCounts: outRedaction.counts }, 'summary_output_redacted');
@@ -188,6 +203,12 @@ async function handle(payload, deps) {
   parsed.gist = outRedaction.summary.gist;
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
+  const safeChapters = wantChapters
+    ? summaryOutput.normalizeChapters(outRedaction.summary.chapters, { maxMs: lastMs })
+    : [];
+  if (wantChapters) {
+    log.info({ noteId, workspaceId, chapters: safeChapters.length, offered: (parsed.chapters || []).length }, 'summary_chapters');
+  }
 
   // Postgres (summary rows, 'ready', manual-edit flags cleared, all in one
   // transaction), then the Firestore mirror: notes-repo markSummaryReady.
@@ -196,7 +217,7 @@ async function handle(payload, deps) {
   const result = await markSummaryReady(firestore(), {
     noteId,
     workspaceId,
-    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
+    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions, chapters: safeChapters },
     model,
     transcriptPreview: redacted.slice(0, 200),
     transcriptTruncated: redacted.length > 200,

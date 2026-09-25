@@ -490,7 +490,13 @@ function isFirestoreNotFound(err: unknown): boolean {
 export interface MarkSummaryReadyInput {
   noteId: string;
   workspaceId: string;
-  summary: { gist: string; actionItems: string[]; keyDecisions: string[] };
+  summary: {
+    gist: string;
+    actionItems: string[];
+    keyDecisions: string[];
+    /** Validated sections (summary-output.cjs normalizeChapters); none for a short note. */
+    chapters?: Array<{ startMs: number; title: string; summary: string }>;
+  };
   model?: string | null;
   /** Redacted transcript preview for the live UI (the full transcript stays in Postgres). */
   transcriptPreview: { speaker: string; text: string; time: string }[];
@@ -547,12 +553,15 @@ export async function markSummaryReady(
         return { written: false, reason: live.rowCount ? 'superseded' : 'not_found' };
       }
       await client.query(
-        `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-           VALUES ($1, $2, NULL, $3, $4)
+        `INSERT INTO summaries (note_id, gist, long_summary, topics, model, chapters)
+           VALUES ($1, $2, NULL, $3, $4, $5)
          ON CONFLICT (note_id) DO UPDATE
            SET gist = EXCLUDED.gist, topics = EXCLUDED.topics,
-               model = EXCLUDED.model, generated_at = NOW()`,
-        [input.noteId, input.summary.gist || '', JSON.stringify(input.summary.actionItems || []), input.model || null],
+               model = EXCLUDED.model, chapters = EXCLUDED.chapters, generated_at = NOW()`,
+        [
+          input.noteId, input.summary.gist || '', JSON.stringify(input.summary.actionItems || []), input.model || null,
+          JSON.stringify(input.summary.chapters || []),
+        ],
       );
       await client.query('DELETE FROM action_items WHERE note_id = $1', [input.noteId]);
       for (const text of input.summary.actionItems || []) {
@@ -580,6 +589,8 @@ export async function markSummaryReady(
       'summary.gist': input.summary.gist || '',
       'summary.actionItems': input.summary.actionItems || [],
       'summary.keyDecisions': input.summary.keyDecisions || [],
+      // Replaced with the summary: a regenerate of a short note clears old chapters.
+      'summary.chapters': input.summary.chapters || [],
       transcript: input.transcriptPreview,
       transcriptTruncated: input.transcriptTruncated,
     });

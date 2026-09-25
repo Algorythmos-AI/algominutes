@@ -296,6 +296,15 @@ function redactSummaryOutput(summary) {
   if (Array.isArray(out.keyDecisions)) out.keyDecisions = redactStringList(out.keyDecisions, counts);
   if (Array.isArray(out.keyPoints)) out.keyPoints = redactStringList(out.keyPoints, counts);
   if (Array.isArray(out.topics)) out.topics = redactStringList(out.topics, counts);
+  if (Array.isArray(out.chapters)) {
+    out.chapters = out.chapters.map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const next = { ...c };
+      if (typeof next.title === 'string') { const r = redactPII(next.title); next.title = r.text; inc(r.counts); }
+      if (typeof next.summary === 'string') { const r = redactPII(next.summary); next.summary = r.text; inc(r.counts); }
+      return next;
+    });
+  }
   return { summary: out, counts };
 }
 

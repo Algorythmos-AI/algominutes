@@ -762,6 +762,33 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     locking it, so the racer is either deleted or rolled back. Regression test with a real uncommitted
     insert; mutation-checked.
 
+## Long recordings: chapters and salvage (plan rev 8, PR-13a, 2026-09-25)
+
+- [x] **Done (summary-chapters PR): a long recording's summary has chapters, and a cut-off answer is salvaged.**
+  - The summarizer asks for chapters past 10 minutes: its own prompt part, so every template's prompt is
+    unchanged, and a schema with `chapters` ordered last.
+  - `summary-output.cjs` validates each chapter's start against the recording, sorts them, keeps one per
+    start and caps at 40. Chapters are scrubbed for PII like the rest of the output, stored in
+    `summaries.chapters` (migration 020), mirrored to `summary.chapters`, and returned by `/v1/notes/read`.
+    The contract gains `Chapter`.
+  - A cut-off answer is repaired to its last complete value, so the gist, action items and decisions land
+    (`summary_salvaged_partial`) instead of the note failing.
+  - Found on the way: `NoteReadMeta.title` is nullable in fact (the kickoff sets no title), and is now so
+    in the contract. iOS decodes only the transcript from that response, so nothing broke on device.
+  - Tested (unit, the handler on Postgres, the read route against the contract); six mutations checked.
+  - **Map-reduce judged unnecessary:** a 4 h transcript is about 40-60k tokens, inside Gemini flash's
+    input window, and the output (chapters included) fits 16,384 tokens. Recheck with a real 3 h note on
+    staging (M1).
+  - **From its PII audit, fixed in the same PR:** chapters are scrubbed whole and *then* trimmed. Trimming
+    first could cut a card number or an email into a fragment the patterns no longer match, which was then
+    stored. The salvage error no longer quotes the model's output, since it reaches logs and the dead letter.
+  - [ ] **Queued (pre-existing, from that audit):**
+    - the fast path's `parseGeminiJson` and the older `parseSummaryJson` still put Node's JSON error (about
+      10 characters of model output) in their message;
+    - `speakerName` (a user-set label) goes to Gemini unscrubbed.
+  - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
+    tap to seek.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**
