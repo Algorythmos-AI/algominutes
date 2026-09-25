@@ -22,6 +22,8 @@ function loadShared(name) {
 }
 
 const sharedTasks = loadShared('cloud-tasks.cjs');
+// The note-author read lives in the repo layer, scoped to the task's workspace.
+const pipelineRepo = require('@algominutes/db/pipeline-repo.cjs');
 
 let _repoWarned = false;
 function requireRepo(basename) {
@@ -50,16 +52,8 @@ function repoFn(basename, fnName, log) {
 async function resolveNoteUid({ pool, noteId, workspaceId, uid, log }) {
   if (uid) return { uid, workspaceId: workspaceId || null };
   try {
-    const { rows } = await pool.query(
-      'SELECT author_uid, workspace_id FROM notes WHERE id = $1',
-      [noteId],
-    );
-    if (rows[0]) {
-      return {
-        uid: rows[0].author_uid || null,
-        workspaceId: workspaceId || rows[0].workspace_id || null,
-      };
-    }
+    const row = await pipelineRepo.noteAuthor(pool, { noteId, workspaceId });
+    if (row) return { uid: row.uid || null, workspaceId: workspaceId || row.workspaceId || null };
   } catch (err) {
     log.error({ err, noteId }, 'note_author_lookup_failed');
   }

@@ -437,11 +437,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     workspace-scoped, `deleted_at`-aware SQL, and route the fast-path's final write through
     `markSummaryReady`. Then add a Postgres counterpart to the gate (writes to `notes` / `summaries` /
     `action_items` / `key_decisions` / `transcript_lines` outside `packages/db`).
-- [ ] **Two transcoder Postgres reads are outside the repo layer** (from the transcoder-sql-into-repo
-  audit). `services/transcoder/src/handler.js` reads chunk progress inline, and
-  `services/transcoder/src/terminal-hooks.js` looks up the note's author by note id alone, **not filtered
-  by workspace** (CLAUDE.md §1 multi-tenancy). The write gate doesn't see reads. Fix: move both into
-  `pipeline-repo.cjs`, scope the author lookup by `workspace_id`, and add a two-workspace test.
+- [x] **Fixed (pipeline-reads-into-repo PR):** the failure tail's author lookup, in both the transcoder's
+  and the summarizer's `terminal-hooks.js`, read the note by id alone, so a task naming another workspace
+  resolved *this* note's author, who would then be notified (CLAUDE.md §1 multi-tenancy). The transcoder's
+  chunk-progress read was unscoped too. Both are now `pipeline-repo.cjs` reads: `noteAuthor` is scoped to the
+  task's workspace when it has one, and `chunkProgress` to the workspace and a live note. Tested with two
+  workspaces for both services; each filter mutation-checked. Other raw *reads* remain in services (the api
+  routes' membership-joined queries, the summarizer's scoped transcript read, db-job diagnostics); the write
+  gate doesn't cover reads. Was: **Two transcoder Postgres reads are outside the repo layer** (from the
+  transcoder-sql-into-repo audit; the dual-write audit of #115 found the summarizer's copy).
 - [x] **Fixed (firestore-gate-batch-writes PR):** the gate now also flags a write whose *first argument*
   is a document ref (`batch.delete(db.doc(p))`, `tx.set(noteRef, …)`, bulk writes), a bare `ref`
   receiver (the old `/Ref$/` missed it; `share-links` relied on that), and `snap.ref.update(…)`.

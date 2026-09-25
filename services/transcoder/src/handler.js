@@ -448,10 +448,8 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
   // Mirror progress.
   const c6 = await db.pool().connect();
   try {
-    const { rows } = await c6.query(
-      `SELECT chunks_done AS "done", chunks_total AS "total" FROM notes WHERE id = $1`, [noteId],
-    );
-    if (rows[0]) await mirror.mirrorProgress({ workspaceId, noteId, done: rows[0].done || 0, total: rows[0].total || 0 });
+    const progress = await db.chunkProgress(c6, { noteId, workspaceId });
+    if (progress) await mirror.mirrorProgress({ workspaceId, noteId, done: progress.done || 0, total: progress.total || 0 });
   } finally { c6.release(); }
 
   if (allDone && summarizerClaimed) {
