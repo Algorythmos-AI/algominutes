@@ -7,8 +7,9 @@ import { pool, resetDb, seedUser } from './helpers';
 // The Android rail's server check, through the real googleapis client, against
 // a local stand-in for the Play Developer API (PLAY_API_ROOT_URL, unset when
 // deployed). It pins what a googleapis major could change: the request the
-// androidpublisher v3 client sends for purchases.subscriptions.get, the auth
-// header, and the fields we read back. Real Postgres for the verify route.
+// androidpublisher v3 client sends for purchases.subscriptionsv2.get (v1
+// purchases.subscriptions.get is gone from googleapis 181), the auth header,
+// and the fields we read back. Real Postgres for the verify route.
 type Seen = { method: string; path: string; auth: string | undefined };
 const seen: Seen[] = [];
 const EXPIRY_MS = Math.floor(Date.now() / 1000 + 30 * 86_400) * 1000; // a month ahead: the grant is live
@@ -33,7 +34,12 @@ beforeEach(async () => {
   seen.length = 0;
   answer = {
     status: 200,
-    body: { kind: 'androidpublisher#subscriptionPurchase', expiryTimeMillis: String(EXPIRY_MS), paymentState: 1, acknowledgementState: 1, autoRenewing: true },
+    body: {
+      kind: 'androidpublisher#subscriptionPurchaseV2',
+      subscriptionState: 'SUBSCRIPTION_STATE_ACTIVE',
+      acknowledgementState: 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+      lineItems: [{ productId: 'pro_monthly', expiryTime: new Date(EXPIRY_MS).toISOString(), autoRenewingPlan: { autoRenewEnabled: true } }],
+    },
   };
   await resetDb();
   await seedUser('u1');
@@ -54,18 +60,33 @@ function call(route: (req: any, res: any) => Promise<unknown>, req: any) {
   });
 }
 
-describe('Google Play: purchases.subscriptions.get', () => {
-  it('asks Play for the token under our package, with a bearer token, and reads the expiry and states', async () => {
+describe('Google Play: purchases.subscriptionsv2.get', () => {
+  it("asks Play for the token under our package, with a bearer token, and reads the product's expiry and the states", async () => {
     const sub = await play.verifyPlaySubscription({ productId: 'pro_monthly', purchaseToken: 'tok-1' });
     expect(seen).toEqual([{
       method: 'GET',
-      path: '/androidpublisher/v3/applications/app.algominutes.test/purchases/subscriptions/pro_monthly/tokens/tok-1',
+      path: '/androidpublisher/v3/applications/app.algominutes.test/purchases/subscriptionsv2/tokens/tok-1',
       auth: 'Bearer stand-in',
     }]);
     expect(sub).toMatchObject({
-      purchaseToken: 'tok-1', productId: 'pro_monthly',
-      currentPeriodEnd: new Date(EXPIRY_MS).toISOString(), paymentState: 1, cancelReason: null, acknowledgementState: 1,
+      purchaseToken: 'tok-1', productId: 'pro_monthly', currentPeriodEnd: new Date(EXPIRY_MS).toISOString(),
+      subscriptionState: 'SUBSCRIPTION_STATE_ACTIVE', acknowledgementState: 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED', canceled: false,
     });
+  });
+
+  it('after a plan change Play reports another product: its latest expiry wins, and the product is what Play says', async () => {
+    answer = { status: 200, body: { subscriptionState: 'SUBSCRIPTION_STATE_ACTIVE', lineItems: [
+      { productId: 'old_plan', expiryTime: new Date(EXPIRY_MS - 86_400_000).toISOString() },
+      { productId: 'pro_annual', expiryTime: new Date(EXPIRY_MS + 86_400_000).toISOString() },
+      { productId: 'no_expiry_yet' },
+    ] } };
+    const sub = await play.verifyPlaySubscription({ productId: 'pro_monthly', purchaseToken: 'tok-2' });
+    expect(sub).toMatchObject({ productId: 'pro_annual', currentPeriodEnd: new Date(EXPIRY_MS + 86_400_000).toISOString() });
+  });
+
+  it('no line item with an expiry: no period end (the verify route then refuses it)', async () => {
+    answer = { status: 200, body: { subscriptionState: 'SUBSCRIPTION_STATE_PENDING', lineItems: [] } };
+    expect((await play.verifyPlaySubscription({ productId: 'pro_monthly', purchaseToken: 'tok-3' })).currentPeriodEnd).toBeNull();
   });
 
   it('an error from Play is thrown (the webhook answers 500 so Pub/Sub redelivers)', async () => {

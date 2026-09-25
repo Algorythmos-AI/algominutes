@@ -381,7 +381,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     `androidpublisher` v3 client against a local stand-in (`PLAY_API_ROOT_URL`, unset when deployed, with a
     static token so no credential is looked up). It pins the request path, the bearer header and the fields
     read back, checks that a Play error is thrown, and checks that the verify route grants Pro until Play's
-    expiry. Next: rebase #108 so its CI runs this on v181.
+    expiry. On v181 the test caught `pub.purchases.subscriptions.get is not a function`: Google is retiring
+    v1 `purchases.subscriptions`, and v181 drops it. `verifyPlaySubscription` now uses `subscriptionsv2.get`
+    (play-subscriptionsv2 PR), which v144 has too. The expiry comes from the product's line item, or the
+    latest-expiring one after a plan change. Then rebase #108.
   - **#107 `pdfjs-dist` 4 → 6** (`services/extractor/src/extractors/pdf.js`,
     `apps/web/src/lib/documentText.ts`). Two majors, with changes to the module and worker setup.
     `web-build` only proves the web bundle builds. **Test in place (extractor-pdf-test PR):**
