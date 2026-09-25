@@ -17,10 +17,12 @@ final class DeletedNoteRecordingTests: XCTestCase {
         if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
     }
 
+    /// The store's own format (its default extension), so this holds whichever
+    /// format new recordings use.
     private func recording(in store: RecordingStore, noteId: String) throws -> URL {
-        let url = store.makeRecordingURL(ext: "aac")
+        let url = store.makeRecordingURL()
         try Data(repeating: 0xAB, count: 16).write(to: url)
-        store.associate(fileURL: url, noteId: noteId, mimeType: "audio/aac", ext: "aac", durationSeconds: 60)
+        store.associate(fileURL: url, noteId: noteId, mimeType: "audio/mp4", ext: url.pathExtension, durationSeconds: 60)
         return url
     }
 
@@ -55,7 +57,7 @@ final class DeletedNoteRecordingTests: XCTestCase {
         let url = try recording(in: store, noteId: "n-deleted")
         store.setUploadSession(fileName: url.lastPathComponent, uploadId: "u-old", sessionUri: "https://storage.googleapis.com/old")
 
-        store.associate(fileURL: url, noteId: "n-new", mimeType: "audio/aac", ext: "aac", durationSeconds: 60)
+        store.associate(fileURL: url, noteId: "n-new", mimeType: "audio/mp4", ext: url.pathExtension, durationSeconds: 60)
 
         XCTAssertNil(store.pendingRecording(forNoteId: "n-deleted"))
         let moved = store.pendingRecording(forNoteId: "n-new")
