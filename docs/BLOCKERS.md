@@ -471,8 +471,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         migration.
       - **R3:** ~~a YouTube permanent failure mirrors `error` to Firestore only~~ **fixed
         (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
-        retry isn't refused for 3 h. Still open: `chunking` and `summarizing` are mirrored with no matching
-        Postgres status write.
+        retry isn't refused for 3 h. ~~Still open: `chunking` and `summarizing` are mirrored with no matching
+        Postgres status write~~ **fixed (status-mirror-follows-postgres PR):** the kickoff writes `chunking`
+        to Postgres (workspace-scoped, deleted-aware) before mirroring it, and the completion gate writes
+        `summarizing` before the mirror and the summarizer enqueue. Tested for order and mutation-checked.
     - [x] **Fixed (note-delete-cancels-upload PR):** `deleteNote` records the note's open GCS upload-session
       URIs on its purge row (migration 017, expand-only), and the purge cancels them *before* it deletes the
       doc and objects. An upload that finished first is removed with the objects, a finished or expired
