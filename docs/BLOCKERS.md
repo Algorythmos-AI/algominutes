@@ -784,8 +784,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       retry is left (a worker's last attempt), a refund that can't be written falls back to the failure
       alone (`*_refund_lost`), so the two stores agree.
       - [ ] **Queued (from its review, pre-existing):**
-        - The api's `failNote` → `markError` after `markQueued` has debited (an enqueue that failed) doesn't
-          refund.
+        - ~~The api's `failNote` → `markError` after `markQueued` has debited doesn't refund~~ **fixed
+          (enqueue-failure-refunds PR):** `markError` takes a `refund`, written in its transaction, and the
+          kickoff's failures after the debit pass one (`refund:enqueue_failed`).
         - The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
           regeneration rule.
         - A failure can deadlock with account deletion (note row, then the ledger's foreign key on
