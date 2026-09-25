@@ -387,8 +387,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     `web-build` only proves the web bundle builds. **Test in place (extractor-pdf-test PR):**
     `tests/extractor-pdf.test.ts` runs the extractor through the real pdfjs-dist on a two-page PDF built at
     test time. It pins each page's text, in order, with no OCR, and checks that a non-PDF is rejected. The
-    web's `documentText.ts` stays covered by `web-build` only; the web is moving to the extractor. Next:
-    rebase #107 so its CI runs this on v6.
+    web's `documentText.ts` stays covered by `web-build` only; the web is moving to the extractor. On v6
+    the test caught `pdf.destroy is not a function` (and `web-build` the same in `documentText.ts`): pdf.js 5
+    removed `PDFDocumentProxy.destroy()`. Both now call `loadingTask.destroy()`, which works on 4 and 6
+    (pdfjs-destroy PR). Then rebase #107.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
