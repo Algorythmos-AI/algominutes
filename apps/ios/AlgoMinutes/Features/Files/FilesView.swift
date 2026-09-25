@@ -198,7 +198,7 @@ struct FilesView: View {
                     Button(role: .destructive) {
                         let id = note.id
                         Task {
-                            do { try await env.notes.deleteNote(id: id) }
+                            do { try await env.deleteNote(id: id) }
                             catch { env.alertMessage = "Couldn't delete this note. Please try again." }
                         }
                     } label: {

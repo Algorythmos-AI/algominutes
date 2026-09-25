@@ -6,6 +6,10 @@ enum UploadError: LocalizedError {
     case timedOut
     case tooLarge(limitLabel: String, isRecording: Bool)
     case failed
+    /// POST /v1/uploads answered 404: the note was deleted (the server refuses
+    /// its id for 30 days). Its own case so the caller keeps the recording as a
+    /// new note instead of retrying into the 404.
+    case noteGone
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +27,8 @@ enum UploadError: LocalizedError {
                 : "That file is too large. The current limit is \(limit)."
         case .failed:
             return "Upload failed. Please check your connection and try again."
+        case .noteGone:
+            return "This note was deleted, so your recording will be saved as a new note."
         }
     }
 }
