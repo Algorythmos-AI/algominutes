@@ -21,7 +21,7 @@ const redaction = loadShared('redaction.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
 const embeddings = loadShared('embeddings.cjs');
 
-async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork = async () => {} }) {
+async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork }) {
   const { db, mirror, tasks } = deps;
 
   // No API key: the ladder calls Vertex AI with the service's identity (ADC),
@@ -38,9 +38,6 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   // Bug 14 surface: short clips ask Gemini for transcript + summary in one
   // call. Without responseSchema + maxOutputTokens=16384, chatty content
   // truncates mid-JSON and parseGeminiJson throws. PR-C closure.
-  // What the daily spend cap counts: the whole clip goes to Gemini, paid for
-  // whether or not the answer is usable (handler.js recordPaidWork).
-  await recordPaidWork('gemini_call', durationSec, 'fast-path');
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
     generationConfig: {
@@ -50,6 +47,11 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     },
   });
   if (!rawText) throw error || new Error('gemini_failed_no_text');
+  // What the daily spend cap counts: an answer came back, so the clip was billed
+  // (usable or not). A 429/5xx outage returns none and isn't counted; retries of
+  // it would otherwise trip the cap with nothing spent (handler.js recordPaidWork).
+  if (recordPaidWork) await recordPaidWork('gemini_call', durationSec, 'fast-path');
+  else log.warn({ noteId, workspaceId }, 'paid_work_unmetered');
 
   // Use salvage parser: if Gemini still truncates despite the schema
   // (rare with maxOutputTokens=16384), recover whatever objects were

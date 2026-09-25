@@ -13,9 +13,9 @@
 //   2. per-env default below (staging A$20, prod A$200 — INFRASTRUCTURE §4.4).
 //
 // Spend source: a pluggable reader returning the last 24 hours' cost in AUD.
-// The workers install @algominutes/db spend-repo.cjs (minutes debited in
-// usage_ledger x a blended cost per minute); the default below returns 0, so a
-// process that installs none is uncapped.
+// The transcoder installs @algominutes/db spend-repo.cjs (audio minutes sent to
+// paid work, from usage_events, x a blended cost per minute); the default below
+// returns 0, so a process that installs none is uncapped.
 
 const DEFAULT_CAPS_AUD = { production: 200, prod: 200, staging: 20, development: 5, test: 1e9 };
 

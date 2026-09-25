@@ -1012,6 +1012,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - The halt was logged for kickoffs that carried on.
     - A latent blind Firestore mirror existed with `onlyIfStatus`.
     - The runbook still described the old `deferred` answer.
+  - **From the third audit (the paid-work reader), fixed in the same PR:**
+    - Deepgram's inline call wasn't recorded.
+    - The fast path recorded before calling Gemini, so an outage's retries would have tripped the cap
+      with nothing billed. It now records once an answer comes back.
+    - A speech job is recorded before its op id is saved, so a crash can't leave a paid job uncounted.
+    - A note deleted before the insert no longer loses the row: its id becomes null.
+    - Migration 021 indexes `created_at`.
 - [ ] **Yours / A11:** replace the default rate with the measured blended cost per minute (speech + Gemini +
   storage), as `COGS_AUD_PER_MINUTE`. Also raise `DAILY_SPEND_CAP_AUD` on staging on heavy test days
   (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day). Verify the trip on staging
@@ -1020,6 +1027,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
   - The embedder, chat and the summarizer's Gemini call aren't metered or gated. They are cents next to
     speech.
+  - Nothing deletes `usage_events` rows. Add a sweep step that keeps, say, 90 days.
   - **Billing (pre-existing, found by the same audit):**
     - Imports are debited 0 minutes against the user's quota, because the client sends no duration. Meter
       from the transcoder's probed duration.

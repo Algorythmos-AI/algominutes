@@ -25,13 +25,13 @@ function deps(duration: number) {
   let op = 0;
   return {
     log, env: {}, traceId: 't-paid', db: transcoderDb,
-    storage: { downloadToLocal: async (_p: string, local: string) => { fs.writeFileSync(local, 'audio'); }, uploadFromLocal: async (_l: string, p: string) => `gs://b/${p}` },
+    storage: { downloadToLocal: async (_p: string, local: string) => { fs.writeFileSync(local, 'audio'); }, uploadFromLocal: async (_l: string, p: string) => `gs://b/${p}`, deletePrefix: async () => {} },
     ffmpeg: {
       ensureTempDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'paid-work-')), cleanupTempDir: noop,
       probeDuration: async () => duration, extractChunk: async () => {},
     },
     stt: { startLongRunning: async () => `op-${op++}`, checkOperation: async () => ({ done: false }) },
-    tasks: { enqueue: async () => {}, enqueueEmbedder: async () => {} },
+    tasks: { enqueue: async () => {}, enqueueEmbedder: async () => {}, enqueueSummarizer: async () => {} },
     mirror: { mirrorStatus: async () => {}, mirrorProgress: async () => {}, mirrorReady: async () => {}, db: () => ({ doc: () => ({ update: async () => {} }) }) },
     fastPath: require('../../services/transcoder/src/fast-path.js'),
     youtube: {},
@@ -72,9 +72,15 @@ describe('paid work is recorded as it starts', () => {
     expect(await events()).toHaveLength(expected.length);
   });
 
-  it("a short clip: the fast path's Gemini call, for the whole clip", async () => {
+  it("a short clip: the fast path's Gemini call, for the whole clip, once an answer came back", async () => {
     await handler.handle(kickoff, deps(90));
     expect((await events()).map((r: any) => [r.event, r.s])).toEqual([['gemini_call', 90]]);
+  });
+
+  it("a Gemini outage (no answer, nothing billed) isn't counted, however often the task retries", async () => {
+    geminiCall.callGeminiWithLadder = async () => ({ rawText: null, error: new Error('429 RESOURCE_EXHAUSTED') });
+    for (let i = 0; i < 3; i++) await expect(handler.handle(kickoff, deps(90))).rejects.toThrow(/429/);
+    expect(await events()).toEqual([]);
   });
 
   it('a whole-file provider job: once, for the whole file', async () => {
@@ -85,6 +91,25 @@ describe('paid work is recorded as it starts', () => {
       recordPaidWork: (event: string, s: number, model: string) => transcoderDb.recordPaidWork(transcoderDb.pool(), { noteId: 'n1', workspaceId: 'ws', uid: 'u', event, audioSeconds: s, model, log }),
     });
     expect((await events()).map((r: any) => [r.event, r.s])).toEqual([['stt_call', 3600]]);
+  });
+
+  it('an inline provider (Deepgram): every call, since no job id guards a replay', async () => {
+    const provider = {
+      name: 'deepgram', mode: 'inline',
+      transcribeInline: async () => [{ speakerTag: 1, startMs: 0, endMs: 1000, text: 'hello', confidence: 0.9 }],
+    };
+    await pool.query(`UPDATE notes SET status = 'chunking' WHERE id = 'n1'`);
+    const record = (event: string, s: number, model: string) => transcoderDb.recordPaidWork(transcoderDb.pool(), { noteId: 'n1', workspaceId: 'ws', uid: 'u', event, audioSeconds: s, model, log });
+    await handler.runWholeFilePath({
+      noteId: 'n1', workspaceId: 'ws', inputLocal: '/tmp/x', durationSec: 1800, mimeType: 'audio/aac', provider, log, env: {}, deps: deps(1800), recordPaidWork: record,
+    });
+    expect((await events()).map((r: any) => [r.event, r.s])).toEqual([['stt_call', 1800]]);
+  });
+
+  it('a note deleted before the record still counts the seconds (its id becomes null)', async () => {
+    await transcoderDb.recordPaidWork(transcoderDb.pool(), { noteId: 'gone', workspaceId: 'ws', uid: 'u', event: 'stt_call', audioSeconds: 60, log });
+    const rows = (await pool.query(`SELECT note_id, workspace_id, audio_seconds::float8 AS s FROM usage_events`)).rows;
+    expect(rows).toEqual([{ note_id: null, workspace_id: 'ws', s: 60 }]);
   });
 
   it("a meter that can't write is logged and never fails the pipeline", async () => {

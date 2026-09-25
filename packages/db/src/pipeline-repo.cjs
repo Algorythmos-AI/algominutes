@@ -195,9 +195,14 @@ async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) 
  */
 async function recordPaidWork(queryable, { noteId, workspaceId, uid, event, audioSeconds, model, log }) {
   try {
+    // A parent deleted meanwhile (note or account) becomes NULL rather than
+    // failing the foreign key: the speech was paid for either way.
     await queryable.query(
       `INSERT INTO usage_events (uid, workspace_id, note_id, event, model, audio_seconds)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ((SELECT uid FROM users WHERE uid = $1),
+               (SELECT id FROM workspaces WHERE id = $2),
+               (SELECT id FROM notes WHERE id = $3),
+               $4, $5, $6)`,
       [uid || null, workspaceId || null, noteId || null, event, model || null, audioSeconds],
     );
   } catch (err) {

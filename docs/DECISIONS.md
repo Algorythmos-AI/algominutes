@@ -8,18 +8,23 @@ choices made during the automated A2/A3 run so they are auditable from the git l
 The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the audio minutes the
 transcoder sent to paid work in the last 24 hours, times a blended cost per minute**
 (`@algominutes/db/spend-repo.cjs`).
-- **Where the minutes come from:** the transcoder writes a `usage_events` row as each paid step starts:
-  each chunk's speech job, a whole-file job, or the fast path's Gemini call. Each row carries the audio
-  seconds the transcoder measured itself (`pipeline-repo` `recordPaidWork`). The schema had this table
-  for per-call cost; nothing wrote it.
+- **Where the minutes come from:** the transcoder writes a `usage_events` row as each paid step starts.
+  Each row carries the audio seconds the transcoder measured itself (`pipeline-repo` `recordPaidWork`).
+  The schema had this table for per-call cost; nothing wrote it. The paid steps are:
+  - **Each chunk's speech job, and a whole-file job.** Recorded as soon as the job exists, before its op
+    id is saved. A crash in between restarts the job, pays again and records again. A crash after the
+    save only re-polls.
+  - **Deepgram's inline call:** every call. No op id guards its replay.
+  - **The fast path's Gemini call:** only once an answer comes back, meaning it was billed. A 429/5xx
+    outage returns none, and counting its retries would trip the cap with nothing spent.
 - **Why not the `usage_ledger` debits** (the first version): the debit is the duration the client reports.
   An import sends none, so it was debited 0 minutes and never counted, and a client could under-report.
   A note retried after a refund also reuses its debit key, so the rerun was never counted.
 - **Best-effort:** a failed write is logged (`paid_work_record_failed`), never fatal. A reader error fails
   open.
 - **Window:** a rolling 24 hours rather than a calendar day, so there is no midnight cliff and no time zone
-  to choose. No index on `usage_events.created_at` yet: a few rows per recording, read once a minute per
-  instance. Add one when volume warrants it.
+  to choose. Migration 021 indexes `usage_events.created_at` for it. Nothing deletes `usage_events` rows
+  yet; retention is queued.
 - **The rate:** `COGS_AUD_PER_MINUTE`, default **A$0.03/min**. That is deliberately high: Google speech is
   about US$0.016/min, and the Gemini summary is a fraction of a cent per minute. Replace it with the
   measured blended cost (BLOCKERS A11).
