@@ -345,6 +345,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   the `@google/genai` dependency are gone. Was: **`@google/genai` 1 → 2** (#29 declined): its only user is
   `services/api/src/routes/process-audio.js`, the synchronous route plan PR-16 retires.
   Delete the dependency with that route; don't migrate it.
+- [ ] **Three Dependabot majors held open, because nothing tests the code they change** (off the M1
+  path; CI is green on each, but CI never calls them). Each needs a test around its call site first, then
+  the bump:
+  - **#52 `stripe` 17 → 22** (`services/billing/src/lib/stripe.js`, used by `routes/portal.js` and
+    `webhooks/stripe.js`). Every Stripe major pins a newer API version, which changes object shapes. It's the
+    web rail; M1 is StoreKit. Test first: a webhook signature check with a test secret, and a portal
+    session against a stubbed HTTP client.
+  - **#108 `googleapis` 144 → 181** (`services/billing/src/lib/google-play.js` `verifyPlaySubscription`,
+    used by `routes/verify.js` and `webhooks/google.js`). The Android rail is Track B. Test first:
+    `verifyPlaySubscription` with the `androidpublisher` client stubbed.
+  - **#107 `pdfjs-dist` 4 → 6** (`services/extractor/src/extractors/pdf.js`,
+    `apps/web/src/lib/documentText.ts`). Two majors, with changes to the module and worker setup.
+    `web-build` only proves the web bundle builds. Test first: the extractor on a small PDF built at test
+    time.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
