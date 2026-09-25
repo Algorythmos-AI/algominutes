@@ -25,6 +25,8 @@ final class AppEnvironment {
     /// The uploader (POST /v1/uploads → GCS resumable session): every
     /// recording and import goes through it.
     let backgroundUploads: BackgroundUploadService
+    /// Captures of another app's audio, finished by the broadcast extension.
+    let broadcast: BroadcastHandoff
 
     /// Upload progress (0-100) for the note currently uploading, keyed by id.
     var uploadProgress: [String: Int] = [:]
@@ -61,6 +63,7 @@ final class AppEnvironment {
         self.transcripts = TranscriptRepository(api: api)
         self.billing = BillingService(api: api)
         self.backgroundUploads = BackgroundUploadService(store: store, api: api)
+        self.broadcast = BroadcastHandoff(store: store)
         notes.onQuotaExceeded = { [weak billing = self.billing] entitlement in
             billing?.onQuotaExceeded(entitlement: entitlement)
         }
@@ -364,6 +367,28 @@ final class AppEnvironment {
         }
         if let noteError = failure.noteError { notes.markNoteError(id: noteId, message: noteError) }
         return failure.message
+    }
+
+    /// Turns a capture the broadcast extension finished into a note, like a
+    /// recording: called whenever the app comes to the foreground, since the
+    /// capture ends while another app is in front.
+    func claimBroadcastCapture() async {
+        switch await broadcast.claim() {
+        case .none:
+            break
+        case .ready(let fileURL, let seconds):
+            await uploadAndProcess(
+                fileURL: fileURL,
+                mimeType: "audio/mp4",
+                ext: "m4a",
+                type: .recording,
+                kind: .recording,
+                durationSeconds: seconds,
+                title: "App audio \(Self.dateStamp())"
+            )
+        case .failed(let message):
+            alertMessage = message
+        }
     }
 
     // MARK: - Retry / recovery (durable re-upload from disk)
