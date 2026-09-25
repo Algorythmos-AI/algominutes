@@ -485,11 +485,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - [ ] **Verify on staging:** the status codes GCS returns to DELETE on a *finished*, a cancelled and an
         expired resumable session. The code accepts 499/404/410/200/204; anything else leaves the purge row
         retrying (the audio is deleted anyway). Put the real codes in `note-delete.test.ts`.
-      - [ ] Still open (from its audit): an upload session minted *during or after* `deleteNote` never
-        reaches a purge row (the GCS session is created before `createUploadSession`'s transaction), so its
-        object can land after the purge. Take the note lock in `createUploadSession` and refuse when a purge
-        row exists (cancelling the just-minted session), or have the sweeper remove objects of notes that
-        don't exist.
+      - [x] **Fixed (upload-refuses-deleted-note PR):** an upload session minted *during* a deletion
+        used to miss its purge. `createUploadSession` now takes the note lock first (the order the kickoff
+        and `deleteNote` use) and refuses a note with a pending purge. The route cancels the session it just
+        minted and answers 404. Tested at the repo and the route; mutation-checked.
+      - [ ] Still open: a session for a note whose purge already *finished* (no purge row left) is allowed.
+        Its object can't be processed (the kickoff refuses a missing doc), but it stays in the bucket. Have
+        the sweeper remove `recordings/` objects whose note doesn't exist, or keep a deleted-note tombstone.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in

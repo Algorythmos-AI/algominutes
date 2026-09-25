@@ -13,6 +13,7 @@ import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
+import { lockNoteId } from './note-lock';
 // Shared, Postgres-only edit writer. Same module the deployed Cloud Function
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
@@ -234,15 +235,6 @@ export async function getNoteQueueState(
     [input.noteId],
   );
   return queueStateOf(rows[0], input.workspaceId, now);
-}
-
-/**
- * Serialises everything that decides whether a note exists or is queued: the
- * kickoff (markQueued) and deleteNote. Held until the transaction ends, and it
- * works for a note id that has no row yet. Taken before any row lock.
- */
-async function lockNoteId(client: import('pg').PoolClient, noteId: string): Promise<void> {
-  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`note-queue:${noteId}`]);
 }
 
 /**
