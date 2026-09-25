@@ -78,10 +78,11 @@ describe('workspaces/{ws}/notes/{noteId}: what the app does', () => {
 
   it('records the upload path, retries, lets the watchdog give up, and retitles', async () => {
     await serverNote(recordingNote({ status: 'transcribing' }));
-    const ref = doc(alice(), NOTE);
+    const db = alice(); // one client, as in the app (a transaction needs refs from its own instance)
+    const ref = doc(db, NOTE);
     await assertSucceeds(updateDoc(ref, { storagePath: 'recordings/workspace_alice/n1.m4a', updatedAt: 't2' }));
     await assertSucceeds(updateDoc(ref, { status: 'queued', errorMessage: null, retryAttempt: 2, storagePath: 'recordings/workspace_alice/n1.m4a', updatedAt: 't3' }));
-    await assertSucceeds(runTransaction(alice(), async (tx) => {
+    await assertSucceeds(runTransaction(db, async (tx) => {
       await tx.get(ref);
       tx.update(ref, { status: 'error', errorMessage: 'Processing took too long. Please try again.', diagnosticCode: 'CLIENT_TIMEOUT', updatedAt: 't4' });
     }));
