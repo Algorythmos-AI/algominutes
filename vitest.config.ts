@@ -9,7 +9,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'services/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'tests/integration/**'],
+    // tests/rules/** needs the Firestore emulator: vitest.rules.config.ts (CI job firestore-rules).
+    exclude: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'tests/integration/**', 'tests/rules/**'],
     passWithNoTests: false,
   },
 });

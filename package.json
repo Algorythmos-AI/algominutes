@@ -2,7 +2,7 @@
   "name": "algominutes",
   "version": "0.1.0",
   "private": true,
-  "description": "AlgoMinutes \u2014 AI meeting recorder. Native iOS, native Android, and a React web app. \u00a9 2026 Algorythmos Pty Ltd.",
+  "description": "AlgoMinutes — AI meeting recorder. Native iOS, native Android, and a React web app. © 2026 Algorythmos Pty Ltd.",
   "license": "UNLICENSED",
   "author": "Algorythmos Pty Ltd",
   "engines": {
@@ -25,6 +25,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
   }
