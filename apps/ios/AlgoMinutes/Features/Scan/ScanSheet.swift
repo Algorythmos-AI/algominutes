@@ -267,12 +267,8 @@ struct ScanSheet: View {
             return
         }
 
-        // Best-effort source upload (parity with the web).
-        if let data = sourceData {
-            let path = StoragePaths.path(kind: .scan, workspaceId: wsId, noteId: noteId, ext: sourceExt)
-            env.notes.updateNote(id: noteId, fields: ["storagePath": path])
-            env.uploads.uploadData(data, to: path, contentType: sourceMime)
-        }
+        // The source image isn't uploaded: the note is its text. (It used to go to
+        // Firebase's default bucket, which account deletion never purged.)
 
         onDone(noteId)
     }
