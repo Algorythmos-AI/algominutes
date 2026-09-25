@@ -39,6 +39,8 @@ cd infra/terraform/envs/staging
 # Required for the per-environment budget; never committed (public repo):
 export TF_VAR_billing_account=$(gcloud billing projects describe "$(basename "$PWD" | sed 's/^/algominutes-/')" \
   --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+# Who the alerts email (alerting.tf); never committed. Empty = console only:
+export TF_VAR_alert_emails='["you@example.com"]'
 terraform init                       # uses the gcs backend from step 1
 terraform plan -out=tfplan           # REVIEW the plan before applying
 terraform apply tfplan               # Cloud SQL creation takes ~10 min
