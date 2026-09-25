@@ -65,6 +65,8 @@ struct RootView: View {
                 // Re-read entitlement: a subscription may have changed in the
                 // system Settings while we were backgrounded.
                 Task { await env.billing.refresh() }
+                // A switch may have been flipped (broadcast's kill switch).
+                Task { await env.refreshSwitches() }
             }
         }
         .alert("AlgoMinutes", isPresented: Binding(
