@@ -782,14 +782,27 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **From its PII audit, fixed in the same PR:** chapters are scrubbed whole and *then* trimmed. Trimming
     first could cut a card number or an email into a fragment the patterns no longer match, which was then
     stored. The salvage error no longer quotes the model's output, since it reaches logs and the dead letter.
-  - [x] **Fixed (pii-parse-errors-speaker-names PR), both pre-existing, from that audit:**
+  - [x] **Fixed (pii-parse-errors-speaker-names PR), pre-existing, from that audit and the PR's own:**
     - the fast path's `parseGeminiJson` and the older `parseSummaryJson` put Node's JSON error (about
       10 characters of model output) in their message. They now say `INVALID_JSON: unparseable model
       output (N chars)`, like the salvage, and still map to the friendly error;
-    - `speakerName` (a user-set label, so possibly an email or a phone number) went to Gemini unscrubbed.
-      The summarizer now scrubs it with `redactPII`, once per distinct name. The embedder reads only
-      `speaker_tag` ("Speaker N"), and no chat call exists yet.
-    - Tested (a unit test for both parsers, the handler on Postgres for the prompt); three mutations checked.
+    - chat's `chat_stream_parse_failed` warning logged the first 80 characters of a cut-off stream event
+      (about 15 of them the answer) and Node's message. It now logs the error's name and the length;
+    - the fast path stored the model's speaker labels unscrubbed (in `transcript_lines.text` and the
+      Firestore preview), and it hears raw audio, so a label can be something said aloud.
+      `redactTranscriptLines` now scrubs a string `speaker` too. Every later reader already scrubbed
+      the whole stored line, so this was storage only;
+    - the summarizer now scrubs `transcript_lines.speaker_name` too. That column holds the model's
+      labels on rows the retired `markReady` writer stored. The names users type live in
+      `note_speakers.display_name`, which nothing sends to Gemini; the summarizer's comment says to
+      scrub them the same way if that changes.
+    - Tested (unit tests for both parsers, the label scrub and the chat parse; the summarizer on Postgres
+      for the prompt); five mutations checked.
+  - [ ] **Queued (pre-existing, from that PR's audit):** the db-job `debug-corpus` handler is a dev
+    leftover (its defaults are `algominutes-dev` and us-central1). Its "global" query has no workspace
+    filter and logs the first 80 characters of the top chunks, with note titles, from any workspace.
+    Only an operator can run it, but on staging or prod it would copy users' meeting text into Cloud
+    Logging. Remove it, or scope it to one workspace and drop the text.
   - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
     tap to seek.
 ## Long recordings: the transcoder on replay (plan rev 8, PR-12, 2026-09-25)

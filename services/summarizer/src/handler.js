@@ -152,8 +152,10 @@ async function handle(payload, deps) {
   // Line by line, carrying a private key that spans lines (redactLines), so a
   // key's later base64 lines are redacted along with its BEGIN line.
   const { texts: scrubbed } = sharedRedaction.redactLines(lines.map((l) => l.text || ''));
-  // A speaker name is a label the user typed, so it can be an email or a phone
-  // number: it is scrubbed too, once per distinct name.
+  // speaker_name holds the model's own label on rows the retired fast-path
+  // writer (notes-repo markReady) stored, so it can be something said aloud:
+  // scrubbed too, once per distinct name. The names users type live in
+  // note_speakers and aren't sent; if they ever are, send them through here.
   const scrubbedNames = new Map();
   const speakerLabel = (name) => {
     if (!scrubbedNames.has(name)) scrubbedNames.set(name, sharedRedaction.redactPII(name).text);
