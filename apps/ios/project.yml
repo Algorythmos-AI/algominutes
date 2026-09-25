@@ -75,8 +75,6 @@ targets:
       - package: Firebase
         product: FirebaseFirestore
       - package: Firebase
-        product: FirebaseStorage
-      - package: Firebase
         product: FirebaseCrashlytics
       - package: GoogleSignIn
         product: GoogleSignIn

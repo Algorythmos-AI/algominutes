@@ -182,6 +182,21 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(docx.count, 2)
     }
 
+    func testPlaybackAsksTheAPIForASignedURL() async throws {
+        respond(#"{"url":"https://storage.googleapis.com/b/recordings/workspace_u/n1.m4a?X-Goog-Signature=x","expiresAt":"2026-09-25T00:15:00Z"}"#)
+        let url = try await api.noteAudioURL(noteId: "n1", workspaceId: "workspace_u")
+        assertRequest("POST", "/v1/notes/audio-url")
+        XCTAssertEqual(last.body?["noteId"] as? String, "n1")
+        XCTAssertEqual(url.host, "storage.googleapis.com")
+
+        respond(#"{"url":"http://insecure.example/x","expiresAt":"x"}"#)
+        do {
+            _ = try await api.noteAudioURL(noteId: "n1", workspaceId: "workspace_u")
+            XCTFail("an http URL must be refused")
+        } catch APIError.invalidResponse {
+        } catch { XCTFail("unexpected \(error)") }
+    }
+
     func testAnOutdatedAppGetsUpdateRequiredAndASpentQuotaGetsQuotaExceeded() async {
         respond(#"{"error":"please_update","message":"Please update AlgoMinutes to continue."}"#, status: 426)
         do {

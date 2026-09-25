@@ -775,9 +775,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       calls the api (Postgres first, then the doc, then the audio). It hides the note at once and restores it,
       with an alert, if the server refuses. All three delete buttons use it. The auto-retitle goes through
       `/v1/notes/update`, so Postgres (search, chat, the transcript read) gets the title too.
-    - [ ] **D, uploads through `/v1/uploads`** (the api's recordings bucket; the Firebase SDK uploads to the
-      default bucket, which the api never reads), and **playback through a signed URL** (`/v1` has no audio
-      route yet; the api's recordings bucket isn't a Firebase bucket).
+    - [x] **D, uploads and playback through the api (ios-uploads-v1 PR):**
+      - every recording and import uploads through `POST /v1/uploads` into the api's recordings bucket, and
+        the kickoff sends the storage path the server returns;
+      - a recording's sidecar remembers its session, so a retry continues it from the server's byte count.
+        The old resumable path resumed a *new* session from an old offset, which GCS rejects;
+      - playback asks `POST /v1/notes/audio-url` for a 15-minute signed URL;
+      - a scan's source image is no longer uploaded: it went to Firebase's default bucket, which account
+        deletion never purged, and the note is its text;
+      - `FirebaseStorage` is gone from the app.
+
+      Needs the audio-url backend route (its own PR). Still to do: the server-side `totalBytes` cap on
+      `/v1/uploads`, and background (app-suspended) transfer (the PUTs run on a background URLSession, but
+      the loop that drives them doesn't survive suspension).
     - [ ] **E, hardening:** the 202/404/413/429 kickoff answers, the 402's entitlement, and the client watchdog's
       Firestore-only `error` flip (it drifts from Postgres).
     - Recording cap: iOS `StoragePaths` says 50 MB (its comment and copy say 120 MB). `/v1/uploads` bypasses
