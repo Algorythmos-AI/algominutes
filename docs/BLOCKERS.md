@@ -299,7 +299,11 @@ where testable so the fix PR proves itself:
 
 ## Found while patching dependency advisories (2026-09-24) — queued
 
-- [ ] **The web build is broken under the workspace install (pre-existing).**
+- [x] **Fixed (web-build-tesseract PR):** the plugin resolves each package with `createRequire` (npm hoists
+  them to the root). The two native plugin wrappers the extraction never brought over
+  (`src/plugins/BackgroundRecorder`, `BroadcastRecorder`) are now typed web shims, like the rest of
+  `native-shim`: they refuse every call, and App.tsx only calls them when the platform isn't web. A
+  `web-build` CI job builds it on every PR. Was: **The web build is broken under the workspace install (pre-existing).**
   `apps/web/vite.config.ts`'s `copy-tesseract-assets` plugin copies from
   `apps/web/node_modules/tesseract.js…`, but npm hoists `tesseract.js` and
   `tesseract.js-core` to the repo-root `node_modules`. `npm run build -w apps/web`
