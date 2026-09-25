@@ -92,6 +92,17 @@ describe('redactTranscriptLines', () => {
   it('returns an empty result for a non-array input', () => {
     expect(redactTranscriptLines(undefined as never)).toEqual({ lines: [], counts: {} });
   });
+
+  it("scrubs a speaker label too: the fast path's labels are the model's, from raw audio", () => {
+    const { lines, counts } = redactTranscriptLines([
+      { speaker: 'jane@example.com', text: 'hello', time: '00:01' },
+      { speaker: 'Speaker 2', text: 'hi' },
+      { speakerTag: 3, text: 'bye' },
+    ]);
+    expect(lines.map((l: any) => l.speaker)).toEqual(['<<REDACTED:EMAIL>>', 'Speaker 2', undefined]);
+    expect(lines[0].time).toBe('00:01');
+    expect(counts.email).toBe(1);
+  });
 });
 
 describe('redactSummaryOutput', () => {

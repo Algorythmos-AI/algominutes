@@ -89,8 +89,10 @@ function parseGeminiJson(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(`INVALID_JSON: ${err.message}`);
+  } catch (_err) {
+    // Not err.message: Node quotes the model's output there, and this error
+    // reaches logs and the dead letter (summary-output.cjs does the same).
+    throw new Error(`INVALID_JSON: unparseable model output (${cleaned.length} chars)`);
   }
   if (!validateSummaryShape(parsed)) {
     throw new Error('Model returned unexpected schema');
@@ -209,8 +211,10 @@ function parseSummaryJson(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(`INVALID_JSON: ${err.message}`);
+  } catch (_err) {
+    // Not err.message: Node quotes the model's output there, and this error
+    // reaches logs and the dead letter (summary-output.cjs does the same).
+    throw new Error(`INVALID_JSON: unparseable model output (${cleaned.length} chars)`);
   }
   if (!validateSummaryOnlyShape(parsed)) {
     throw new Error('Model returned unexpected schema');

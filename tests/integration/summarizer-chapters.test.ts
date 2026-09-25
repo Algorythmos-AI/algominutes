@@ -120,3 +120,22 @@ describe('summarizer chapters', () => {
     expect(await repo.getPool().query(`SELECT count(*)::int AS n FROM action_items WHERE note_id = 'n1'`).then((r) => r.rows[0].n)).toBe(1);
   });
 });
+
+describe('summarizer prompt', () => {
+  it("a speaker name the user typed is scrubbed before it reaches Gemini, like the words", async () => {
+    await pool.query(
+      `INSERT INTO transcript_lines (note_id, speaker_tag, speaker_name, start_ms, end_ms, text) VALUES
+         ('n1', 1, 'jane@example.com', 0, 5000, 'Hello.'),
+         ('n1', 2, 'Bob', 6000, 9000, 'Hi Jane.'),
+         ('n1', 1, 'jane@example.com', 10000, 12000, 'Call me on 4111 1111 1111 1111.'),
+         ('n1', 3, NULL, 13000, 15000, 'Bye.')`,
+    );
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'Hellos.', actionItems: [], keyDecisions: [] })));
+    const prompt = request.parts.map((p: any) => p.text).join('');
+    expect(prompt).not.toContain('jane@example.com');
+    expect(prompt).not.toMatch(/4111/);
+    expect(prompt).toContain('<<REDACTED:EMAIL>>: Hello.');
+    expect(prompt).toContain('Bob: Hi Jane.');
+    expect(prompt).toContain('Speaker 3: Bye.');
+  });
+});

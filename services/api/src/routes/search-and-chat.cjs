@@ -368,7 +368,9 @@ function parseSseDataLine(rawLine) {
   try {
     obj = JSON.parse(payload);
   } catch (parseErr) {
-    return { type: 'parse_error', parseErr, payloadHead: payload.slice(0, 80) };
+    // Neither the payload nor Node's message: both quote the model's answer,
+    // and meeting content stays out of logs even scrubbed.
+    return { type: 'parse_error', errorName: parseErr.name, payloadChars: payload.length };
   }
   const parts = obj && obj.candidates && obj.candidates[0]
     && obj.candidates[0].content && obj.candidates[0].content.parts;
@@ -505,7 +507,7 @@ async function handleChatStream({ uid, body, apiKey, log, res }) {
     const feeder = createSseLineFeeder((rawLine) => {
       const parsed = parseSseDataLine(rawLine);
       if (parsed.type === 'parse_error') {
-        log.warn({ uid, noteId, err: parsed.parseErr, payloadHead: parsed.payloadHead }, 'chat_stream_parse_failed');
+        log.warn({ uid, noteId, errorName: parsed.errorName, payloadChars: parsed.payloadChars }, 'chat_stream_parse_failed');
         return;
       }
       if (parsed.type === 'text') {

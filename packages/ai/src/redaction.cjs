@@ -261,7 +261,19 @@ function redactLines(texts) {
 function redactTranscriptLines(lines) {
   if (!Array.isArray(lines)) return { lines: [], counts: {} };
   const { texts, counts } = redactLines(lines.map((line) => (line && typeof line.text === 'string' ? line.text : null)));
-  const out = lines.map((line, i) => (line && typeof line.text === 'string' ? { ...line, text: texts[i] } : line));
+  const out = lines.map((line, i) => {
+    let next = line && typeof line.text === 'string' ? { ...line, text: texts[i] } : line;
+    // The fast path's speaker labels are the model's, written after hearing raw
+    // audio, so one can be what someone said ("this is jane@example.com").
+    if (line && typeof line.speaker === 'string') {
+      const r = redactPII(line.speaker);
+      if (r.text !== line.speaker) {
+        next = { ...next, speaker: r.text };
+        for (const [k, v] of Object.entries(r.counts)) counts[k] = (counts[k] || 0) + v;
+      }
+    }
+    return next;
+  });
   return { lines: out, counts };
 }
 
