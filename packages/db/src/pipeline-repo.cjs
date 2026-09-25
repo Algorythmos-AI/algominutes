@@ -15,6 +15,12 @@
 
 const _redaction = require('@algominutes/ai/redaction.cjs');
 
+// The shared structured logger, for a caller that passed none: a catch that
+// logs must not turn its failure into a TypeError on `log.error`.
+function logOr(log) {
+  return log && typeof log.error === 'function' ? log : require('@algominutes/ai/logger.cjs').logger;
+}
+
 /**
  * Whether the task's note still exists in the task's workspace (deleted notes
  * are gone from Postgres; see notes-repo deleteNote). Checked before the
@@ -175,7 +181,7 @@ async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) 
     await client.query('COMMIT');
     return { allDone, summarizerClaimed, embedderClaimed };
   } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId, chunkId }, 'chunk_gate_rollback_failed'));
+    await client.query('ROLLBACK').catch((rollbackErr) => logOr(log).error({ err: rollbackErr, noteId, workspaceId, chunkId }, 'chunk_gate_rollback_failed'));
     throw err;
   }
 }
@@ -201,7 +207,7 @@ async function recordPaidWork(queryable, { noteId, workspaceId, uid, event, audi
       [uid || null, workspaceId || null, noteId || null, event, model || null, audioSeconds],
     );
   } catch (err) {
-    log.error({ err, noteId, workspaceId, userId: uid, event }, 'paid_work_record_failed');
+    logOr(log).error({ err, noteId, workspaceId, userId: uid, event }, 'paid_work_record_failed');
   }
 }
 
@@ -346,7 +352,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
     }
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
+    await client.query('ROLLBACK').catch((rollbackErr) => logOr(log).error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
     throw err;
   } finally {
     client.release();
