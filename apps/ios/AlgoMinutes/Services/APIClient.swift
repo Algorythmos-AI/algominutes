@@ -672,6 +672,11 @@ final class APIClient: Sendable {
         try await getDecoded(path: "v1/entitlement")
     }
 
+    /// Server-side feature switches (`AppSwitches`).
+    func fetchAppConfig() async throws -> AppConfigResponse {
+        try await getDecoded(path: "v1/config")
+    }
+
     /// A9.6 funnel event. Best-effort: analytics must never block a user action,
     /// so callers wrap this in `try?`. Mirrors `TrackEventRequest`.
     @discardableResult
