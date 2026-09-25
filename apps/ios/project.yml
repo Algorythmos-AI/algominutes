@@ -5,6 +5,14 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+# Debug and Staging talk to the staging backend; Release to production.
+# Staging is a release-type build (optimised, no DEBUG), archived by the
+# AlgoMinutes-Staging scheme for internal TestFlight.
+configs:
+  Debug: debug
+  Staging: release
+  Release: release
+
 packages:
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk
@@ -26,6 +34,20 @@ settings:
     # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic
     # (-allowProvisioningUpdates registers ids/profiles at archive; see A4/PR-25).
     DEVELOPMENT_TEAM: NY9MS8GSBK
+  # The backend each build talks to (Info.plist → AppConfig.swift). Cloud Run
+  # URLs are deterministic: https://<service>-<project number>.<region>.run.app
+  # (infra/terraform/modules/environment/cloud-run.tf).
+  configs:
+    Debug:
+      API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+    Staging:
+      API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+    Release:
+      # TODO(prod): the production origins once prod is applied (BLOCKERS: domain).
+      API_BASE_URL: https://api.algominutes.com
+      BILLING_BASE_URL: https://api.algominutes.com
 
 targets:
   AlgoMinutes:
@@ -61,11 +83,31 @@ targets:
       - package: GoogleSignIn
         product: GoogleSignInSwift
     postBuildScripts:
-      # Crashlytics needs the dSYM after every Release build; Debug/simulator
-      # builds skip the upload (no symbols leave the machine in development).
+      # The Google Sign-In callback scheme is the bundled GoogleService-Info.plist's
+      # REVERSED_CLIENT_ID, written into the built Info.plist (before signing), so
+      # it always matches the Firebase project the build was configured with and
+      # no client id lives in the repo. Staging and Release builds need the plist;
+      # Debug (CI, simulator tests) runs with FirebaseBootstrap's placeholder.
+      - name: Google Sign-In URL scheme from GoogleService-Info.plist
+        script: |
+          set -euo pipefail
+          GSI="${SRCROOT}/AlgoMinutes/Resources/GoogleService-Info.plist"
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          if [ ! -f "$GSI" ]; then
+            if [ "${CONFIGURATION}" != "Debug" ]; then
+              echo "error: ${CONFIGURATION} needs AlgoMinutes/Resources/GoogleService-Info.plist (git-ignored; see docs/runbooks)"
+              exit 1
+            fi
+            exit 0
+          fi
+          REVERSED=$(/usr/libexec/PlistBuddy -c "Print :REVERSED_CLIENT_ID" "$GSI")
+          /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${REVERSED}" "$PLIST"
+        basedOnDependencyAnalysis: false
+      # Crashlytics needs the dSYM of every build that reaches a device outside
+      # development (Staging and Release); Debug/simulator builds skip the upload.
       - name: Upload dSYMs to Crashlytics
         script: |
-          if [ "${CONFIGURATION}" = "Release" ]; then
+          if [ "${CONFIGURATION}" != "Debug" ]; then
             "${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
           fi
         inputFiles:
@@ -126,3 +168,14 @@ schemes:
         - AlgoMinutesTests
     archive:
       config: Release
+  # Internal TestFlight against staging (Xcode Cloud, plan PR-30).
+  AlgoMinutes-Staging:
+    build:
+      targets:
+        AlgoMinutes: all
+        BroadcastExtension: all
+        BroadcastExtensionSetupUI: all
+    run:
+      config: Staging
+    archive:
+      config: Staging
