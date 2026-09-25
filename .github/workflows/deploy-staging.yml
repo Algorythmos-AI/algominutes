@@ -236,3 +236,36 @@ jobs:
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
         run: bash scripts/smoke-staging.sh
+      - name: Resume the sweeper
+        # Terraform creates the db-sweep Scheduler job paused (scheduler.tf):
+        # until a real image is out, every tick would run the placeholder and
+        # burn its 900 s timeout. Resume it only after this deploy's smoke has
+        # passed. To keep it paused (an incident), set the repo variable
+        # SWEEPER_HOLD=true.
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          HOLD: ${{ vars.SWEEPER_HOLD }}
+        run: |
+          set -euo pipefail
+          if [ "${HOLD:-}" = "true" ]; then
+            echo "SWEEPER_HOLD=true: leaving db-sweep as it is"
+            exit 0
+          fi
+          # The state comes from stdout only: gcloud can print warnings on
+          # stderr, which is read only when describe fails.
+          err=$(mktemp)
+          if ! state=$(gcloud scheduler jobs describe db-sweep --location "$REGION" --project "$PROJECT" --format='value(state)' 2>"$err"); then
+            if grep -q NOT_FOUND "$err"; then
+              echo "No db-sweep Scheduler job (enable_sweeper = false)"
+              exit 0
+            fi
+            cat "$err"
+            exit 1
+          fi
+          case "$state" in
+            PAUSED)
+              gcloud scheduler jobs resume db-sweep --location "$REGION" --project "$PROJECT" --quiet
+              echo "db-sweep resumed" ;;
+            ENABLED) echo "db-sweep already running" ;;
+            *) echo "db-sweep is in an unexpected state: '$state'"; cat "$err"; exit 1 ;;
+          esac

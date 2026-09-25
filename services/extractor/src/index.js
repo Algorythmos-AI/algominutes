@@ -20,7 +20,7 @@ const express = require('express');
 
 const sharedLogger = require('@algominutes/ai/logger.cjs');
 const { requireEnv } = require('@algominutes/ai/require-env.cjs');
-requireEnv('extractor', { required: ['GCS_BUCKET'] }, { logger: sharedLogger.logger });
+requireEnv('extractor', require('./env-spec.cjs'), { logger: sharedLogger.logger });
 
 const storage = require('./storage');
 const { readInput } = require('./input');

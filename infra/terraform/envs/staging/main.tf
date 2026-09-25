@@ -50,6 +50,22 @@ variable "alert_emails" {
   default = []
 }
 
+# Operator uids for the api's /v1/admin/* routes (the dead-letter view). Firebase
+# uids exist only once someone has signed in, so this is set on a later plan,
+# never committed:
+#   export TF_VAR_admin_uids='["<your uid>"]'
+variable "admin_uids" {
+  type    = list(string)
+  default = []
+}
+
+# Broadcast capture's server-side kill switch (GET /v1/config). To turn it off
+# without an app build: plan with TF_VAR_broadcast_capture=off and apply.
+variable "broadcast_capture" {
+  type    = string
+  default = "on"
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -107,7 +123,13 @@ module "environment" {
 
   billing_account = var.billing_account
   alert_emails    = var.alert_emails
-  monthly_budget  = 100
+
+  # The api's CORS allowlist (the public site) and its operator/kill-switch
+  # settings. A blank allowed_origins fails the plan (the api can't boot on it).
+  allowed_origins   = "https://algominutes.algorythmos.com"
+  admin_uids        = var.admin_uids
+  broadcast_capture = var.broadcast_capture
+  monthly_budget    = 100
 
   # In-VPC proof VM for proving staging (docs/runbooks/staging-proof.md).
   # About US$15/month while on; set false and apply to remove it.

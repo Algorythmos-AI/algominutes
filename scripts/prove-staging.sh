@@ -103,8 +103,11 @@ if PGSSLMODE=require psql -d "$DB_NAME" -qc "create database $proof_db" 2>&1; th
     ( cd "$WORK" && npm ci --no-audit --no-fund --loglevel=error >/dev/null 2>&1 ) || echo "npm ci failed"
   fi
   # No password in the URL: pg takes it from PGPASSWORD. TLS is forced.
+  # PG_POOL_MAX=1: the suite shares a db-f1-micro (25 connections, 20 budgeted
+  # to the live services) with staging, so it must not open a pool of 8. CI
+  # proves the suite passes at pool size 1 (ci.yml).
   it=$(cd "$WORK" && DATABASE_URL="postgres://$DB_USER@$DB_HOST:$DB_PORT/$proof_db" PGSSLMODE="${PROOF_TEST_SSLMODE:-require}" \
-       npm run test:integration 2>&1)
+       PG_POOL_MAX=1 npm run test:integration 2>&1)
   # Judge vitest's own summary lines only (test output contains event names
   # like migration_failed). Pass = "Tests  N passed (N)" and no failed/Errors line.
   summary=$(printf '%s\n' "$it" | grep -E '^\s+(Test Files|Tests|Errors)\s' | tr -s ' ' | tr '\n' ';')

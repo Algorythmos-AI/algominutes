@@ -78,9 +78,19 @@ locals {
     PGUSER     = google_sql_user.app.name
   }
 
-  # Per-service extra plain env, merged over common_env.
+  # Operator uids for the api's /v1/admin/* routes. Set only when there are
+  # some: an unset ADMIN_UIDS means every admin route answers 403.
+  admin_env = length(var.admin_uids) > 0 ? { ADMIN_UIDS = join(",", var.admin_uids) } : {}
+
+  # Per-service extra plain env, merged over common_env. Every name a service's
+  # src/env-spec.cjs requires must be set here, non-blank
+  # (tests/tf-env-contract.test.ts).
   service_env = {
-    api        = merge(local.db_env, { STORAGE_BUCKET = local.region_bucket["recordings"], ALLOWED_ORIGINS = var.allowed_origins })
+    api = merge(local.db_env, local.admin_env, {
+      STORAGE_BUCKET    = local.region_bucket["recordings"]
+      ALLOWED_ORIGINS   = var.allowed_origins
+      BROADCAST_CAPTURE = var.broadcast_capture
+    })
     transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     summarizer = local.db_env
     embedder   = local.db_env
@@ -96,8 +106,11 @@ locals {
 
   # Services end users / third parties call directly. They authenticate at the
   # application layer (api: Firebase ID token; billing: store/Stripe webhook
-  # signatures), so Cloud Run IAM must admit unauthenticated requests. Every
-  # other service stays private (only run-jobs may invoke).
+  # signatures), so Cloud Run must admit unauthenticated requests. That is done
+  # by turning off the invoker IAM check (invoker_iam_disabled), not by granting
+  # run.invoker to allUsers: the organization's iam.allowedPolicyMemberDomains
+  # policy refuses any allUsers binding, so the apply would fail. Every other
+  # service keeps the check on (only run-jobs may invoke).
   public_services = ["api", "billing"]
 }
 
@@ -107,9 +120,10 @@ resource "google_cloud_run_v2_service" "services" {
   project  = var.project_id
   name     = each.key
   location = var.region
-  # Network ingress is open; *who* may invoke is IAM (see jobs_invoker and
-  # public_invoker below): workers are private, api/billing are public.
-  ingress = "INGRESS_TRAFFIC_ALL"
+  # Network ingress is open; *who* may invoke is IAM (see jobs_invoker below):
+  # workers are private, api/billing skip the invoker check (public_services).
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = contains(local.public_services, each.key)
 
   deletion_protection = false
 
@@ -260,17 +274,6 @@ resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
   name     = each.value.name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.runtime["run-jobs"].email}"
-}
-
-# api + billing are called by the app / store webhooks without a Google identity.
-resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  for_each = toset(local.public_services)
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.services[each.value].name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
 }
 
 resource "google_service_account_iam_member" "act_as_jobs" {
