@@ -42,6 +42,19 @@ jobs:
   # Integration tests against a REAL Postgres 16 + pgvector (never mocked):
   # migrations apply on a real server, replay idempotency, PII-before-storage,
   # and cross-workspace isolation. Always runs, so it can be a required check.
+  # The web app's production build (vite): it broke unnoticed once already
+  # (tesseract assets, missing native-plugin shims) because nothing built it.
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Build apps/web
+        run: npm run build -w apps/web
+
   # infra/firebase/firestore.rules against the Firestore emulator (it needs Java).
   firestore-rules:
     runs-on: ubuntu-latest
