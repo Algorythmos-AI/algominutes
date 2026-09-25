@@ -31,7 +31,7 @@ struct ImportSheet: View {
                     .foregroundStyle(Theme.heading)
 
                 // MARK: Audio file
-                OwllCard {
+                AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Label("Audio file", systemImage: "waveform")
                             .font(Typography.heading(16, weight: .bold))
@@ -54,7 +54,7 @@ struct ImportSheet: View {
                 }
 
                 // MARK: YouTube
-                OwllCard {
+                AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Label("YouTube link", systemImage: "play.rectangle.fill")
                             .font(Typography.heading(16, weight: .bold))

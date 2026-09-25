@@ -139,9 +139,6 @@ struct AlgoMinutesApp: App {
 
     init() {
         FirebaseBootstrap.configureIfNeeded()
-        #if DEBUG
-        Theme.assertBrandFontsLoaded()
-        #endif
         _environment = State(initialValue: AppEnvironment())
     }
 

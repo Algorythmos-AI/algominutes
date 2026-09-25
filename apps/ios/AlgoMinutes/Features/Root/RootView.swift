@@ -45,7 +45,7 @@ struct RootView: View {
         .fullScreenCover(isPresented: Binding(get: { env.updateRequired }, set: { _ in })) {
             UpdateRequiredView()
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
         // Support Dynamic Type broadly, but clamp the largest accessibility
         // sizes so the fixed-layout recording screen doesn't overflow.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
@@ -83,7 +83,7 @@ struct RootView: View {
 struct BootstrapSplash: View {
     var body: some View {
         ZStack {
-            OwllBackground()
+            AlgoMinutesBackground()
             VStack(spacing: Theme.Spacing.lg) {
                 Image("Logo")
                     .resizable()

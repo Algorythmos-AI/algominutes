@@ -13,7 +13,7 @@ struct ProcessingPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
-            OwllCard {
+            AlgoMinutesCard {
                 HStack(spacing: Theme.Spacing.lg) {
                     ProgressRing(stage: stage)
                     VStack(alignment: .leading, spacing: 4) {

@@ -29,7 +29,7 @@ struct RetentionSettingsCard: View {
     }
 
     var body: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {

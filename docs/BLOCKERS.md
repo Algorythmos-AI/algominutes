@@ -1067,6 +1067,21 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - that it reads entries from the Cloud Run *job* (db-job);
   - Error Reporting's retention against the 30-day promise.
 
+## Brand leftovers (plan rev 8, PR-21, 2026-09-25)
+
+- [x] **Done (ios-brand-leftovers PR):**
+  - The `Owll*` design-system names from the client era are now `AlgoMinutesCard`, `AlgoMinutesCardStyle`
+    and `AlgoMinutesBackground` (18 files), and the "Owll-style" comments are gone.
+  - The Rajdhani brand fonts are removed: three TTFs, their `UIAppFonts` entries, the test asserting they
+    were registered, `scripts/fetch-fonts.sh`, and the no-op `Theme.assertBrandFontsLoaded()`. Typography
+    already used the system font, so nothing rendered differently.
+  - The launch screen was already in place (`UILaunchScreen` with the `LaunchBackground` colour).
+- [ ] **Check at the M0 upload:** the primary 1024 icon and its dark variant have no alpha channel. The
+  tinted variant does. App Store validation checks the primary icon; if the upload refuses the tinted
+  one, flatten it (`scripts/generate-app-icon.swift`).
+- [ ] **Brand sign-off (yours, A6.5):** the final palette and a typeface. The app runs on the provisional
+  indigo palette and the system font.
+
 ## Account deletion revokes Sign in with Apple (plan rev 8, PR-29 M1 part, 2026-09-25)
 
 - [x] **Done in code (ios-apple-revocation PR):** deleting an Apple-linked account first asks the user to

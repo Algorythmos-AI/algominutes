@@ -45,12 +45,6 @@
 	<string>AlgoMinutes opens your photo library only when you pick an image to scan text from. Only the image you choose is read; it is used to extract text into your notes and is not scanned for any other purpose.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Rajdhani-Medium.ttf</string>
-		<string>Rajdhani-SemiBold.ttf</string>
-		<string>Rajdhani-Bold.ttf</string>
-	</array>
 	<key>AlgoMinutesAPIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
 	<key>AlgoMinutesBillingBaseURL</key>

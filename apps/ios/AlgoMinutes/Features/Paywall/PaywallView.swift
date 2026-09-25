@@ -39,7 +39,7 @@ struct PaywallView: View {
                 }
                 .padding(Theme.Spacing.xl)
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("AlgoMinutes Pro")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
