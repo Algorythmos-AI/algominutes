@@ -92,7 +92,8 @@ export default function SharedNote({ token }: { token: string }) {
         if (!parsed) return setState('error');
         setData(parsed);
         setState('ok');
-      } catch {
+      } catch (err) {
+        console.warn('shared_note_load_failed', err);
         if (!cancelled) setState('error');
       }
     })();

@@ -14,6 +14,7 @@ import type {
   AnalyticsEvent,
   BillingPeriod,
 } from '@algominutes/contracts';
+import { readErrorText, readErrorJson } from './http';
 
 // ── Product catalogue (A9.3 pricing) ─────────────────────────────────────────
 // Stripe prices are the source of truth for charging; these ids/displays are UI
@@ -45,11 +46,11 @@ export async function startCheckout(period: BillingPeriod): Promise<void> {
     period,
   });
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('billing_checkout_failed', new Error(`checkout_http_${resp.status}`), { detail: detail.slice(0, 200) });
     throw new Error('Could not start checkout. Please try again.');
   }
-  const data = (await resp.json().catch(() => ({}))) as { url?: string };
+  const data = (await readErrorJson(resp)) as { url?: string };
   if (!data.url) {
     reportCrash('billing_checkout_no_url', new Error('checkout_response_missing_url'));
     throw new Error('Could not start checkout. Please try again.');
@@ -64,11 +65,11 @@ export async function startCheckout(period: BillingPeriod): Promise<void> {
 export async function openBillingPortal(): Promise<void> {
   const resp = await authedFetch('/v1/billing/portal', {});
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('billing_portal_failed', new Error(`portal_http_${resp.status}`), { detail: detail.slice(0, 200) });
     throw new Error('Could not open the billing portal. Please try again.');
   }
-  const data = (await resp.json().catch(() => ({}))) as { url?: string };
+  const data = (await readErrorJson(resp)) as { url?: string };
   if (!data.url) {
     reportCrash('billing_portal_no_url', new Error('portal_response_missing_url'));
     throw new Error('Could not open the billing portal. Please try again.');
@@ -110,7 +111,7 @@ export async function track(
       occurredAt: new Date().toISOString(),
     });
   } catch {
-    // Intentionally swallowed — a dropped analytics beacon is not worth a
+    // silent-catch-ok: a dropped analytics beacon is not worth a
     // user-visible error or a crash report.
   }
 }

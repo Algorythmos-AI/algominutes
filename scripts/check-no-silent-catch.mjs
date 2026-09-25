@@ -27,9 +27,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 
-// Server + shared code, where CLAUDE.md §1 applies. apps/web/src is still held to
-// the one-line grep rules in check-no-silent-catch.sh until its own cleanup (BLOCKERS).
-const ROOTS = ['packages', 'services', 'functions', 'scripts'];
+// Server, shared and web code (CLAUDE.md §1). The web's unreadable-body reads go
+// through apps/web/src/lib/http.ts, which logs them.
+const ROOTS = ['packages', 'services', 'functions', 'scripts', 'apps/web/src'];
 // Whole path segments only (so e.g. `builder.js` is not skipped), plus type declarations.
 const SKIP_DIR = /(^|\/)(node_modules|dist|build|generated)(\/|$)/;
 const skip = (p) => SKIP_DIR.test(p) || p.endsWith('.d.ts');

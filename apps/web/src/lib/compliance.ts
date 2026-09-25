@@ -20,6 +20,7 @@ import {
   TERMS_VERSION,
   PRIVACY_VERSION,
 } from '@algominutes/contracts';
+import { readErrorText, readErrorJson } from './http';
 
 // UI-only app version. Kept in sync with apps/web/package.json; overridable at
 // build time via VITE_APP_VERSION so a release can stamp the real tag. This is
@@ -57,7 +58,7 @@ export async function acceptTerms(): Promise<void> {
     platform: platform(),
   });
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('accept_terms_failed', new Error(`accept_terms_http_${resp.status}`), {
       detail: detail.slice(0, 200),
     });
@@ -73,7 +74,7 @@ export async function acceptTerms(): Promise<void> {
 export async function setRetention(retentionDays: number | null): Promise<void> {
   const resp = await authedFetch('/v1/account/retention', { retentionDays });
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('set_retention_failed', new Error(`retention_http_${resp.status}`), {
       detail: detail.slice(0, 200),
     });
@@ -106,14 +107,14 @@ export async function submitSupport(input: {
 
   const resp = await authedFetch('/v1/support', body);
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('support_submit_failed', new Error(`support_http_${resp.status}`), {
       kind: input.kind,
       detail: detail.slice(0, 200),
     });
     throw new Error('Could not send your message. Please try again.');
   }
-  const data = (await resp.json().catch(() => ({}))) as { id?: string };
+  const data = (await readErrorJson(resp)) as { id?: string };
   return { id: data.id ?? '' };
 }
 
@@ -127,7 +128,7 @@ export async function submitSupport(input: {
 export async function requestAccountDeletion(): Promise<void> {
   const resp = await authedFetch('/v1/account/delete', {});
   if (!resp.ok) {
-    const detail = await resp.text().catch(() => '');
+    const detail = await readErrorText(resp);
     reportCrash('account_delete_failed', new Error(`account_delete_http_${resp.status}`), {
       detail: detail.slice(0, 200),
     });

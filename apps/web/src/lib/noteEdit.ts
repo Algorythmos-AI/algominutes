@@ -13,6 +13,7 @@
 // once the endpoint's mirror write lands (which also bumps updatedAt).
 import { authedFetch } from './authedFetch';
 import type { Note, Summary } from '../types';
+import { readErrorJson } from './http';
 
 export const workspaceIdFor = (uid: string) => `workspace_${uid}`;
 
@@ -62,7 +63,7 @@ async function postNoteEdit(
     ...(fields.summary !== undefined ? { summary: fields.summary } : {}),
   });
   if (!resp.ok) {
-    const data = (await resp.json().catch(() => ({}))) as { error?: string };
+    const data = (await readErrorJson(resp)) as { error?: string };
     throw new Error(data.error || `Couldn't save your changes (${resp.status}).`);
   }
 }
