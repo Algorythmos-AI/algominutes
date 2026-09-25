@@ -888,16 +888,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
               transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
               the summary from Firestore, so it isn't affected. Fix: store a position.
-            - **Every** `completeChunkAndAdvance` caller (Google and AssemblyAI polls, not only Deepgram)
-              commits `summarizing` and spends the summarizer claim, then mirrors, then enqueues. A mirror
-              or enqueue that throws in between retries into `chunk already done` and returns, so the
-              summarizer never runs and the 3.5 h sweep fails a note whose transcript is fine. Fix: as the
-              fast path now does, log a failed mirror after the commit and enqueue first.
-            - `persistFastPathResult` writes `ready` without a status condition. So a duplicate kickoff
-              delivery that overlaps (or runs after) the first overwrites the finished note: a user's
-              edits to its action items are lost, and overlapping writes can leave Postgres and Firestore
-              with different summaries. Fix: `onlyIfStatus` in-progress there, so the second attempt gets
-              `NOTE_MOVED_ON`.
+            - ~~**Every** `completeChunkAndAdvance` caller commits `summarizing` and spends the summarizer
+              claim, then mirrors, then enqueues; a mirror that throws in between left the summarizer
+              unqueued~~ **fixed (pipeline-no-lost-work-after-commit PR):** a failed mirror after that
+              commit is logged (`chunk_complete_mirror_failed`), and the summarizer and embedder are still
+              queued. The mirror still goes first, so a quick summarizer's `ready` can't be overwritten by
+              a late `summarizing`. An enqueue that itself throws after the claim is still lost (the
+              3.5 h sweep fails the note); a sweep that re-drives a `summarizing` note with a full
+              transcript would cover it.
+            - ~~`persistFastPathResult` writes `ready` without a status condition~~ **fixed (same PR):** it
+              commits only over an in-progress note, so a duplicate delivery gets `NOTE_MOVED_ON` (acked)
+              instead of overwriting the finished note and the user's edits since.
+              - Tested on Postgres (five cases); three mutations checked.
             - The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
               when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
               doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds

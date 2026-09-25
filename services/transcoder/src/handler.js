@@ -549,15 +549,27 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     }
   } finally { c5.release(); }
 
-  // Mirror progress.
-  const c6 = await db.pool().connect();
-  try {
-    const progress = await db.chunkProgress(c6, { noteId, workspaceId });
+  // Past the commit above, a failed mirror is logged, not thrown: a retry of
+  // this poll finds the chunk done and returns, so a throw here skipped the
+  // enqueues below with their claims spent, and the note waited 3.5 h for the
+  // sweep to fail it. The mirror still goes first, so a quick summarizer's
+  // 'ready' can't be overwritten by a late 'summarizing'. A doc that's gone
+  // still throws, for handle() to judge.
+  const mirrorAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      if (isNoteGone(err)) throw err;
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_mirror_failed');
+    }
+  };
+  await mirrorAfterCommit('progress', async () => {
+    const c6 = await db.pool().connect();
+    let progress;
+    try { progress = await db.chunkProgress(c6, { noteId, workspaceId }); } finally { c6.release(); }
     if (progress) await mirror.mirrorProgress({ workspaceId, noteId, done: progress.done || 0, total: progress.total || 0 });
-  } finally { c6.release(); }
+  });
 
   if (allDone && summarizerClaimed) {
-    await mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' });
+    await mirrorAfterCommit('summarizing', () => mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' }));
     await tasks.enqueueSummarizer({ noteId, workspaceId });
   }
   if (allDone && embedderClaimed) {

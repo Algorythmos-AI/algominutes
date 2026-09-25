@@ -257,11 +257,17 @@ async function getChunkRow(client, chunkId) {
  * `lines` are `{ startMs, text }`. Throws after a rollback; a failed rollback
  * is logged (never swallowed).
  */
+// A kickoff delivered twice (or a stalled attempt waking after its retry
+// finished) must not overwrite the finished note: that would lose the user's
+// edits since, and overlapping runs could leave the two stores with different
+// summaries. The second commit throws NOTE_MOVED_ON, which handle() acknowledges.
+const FAST_PATH_IN_PROGRESS = ['queued', 'chunking', 'transcribing'];
+
 async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary, model }, log) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await upsertNoteStatus(client, { noteId, workspaceId, status: 'ready' });
+    await upsertNoteStatus(client, { noteId, workspaceId, status: 'ready', onlyIfStatus: FAST_PATH_IN_PROGRESS });
     await deleteTranscriptLinesForNote(client, noteId);
     for (const l of lines) {
       await client.query(
