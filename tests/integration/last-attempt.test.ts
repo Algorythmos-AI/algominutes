@@ -123,6 +123,26 @@ describe('the transcoder, last attempt', () => {
       .toEqual([{ reason: 'refund:transcode_failed' }]);
   });
 
+  it("a poll task's last attempt fails its chunk with the note, and its dead letter names the chunk", async () => {
+    await pool.query(`UPDATE notes SET status = 'transcribing' WHERE id = 'n1'`);
+    const { rows: [c] } = await pool.query(
+      `INSERT INTO audio_chunks (note_id, idx, start_sec, end_sec, storage_path, status, stt_operation_id)
+         VALUES ('n1', 0, 0, 600, 'chunks/n1', 'pending', 'operations/1') RETURNING id`,
+    );
+    const t = transcoder();
+    expect(await t.run({ kind: 'stt-poll', jobId: 'job-7', chunkId: c.id, noteId: 'n1', workspaceId: 'ws', poll: 7 })).toEqual({ failed: true });
+    expect((await pool.query('SELECT status FROM audio_chunks WHERE id = $1', [c.id])).rows[0].status).toBe('error');
+    expect(await status()).toBe('error');
+    expect(t.hooks[0].payload).toMatchObject({ kind: 'stt-poll', chunkId: c.id, jobId: 'job-7', poll: 7 });
+  });
+
+  it('a malformed chunk id is left out, and the note still fails', async () => {
+    await pool.query(`UPDATE notes SET status = 'transcribing' WHERE id = 'n1'`);
+    const t = transcoder();
+    expect(await t.run({ kind: 'stt-poll', chunkId: 'not-a-uuid', noteId: 'n1', workspaceId: 'ws' })).toEqual({ failed: true });
+    expect(await status()).toBe('error');
+  });
+
   it('a note that is gone: nothing to fail, no hooks', async () => {
     const t = transcoder();
     expect(await t.run({ ...kickoff, noteId: 'gone' })).toEqual({ failed: false });
