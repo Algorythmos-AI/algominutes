@@ -116,11 +116,10 @@ app.post('/', async (req, res) => {
     // Surface 500 so Cloud Tasks retries per the queue's backoff policy.
     //
     // On the LAST attempt, write a terminal state to Postgres as well as
-    // Firestore. Without this the note sat at 'queued'/'chunking'/'transcribing'
-    // forever: mirrorError writes Firestore only, /api/note serves the Postgres
-    // status, and the iOS app therefore showed a spinner that could never
-    // resolve. There is no server-side sweeper to catch it, and the queue has
-    // no dead-letter sink, so this log line is the only trace a human gets.
+    // Firestore, then dead-letter, refund and notify (the hooks below). The
+    // kickoff mirrors nothing on the way out, so until here the app shows the
+    // note processing; without this it would stay so until the stuck-note
+    // sweep (db-job, 3.5 h).
     const { noteId, workspaceId } = req.body || {};
     if (noteTerminal.isFinalAttempt(req.headers)) {
       await noteTerminal.markNoteFailed({

@@ -862,6 +862,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           notice if it takes long) until the queue's last attempt marks both stores through
           `markNoteFailed`. `mirrorError`, which had no other caller, is gone. A mutation re-adding the
           mirror fails three tests.
+          - **From its dual-write audit, fixed in the same PR:** the fast path can commit `ready` to
+            Postgres and then fail to mirror it. Its retry found the note finished and acked, so the doc
+            stayed at `chunking` for good: an endless spinner with no Try again (it used to show a wrong
+            `error` instead). A kickoff replayed after its note finished now rewrites the doc from
+            Postgres (`finishedNoteMirror`: status and message, or the summary with the first 200
+            transcript lines). Tested end to end on Postgres; three mutations checked.
+          - [ ] **Queued (pre-existing, from that audit):**
+            - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
+              transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
+              the summary from Firestore, so it isn't affected. Fix: order by position (items are in
+              order in `summaries.topics`; decisions need a column).
+            - If the last attempt's `markNoteFailed` misses its Firestore write, Postgres says `error`
+              and the doc stays in progress. The sweep only looks at notes Postgres has in flight. A
+              sweep step that re-mirrors recently finished notes would cover this and any other lost
+              mirror write.
+            - The Deepgram path commits `summarizing` before enqueueing the summarizer. A throw in
+              between leaves the note to the 3.5 h sweep, because the claim is spent. Deepgram is off.
+            - The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
+              while Postgres may be in flight (#124 fixed this on iOS).
         - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
           Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
           a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the
