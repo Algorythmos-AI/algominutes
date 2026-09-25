@@ -136,6 +136,41 @@ describe('the summarizer, last attempt', () => {
     expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
   });
 
+  it("a regeneration's failure: failed and told, but not refunded (the recording's charge stands)", async () => {
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 2 WHERE id = 'n1'`);
+    const s = summarizerRun();
+    expect(await s.run({ noteId: 'n1', workspaceId: 'ws', summaryGeneration: 2 })).toEqual({ failed: true });
+    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify, h.refund])).toEqual([[false, true, false]]);
+  });
+
+  it('on the ledger, through the real hooks: a pipeline summary failure is refunded, a regeneration failure is not', async () => {
+    for (const spec of ['@algominutes/db/usage-repo.ts', '@algominutes/db/dead-letter-repo.ts']) {
+      const path = require.resolve(spec);
+      require.cache[path] = { id: path, filename: path, loaded: true, exports: repo } as never;
+    }
+    const realHooks = require('../../services/summarizer/src/terminal-hooks.js');
+    const ledger = async () => (await pool.query(
+      `SELECT entry_type, minutes::float8 AS m FROM usage_ledger WHERE note_id = 'n1' ORDER BY id`,
+    )).rows.map((r: any) => `${r.entry_type} ${r.m}`);
+    const debit = (key: string) => pool.query(
+      `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
+         VALUES ('u', 'ws', 'n1', 'debit', 30, to_char(NOW(), 'YYYY-MM'), 'ingest', $1)`, [key],
+    );
+    const last = (body: any) => summarizerLast.onLastAttempt({
+      body, headers, err: new Error('boom'), markNoteFailed: summarizer.markNoteFailed, pool: summarizer.pool, log, traceId: 't',
+      terminalHooks: realHooks,
+    });
+
+    await debit('n1:ingest');
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 2 WHERE id = 'n1'`);
+    await last({ noteId: 'n1', workspaceId: 'ws', summaryGeneration: 2 });
+    expect(await ledger()).toEqual(['debit 30']);
+
+    await pool.query(`UPDATE notes SET status = 'summarizing' WHERE id = 'n1'`);
+    await last({ noteId: 'n1', workspaceId: 'ws' });
+    expect(await ledger()).toEqual(['debit 30', 'reversal -30']);
+  });
+
   it('a note that is ready anyway (the attempt threw after its summary committed): the dead letter only', async () => {
     await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'n1'`);
     const s = summarizerRun();
