@@ -73,7 +73,7 @@ func drawBars(_ ctx: CGContext, gradient: Bool, glow: Bool) {
 }
 
 func drawBackground(_ ctx: CGContext) {
-    // Vertical #0D0D0F -> #000000, echoing OwllBackground's near-black.
+    // Vertical #0D0D0F -> #000000, echoing AlgoMinutesBackground's near-black.
     let g = CGGradient(
         colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
         colors: [

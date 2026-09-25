@@ -8,7 +8,7 @@ struct UpdateRequiredView: View {
 
     var body: some View {
         ZStack {
-            OwllBackground()
+            AlgoMinutesBackground()
             VStack(spacing: Theme.Spacing.lg) {
                 Image("Logo")
                     .resizable()

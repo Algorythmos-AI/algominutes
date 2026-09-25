@@ -37,7 +37,7 @@ struct SettingsView: View {
 
                     subscriptionCard
 
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Link(destination: LegalLinks.webApp) {
                                 linkRow(label: "Web version", icon: "macbook")
@@ -47,7 +47,7 @@ struct SettingsView: View {
 
                     // A7.2 (P1): Wi-Fi-only uploads. The uploader reads this via
                     // UploadPreferences.wifiOnly at session creation.
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 6) {
                             Toggle(isOn: $wifiOnlyUploads) {
                                 Text("Upload on Wi-Fi only")
@@ -66,7 +66,7 @@ struct SettingsView: View {
                     RetentionSettingsCard()
 
                     // A10 #4: static FAQ + contact support.
-                    OwllCard {
+                    AlgoMinutesCard {
                         NavigationLink {
                             HelpSupportView()
                         } label: {
@@ -74,7 +74,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
                             infoRow(label: "Account", value: env.auth.user?.email ?? "—")
                             Divider().overlay(Theme.borderSoft)
@@ -82,7 +82,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Link(destination: LegalLinks.privacy) {
                                 linkRow(label: "Privacy Policy")
@@ -144,7 +144,7 @@ struct SettingsView: View {
                 }
                 .padding(20)
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .confirmationDialog(
@@ -166,10 +166,10 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Usage (Owll-style meters, real numbers only)
+    // MARK: - Usage (meters, real numbers only)
 
     private var usageCard: some View {
-        OwllCard(style: .raised) {
+        AlgoMinutesCard(style: .raised) {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 Text("THIS MONTH")
                     .font(Typography.eyebrow())
@@ -189,7 +189,7 @@ struct SettingsView: View {
     /// created a permanent account — an App Review requirement.
     @ViewBuilder
     private var subscriptionCard: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -433,7 +433,7 @@ struct AdminCostsCard: View {
     }
 
     var body: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Admin tools")

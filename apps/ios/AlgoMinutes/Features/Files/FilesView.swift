@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Owll-style Files tab: every note in the workspace behind a search bar,
+/// The Files tab: every note in the workspace behind a search bar,
 /// source filter chips, and an "Ask AI" entry into chat. Replaces the old
 /// Search tab (transcript search lives behind the same search field) and
 /// the AllNotes screen.
@@ -57,7 +57,7 @@ struct FilesView: View {
                     .padding(.top, Theme.Spacing.md)
                 notesList
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(item: $selectedNoteId) { noteId in
@@ -256,7 +256,7 @@ struct FilesView: View {
     // MARK: - Cards
 
     private func fileCard(_ note: Note) -> some View {
-        OwllCard(style: .flat) {
+        AlgoMinutesCard(style: .flat) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: iconName(for: note.type))
@@ -313,7 +313,7 @@ struct FilesView: View {
     }
 
     private func transcriptHitCard(_ hit: SearchHit) -> some View {
-        OwllCard(style: .flat) {
+        AlgoMinutesCard(style: .flat) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack {
                     Label(noteTitle(for: hit), systemImage: "doc.text")
