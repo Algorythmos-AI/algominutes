@@ -869,6 +869,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - that it reads entries from the Cloud Run *job* (db-job);
   - Error Reporting's retention against the 30-day promise.
 
+## Account deletion revokes Sign in with Apple (plan rev 8, PR-29 M1 part, 2026-09-25)
+
+- [x] **Done in code (ios-apple-revocation PR):** deleting an Apple-linked account first asks the user to
+  confirm with Apple, then revokes its tokens (`Auth.revokeToken(withAuthorizationCode:)`), then deletes.
+  Apple requires this (App Review 5.1.1(v)).
+  - A dismissed prompt stops the deletion, with an explanation.
+  - A failed revocation doesn't block deletion (logged `apple_token_revoke_failed`): removing the data
+    comes first.
+  - Accounts without Apple sign-in, including anonymous ones, are unaffected.
+- [ ] **Yours:** configure the Firebase Apple provider (Services ID, Key ID, `.p8`) in `algominutes-staging`.
+  Without it the revocation fails and is logged.
+- [ ] **Verify on a real iPhone (M1):** delete an Apple-linked test account, and the app disappears from
+  Settings → Apple ID → Sign in with Apple.
 
 ## Found while adding the audio smoke (2026-09-25)
 

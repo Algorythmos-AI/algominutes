@@ -308,6 +308,7 @@ struct DeleteAccountSheet: View {
     @State private var confirmationText = ""
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    @State private var revocation = AppleTokenRevocation()
 
     private var canDelete: Bool {
         acknowledged
@@ -390,6 +391,18 @@ struct DeleteAccountSheet: View {
         guard canDelete else { return }
         isDeleting = true
         errorMessage = nil
+        // Apple first (it requires the revocation, and a deleted account can't
+        // be asked again). A dismissed prompt stops the deletion; a failed
+        // revocation doesn't, since removing the user's data comes first.
+        do {
+            if try await revocation.revokeIfLinked() == .cancelled {
+                errorMessage = "Deleting an account that uses Sign in with Apple needs Apple's confirmation. Please try again."
+                isDeleting = false
+                return
+            }
+        } catch {
+            AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+        }
         do {
             try await env.api.deleteAccount()
             env.signOut()
