@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
 import { getPool } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog } from './helpers';
 
 // Workers and a deleted (or mismatched) note, on real Postgres.
 const require = createRequire(import.meta.url);
@@ -83,5 +83,34 @@ describe('note-terminal markNoteFailed', () => {
     await markNoteFailed({ pool, firestore, noteId: 'note-a', workspaceId: 'ws-a', message: 'failed', log, event: 'test' });
     expect(errors).toContain('test_mirror_doc_missing');
     expect((await pool.query(`SELECT status FROM notes WHERE id = 'note-a'`)).rows[0].status).toBe('error');
+  });
+});
+
+describe('pipeline reads', () => {
+  it("chunk progress is read only for a live note in the task's workspace", async () => {
+    await pool.query(`UPDATE notes SET chunks_done = 1, chunks_total = 3 WHERE id = 'note-a'`);
+    const c = await pool.connect();
+    try {
+      expect(await transcoderDb.chunkProgress(c, { noteId: 'note-a', workspaceId: 'ws-a' })).toEqual({ done: 1, total: 3 });
+      expect(await transcoderDb.chunkProgress(c, { noteId: 'note-a', workspaceId: 'ws-b' })).toBeNull();
+      await pool.query(`DELETE FROM notes WHERE id = 'note-a'`);
+      expect(await transcoderDb.chunkProgress(c, { noteId: 'note-a', workspaceId: 'ws-a' })).toBeNull();
+    } finally {
+      c.release();
+    }
+  });
+
+  // The failure tail notifies the note's author when the task carried no uid.
+  // Resolved by note id alone, a task naming another workspace would reach
+  // this note's author.
+  it.each(['transcoder', 'summarizer'])("%s: a task from another workspace never resolves this note's author", async (svc) => {
+    const { resolveNoteUid } = require(`../../services/${svc}/src/terminal-hooks.js`);
+    expect(await resolveNoteUid({ pool, noteId: 'note-a', workspaceId: 'ws-a', log: quietLog }))
+      .toEqual({ uid: 'alice', workspaceId: 'ws-a' });
+    expect(await resolveNoteUid({ pool, noteId: 'note-a', workspaceId: 'ws-b', log: quietLog }))
+      .toEqual({ uid: null, workspaceId: 'ws-b' });
+    // A task with no workspace gets the note's own.
+    expect(await resolveNoteUid({ pool, noteId: 'note-a', log: quietLog }))
+      .toEqual({ uid: 'alice', workspaceId: 'ws-a' });
   });
 });

@@ -210,6 +210,7 @@ describe('transcoder: the completion gate', () => {
         claimSummarizerEnqueue: async () => true,
         claimEmbedderEnqueue: async () => false,
         upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+        chunkProgress: async () => ({ done: 2, total: 2 }),
       },
       mirror: {
         mirrorProgress: async () => {},
@@ -234,6 +235,7 @@ describe('transcoder: the completion gate', () => {
         claimSummarizerEnqueue: async () => false,
         claimEmbedderEnqueue: async () => false,
         upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+        chunkProgress: async () => ({ done: 2, total: 2 }),
       },
       mirror: { mirrorProgress: async () => {}, mirrorStatus: async () => void order.push('mirror') },
       tasks: { enqueueSummarizer: async () => void order.push('enqueue'), enqueueEmbedder: async () => {} },
