@@ -994,9 +994,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   failed and told, and the recording's charge stands. Tested on the ledger through the real
                   hooks; two mutations checked.
                 - ~~`markNoteFailed` with a chunk locks note then chunk, against `completeChunkGate`'s chunk
-                  then note~~ **fixed (poll-failure-locks-chunk-first PR):** it takes the chunk first now.
-                  A re-queue (`markQueued`: note, then the chunks it deletes) racing a poll's verdict can
-                  still deadlock; Postgres aborts one, and either retries into a consistent state.
+                  then note~~ **fixed (poll-failure-locks-chunk-first PR):** every writer now takes the note,
+                  then its chunks (`completeChunkGate` gained a note lock; `markQueued`, `deleteNote` and
+                  account deletion already did), so none of them deadlock with a poll's verdict.
                 - When Postgres errors, the mirror writes the caller's message while Postgres keeps the
                   first; mirror repair compares status only, so they don't converge.
                 - A re-drive's dead letter says `chunk_already_failed`, not the original reason.
@@ -1005,9 +1005,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 - A re-driven poll records its dead letter again (the dedupe item below).
                 - ~~A poll from a run that was just re-queued can fail the new run~~ and ~~a second poll
                   chain can turn a `done` chunk into `error`~~ **fixed (poll-failure-locks-chunk-first
-                  PR):** a poll's verdict locks its chunk first; a chunk that's gone (re-queued, even while
-                  the verdict waited) or `done` makes it moot (`superseded`): nothing is failed, refunded
-                  or told. Tested with the re-queue holding the chunk locks; three mutations checked.
+                  PR):** a poll's verdict locks the note, then its chunk; a chunk that's gone (re-queued,
+                  even while the verdict waited on the note) or `done` makes it moot (`superseded`): nothing
+                  is failed, refunded or told. And a late completion of a failed (or finished) note's chunk
+                  is refused (`completeChunkGate` returns `finished`), so it can't move the note on to
+                  `summarizing` after its refund and "failed" notice. Tested with the re-queue locking the
+                  note first and deleting the chunks while the verdict waits; mutations checked.
                 - ~~A poll task's last attempt (`last-attempt.js`) passes no `chunkId`, and its dead letter
                   drops the chunk, job and reason~~ **fixed (poll-last-attempt-keeps-chunk PR):** its chunk
                   fails with the note (a well-formed id only), and the dead letter keeps the chunk, job and

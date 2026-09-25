@@ -167,9 +167,25 @@ async function claimEmbedderEnqueue(client, noteId) {
  * row, so the second's count runs after the first commits and exactly one of
  * them sees the note complete.
  */
+// A note whose chunks are still being transcribed.
+const COMPLETABLE_STATUSES = ['queued', 'chunking', 'transcribing'];
+
 async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) {
   await client.query('BEGIN');
   try {
+    // The note first, then its chunk: the order every writer takes them
+    // (note-terminal markNoteFailed, markQueued, deleteNote), so none can
+    // deadlock with this. A note the run no longer owns (failed, finished,
+    // re-queued past this run, gone) takes no completion: a late chain mustn't
+    // turn a failed chunk 'done' and move the note on to 'summarizing' after
+    // its refund and "failed" notice.
+    const { rows: [note] } = await client.query(
+      'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 FOR NO KEY UPDATE', [noteId, workspaceId],
+    );
+    if (!note || !COMPLETABLE_STATUSES.includes(note.status)) {
+      await client.query('COMMIT');
+      return { allDone: false, summarizerClaimed: false, embedderClaimed: false, finished: true, status: note ? note.status : null };
+    }
     const allDone = await markChunkDone(client, { chunkId, noteId });
     let summarizerClaimed = false;
     let embedderClaimed = false;

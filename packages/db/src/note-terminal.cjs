@@ -117,15 +117,23 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
         try {
           await client.query('BEGIN');
           if (chunkId) {
-            // A poll's verdict: its chunk first, the order completeChunkGate
-            // takes them (chunk, then note), so the two can't deadlock. A chunk
-            // that's gone (the note was re-queued; markQueued deleted this run's
-            // chunks, maybe while this waited) or done (another chain finished
-            // it) makes the verdict moot: nothing is failed or refunded.
-            const { rows: [chunk] } = await client.query(
-              'SELECT status FROM audio_chunks WHERE id = $1 AND note_id = $2 FOR UPDATE', [chunkId, noteId],
+            // A poll's verdict. The note, then its chunk: the order every
+            // writer takes them (markQueued, deleteNote, account deletion,
+            // completeChunkGate), so none can deadlock with this. A chunk that's
+            // gone (the note was re-queued: markQueued deleted this run's
+            // chunks, maybe while this waited on the note) or done (another
+            // chain finished it) makes the verdict moot: nothing is failed,
+            // refunded or told.
+            await client.query(
+              'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 FOR NO KEY UPDATE', [noteId, workspaceId],
             );
-            superseded = !chunk || chunk.status === 'done';
+            const { rows: [chunk] } = await client.query(
+              'SELECT note_id, status FROM audio_chunks WHERE id = $1 FOR NO KEY UPDATE', [chunkId],
+            );
+            if (chunk && chunk.note_id !== noteId) {
+              log.warn({ noteId, workspaceId, chunkId, chunkNoteId: chunk.note_id }, `${name}_chunk_note_mismatch`);
+            }
+            superseded = !chunk || chunk.note_id !== noteId || chunk.status === 'done';
           }
           if (!superseded) ({ rows } = await failNote());
           // The refund in the failure's transaction, while its row lock holds.
@@ -146,7 +154,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
           // No retry left (a last attempt): fail the note without its refund,
           // so the two stores agree, and say the refund was lost. A Postgres
           // that's down fails this too, into the catch below.
-          log.error({ err, noteId, workspaceId, reason: refund.reason }, `${name}_refund_lost`);
+          log.error({ err, noteId, workspaceId, reason: refund && refund.reason }, `${name}_refund_lost`);
           ({ rows } = await failNote());
         }
       }
