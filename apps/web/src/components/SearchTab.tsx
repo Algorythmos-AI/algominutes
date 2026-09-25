@@ -4,6 +4,7 @@ import { auth } from '../firebase';
 import { authedFetch } from '../lib/authedFetch';
 import { SearchResponseSchema, safeParse } from '../lib/apiSchemas';
 import type { Note } from '../types';
+import { readErrorJson } from '../lib/http';
 
 interface SearchHit {
   noteId: string;
@@ -49,7 +50,7 @@ export default function SearchTab({ onOpenNote, notes, onBack }: SearchTabProps)
     try {
       const resp = await authedFetch('/api/search', { query: query.trim(), k: 12 });
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
+        const data = await readErrorJson(resp);
         setError(data.error || `Search failed (${resp.status})`);
         setHits([]);
         return;

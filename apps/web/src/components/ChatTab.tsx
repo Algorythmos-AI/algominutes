@@ -4,6 +4,7 @@ import { auth } from '../firebase';
 import { apiUrl } from '../lib/apiUrl';
 import { tryHandleEditCommand } from '../lib/noteCommands';
 import type { Note } from '../types';
+import { readErrorJson } from '../lib/http';
 
 /**
  * `crypto.randomUUID` is undefined outside a secure context — plain HTTP on a
@@ -131,7 +132,7 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
       });
 
       if (!resp.ok || !resp.body) {
-        const data = await resp.json().catch(() => ({}));
+        const data = await readErrorJson(resp);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId ? { ...m, content: data.error || `Chat failed (${resp.status})` } : m,
@@ -179,7 +180,8 @@ export default function ChatTab({ onOpenNote, notes, onBack }: ChatTabProps) {
             let data: any;
             try {
               data = JSON.parse(dataMatch[1]);
-            } catch {
+            } catch (parseErr) {
+              console.warn('chat_sse_frame_unparseable', parseErr);
               continue;
             }
             const eventName = eventMatch ? eventMatch[1] : 'message';

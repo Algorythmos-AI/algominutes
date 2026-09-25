@@ -91,6 +91,7 @@ import {
 } from 'firebase/firestore';
 import type { Note, NoteType, Summary } from './types';
 import { DEFAULT_MAX_RECORDING_SECONDS } from '@algominutes/contracts';
+import { readErrorText } from './lib/http';
 
 // Per-recording cap is plan-derived config (A6.2), defined once in
 // @algominutes/contracts. Until entitlements resolve (A9), the web client uses
@@ -632,10 +633,10 @@ export default function App() {
       if (!u.isAnonymous) {
         const acceptKey = `terms_accepted:${u.uid}:${TERMS_VERSION}:${PRIVACY_VERSION}`;
         let alreadyAccepted = false;
-        try { alreadyAccepted = localStorage.getItem(acceptKey) === '1'; } catch { /* ignore */ }
+        try { alreadyAccepted = localStorage.getItem(acceptKey) === '1'; } catch { /* silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); no flag is the default */ }
         if (!alreadyAccepted) {
           void acceptTerms()
-            .then(() => { try { localStorage.setItem(acceptKey, '1'); } catch { /* ignore */ } })
+            .then(() => { try { localStorage.setItem(acceptKey, '1'); } catch { /* silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); no flag is the default */ } })
             .catch((err) => reportCrash('accept_terms_on_signin_failed', err));
         }
       }
@@ -801,11 +802,11 @@ export default function App() {
     if (!selectedNote.summary?.gist) return;
 
     let alreadySeen = false;
-    try { alreadySeen = localStorage.getItem('first_summary_viewed') === '1'; } catch { /* ignore */ }
+    try { alreadySeen = localStorage.getItem('first_summary_viewed') === '1'; } catch { /* silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); no flag is the default */ }
     if (alreadySeen) { firstSummaryFiredRef.current = true; return; }
 
     firstSummaryFiredRef.current = true;
-    try { localStorage.setItem('first_summary_viewed', '1'); } catch { /* ignore */ }
+    try { localStorage.setItem('first_summary_viewed', '1'); } catch { /* silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); no flag is the default */ }
     void track('first_summary_viewed', { noteType: selectedNote.type });
 
     // Defer the prompt so the summary is on screen first, not covered instantly.
@@ -1375,7 +1376,7 @@ export default function App() {
             controller.signal,
           );
           if (!resp.ok) {
-            console.error('process-audio failed', resp.status, await resp.text().catch(() => ''));
+            console.error('process-audio failed', resp.status, await readErrorText(resp));
             await markKickoffError('Could not queue your recording. Please try again.');
           }
         } catch (e) {
@@ -1532,7 +1533,7 @@ export default function App() {
           controller.signal,
         );
         if (!resp.ok) {
-          const responseText = await resp.text().catch(() => '');
+          const responseText = await readErrorText(resp);
           console.error(`[retry] kickoff_failed noteId=${note.id} status=${resp.status} attempt=${nextAttempt} body=${responseText}`);
           await markRetryError('Could not queue this retry. Please try again.');
         } else {
@@ -2737,7 +2738,7 @@ export default function App() {
         onConfirm={async () => {
           const resp = await authedFetch('/api/delete-account', {});
           if (!resp.ok) {
-            const body = await resp.text().catch(() => '');
+            const body = await readErrorText(resp);
             console.error('delete_account_http_error', resp.status, body);
             throw new Error(`delete_account_failed_${resp.status}`);
           }

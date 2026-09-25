@@ -17,6 +17,7 @@ function loadChoice(): Choice {
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   } catch {
+    // silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); the server has the choice
     return null;
   }
 }
@@ -47,7 +48,7 @@ export default function RetentionSetting() {
     try {
       await setRetention(next);
       setChoice(next);
-      try { localStorage.setItem(STORAGE_KEY, next === null ? 'null' : String(next)); } catch { /* non-fatal */ }
+      try { localStorage.setItem(STORAGE_KEY, next === null ? 'null' : String(next)); } catch { /* silent-catch-ok: a local cache of the choice the server already saved */ }
       setSaved(true);
     } catch (err) {
       setError((err as Error)?.message || 'Could not update your retention setting.');

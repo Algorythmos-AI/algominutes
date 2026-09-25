@@ -277,7 +277,10 @@ where testable so the fix PR proves itself:
       - [x] **Fixed (syntax-aware silent-catch PR):** `scripts/check-no-silent-catch.mjs` parses server and
         shared code with the TypeScript compiler. A catch must throw, log, use the error, or carry
         `// silent-catch-ok: <reason>`. 12 server sites were triaged (2 fixed, 10 marked with a reason).
-      - [ ] **apps/web/src silent catches (27):** mostly `resp.text().catch(() => '')`, plus
+      - [x] **Fixed (web-silent-catches PR):** the 17 unreadable-body reads go through
+        `apps/web/src/lib/http.ts` (`readErrorText`/`readErrorJson`, which log a warning). The 12 catch
+        clauses now log, or carry a reasoned `silent-catch-ok` (mostly `localStorage` being unavailable in
+        private mode). `apps/web/src` is in the AST gate's roots. Was: **apps/web/src silent catches (27):** mostly `resp.text().catch(() => '')`, plus
         `catch { /* ignore */ }`. They're still under the old one-line grep rules. Clean them up (a shared
         `readErrorBody(resp)` helper plus reasoned markers), then add `apps/web/src` to the AST gate's ROOTS.
       - Was: Checker gaps: `catch (e) {}` with a non-underscore name, comment-only catches, multi-line catches.
