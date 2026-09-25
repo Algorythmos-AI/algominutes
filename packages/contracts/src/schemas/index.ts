@@ -18,3 +18,4 @@ export * from './async';
 export * from './billing';
 export * from './compliance';
 export * from './actions';
+export * from './appConfig';

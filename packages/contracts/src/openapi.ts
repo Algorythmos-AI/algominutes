@@ -491,6 +491,15 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/config`, tags: ['config'], security: authed, parameters: commonHeaders,
+    summary: 'Server-side feature switches the apps read at launch (e.g. broadcast capture).',
+    responses: {
+      200: { description: 'Switches.', ...json(S.AppConfigResponse) },
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'post', path: `${API_BASE_PATH}/events`, tags: ['billing'], security: authed, parameters: commonHeaders,
     summary: 'Record a conversion-funnel event (best-effort; a storage failure still answers 202).',
     request: { body: json(S.TrackEventRequest) },

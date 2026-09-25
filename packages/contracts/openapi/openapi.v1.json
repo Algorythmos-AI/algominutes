@@ -1863,6 +1863,17 @@
           "complete"
         ]
       },
+      "AppConfigResponse": {
+        "type": "object",
+        "properties": {
+          "broadcastCapture": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "broadcastCapture"
+        ]
+      },
       "OkResponse": {
         "type": "object",
         "properties": {
@@ -3976,6 +3987,46 @@
           },
           "500": {
             "description": "Internal error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Server-side feature switches the apps read at launch (e.g. broadcast capture).",
+        "responses": {
+          "200": {
+            "description": "Switches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
             "content": {
               "application/json": {
                 "schema": {
