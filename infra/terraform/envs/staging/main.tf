@@ -43,6 +43,13 @@ variable "billing_account" {
   type = string
 }
 
+# Who the alerts email (alerting.tf). Passed at plan time, never committed:
+#   export TF_VAR_alert_emails='["you@example.com"]'
+variable "alert_emails" {
+  type    = list(string)
+  default = []
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -99,6 +106,7 @@ module "environment" {
   wif_github_environment = "staging"
 
   billing_account = var.billing_account
+  alert_emails    = var.alert_emails
   monthly_budget  = 100
 
   # In-VPC proof VM for proving staging (docs/runbooks/staging-proof.md).

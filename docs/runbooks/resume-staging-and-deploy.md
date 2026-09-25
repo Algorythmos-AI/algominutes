@@ -33,6 +33,8 @@ cd infra/terraform/envs/staging
 # The billing account ID is required (for the budget) but never committed:
 export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-staging \
   --account=algorythmos.france@gmail.com --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+# Who the alerts email (alerting.tf); also never committed. Empty = console only.
+export TF_VAR_alert_emails='["you@example.com"]'
 terraform init                                  # real GCS backend this time
 terraform plan  -var-file=terraform.tfvars -out plan.out   # RECORD this output
 terraform apply plan.out
