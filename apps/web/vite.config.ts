@@ -31,7 +31,7 @@ function copyTesseractAssets(): Plugin {
     name: 'copy-tesseract-assets',
     apply: 'build',
     closeBundle() {
-      const outDir = path.resolve(__dirname, 'dist/tesseract');
+      const outDir = path.resolve(import.meta.dirname, 'dist/tesseract');
       mkdirSync(outDir, { recursive: true });
       for (const [pkg, src, name] of files) {
         copyFileSync(path.join(packageDir(pkg), src), path.resolve(outDir, name));
@@ -49,7 +49,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {
