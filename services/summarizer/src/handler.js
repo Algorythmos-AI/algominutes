@@ -187,13 +187,15 @@ async function handle(payload, deps) {
   // gist, action items and decisions survive), instead of failing the note.
   const { result: parsed, partial } = summaryOutput.salvageSummaryJson(rawText);
   if (partial) log.warn({ noteId, workspaceId, model }, 'summary_salvaged_partial');
-  const chapters = wantChapters ? summaryOutput.normalizeChapters(parsed.chapters, { maxMs: lastMs }) : [];
-  if (wantChapters) log.info({ noteId, workspaceId, chapters: chapters.length, offered: (parsed.chapters || []).length }, 'summary_chapters');
 
   // Defense-in-depth: the transcript is scrubbed before Gemini, but redact the
   // summary OUTPUT too before persist + mirror (the model can still echo PII).
+  // Scrub the chapters whole, THEN trim them (normalizeChapters caps lengths):
+  // trimming first can cut a card number or an email so the patterns no longer
+  // match, and the fragment would be stored.
   const outRedaction = sharedRedaction.redactSummaryOutput({
-    gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions, chapters,
+    gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions,
+    chapters: wantChapters ? parsed.chapters : [],
   });
   if (Object.keys(outRedaction.counts).length) {
     log.info({ noteId, workspaceId, redactionCounts: outRedaction.counts }, 'summary_output_redacted');
@@ -201,7 +203,12 @@ async function handle(payload, deps) {
   parsed.gist = outRedaction.summary.gist;
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
-  const safeChapters = outRedaction.summary.chapters || [];
+  const safeChapters = wantChapters
+    ? summaryOutput.normalizeChapters(outRedaction.summary.chapters, { maxMs: lastMs })
+    : [];
+  if (wantChapters) {
+    log.info({ noteId, workspaceId, chapters: safeChapters.length, offered: (parsed.chapters || []).length }, 'summary_chapters');
+  }
 
   // Postgres (summary rows, 'ready', manual-edit flags cleared, all in one
   // transaction), then the Firestore mirror: notes-repo markSummaryReady.

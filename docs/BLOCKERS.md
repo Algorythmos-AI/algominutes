@@ -779,6 +779,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **Map-reduce judged unnecessary:** a 4 h transcript is about 40-60k tokens, inside Gemini flash's
     input window, and the output (chapters included) fits 16,384 tokens. Recheck with a real 3 h note on
     staging (M1).
+  - **From its PII audit, fixed in the same PR:** chapters are scrubbed whole and *then* trimmed. Trimming
+    first could cut a card number or an email into a fragment the patterns no longer match, which was then
+    stored. The salvage error no longer quotes the model's output, since it reaches logs and the dead letter.
+  - [ ] **Queued (pre-existing, from that audit):**
+    - the fast path's `parseGeminiJson` and the older `parseSummaryJson` still put Node's JSON error (about
+      10 characters of model output) in their message;
+    - `speakerName` (a user-set label) goes to Gemini unscrubbed.
   - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
     tap to seek.
 

@@ -87,6 +87,19 @@ describe('summarizer chapters', () => {
     expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('ready');
   });
 
+  it('a secret straddling the length cap is scrubbed whole, not cut into an unrecognisable fragment', async () => {
+    await lines([0, 20]);
+    const pad = 'x'.repeat(590);
+    const answer = JSON.stringify({
+      gist: 'g', actionItems: [], keyDecisions: [],
+      chapters: [{ start: '00:00', title: 'Billing', summary: `${pad} card 4111 1111 1111 1111 end` }],
+    });
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(answer));
+    const [chapter] = (await stored()).chapters;
+    expect(chapter.summary.length).toBeLessThanOrEqual(600);
+    expect(chapter.summary).not.toMatch(/4111/);
+  });
+
   it('a 2-minute recording: no chapter request, and none stored', async () => {
     await lines([0, 1, 2]);
     await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'Quick sync.', actionItems: [], keyDecisions: [] })));

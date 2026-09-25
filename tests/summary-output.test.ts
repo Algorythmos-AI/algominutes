@@ -63,6 +63,10 @@ describe('repairTruncatedJson and salvageSummaryJson', () => {
     expect(() => salvageSummaryJson('{"gist": "unfini')).toThrow(/INVALID_JSON/);
     expect(() => salvageSummaryJson('{"actionItems": ["a"], "chapters": []}')).toThrow(/unexpected schema/);
     expect(() => salvageSummaryJson('not json')).toThrow(/INVALID_JSON/);
+    // The error never quotes the model's text (it reaches logs and the dead letter).
+    expect(() => salvageSummaryJson('Sure, jane@example.com is the owner')).toThrow(/^INVALID_JSON: unparseable model output \(\d+ chars\)$/);
+    expect(repairTruncatedJson('{"gist": "a"} trailing')).toEqual({ gist: 'a' });
+    expect(repairTruncatedJson('{"gist": 1 2}')).toBeNull();
   });
 });
 

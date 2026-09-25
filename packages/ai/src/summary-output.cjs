@@ -65,7 +65,15 @@ function repairTruncatedJson(text) {
     else if (ch === '[') stack.push(']');
     else if (ch === '}' || ch === ']') {
       stack.pop();
-      if (stack.length === 0) return JSON.parse(s.slice(0, i + 1)); // complete document
+      if (stack.length === 0) {
+        // A complete document (anything after it is ignored).
+        try {
+          return JSON.parse(s.slice(0, i + 1));
+        } catch {
+          /* silent-catch-ok: unparseable means nothing was salvaged; the caller reports it without quoting the model's text */
+          return null;
+        }
+      }
       snapshot(i + 1);
     } else if (ch === ',') snapshot(i); // everything before the comma is complete
   }
@@ -90,10 +98,12 @@ function salvageSummaryJson(rawText) {
   let partial = false;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
+  } catch {
     parsed = repairTruncatedJson(cleaned);
     partial = true;
-    if (!parsed) throw new Error(`INVALID_JSON: ${err.message}`);
+    // Never the parser's message: it quotes the model's output, which can hold
+    // what the transcript said, and this error reaches logs and the dead letter.
+    if (!parsed) throw new Error(`INVALID_JSON: unparseable model output (${cleaned.length} chars)`);
   }
   if (!parsed || typeof parsed.gist !== 'string' || !parsed.gist.trim()) {
     throw new Error('Model returned unexpected schema');
