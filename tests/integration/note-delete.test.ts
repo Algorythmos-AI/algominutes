@@ -130,6 +130,9 @@ describe('deleteNote (the single deletion path)', () => {
     await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
     expect(await count(`SELECT 1 FROM upload_sessions WHERE note_id = 'note-a'`)).toBe(0);
     expect(await count(`SELECT 1 FROM upload_sessions WHERE note_id = 'note-b'`)).toBe(1);
+    // Their GCS URIs stay valid for a week, so the purge gets them to cancel.
+    const purge = (await listPendingStoragePurges())[0]!;
+    expect(purge.uploadSessionUris).toEqual(['https://storage.googleapis.com/x']);
   });
 });
 
@@ -193,5 +196,53 @@ describe('runStoragePurge', () => {
     ]);
     // Logged under the deleting request's traceId, so a sweeper retry still traces to it.
     expect(errors).toContainEqual(expect.objectContaining({ traceId: 't-2', noteId: 'note-a', workspaceId: 'ws-a', attempts: 1 }));
+  });
+});
+
+describe('runStoragePurge and the note\'s open upload sessions', () => {
+  const log = { info: () => {}, error: () => {} };
+  const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=abc';
+  async function deletedWithSession() {
+    await pool.query(
+      `INSERT INTO upload_sessions (uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at)
+         VALUES ('alice', 'ws-a', 'note-a', 'recordings/ws-a/note-a.m4a', $1, 1, NOW() + INTERVAL '1 day')`,
+      [SESSION],
+    );
+    const { fs, deletes } = fsStub();
+    const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
+    deletes.length = 0;
+    return { fs, deletes, purge: (await getStoragePurge((r as { purgeId: number }).purgeId))! };
+  }
+
+  it('cancels them before it deletes anything, so no upload can land afterwards', async () => {
+    const { fs, deletes, purge } = await deletedWithSession();
+    const bucket = fakeBucket(['recordings/ws-a/note-a.m4a']);
+    const order: string[] = [];
+    const fetchImpl = async (url: string, init: { method: string }) => {
+      order.push(`${init.method} ${url}`, `objects:${bucket.present.size} docDeletes:${deletes.length}`);
+      return { status: 499 };
+    };
+    expect(await runStoragePurge({ bucket, firestore: fs, fetchImpl }, purge, log)).toBe(true);
+    expect(order).toEqual([`DELETE ${SESSION}`, 'objects:1 docDeletes:0']);
+    expect(bucket.present.size).toBe(0);
+    expect(await count('SELECT 1 FROM storage_purges')).toBe(0);
+  });
+
+  it('a session already finished or expired (404/410) counts as cancelled', async () => {
+    const { fs, purge } = await deletedWithSession();
+    const fetchImpl = async () => ({ status: 404 });
+    expect(await runStoragePurge({ bucket: fakeBucket([]), firestore: fs, fetchImpl }, purge, log)).toBe(true);
+  });
+
+  it('a failed cancel keeps the purge queued, and deletes nothing yet', async () => {
+    const { fs, deletes, purge } = await deletedWithSession();
+    const bucket = fakeBucket(['recordings/ws-a/note-a.m4a']);
+    const fetchImpl = async () => ({ status: 503 });
+    expect(await runStoragePurge({ bucket, firestore: fs, fetchImpl }, purge, log)).toBe(false);
+    expect(bucket.present.size).toBe(1);
+    expect(deletes).toEqual([]);
+    expect(await listPendingStoragePurges()).toEqual([
+      expect.objectContaining({ noteId: 'note-a', attempts: 1, lastError: 'cancel resumable upload failed: HTTP 503' }),
+    ]);
   });
 });

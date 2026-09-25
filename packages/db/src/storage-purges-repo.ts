@@ -13,11 +13,12 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getPool } from './db';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
-const { purgeNoteObjects } = noteStorage as {
+const { purgeNoteObjects, cancelResumableUpload } = noteStorage as {
   purgeNoteObjects: (
     args: { bucket: unknown; workspaceId: string; noteId: string; includeScratch: boolean },
     log?: { info: (o: any, m?: string) => void },
   ) => Promise<string[]>;
+  cancelResumableUpload: (uri: string, fetchImpl?: unknown) => Promise<void>;
 };
 
 export interface StoragePurge {
@@ -29,12 +30,14 @@ export interface StoragePurge {
   /** Set when an account deletion queued it, so a retry can find it by uid. */
   uid: string | null;
   traceId: string | null;
+  /** The note's open GCS upload sessions when it was deleted: cancelled first (017). */
+  uploadSessionUris: string[];
   attempts: number;
   lastError: string | null;
   createdAt: Date;
 }
 
-const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, uid, trace_id, attempts, last_error, created_at`;
+const COLUMNS = `id, note_id, workspace_id, storage_path, include_scratch, uid, trace_id, upload_session_uris, attempts, last_error, created_at`;
 
 function toPurge(r: any): StoragePurge {
   return {
@@ -45,6 +48,7 @@ function toPurge(r: any): StoragePurge {
     includeScratch: r.include_scratch,
     uid: r.uid ?? null,
     traceId: r.trace_id,
+    uploadSessionUris: r.upload_session_uris ?? [],
     attempts: r.attempts,
     lastError: r.last_error,
     createdAt: new Date(r.created_at),
@@ -100,7 +104,7 @@ export async function listStoragePurgesForAccount(input: { uid: string; workspac
  * not surfaced to the user whose note is already gone.
  */
 export async function runStoragePurge(
-  { bucket, firestore }: { bucket: unknown; firestore: Firestore },
+  { bucket, firestore, fetchImpl }: { bucket: unknown; firestore: Firestore; fetchImpl?: unknown },
   purge: StoragePurge,
   log: { info: (o: any, m?: string) => void; error: (o: any, m?: string) => void },
 ): Promise<boolean> {
@@ -114,6 +118,9 @@ export async function runStoragePurge(
     purgeId: purge.id,
   };
   try {
+    // First, so no upload can land after the objects are gone. A session
+    // already finished, expired or cancelled counts as done (note-storage.cjs).
+    for (const uri of purge.uploadSessionUris) await cancelResumableUpload(uri, fetchImpl);
     // Idempotent: deleting a missing doc succeeds.
     await firestore.doc(`workspaces/${purge.workspaceId}/notes/${purge.noteId}`).delete();
     await purgeNoteObjects(

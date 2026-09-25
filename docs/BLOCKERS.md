@@ -470,9 +470,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
         retry isn't refused for 3 h. Still open: `chunking` and `summarizing` are mirrored with no matching
         Postgres status write.
-    - [ ] A client that still holds a GCS resumable-session URI can finish uploading after the delete. Its
-      server-side upload session is gone, so it can't be completed or processed, but the object lands. The
-      PR-15 sweeper should also remove objects of notes that don't exist.
+    - [x] **Fixed (note-delete-cancels-upload PR):** `deleteNote` records the note's open GCS upload-session
+      URIs on its purge row (migration 017, expand-only), and the purge cancels them *before* it deletes the
+      doc and objects. An upload that finished first is removed with the objects, a finished or expired
+      session counts as cancelled, and a failed cancel keeps the purge queued for the sweeper. Tested and
+      mutation-checked. Was: a client still holding a session URI could finish uploading after the delete.
     - [ ] The PR-15 sweeper drains `storage_purges` (retries with backoff), and the admin view / alert counts
       the rows that stay stuck.
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in
@@ -501,7 +503,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         your apply. See DECISIONS.
       - Alert on `delete_account_incomplete` and on `storage_purges.attempts >= N` (PR-16c). A permanently
         failing object blocks an account's deletion (fail closed), and must page someone.
-      - Single-note deletion should also cancel the note's open upload session (account deletion does).
+      - ~~Single-note deletion should also cancel the note's open upload session~~ **done
+        (note-delete-cancels-upload PR)**: see the item above.
       - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today
         an owned workspace goes with its owner, members' notes included.
       - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
