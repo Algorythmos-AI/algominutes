@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { resolveDispatchDeadline } = require('@algominutes/ai/cloud-tasks.cjs') as typeof import('../packages/ai/src/cloud-tasks.cjs');
-const { isFinalAttempt } = require('@algominutes/ai/note-terminal.cjs') as typeof import('../packages/ai/src/note-terminal.cjs');
+const { isFinalAttempt } = require('@algominutes/db/note-terminal.cjs') as typeof import('../packages/db/src/note-terminal.cjs');
 
 const savedDeadline = process.env.TASK_DISPATCH_DEADLINE_SECONDS;
 const savedAttempts = process.env.MAX_TASK_ATTEMPTS;

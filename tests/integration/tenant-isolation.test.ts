@@ -6,7 +6,7 @@ import {
 import { createRequire } from 'node:module';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } from './helpers';
 
-const { markNoteFailed } = createRequire(import.meta.url)('@algominutes/ai/note-terminal.cjs');
+const { markNoteFailed } = createRequire(import.meta.url)('@algominutes/db/note-terminal.cjs');
 
 // CLAUDE.md §1 Multi-tenancy: a user in workspace A must never read or write
 // workspace B's data. Two users, two workspaces, one note each.

@@ -10,7 +10,7 @@
 import { getFirestore } from 'firebase-admin/firestore';
 
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
-import noteEditModule from '@algominutes/ai/note-edit.cjs';
+import noteEditModule from '@algominutes/db/note-edit.cjs';
 import { applyNoteEdit } from '@algominutes/db/notes-repo';
 
 const { isValidId } = intelligenceModule;

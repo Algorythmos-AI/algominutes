@@ -6,7 +6,7 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } fro
 // The db-job sweeper (JOB_NAME=sweep), on real Postgres with Firebase faked.
 const require = createRequire(import.meta.url);
 const sweep = require('../../services/db-job/src/handlers/sweep.js');
-const noteTerminal = require('@algominutes/ai/note-terminal.cjs');
+const noteTerminal = require('@algominutes/db/note-terminal.cjs');
 const { getPool, deleteAccountData } = repo;
 
 const HOUR = 60 * 60 * 1000;

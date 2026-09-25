@@ -23,7 +23,7 @@ const { ownedStoragePath } = noteStorage as {
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
 // Ported from the original app: note-edit.cjs now lives in @algominutes/ai.
-import noteEditShared from '@algominutes/ai/note-edit.cjs';
+import noteEditShared from '@algominutes/db/note-edit.cjs';
 const { writeNoteEditWithinTx } = noteEditShared as {
   writeNoteEditWithinTx: (
     client: import('pg').PoolClient,

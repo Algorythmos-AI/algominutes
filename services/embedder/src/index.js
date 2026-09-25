@@ -24,7 +24,8 @@ requireEnv(
   },
   { logger: sharedLogger.logger },
 );
-const sharedEmbeddings = loadShared('embeddings.cjs');
+// The transcript read and the embeddings write live in the repo layer.
+const embeddingsRepo = require('@algominutes/db/embeddings-repo.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const terminalHooks = require('./terminal-hooks');
 
@@ -51,7 +52,7 @@ app.post('/', async (req, res) => {
   if (!noteId || !workspaceId) return res.status(400).json({ error: 'missing noteId/workspaceId' });
 
   try {
-    const transcript = await sharedEmbeddings.loadTranscriptForEmbedding(pool(), { noteId, workspaceId });
+    const transcript = await embeddingsRepo.loadTranscriptForEmbedding(pool(), { noteId, workspaceId });
     if (transcript === null) {
       // Deleted (or not in this workspace): nothing to index, nothing to retry.
       log.warn({}, 'embedder_note_gone');
@@ -59,7 +60,7 @@ app.post('/', async (req, res) => {
     }
 
     // Vertex AI embeddings: ADC from the bound service account; no API key.
-    const result = await sharedEmbeddings.indexEmbeddings({
+    const result = await embeddingsRepo.indexEmbeddings({
       pool: pool(),
       noteId,
       workspaceId,

@@ -11,7 +11,7 @@
 // revokeShareWithinTx), exactly as the source used it.
 
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
-import shareLinksModule from '@algominutes/ai/share-links.cjs';
+import shareLinksModule from '@algominutes/db/share-links.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 
 const { isValidId } = intelligenceModule;
