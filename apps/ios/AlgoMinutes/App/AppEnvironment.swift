@@ -35,9 +35,10 @@ final class AppEnvironment {
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
 
-    /// Shown on a note that couldn't process because the user is out of quota
-    /// (A9.4). The paywall carries the actual upgrade path.
-    static let quotaMessage = "You've used up your included minutes. Upgrade to Pro to keep processing."
+    /// The api answered 426: this build is below its minimum. RootView covers
+    /// the app with the update screen; nothing else works until the update.
+    private(set) var updateRequired = false
+    private var updateRequiredObserver: NSObjectProtocol?
 
     /// Guards against a double-fired retry for the same note.
     private var retryInFlight = Set<String>()
@@ -60,6 +61,14 @@ final class AppEnvironment {
         self.transcripts = TranscriptRepository(api: api)
         self.billing = BillingService(api: api)
         self.backgroundUploads = BackgroundUploadService(store: store, api: api)
+        notes.onQuotaExceeded = { [weak billing = self.billing] entitlement in
+            billing?.onQuotaExceeded(entitlement: entitlement)
+        }
+        updateRequiredObserver = NotificationCenter.default.addObserver(
+            forName: .algoMinutesUpdateRequired, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateRequired = true }
+        }
         startNetworkWatch()
     }
 
@@ -329,19 +338,32 @@ final class AppEnvironment {
                 mimeType: mimeType,
                 durationSec: durationSeconds.map { Double($0) }
             ))
-        } catch APIError.quotaExceeded {
-            // A9.4: out of included minutes. Present the paywall rather than a
-            // dead-end error; the recording is safe and can process once Pro.
-            AppLog.info("process_kickoff_quota_exceeded noteId=\(noteId)")
-            notes.markNoteError(id: noteId, message: Self.quotaMessage)
-            billing.onQuotaExceeded()
         } catch {
-            AppLog.error("process_kickoff_failed: \(error.localizedDescription)")
-            let message = type == .importAudio
-                ? "Could not queue your file. Please try again."
-                : "Could not start processing. Please try again."
-            notes.markNoteError(id: noteId, message: message)
+            // Out of minutes opens the paywall (the recording is safe and can
+            // process once Pro); a refusal the server recorded is left as is.
+            handleKickoffFailure(
+                error, noteId: noteId, event: "process_kickoff_failed",
+                fallback: type == .importAudio
+                    ? "Could not queue your file. Please try again."
+                    : "Could not start processing. Please try again."
+            )
         }
+    }
+
+    /// A refused kickoff (KickoffFailure): the paywall for a spent quota, the
+    /// note marked unless the server already did, and the message returned
+    /// for the caller to show.
+    @discardableResult
+    private func handleKickoffFailure(_ error: Error, noteId: String, event: String, fallback: String) -> String {
+        let failure = KickoffFailure(error, fallback: fallback)
+        if case .quota(let entitlement) = failure {
+            AppLog.info("\(event) quota_exceeded noteId=\(noteId)")
+            billing.onQuotaExceeded(entitlement: entitlement)
+        } else {
+            AppLog.error("\(event) noteId=\(noteId): \(error.localizedDescription)")
+        }
+        if let noteError = failure.noteError { notes.markNoteError(id: noteId, message: noteError) }
+        return failure.message
     }
 
     // MARK: - Retry / recovery (durable re-upload from disk)
@@ -466,15 +488,11 @@ final class AppEnvironment {
                 durationSec: pending.durationSeconds.map { Double($0) }
             ))
             return .queued
-        } catch APIError.quotaExceeded {
-            AppLog.info("reupload_kickoff_quota_exceeded noteId=\(noteId)")
-            notes.markNoteError(id: noteId, message: Self.quotaMessage)
-            billing.onQuotaExceeded()
-            return .blocked(message: Self.quotaMessage)
         } catch {
-            AppLog.error("reupload_process_kickoff_failed: \(error.localizedDescription)")
-            notes.markNoteError(id: noteId, message: "Could not start processing. Please try again.")
-            return .blocked(message: "Could not start processing. Please try again.")
+            return .blocked(message: handleKickoffFailure(
+                error, noteId: noteId, event: "reupload_process_kickoff_failed",
+                fallback: "Could not start processing. Please try again."
+            ))
         }
     }
 

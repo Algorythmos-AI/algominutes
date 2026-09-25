@@ -41,13 +41,18 @@ settings:
     Debug:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+      UPDATE_URL: itms-beta://
     Staging:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+      UPDATE_URL: itms-beta://
     Release:
       # TODO(prod): the production origins once prod is applied (BLOCKERS: domain).
       API_BASE_URL: https://api.algominutes.com
       BILLING_BASE_URL: https://api.algominutes.com
+      # The update screen's button (426). TestFlight until the App Store
+      # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
+      UPDATE_URL: itms-beta://
 
 targets:
   AlgoMinutes:
