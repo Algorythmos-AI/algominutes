@@ -19,7 +19,6 @@ final class NotesRepository {
     private var wsId: String?
 
     /// Once-per-session guards (parity with the web refs).
-    private var stuckCheckRan = Set<String>()
     private var retitleAttempted = Set<String>()
     private var retryInFlight = Set<String>()
     /// The last snapshot, and the notes a delete is in flight for: hidden at
@@ -69,7 +68,7 @@ final class NotesRepository {
         notes = []
         uid = nil
         wsId = nil
-        stuckCheckRan.removeAll()
+        slowNoteIds.removeAll()
         retitleAttempted.removeAll()
         retryInFlight.removeAll()
         snapshotNotes = []
@@ -253,10 +252,6 @@ final class NotesRepository {
         retryInFlight.insert(note.id)
         defer { retryInFlight.remove(note.id) }
 
-        // Re-arm the watchdog: this note is moving back in-progress and must be
-        // eligible to be flipped again if it gets stuck a second time.
-        resetStuckGuard(noteId: note.id)
-
         updateNote(id: note.id, fields: [
             "status": NoteStatus.queued.rawValue,
             "errorMessage": NSNull(),
@@ -275,7 +270,15 @@ final class NotesRepository {
         }
     }
 
-    // MARK: - Stuck-note watchdog (parity with App.tsx)
+    // MARK: - Slow-note watchdog
+
+    /// Notes past their StuckBudgets budget. Local only: the app shows "taking
+    /// longer than usual" and changes nothing. It used to flip such a note to
+    /// `error` in Firestore alone, 90 s into `queued`, while Postgres still had
+    /// it in flight: the server refuses a re-queue for 3 h and fails a stuck
+    /// note itself at 3.5 h (the db-job sweep, Postgres first), so a retry got
+    /// "already in flight" and the note flipped again 90 s later.
+    private(set) var slowNoteIds = Set<String>()
 
     private func startWatchdog() {
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: StuckBudgets.checkInterval, repeats: true) { [weak self] _ in
@@ -286,51 +289,11 @@ final class NotesRepository {
     }
 
     func runWatchdogPass(now: Date = Date()) {
-        for note in notes where StuckBudgets.isStuck(note: note, now: now) {
-            guard !stuckCheckRan.contains(note.id) else { continue }
-            stuckCheckRan.insert(note.id)
-            flipStuckToError(note: note)
-        }
+        slowNoteIds = Self.slowNoteIds(in: notes, now: now)
     }
 
-    /// Re-arms the once-per-session stuck guard for a note that is being
-    /// retried. Without this, a note the watchdog already flipped to error once
-    /// stays in `stuckCheckRan` forever, so if the retry gets stuck again the
-    /// watchdog can never flip it back — the note spins indefinitely.
-    func resetStuckGuard(noteId: String) {
-        stuckCheckRan.remove(noteId)
-    }
-
-    /// Transaction: only flip when the status is unchanged server-side.
-    private func flipStuckToError(note: Note) {
-        guard let collection = notesCollection() else { return }
-        let ref = collection.document(note.id)
-        let expectedStatus = note.status.rawValue
-        db.runTransaction({ transaction, errorPointer -> Any? in
-            let snapshot: DocumentSnapshot
-            do {
-                snapshot = try transaction.getDocument(ref)
-            } catch let error as NSError {
-                errorPointer?.pointee = error
-                return nil
-            }
-            guard let status = snapshot.data()?["status"] as? String, status == expectedStatus else {
-                return nil // backend already progressed — bail
-            }
-            transaction.updateData([
-                "status": NoteStatus.error.rawValue,
-                "errorMessage": "Processing took too long. Please try again.",
-                "diagnosticCode": "CLIENT_TIMEOUT",
-                "updatedAt": Note.isoNow(),
-            ], forDocument: ref)
-            return nil
-        }) { _, error in
-            if let error {
-                AppLog.error("watchdog_flip_failed: \(error.localizedDescription)")
-            } else {
-                AppLog.info("watchdog_flipped_stuck_to_error noteId=\(note.id)")
-            }
-        }
+    nonisolated static func slowNoteIds(in notes: [Note], now: Date) -> Set<String> {
+        Set(notes.filter { StuckBudgets.isStuck(note: $0, now: now) }.map(\.id))
     }
 
     // MARK: - Auto-retitle (parity with App.tsx)

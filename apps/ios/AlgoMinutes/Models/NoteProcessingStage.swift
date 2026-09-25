@@ -42,6 +42,7 @@ struct NoteProcessingStage: Equatable, Sendable {
     /// purpose: it is true at every stage, and varying it would imply the
     /// guarantee changes.
     static let backgroundNotice = "Runs in the background. Safe to leave."
+    static let slowNotice = "Taking longer than usual. It's still running, and you'll get a notification when it's ready."
 
     /// - Parameters:
     ///   - status: the note's pipeline status.

@@ -49,10 +49,10 @@ final class TitleDeriverTests: XCTestCase {
 // MARK: - StuckBudgets (parity with the App.tsx watchdog)
 
 final class StuckBudgetsTests: XCTestCase {
-    private func note(status: NoteStatus, ageSeconds: Double, duration: Double? = nil) -> Note {
+    private func note(id: String = "n1", status: NoteStatus, ageSeconds: Double, duration: Double? = nil) -> Note {
         let reference = Date().addingTimeInterval(-ageSeconds)
         var note = Note(
-            id: "n1", title: "t", workspaceId: "ws", authorId: "u",
+            id: id, title: "t", workspaceId: "ws", authorId: "u",
             status: status, type: .recording, sourceUrl: nil, duration: duration,
             wordCount: nil, createdAt: Note.isoNow(), updatedAt: Note.isoNow(reference),
             lastProgressAt: nil, summary: nil, transcript: nil, transcriptTruncated: nil,
@@ -93,6 +93,15 @@ final class StuckBudgetsTests: XCTestCase {
         XCTAssertFalse(StuckBudgets.isStuck(note: note(status: .ready, ageSeconds: 10_000)))
         XCTAssertFalse(StuckBudgets.isStuck(note: note(status: .transcribing, ageSeconds: 600, duration: 3600)))
         XCTAssertTrue(StuckBudgets.isStuck(note: note(status: .transcribing, ageSeconds: 600, duration: 60)))
+    }
+
+    /// The watchdog only reports slow notes; a note that moves on drops out.
+    func testSlowNotesAreReportedNotFailed() {
+        let slow = note(id: "slow", status: .queued, ageSeconds: 120)
+        let fresh = note(id: "fresh", status: .queued, ageSeconds: 30)
+        let done = note(id: "done", status: .ready, ageSeconds: 10_000)
+        XCTAssertEqual(NotesRepository.slowNoteIds(in: [slow, fresh, done], now: Date()), ["slow"])
+        XCTAssertEqual(NotesRepository.slowNoteIds(in: [], now: Date()), [])
     }
 }
 
