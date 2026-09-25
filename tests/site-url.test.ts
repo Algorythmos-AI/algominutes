@@ -23,7 +23,8 @@ describe('publicSiteUrl', () => {
     for (const f of ['checkout', 'portal']) {
       const src = fs.readFileSync(`services/billing/src/routes/${f}.js`, 'utf8');
       expect(src).toMatch(/publicSiteUrl\(\)\}\/billing/);
-      expect(src).not.toMatch(/algominutes\.com/);
+      // A substring check: the old, unregistered domain is gone from the source.
+      expect(src.includes('algominutes.com')).toBe(false);
     }
   });
 });
