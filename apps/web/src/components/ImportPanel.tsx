@@ -7,6 +7,7 @@ import { db, storage } from '../firebase';
 import { authedFetch } from '../lib/authedFetch';
 import { markNoteError } from '../lib/noteStatus';
 import type { Note } from '../types';
+import { readErrorText } from '../lib/http';
 
 const SOFT_WARN_BYTES = 100 * 1024 * 1024;
 const HARD_LIMIT_BYTES = 500 * 1024 * 1024;
@@ -146,7 +147,7 @@ export default function ImportPanel({ user, onCreated, onCancel }: ImportPanelPr
             mimeType: file.type || 'audio/mpeg',
           });
           if (!resp.ok) {
-            const txt = await resp.text().catch(() => '');
+            const txt = await readErrorText(resp);
             console.error('process-audio kickoff failed', resp.status, txt);
             await markKickoffError('Could not queue your file. Please try again.');
           }

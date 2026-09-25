@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { authedFetch } from '../lib/authedFetch';
 import { markNoteError } from '../lib/noteStatus';
 import type { Note } from '../types';
+import { readErrorText } from '../lib/http';
 
 const ALLOWED_HOSTS = new Set([
   'youtube.com',
@@ -25,6 +26,7 @@ function isYoutubeUrl(raw: string): boolean {
     const u = new URL(raw);
     return ALLOWED_HOSTS.has(u.host);
   } catch (_err) {
+    // silent-catch-ok: a string that isn't a URL isn't a YouTube URL
     return false;
   }
 }
@@ -75,7 +77,7 @@ export default function YouTubeImport({ user, onCreated }: YouTubeImportProps) {
         sourceUrl,
       });
       if (!resp.ok) {
-        const txt = await resp.text().catch(() => '');
+        const txt = await readErrorText(resp);
         console.error('youtube kickoff failed', resp.status, txt);
         const msg = 'Could not queue this URL. Please try again.';
         setError(msg);
