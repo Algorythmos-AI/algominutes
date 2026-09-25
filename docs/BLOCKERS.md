@@ -573,14 +573,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         Tested (upload, kickoff, account deletion, sweep); four mutations checked. Was: a session for a
         note whose purge already *finished* (no purge row left) was allowed, and its object stayed in the
         bucket.
-        - [ ] **iOS, queued (found by the audit of that PR):** `recoverRecording` / `resumePendingUploads`
-          re-upload a saved recording into its original note id without checking the note still exists,
-          and deleting a note doesn't remove its saved recording. The server now refuses that id for 30
-          days (was: until the purge finished), so the app retries into a 404 on every foreground. With
-          `backgroundResumableUpload` off it's worse and pre-existing: the file uploads, the local copy is
-          removed, then the kickoff 404s and the recording is lost. Fix in the client: a note that's gone
-          gets a fresh note id (the comment in `AppEnvironment` already says so), and deleting a note
-          removes its saved recording.
+        - [x] **Fixed (ios-deleted-note-recording PR), found by the audit of that PR:** `recoverRecording` /
+          `resumePendingUploads` re-uploaded a saved recording into its original note id without checking
+          the note still existed, and deleting a note didn't remove its saved recording. The server refuses
+          that id for 30 days, so the app retried into a 404 on every foreground.
+          - Deleting a note in the app (`AppEnvironment.deleteNote`, all three delete buttons) now removes
+            its waiting recording once the server has confirmed the delete.
+          - A note deleted elsewhere makes `POST /v1/uploads` answer 404, now `UploadError.noteGone`. The
+            recording is then kept as a new note: `associate()` replaces the sidecar, and the old session
+            with it.
+          - A first upload whose note was deleted mid-way is left alone, with no error mark or alert.
+          - Tested (XCTest): the 404 mapping, removal per note, and the re-association forgetting the old
+            session. The whole app type-checks against the Firebase stubs. The `AppEnvironment` flows
+            themselves need Firebase, so they are checked on device (M1).
     - [x] The sweeper drains `storage_purges` (#71; capped at 10 attempts), and a stuck row is logged every run
       and alerts (`storage_purge_stuck`, #90).
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in

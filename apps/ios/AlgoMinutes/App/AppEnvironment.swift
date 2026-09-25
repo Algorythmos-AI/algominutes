@@ -215,6 +215,17 @@ final class AppEnvironment {
         auth.signOut()
     }
 
+    /// Deletes a note (NotesRepository.deleteNote, through the api), then any
+    /// recording still waiting on this device for it: the user deleted the note,
+    /// so its audio goes too, and nothing retries it into an id the server now
+    /// refuses. Only once the server has confirmed; a refused delete keeps both.
+    func deleteNote(id: String) async throws {
+        try await notes.deleteNote(id: id)
+        if recordingStore.removeRecording(forNoteId: id) {
+            AppLog.info("deleted_note_recording_removed noteId=\(id)")
+        }
+    }
+
     /// Resume any recording whose upload never confirmed — a Firebase Storage
     /// `putFile` cannot run in a background `URLSession`, so an upload that is
     /// interrupted by backgrounding/termination dies. The bytes still live on
@@ -307,6 +318,12 @@ final class AppEnvironment {
                     self?.uploadProgress[noteId] = percent
                 }
             )
+        } catch UploadError.noteGone {
+            // Deleted while its first upload ran. Deleting it here removed the
+            // recording too; deleted elsewhere, the next resume keeps it as a new
+            // note (reupload). Nothing to mark: the note is gone.
+            AppLog.info("upload_note_gone noteId=\(noteId)")
+            return
         } catch {
             // Keep the local recording — it is associated with `noteId` and the
             // user can retry, which re-uploads from disk.
@@ -468,6 +485,21 @@ final class AppEnvironment {
                 pending: pending,
                 onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
             )
+        } catch UploadError.noteGone {
+            // The note was deleted elsewhere (another device, the web) while its
+            // recording waited here. The server refuses its id for 30 days, so a
+            // retry would 404 on every foreground: keep the recording as a new
+            // note instead (associate() replaces the sidecar, old session and all).
+            AppLog.info("reupload_note_gone noteId=\(noteId)")
+            await uploadAndProcess(
+                fileURL: fileURL,
+                mimeType: pending.mimeType,
+                ext: pending.ext,
+                type: type,
+                kind: .recording,
+                durationSeconds: pending.durationSeconds
+            )
+            return .queued
         } catch {
             let message = (error as? UploadError)?.errorDescription ?? UploadError.failed.errorDescription!
             recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
