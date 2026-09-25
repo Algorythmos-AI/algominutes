@@ -27,6 +27,8 @@ final class AppEnvironment {
     let backgroundUploads: BackgroundUploadService
     /// Captures of another app's audio, finished by the broadcast extension.
     let broadcast: BroadcastHandoff
+    /// Server-side feature switches, e.g. broadcast capture's kill switch.
+    let switches = AppSwitches()
 
     /// Upload progress (0-100) for the note currently uploading, keyed by id.
     var uploadProgress: [String: Int] = [:]
@@ -163,6 +165,12 @@ final class AppEnvironment {
         Task { await billing.bootstrap() }
         // A10 #3: capture Terms + Privacy acceptance at account creation.
         Task { await recordTermsAcceptanceIfNeeded() }
+        Task { await refreshSwitches() }
+    }
+
+    /// Re-read the server-side switches (launch, sign-in, foreground).
+    func refreshSwitches() async {
+        await switches.refresh { [api] in try await api.fetchAppConfig() }
     }
 
     /// A10 #3: record timestamped Terms + Privacy acceptance for a permanent

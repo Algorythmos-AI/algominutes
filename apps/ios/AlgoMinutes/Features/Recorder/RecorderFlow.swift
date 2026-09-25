@@ -69,14 +69,18 @@ struct RecorderConsentFlow: View {
                     .disabled(!permissionChecked)
                     .opacity(permissionChecked ? 1 : 0.5)
                     // The same consent covers capturing another app's audio.
-                    Button("Capture audio from another app") {
-                        consentShownBefore = true
-                        env.consentGate.acknowledge()
-                        withAnimation(.spring(duration: 0.3)) { step = .broadcast }
+                    // Shown only while the server allows it (AppSwitches: the
+                    // broadcast kill switch).
+                    if env.switches.broadcastCapture {
+                        Button("Capture audio from another app") {
+                            consentShownBefore = true
+                            env.consentGate.acknowledge()
+                            withAnimation(.spring(duration: 0.3)) { step = .broadcast }
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(!permissionChecked)
+                        .opacity(permissionChecked ? 1 : 0.5)
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(!permissionChecked)
-                    .opacity(permissionChecked ? 1 : 0.5)
                     Button("Cancel") { dismiss() }
                         .buttonStyle(SecondaryButtonStyle())
                 }
