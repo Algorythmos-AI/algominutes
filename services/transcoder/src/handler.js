@@ -534,34 +534,51 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     await db.insertTranscriptLines(c4, { noteId, chunkId, lines, log });
   } finally { c4.release(); }
 
-  // Atomic completion gate.
+  // Atomic completion gate, one transaction (pipeline-repo completeChunkGate).
+  // Postgres holds 'summarizing' before the mirror shows it (below).
   const c5 = await db.pool().connect();
-  let allDone = false;
-  let summarizerClaimed = false;
-  let embedderClaimed = false;
+  let allDone;
+  let summarizerClaimed;
+  let embedderClaimed;
   try {
-    allDone = await db.markChunkDone(c5, { chunkId, noteId });
-    if (allDone) {
-      summarizerClaimed = await db.claimSummarizerEnqueue(c5, noteId);
-      embedderClaimed = await db.claimEmbedderEnqueue(c5, noteId);
-      // Postgres holds 'summarizing' before the mirror shows it (below).
-      if (summarizerClaimed) await db.upsertNoteStatus(c5, { noteId, workspaceId, status: 'summarizing' });
-    }
+    ({ allDone, summarizerClaimed, embedderClaimed } = await db.completeChunkGate(c5, { chunkId, noteId, workspaceId, log }));
   } finally { c5.release(); }
 
-  // Mirror progress.
-  const c6 = await db.pool().connect();
-  try {
-    const progress = await db.chunkProgress(c6, { noteId, workspaceId });
+  // Past the commit above, a failed mirror is logged, not thrown: a retry of
+  // this poll finds the chunk done and returns, so a throw here skipped the
+  // enqueues below with their claims spent, and the note waited 3.5 h for the
+  // sweep to fail it. The mirror still goes first, so a quick summarizer's
+  // 'ready' can't be overwritten by a late 'summarizing'. A doc that's gone
+  // still throws, for handle() to judge.
+  const mirrorAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      if (isNoteGone(err)) throw err;
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_mirror_failed');
+    }
+  };
+  await mirrorAfterCommit('progress', async () => {
+    const c6 = await db.pool().connect();
+    let progress;
+    try { progress = await db.chunkProgress(c6, { noteId, workspaceId }); } finally { c6.release(); }
     if (progress) await mirror.mirrorProgress({ workspaceId, noteId, done: progress.done || 0, total: progress.total || 0 });
-  } finally { c6.release(); }
+  });
 
+  // Both enqueues run whatever the other does: their claims are spent, and a
+  // retry returns early, so a throw from the first used to drop the second too.
+  // The first failure is rethrown once both have been tried.
+  let enqueueErr = null;
+  const enqueueAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_enqueue_failed');
+      enqueueErr = enqueueErr || err;
+    }
+  };
   if (allDone && summarizerClaimed) {
-    await mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' });
-    await tasks.enqueueSummarizer({ noteId, workspaceId });
+    await mirrorAfterCommit('summarizing', () => mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' }));
+    await enqueueAfterCommit('summarizer', () => tasks.enqueueSummarizer({ noteId, workspaceId }));
   }
   if (allDone && embedderClaimed) {
-    await tasks.enqueueEmbedder({ noteId, workspaceId });
+    await enqueueAfterCommit('embedder', () => tasks.enqueueEmbedder({ noteId, workspaceId }));
   }
 
   // Every chunk is transcribed, so the intermediate FLAC files have served
@@ -580,6 +597,7 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
   if (allDone) {
     await storage.deletePrefix(`transcoder/${noteId}/`, log);
   }
+  if (enqueueErr) throw enqueueErr;
 }
 
 // ── Whole-file provider path (AssemblyAI primary / Deepgram failover) ──────────
