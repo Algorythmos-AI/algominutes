@@ -39,7 +39,13 @@ struct NoteContextMenu: View {
         }
         if note.status == .error {
             Button {
-                Task { _ = await env.notes.retryProcessing(note: note) }
+                // Through env.retry, like the note screen: it re-uploads a
+                // recording still on disk, and a refusal is shown.
+                Task {
+                    if case .blocked(let message) = await env.retry(note: note) {
+                        env.alertMessage = message
+                    }
+                }
             } label: {
                 Label("Retry processing", systemImage: "arrow.clockwise")
             }

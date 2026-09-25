@@ -55,6 +55,8 @@
 	<string>$(API_BASE_URL)</string>
 	<key>AlgoMinutesBillingBaseURL</key>
 	<string>$(BILLING_BASE_URL)</string>
+	<key>AlgoMinutesUpdateURL</key>
+	<string>$(UPDATE_URL)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

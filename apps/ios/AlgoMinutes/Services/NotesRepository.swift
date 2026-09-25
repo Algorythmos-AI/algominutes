@@ -35,6 +35,9 @@ final class NotesRepository {
 
     static let maxRetryAttempts = 3
 
+    /// A retry refused for quota (402): AppEnvironment opens the paywall.
+    var onQuotaExceeded: (@MainActor (EntitlementResponse?) -> Void)?
+
     init(api: APIClient) {
         self.api = api
     }
@@ -264,9 +267,11 @@ final class NotesRepository {
             try await api.processAudio(request)
             return .queued
         } catch {
-            AppLog.error("retry_kickoff_failed: \(error.localizedDescription)")
-            markNoteError(id: note.id, message: "Could not queue this retry. Please try again.")
-            return .blocked(message: "Could not queue this retry. Please try again.")
+            let failure = KickoffFailure(error, fallback: "Could not queue this retry. Please try again.")
+            AppLog.error("retry_kickoff_failed noteId=\(note.id): \(error.localizedDescription)")
+            if let noteError = failure.noteError { markNoteError(id: note.id, message: noteError) }
+            if case .quota(let entitlement) = failure { onQuotaExceeded?(entitlement) }
+            return .blocked(message: failure.message)
         }
     }
 

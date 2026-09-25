@@ -831,8 +831,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       Needs the audio-url backend route (its own PR). Still to do: the server-side `totalBytes` cap on
       `/v1/uploads`, and background (app-suspended) transfer (the PUTs run on a background URLSession, but
       the loop that drives them doesn't survive suspension).
-    - [ ] **E, hardening:** the 202/404/413/429 kickoff answers, the 402's entitlement, and the client watchdog's
-      Firestore-only `error` flip (it drifts from Postgres).
+    - [x] **E1, the kickoff's answers (ios-kickoff-answers PR):** `KickoffFailure` maps each `/v1/process`
+      refusal to one action, at all three kickoff sites (the first upload, the re-upload, and the retry):
+      - a 402 opens the paywall with the entitlement from its body;
+      - 413 and 429 show the server's own message and leave the note alone (the server already marked it
+        failed, Postgres first);
+      - a 404, a network error or a 5xx marks the note.
+
+      A 202 (already in flight) is a success. Any endpoint's 426 now raises a full-screen "Update
+      AlgoMinutes" cover (its button opens TestFlight, `UPDATE_URL`). The Files list's "Retry" goes through
+      `env.retry` like the note screen, so it re-uploads a recording still on disk. Unit-tested (the
+      mapping, the 402 body, the 426 notification, the update URL).
+    - [ ] **E2, the client watchdog:** it flips a note to `error` in Firestore only after 90 s `queued`,
+      but the server refuses a re-queue for 3 h and fails a stuck note itself at 3.5 h (the sweep, Postgres
+      first). Make it local-only ("taking longer than usual") and leave failing to the server.
     - Recording cap: iOS `StoragePaths` says 50 MB (its comment and copy say 120 MB). `/v1/uploads` bypasses
       `storage.rules`, and `CreateUploadSessionRequest.totalBytes` has no maximum. The server must cap it (D).
   - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
