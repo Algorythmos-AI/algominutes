@@ -15,6 +15,7 @@ export * from './upload-sessions-repo.js';
 export * from './storage-purges-repo.js';
 export * from './account-repo.js';
 export * from './entitlement-grants-repo.js';
+export * from './mirror-repair.js';
 // Only the prune: the tombstone's write and check are correct only inside a
 // transaction holding the note lock, so the repo calls them itself.
 export { pruneDeletedNotes } from './deleted-notes-repo.js';
