@@ -56,7 +56,6 @@ async function failNote(db, { noteId, workspaceId, userMsg, log, event }) {
 
 export async function processIntelligenceRoute(req, res) {
   const baseLog = req.log;
-  const traceId = req.traceId;
 
   // Auth handled by the shared middleware; identity claims come from it.
   const callerUid = req.uid;
@@ -290,11 +289,10 @@ export async function processIntelligenceRoute(req, res) {
     return res.status(500).json({ error: userMsg });
   }
 
-  await db
-    .collection('analytics')
-    .add({ event: 'process_queued', noteId, noteType: type, workspaceId, traceId, jobId, timestamp: new Date().toISOString() })
-    .catch((err) => log.error({ err }, 'analytics_write_failed:queued'));
-
+  // The kickoff's record: this line carries traceId, userId, noteId,
+  // workspaceId, the note type (`source`) and the jobId, and a log-based
+  // metric counts it. (It used to be duplicated into a root Firestore
+  // `analytics` doc, which nothing read and account deletion had to sweep.)
   log.info({ jobId }, 'kickoff_enqueued');
   return res.json({ success: true, noteId, jobId, status: 'queued' });
 }
