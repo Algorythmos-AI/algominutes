@@ -61,14 +61,22 @@ describe('isNoteGone', () => {
 describe('transcoder kickoff for a deleted note', () => {
   // `exists`: what each successive noteExists call answers (the kickoff's
   // pre-check, then any re-check after a missing Firestore doc).
-  function deps({ exists = [true] as boolean[], upsertErr = null as Error | null, mirrorStatusErr = null as Error | null } = {}) {
+  // `upsertErr` fails the status write after the download (the default), or the
+  // kickoff's first one with `upsertErrOn: 'chunking'`. `order` records Postgres
+  // status writes and mirror writes together.
+  function deps({
+    exists = [true] as boolean[], upsertErr = null as Error | null, upsertErrOn = 'later' as 'later' | 'chunking',
+    mirrorStatusErr = null as Error | null,
+  } = {}) {
     const calls: string[] = [];
+    const order: string[] = [];
     const warns: Array<{ o: any; m: string }> = [];
     const errors: Array<{ o: any; m: string }> = [];
     const answers = [...exists];
     const client = { release: () => {}, query: async () => ({ rows: [], rowCount: 0 }) };
     return {
       calls,
+      order,
       warns,
       errors,
       deps: {
@@ -76,10 +84,17 @@ describe('transcoder kickoff for a deleted note', () => {
         db: {
           pool: () => ({ connect: async () => client }),
           noteExists: async () => (answers.length > 1 ? answers.shift() : answers[0]),
-          upsertNoteStatus: async () => { if (upsertErr) throw upsertErr; },
+          upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => {
+            order.push(`pg:${status}`);
+            if (upsertErr && (upsertErrOn === 'chunking') === (status === 'chunking')) throw upsertErr;
+          },
         },
         mirror: {
-          mirrorStatus: async () => { calls.push('mirrorStatus'); if (mirrorStatusErr) throw mirrorStatusErr; },
+          mirrorStatus: async ({ status }: { status: string }) => {
+            calls.push('mirrorStatus');
+            order.push(`mirror:${status}`);
+            if (mirrorStatusErr) throw mirrorStatusErr;
+          },
           mirrorError: async () => { calls.push('mirrorError'); },
           mirrorProgress: async () => { calls.push('mirrorProgress'); },
         },
@@ -101,6 +116,18 @@ describe('transcoder kickoff for a deleted note', () => {
     await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
     expect(d.calls).toEqual([]); // no phantom 'chunking' doc, nothing enqueued
     expect(d.warns).toContainEqual(expect.objectContaining({ m: 'transcoder_note_gone' }));
+  });
+
+  it("Postgres holds 'chunking' before the mirror shows it", async () => {
+    const d = deps();
+    await handler.handle(kickoff, d.deps);
+    expect(d.order.slice(0, 2)).toEqual(['pg:chunking', 'mirror:chunking']);
+  });
+
+  it("deleted between the check and the first status write: acknowledged, and nothing mirrored", async () => {
+    const d = deps({ upsertErr: Object.assign(new Error('note_missing_in_postgres:n1'), { code: 'NOTE_NOT_FOUND' }), upsertErrOn: 'chunking' });
+    await expect(handler.handle(kickoff, d.deps)).resolves.toBeUndefined();
+    expect(d.calls).toEqual([]);
   });
 
   it('deleted after the check (NOTE_NOT_FOUND on the status write): acknowledged, and no error mirror', async () => {
@@ -146,7 +173,7 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     const hooks: string[] = [];
     const deps = {
       log: { info: () => {}, error: () => {}, warn: () => {} },
-      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true },
+      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true, upsertNoteStatus: async () => {} },
       mirror: {
         mirrorStatus: async () => {},
         mirrorError: async () => { throw new Error('the Firestore-only error mirror must not be used here'); },
@@ -165,5 +192,54 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1']);
     expect(mirrored).toEqual([{ path: 'workspaces/w1/notes/n1', data: expect.objectContaining({ status: 'error', errorMessage: 'This video is private.' }) }]);
     expect(hooks).toEqual(['terminal']);
+  });
+});
+
+// The last chunk done: Postgres holds 'summarizing' before the mirror shows it
+// and the summarizer is enqueued (both engines share this tail).
+describe('transcoder: the completion gate', () => {
+  it("writes 'summarizing' to Postgres, then mirrors it, then enqueues the summarizer", async () => {
+    const order: string[] = [];
+    const client = { release: () => {}, query: async () => ({ rows: [{ done: 2, total: 2 }], rowCount: 1 }) };
+    const deps = {
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+      db: {
+        pool: () => ({ connect: async () => client }),
+        insertTranscriptLines: async () => {},
+        markChunkDone: async () => true,
+        claimSummarizerEnqueue: async () => true,
+        claimEmbedderEnqueue: async () => false,
+        upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+      },
+      mirror: {
+        mirrorProgress: async () => {},
+        mirrorStatus: async ({ status }: { status: string }) => void order.push(`mirror:${status}`),
+      },
+      tasks: { enqueueSummarizer: async () => void order.push('enqueue:summarizer'), enqueueEmbedder: async () => {} },
+      storage: { deletePrefix: async () => {} },
+    };
+    await handler.completeChunkAndAdvance({ noteId: 'n1', workspaceId: 'w1', chunkId: 7, lines: [], deps });
+    expect(order).toEqual(['pg:summarizing', 'mirror:summarizing', 'enqueue:summarizer']);
+  });
+
+  it("a replayed completion (the summarizer already claimed) writes no status and enqueues nothing", async () => {
+    const order: string[] = [];
+    const client = { release: () => {}, query: async () => ({ rows: [{ done: 2, total: 2 }], rowCount: 1 }) };
+    const deps = {
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+      db: {
+        pool: () => ({ connect: async () => client }),
+        insertTranscriptLines: async () => {},
+        markChunkDone: async () => true,
+        claimSummarizerEnqueue: async () => false,
+        claimEmbedderEnqueue: async () => false,
+        upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => void order.push(`pg:${status}`),
+      },
+      mirror: { mirrorProgress: async () => {}, mirrorStatus: async () => void order.push('mirror') },
+      tasks: { enqueueSummarizer: async () => void order.push('enqueue'), enqueueEmbedder: async () => {} },
+      storage: { deletePrefix: async () => {} },
+    };
+    await handler.completeChunkAndAdvance({ noteId: 'n1', workspaceId: 'w1', chunkId: 7, lines: [], deps });
+    expect(order).toEqual([]);
   });
 });
