@@ -1150,9 +1150,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   failure, timeout, success; integration: `search_ok`, the bound and the malformed id); two mutations checked.
   - [ ] Unverified: whether a Vertex error body (200 characters, carried on `err` by `embed_query_failed`
     and `chat_stream_failed`) can quote the input back.
-- [ ] `recordPaidWork` and `completeChunkGate` (`pipeline-repo.cjs`) call `log.error` in their catch without
-  checking a logger was passed. Every caller passes one today; a missing one would turn a logged failure
-  into a TypeError.
+- [x] ~~`recordPaidWork` and `completeChunkGate` (`pipeline-repo.cjs`) call `log.error` in their catch without
+  checking a logger was passed~~ **fixed (pipeline-repo-log-guard PR):** they, and `persistFastPathResult`'s
+  rollback catch, fall back to the shared structured logger. Unit-tested; one mutation checked.
 
 ## Found while adding the audio smoke (2026-09-25)
 
