@@ -19,10 +19,9 @@ import noteStorage from '@algominutes/ai/note-storage.cjs';
 const { ownedStoragePath } = noteStorage as {
   ownedStoragePath: (storagePath: string | null, workspaceId: string, noteId: string) => string | null;
 };
-// Shared, Postgres-only edit writer. Same module the deployed Cloud Function
-// (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
-// place. Imported as a default (CJS) — see server.ts for the same pattern.
-// Ported from the original app: note-edit.cjs now lives in @algominutes/ai.
+// Shared, Postgres-only edit writer (the api's update-note route uses it too),
+// so the edit SQL lives in one place. Imported as a default (CJS) — see
+// server.ts for the same pattern.
 import noteEditShared from '@algominutes/db/note-edit.cjs';
 const { writeNoteEditWithinTx } = noteEditShared as {
   writeNoteEditWithinTx: (
