@@ -30,6 +30,7 @@ const noteTerminal = loadShared('note-terminal.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
 const handler = require('./handler');
 const terminalHooks = require('./terminal-hooks');
+const { onLastAttempt } = require('./last-attempt');
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));
@@ -80,25 +81,9 @@ app.post('/', async (req, res) => {
     // the last one.
     const { noteId, workspaceId } = req.body || {};
     if (noteTerminal.isFinalAttempt(req.headers) && noteId && workspaceId) {
-      await handler.markNoteFailed({
-        noteId, workspaceId,
-        message: 'We could not write a summary for this recording.',
-        log,
-      });
-      // A7.4 tail: dead-letter the exhausted summarize job, refund the note's
-      // metered minutes, and notify the author of the failure. Best-effort —
-      // never masks the original error.
-      const attempts = Number((req.headers && req.headers['x-cloudtasks-taskretrycount']) || 0) + 1;
-      const b = req.body || {};
-      await terminalHooks.onSummarizeTerminalFailure({
-        pool: handler.pool(),
-        noteId,
-        workspaceId,
-        err,
-        attempts,
-        traceId,
-        payload: { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration },
-        log,
+      await onLastAttempt({
+        body: req.body, headers: req.headers, err, markNoteFailed: handler.markNoteFailed,
+        terminalHooks, pool: handler.pool, log, traceId,
       });
     }
     return res.status(500).json({ error: 'task_failed' });
