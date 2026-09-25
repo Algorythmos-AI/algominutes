@@ -447,6 +447,8 @@ export function buildRegistry(): OpenAPIRegistry {
       400: errorResponse('Invalid fields or storage path.'),
       401: errorResponse('Missing or invalid token.'),
       403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('The note was deleted (its purge is pending).'),
+      413: errorResponse('totalBytes is over the 500 MB limit (the kickoff enforces the same).'),
       502: errorResponse('Could not start the upload.'),
       503: errorResponse('Unavailable until Postgres is provisioned.'),
     },

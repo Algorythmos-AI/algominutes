@@ -65,6 +65,19 @@ describe('an upload session for a deleted note', () => {
     expect(await count(`SELECT 1 FROM upload_sessions`)).toBe(0);
   });
 
+  it('a file over the 500 MB cap is refused before any session is minted', async () => {
+    const out = { status: 0, body: undefined as any };
+    const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.status ||= 200; out.body = b; return this; } };
+    const noop = () => {};
+    const log = { info: noop, warn: noop, error: noop, child: () => log };
+    await createUploadSessionRoute({
+      uid: 'alice', log,
+      body: { noteId: 'n1', workspaceId: 'workspace_alice', fileName: 'a.m4a', contentType: 'audio/mp4', totalBytes: 500 * 1024 * 1024 + 1 },
+    }, res);
+    expect(out.status).toBe(413);
+    expect(await count(`SELECT 1 FROM upload_sessions`)).toBe(0);
+  });
+
   it('a live note still gets its session, and nothing is cancelled', async () => {
     expect((await upload('n1')).status).toBe(200);
     expect(cancels).toEqual([]);
