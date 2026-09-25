@@ -9,7 +9,7 @@ describe('POST /v1/client-error', () => {
   it('logs capped fields with line breaks flattened and control characters removed, and answers 204', () => {
     const logged: any[] = [];
     const req = {
-      body: { message: 'boom\r\nFAKE severity=INFO\u0007', stack: 'Error: x\n    at a (a.js:1)\n    at b (b.js:2)', url: 'u'.repeat(500), extra: 'ignored' },
+      body: { message: 'boom\r\nFAKE severity=INFO\u0007', stack: 'Error: x\n    at a (a.js:1)\n    at b (b.js:2)', url: 'u'.repeat(500), extra: 'ignored', kind: 42 },
       log: { error: (o: unknown, m: string) => logged.push({ o, m }) },
     };
     const out = { status: 0 };
@@ -22,6 +22,7 @@ describe('POST /v1/client-error', () => {
     expect(o.stack).toBe('Error: x |     at a (a.js:1) |     at b (b.js:2)');
     expect(o.url).toHaveLength(200);
     expect(o.extra).toBeUndefined();
+    expect(o.kind).toBeUndefined(); // non-strings are dropped, never logged raw
     for (const v of Object.values(o)) if (typeof v === 'string') expect(v).not.toMatch(/[\u0000-\u001f\u007f]/);
   });
 });
