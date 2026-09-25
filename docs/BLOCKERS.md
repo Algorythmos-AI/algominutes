@@ -1047,7 +1047,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
   - The embedder, chat and the summarizer's Gemini call aren't metered or gated. They are cents next to
     speech.
-  - Nothing deletes `usage_events` rows. Add a sweep step that keeps, say, 90 days.
+  - ~~Nothing deletes `usage_events` rows~~ **fixed (sweep-usage-events-retention PR):** the sweep's
+    `usage_events` step keeps 90 days (DATA-RETENTION).
   - **Billing (pre-existing, found by the same audit):**
     - Imports are debited 0 minutes against the user's quota, because the client sends no duration. Meter
       from the transcoder's probed duration.
