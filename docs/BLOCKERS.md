@@ -328,7 +328,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   October 2026. Move all 8 service images together, run the boot smoke plus a staging
   deploy, and update `engines`. Never move to an odd major: Dependabot proposed
   `node:25`, which is already EOL (#20, declined).
-- [ ] **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6
+- [x] **Done (web-vite-8 PR):** vite 8.3, `@vitejs/plugin-react` 6.1 and `@tailwindcss/vite` 4.3. The build
+  passes (and the `web-build` CI job keeps it so). `vite.config.ts` uses `import.meta.dirname`, ready for
+  vite's native config loader. Was: **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6
   requires vite ^8). Do it in one apps/web PR, together with the tesseract-asset build
   fix above and a web-build CI job, so the result is actually verified.
 - [x] **Resolved by removal (retire-process-audio PR):** the synchronous `/v1/process-audio` route and

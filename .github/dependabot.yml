@@ -23,8 +23,9 @@ updates:
       # all 7 services. It is a planned migration (BLOCKERS), not a weekly bump.
       - dependency-name: express
         update-types: ['version-update:semver-major']
-      # apps/web toolchain: @vitejs/plugin-react 6 requires vite 8 (we are on 6).
-      # Vite majors move together as one planned web-toolchain migration.
+      # apps/web toolchain (on vite 8 + plugin-react 6 since 2026-09-25): vite,
+      # its React plugin and Tailwind's plugin move majors together, as one planned
+      # migration verified by the web-build CI job.
       - dependency-name: vite
         update-types: ['version-update:semver-major']
       - dependency-name: '@vitejs/*'
