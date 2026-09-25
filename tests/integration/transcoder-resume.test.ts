@@ -21,7 +21,6 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
   const enqueued: Array<{ payload: any; delay: number; taskId?: string }> = [];
   const terminal: any[] = [];
   const progress: any[] = [];
-  const remirrored: any[] = [];
   let op = 0;
   const d = {
     log, env: {}, traceId: 't-resume',
@@ -48,14 +47,13 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
     tasks: { enqueue: async (payload: any, delay: number, taskId?: string) => { enqueued.push({ payload, delay, taskId }); } },
     mirror: {
       mirrorStatus: async () => {}, mirrorProgress: async (p: any) => { progress.push(p); }, mirrorError: async () => {},
-      mirrorFinished: async (a: any) => { remirrored.push(a.state.status); },
       db: () => ({ doc: () => ({ update: async () => {} }) }),
     },
     fastPath: { run: async () => { throw new Error('fast path must not run for a long recording'); } },
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => { terminal.push(a); } },
   };
-  return { d, extracted, started, enqueued, terminal, progress, remirrored };
+  return { d, extracted, started, enqueued, terminal, progress };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', type: 'recording', storagePath: 'recordings/ws/n1.m4a' };
 const chunks = async () => (await pool.query(
@@ -103,8 +101,6 @@ describe('transcoder kickoff, replayed', () => {
     expect(replay.enqueued.some((e) => e.payload.chunkId === c0.id)).toBe(false);
   });
 
-  // It changes nothing in Postgres and starts nothing; a finished note's doc is
-  // brought in line with Postgres (kickoff-remirror.test.ts has the detail).
   it.each(['summarizing', 'ready', 'error'])('a replay after the note moved on (%s) changes nothing', async (s) => {
     await pool.query(`UPDATE notes SET status = $1 WHERE id = 'n1'`, [s]);
     const f = deps();
@@ -113,7 +109,6 @@ describe('transcoder kickoff, replayed', () => {
     expect(f.started).toEqual([]);
     expect(f.enqueued).toEqual([]);
     expect(await count(`SELECT 1 FROM audio_chunks`)).toBe(0);
-    expect(f.remirrored).toEqual(s === 'summarizing' ? [] : [s]);
   });
 
   // An attempt that stalled (past Cloud Tasks' dispatch deadline) wakes up after

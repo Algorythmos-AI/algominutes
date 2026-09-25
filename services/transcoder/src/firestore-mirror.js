@@ -57,23 +57,6 @@ async function mirrorReady({ workspaceId, noteId, summary, transcriptPreview }, 
   await updateNote(fsdb, { workspaceId, noteId }, patch);
 }
 
-/**
- * Brings a finished note's doc in line with Postgres (`state` from
- * pipeline-repo finishedNoteMirror): a kickoff replayed after the note
- * finished, whose first run committed Postgres and then failed to mirror.
- */
-async function mirrorFinished({ workspaceId, noteId, state }, fsdb = db()) {
-  if (state.status === 'ready') {
-    await mirrorReady({ workspaceId, noteId, summary: state.summary, transcriptPreview: state.transcriptPreview }, fsdb);
-    return;
-  }
-  await updateNote(fsdb, { workspaceId, noteId }, {
-    status: 'error',
-    errorMessage: state.errorMessage,
-    updatedAt: new Date().toISOString(),
-  });
-}
-
 async function mirrorProgress({ workspaceId, noteId, done, total }, fsdb = db()) {
   await updateNote(fsdb, { workspaceId, noteId }, {
     progress: { done, total },
@@ -83,4 +66,4 @@ async function mirrorProgress({ workspaceId, noteId, done, total }, fsdb = db())
 
 // `db` is exported so the terminal-failure helper can write the same Firestore
 // mirror without opening a second admin app.
-module.exports = { db, mirrorStatus, mirrorReady, mirrorFinished, mirrorProgress };
+module.exports = { db, mirrorStatus, mirrorReady, mirrorProgress };

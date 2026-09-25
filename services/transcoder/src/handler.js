@@ -116,20 +116,6 @@ async function handleKickoff(payload, deps) {
   if (status == null) throw new NoteGoneError('postgres');
   if (!KICKOFF_RESUMABLE.has(status)) {
     log.info({ noteId, workspaceId, status }, 'kickoff_replay_after_progress');
-    // A first run can commit a finished note to Postgres and then fail to
-    // mirror it (the fast path's mirrorReady), and this retry is the only
-    // thing that comes back to it: bring the doc in line with Postgres. A
-    // failed mirror throws, so the task retries.
-    if (status === 'ready' || status === 'error') {
-      const c = await db.pool().connect();
-      let state;
-      try { state = await db.finishedNoteMirror(c, { noteId, workspaceId }); }
-      finally { c.release(); }
-      if (state) {
-        await mirror.mirrorFinished({ workspaceId, noteId, state });
-        log.info({ noteId, workspaceId, status: state.status }, 'kickoff_replay_remirrored');
-      }
-    }
     return;
   }
 
@@ -401,8 +387,8 @@ async function handleSttPoll(payload, deps) {
     if (poll >= MAX_STT_POLLS) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
       // Terminal, and decided here rather than by a retry count — this loop
-      // re-enqueues, so Cloud Tasks never sees a final attempt. A Firestore-only
-      // error mirror used to leave Postgres at 'transcribing'.
+      // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
+      // alone left Postgres at 'transcribing' forever.
       //
       // The note before the chunk: if Postgres misses the note write this
       // throws and the task retries, and a chunk already marked 'error' would

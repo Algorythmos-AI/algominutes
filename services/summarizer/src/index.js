@@ -79,11 +79,13 @@ app.post('/', async (req, res) => {
     return res.status(200).json({ ok: true });
   } catch (err) {
     log.error({ err }, 'summarizer_task_failed');
-    // Cloud Tasks retries this, then drops it after the queue's max attempts.
-    // Mark the note failed on the LAST attempt only, so genuine transient
-    // failures still get their retries; the hooks below dead-letter, refund and
-    // notify. Without it the note would sit at 'summarizing' until the
-    // stuck-note sweep (db-job, 3.5 h).
+    // Cloud Tasks retries this and then DROPS the task — the queue is created
+    // with --max-attempts=5 and no dead-letter topic, so there is no sink and
+    // nothing to inspect afterwards. This terminal write is the only record.
+    // Without a terminal write the note sits at 'summarizing' forever: there
+    // is no server-side sweeper, and the client watchdog only ticks while the
+    // app is foregrounded. Mark it failed on the LAST attempt only, so genuine
+    // transient failures still get their retries.
     //
     // The 0-based X-CloudTasks-TaskRetryCount check lives in shared/ now, so
     // the transcoder and this service cannot disagree about which attempt is

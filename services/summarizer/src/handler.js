@@ -55,9 +55,12 @@ function fmtTime(ms) {
 /**
  * Move a note to a terminal 'error' state in both Postgres and Firestore.
  *
- * Every failure path used to return 500 until Cloud Tasks dropped the task,
- * leaving the note at 'summarizing'. The stuck-note sweep (db-job, 3.5 h) is
- * the backstop now; this is the first line.
+ * The summarizer had no equivalent of the transcoder's mirrorError, so every
+ * failure path returned 500 → Cloud Tasks retried → and then simply dropped
+ * the task (the queue has no dead-letter sink, despite what the comments used
+ * to claim), leaving the note at 'summarizing' indefinitely. There is no
+ * server-side sweeper, and the client watchdog only runs while the app is
+ * foregrounded, so a note stuck this way could stay stuck for days.
  *
  * Best-effort and never throws: it runs on the failure path, and a failure to
  * record the failure must not mask the original error. The one exception is

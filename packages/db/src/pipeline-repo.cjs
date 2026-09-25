@@ -296,69 +296,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
   }
 }
 
-function clock(ms) {
-  const total = Math.max(0, Math.floor((ms || 0) / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = String(total % 60).padStart(2, '0');
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${String(m).padStart(2, '0')}:${s}`;
-}
-
-/**
- * What the Firestore doc of a finished note should say, read from Postgres, or
- * null unless the note is 'ready' or 'error' (and live, in this workspace).
- *
- * For a kickoff replayed after its note finished: a first run can commit the
- * note to Postgres and then fail to mirror it (the fast path's mirrorReady),
- * and nothing else revisits a finished note, so the doc would stay at
- * 'chunking'. The preview is the first 200 lines plus one, so the mirror can
- * tell it was cut. The fast path stores a line as "Speaker: text" with no
- * speaker column; that label is split back out.
- */
-async function finishedNoteMirror(client, { noteId, workspaceId }) {
-  const { rows: [note] } = await client.query(
-    `SELECT status, error_message FROM notes
-      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
-    [noteId, workspaceId],
-  );
-  if (!note || (note.status !== 'ready' && note.status !== 'error')) return null;
-  if (note.status === 'error') return { status: 'error', errorMessage: note.error_message || null };
-
-  // Action items come from summaries.topics, which both writers fill with them
-  // in order: the rows share one transaction's created_at, so ordering the rows
-  // falls back to their random ids. Decisions have no ordered copy.
-  const [summary, items, decisions, lines] = await Promise.all([
-    client.query('SELECT gist, topics, chapters FROM summaries WHERE note_id = $1', [noteId]),
-    client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
-    client.query('SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
-    client.query(
-      `SELECT speaker_tag, speaker_name, start_ms, text FROM transcript_lines
-        WHERE note_id = $1 ORDER BY start_ms, id LIMIT 201`,
-      [noteId],
-    ),
-  ]);
-  const s = summary.rows[0] || {};
-  return {
-    status: 'ready',
-    summary: {
-      gist: s.gist || '',
-      actionItems: Array.isArray(s.topics) && s.topics.every((t) => typeof t === 'string')
-        ? s.topics : items.rows.map((r) => r.text),
-      keyDecisions: decisions.rows.map((r) => r.text),
-      chapters: Array.isArray(s.chapters) ? s.chapters : [],
-    },
-    transcriptPreview: lines.rows.map((l) => {
-      let speaker = l.speaker_name || (l.speaker_tag != null ? `Speaker ${l.speaker_tag}` : '');
-      let text = l.text || '';
-      const labelled = !speaker && /^([^:\n]{1,40}): ([\s\S]*)$/.exec(text);
-      if (labelled) [, speaker, text] = labelled;
-      return { speaker, text, time: clock(l.start_ms) };
-    }),
-  };
-}
-
 module.exports = {
-  finishedNoteMirror,
   noteExists,
   noteStatus,
   fetchPriorChunkEndMs,
