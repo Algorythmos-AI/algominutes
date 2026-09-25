@@ -32,6 +32,9 @@
 //                        and the rails' view honest).
 //   8. usage_events      paid-work records (the spend cap's input) older than
 //                        USAGE_EVENTS_DAYS are pruned; the cap reads 24 hours.
+//   9. mirror_repair     a note Postgres finished 10-40 minutes ago whose doc
+//                        disagrees (a mirror write lost after its commit) is
+//                        brought in line (packages/db mirror-repair.ts).
 
 'use strict';
 
@@ -47,6 +50,8 @@ const STUCK_NOTE_MS = IN_FLIGHT_STALE_MS + 30 * 60 * 1000; // after a client re-
 const ACCOUNT_DELETION_GRACE_MS = 15 * 60 * 1000; // the client's own retry goes first
 const TOMBSTONE_DAYS = 30;
 const USAGE_EVENTS_DAYS = 90;
+const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
+const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
 const LOCK_KEY = 'algominutes:sweep';
 
 function firebaseDeps(env) {
@@ -76,7 +81,7 @@ async function run({
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
     recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
-    expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents,
+    expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
@@ -191,6 +196,30 @@ async function run({
           .catch((err) => log.error({ err, ...fields }, 'sweep_refund_failed'));
       }
       return failed;
+    });
+
+    // A finished note whose doc missed its mirror write (packages/db
+    // mirror-repair.ts): checked twice while 10-40 minutes old, repaired only
+    // if Postgres says finished and the doc hasn't moved since it was read.
+    await step('mirror_repair', async () => {
+      const notes = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: 200 });
+      let repaired = 0;
+      let failedRepairs = 0;
+      for (const n of notes) {
+        const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
+        try {
+          const outcome = await repairNoteMirror(deps.firestore, n);
+          if (outcome === 'repaired') {
+            repaired += 1;
+            log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+          }
+        } catch (err) {
+          failedRepairs += 1;
+          log.error({ err, ...fields }, 'mirror_repair_failed');
+        }
+      }
+      if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
+      return repaired;
     });
 
     await step('upload_sessions', () => deleteExpiredUploadSessions(now));

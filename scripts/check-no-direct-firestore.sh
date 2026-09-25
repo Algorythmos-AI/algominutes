@@ -12,6 +12,7 @@
 # ALLOWLIST (legitimate repo + mirror writers), same as check-no-direct-firestore.mjs:
 #   - packages/db/src/notes-repo.ts             (the repo layer)
 #   - packages/db/src/note-terminal.cjs         (terminal-failure writer: PG first, then mirror)
+#   - packages/db/src/mirror-repair.ts          (the sweep's mirror repair: PG read, precondition write)
 #   - services/transcoder/src/firestore-mirror.js
 #
 # (services/api/src/routes/process-intelligence.js was allowlisted here as a
@@ -33,7 +34,7 @@ TARGETS=(
 PATTERNS=(
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/db/src/note-terminal\.cjs|services/transcoder/src/firestore-mirror\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/db/src/note-terminal\.cjs|packages/db/src/mirror-repair\.ts|services/transcoder/src/firestore-mirror\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do

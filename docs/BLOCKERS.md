@@ -894,15 +894,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
             searchable. The doc stays behind Postgres until the sweep step below exists. Tested on
             Postgres; two mutations checked.
           - [ ] **Queued (pre-existing, from those audits):**
-            - **A sweep step that re-mirrors recently finished notes.** Three cases leave the doc behind
-              Postgres for good today:
-              - the fast path's mirror failing after its commit (logged `fast_path_ready_mirror_failed`);
-              - the last attempt's `markNoteFailed` missing its Firestore write;
-              - any other lost mirror write.
-
-              The sweep only looks at notes Postgres has in flight. The step must read one consistent
-              snapshot, take the action items from the rows rather than `summaries.topics` (which a user
-              edit leaves stale), and skip a note that moved since the read.
+            - ~~**A sweep step that re-mirrors recently finished notes.**~~ **Done (sweep-mirror-repair PR):**
+              the sweep's `mirror_repair` step (`packages/db` `mirror-repair.ts`) checks notes Postgres finished
+              10-40 minutes ago. It reads the doc first, then Postgres in one snapshot, and writes only if
+              Postgres says finished, the doc disagrees, and the doc hasn't changed since its read (an
+              update-time precondition). A summary or transcript already on the doc is never rewritten; only
+              a missing one is filled. It covers the fast path's failed mirror after its commit, a last
+              attempt's lost `error` mirror, and any other lost mirror write. Tested on Postgres with a
+              precondition-honouring fake; three mutations checked.
             - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
               spent and the note is never embedded.
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
@@ -1067,6 +1066,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   to 4 attempts), and a refused request (other 4xx) fails at once. Unit-tested with a fake fetch and token;
   two mutations checked. The M1 check "minute-170 content found by search and chat" depends on this path
   indexing the whole transcript; nothing truncates it.
+
+## From the log-fields audit of 2026-09-25 (queued)
+
+- [ ] `services/api/src/routes/search-and-chat.cjs` logs the user's scrubbed search text (`query` on
+  `search_ok`, `queryHead` on the embed timeout and failure lines). Chat keeps meeting content out of logs even
+  scrubbed; the same argument applies to what users type into search. Log its length instead.
+- [ ] `recordPaidWork` and `completeChunkGate` (`pipeline-repo.cjs`) call `log.error` in their catch without
+  checking a logger was passed. Every caller passes one today; a missing one would turn a logged failure
+  into a TypeError.
 
 ## Found while adding the audio smoke (2026-09-25)
 
