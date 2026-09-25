@@ -45,7 +45,8 @@ export const auth = initializeAuth(app, {
   popupRedirectResolver: browserPopupRedirectResolver,
 });
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// The (default) database: the config never carried a database id, so this was always the default.
+export const db = getFirestore(app);
 export const storage = getStorage(app);
 
 // ── A6.3 guest identity ──────────────────────────────────────────────────────
