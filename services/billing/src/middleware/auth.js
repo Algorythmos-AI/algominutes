@@ -8,7 +8,7 @@
 // instead (see src/lib/*.js), which is the whole security posture of A9.5.
 
 import { getAuth } from 'firebase-admin/auth';
-import { isAccountDeleted, isPostgresEnabled } from '@algominutes/db';
+import { admitUser, isPostgresEnabled } from '@algominutes/db';
 
 function bearer(req) {
   return (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -31,17 +31,20 @@ export async function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  // A deleted account's token verifies for up to an hour after the deletion
-  // (account_deletions). Refuse it here too, as the api does.
+  // Admit the caller: a new user's row is created here from the token's
+  // claims, since their first requests (terms, push, analytics) all write rows
+  // keyed to it. A deleted account's token verifies for up to an hour after
+  // the deletion: refuse it everywhere, not only on the paths that could
+  // re-create it.
   if (isPostgresEnabled()) {
-    let deleted;
+    let state;
     try {
-      deleted = await isAccountDeleted(decoded.uid);
+      state = await admitUser({ uid: decoded.uid, email: decoded.email, name: decoded.name }, req.log);
     } catch (err) {
       req.log?.error?.({ err, userId: decoded.uid }, 'auth_account_check_failed');
       return res.status(503).json({ error: 'Service unavailable. Please try again.' });
     }
-    if (deleted) {
+    if (state === 'deleted') {
       req.log?.warn?.({ userId: decoded.uid }, 'auth_account_deleted');
       return res.status(401).json({ error: 'account_deleted' });
     }
