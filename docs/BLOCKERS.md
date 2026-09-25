@@ -862,6 +862,38 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           notice if it takes long) until the queue's last attempt marks both stores through
           `markNoteFailed`. `mirrorError`, which had no other caller, is gone. A mutation re-adding the
           mirror fails three tests.
+          - **From its dual-write audit, fixed in the same PR:** the fast path can commit `ready` to
+            Postgres and then fail to mirror it. Its retry found the note finished and acked, so the doc
+            stayed at `chunking`: an endless spinner with no Try again. Before, it showed a wrong `error`.
+            A first fix repaired the doc from Postgres on that replay; its re-audit showed the repair was
+            itself racy. It could restore action items the user had since edited, overwrite a
+            regenerated summary, and refund a ready note if the repair kept failing. So it was reverted.
+            Now the fast path logs a failed mirror after its commit (`fast_path_ready_mirror_failed`)
+            instead of throwing. Throwing bought nothing and skipped the embedder, so the note was never
+            searchable. The doc stays behind Postgres until the sweep step below exists. Tested on
+            Postgres; two mutations checked.
+          - [ ] **Queued (pre-existing, from those audits):**
+            - **A sweep step that re-mirrors recently finished notes.** Three cases leave the doc behind
+              Postgres for good today:
+              - the fast path's mirror failing after its commit (logged `fast_path_ready_mirror_failed`);
+              - the last attempt's `markNoteFailed` missing its Firestore write;
+              - any other lost mirror write.
+
+              The sweep only looks at notes Postgres has in flight. The step must read one consistent
+              snapshot, take the action items from the rows rather than `summaries.topics` (which a user
+              edit leaves stale), and skip a note that moved since the read.
+            - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
+              spent and the note is never embedded.
+            - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
+              transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
+              the summary from Firestore, so it isn't affected. Fix: store a position.
+            - The Deepgram path commits `summarizing` before enqueueing the summarizer. A throw in
+              between leaves the note to the 3.5 h sweep, because the claim is spent. Deepgram is off.
+            - The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
+              while Postgres may be in flight (#124 fixed this on iOS).
+            - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
+              fast path keeps an older summary's chapters in Postgres. And `applyNoteEdit` replaces the
+              whole Firestore `summary` map, which drops `summary.chapters` there.
         - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
           Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
           a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the

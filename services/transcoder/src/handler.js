@@ -387,8 +387,8 @@ async function handleSttPoll(payload, deps) {
     if (poll >= MAX_STT_POLLS) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
       // Terminal, and decided here rather than by a retry count — this loop
-      // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
-      // alone left Postgres at 'transcribing' forever.
+      // re-enqueues, so Cloud Tasks never sees a final attempt. A Firestore-only
+      // error mirror used to leave Postgres at 'transcribing'.
       //
       // The note before the chunk: if Postgres misses the note write this
       // throws and the task retries, and a chunk already marked 'error' would
