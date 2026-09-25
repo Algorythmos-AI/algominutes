@@ -41,6 +41,10 @@ struct RootView: View {
                 .environment(env)
                 .algoMinutesSheet([.large])
         }
+        // The api answered 426: this build is too old to talk to it.
+        .fullScreenCover(isPresented: Binding(get: { env.updateRequired }, set: { _ in })) {
+            UpdateRequiredView()
+        }
         .background(OwllBackground())
         // Support Dynamic Type broadly, but clamp the largest accessibility
         // sizes so the fixed-layout recording screen doesn't overflow.

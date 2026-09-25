@@ -213,6 +213,24 @@ final class APIClientTests: XCTestCase {
         } catch { XCTFail("unexpected \(error)") }
     }
 
+    /// The 402 carries the server's entitlement (for the paywall), and any
+    /// endpoint's 426 raises the update screen.
+    func testA402CarriesTheEntitlementAndA426RaisesTheUpdateScreen() async {
+        respond(#"{"error":"quota_exceeded","entitlement":{"state":"expired","plan":"free","billingPeriod":"2026-09","includedMinutes":600,"usedMinutes":600,"remainingMinutes":0,"overQuota":true,"trialEndsAt":null}}"#, status: 402)
+        do {
+            try await api.processAudio(.init(noteId: "n1", workspaceId: "w", type: .recording))
+            XCTFail("expected quotaExceeded")
+        } catch APIError.quotaExceeded(let entitlement) {
+            XCTAssertEqual(entitlement?.state, .expired)
+            XCTAssertEqual(entitlement?.overQuota, true)
+        } catch { XCTFail("unexpected \(error)") }
+
+        let raised = expectation(forNotification: .algoMinutesUpdateRequired, object: nil)
+        respond(#"{"error":"please_update"}"#, status: 426)
+        _ = try? await api.fetchEntitlement()
+        await fulfillment(of: [raised], timeout: 1)
+    }
+
     func testChatStreamsFromV1OnTheInjectedSession() async throws {
         StubURLProtocol.responder = { _ in (200, Data("data: {\"type\":\"done\"}\n\n".utf8)) }
         for try await _ in api.chatStream(query: "q", noteId: "n1") {}

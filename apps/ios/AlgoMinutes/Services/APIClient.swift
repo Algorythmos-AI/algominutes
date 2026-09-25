@@ -22,7 +22,8 @@ enum APIError: LocalizedError {
     /// A9.4: the server refused a metered action because the user is out of
     /// quota (HTTP 402, `error: "quota_exceeded"`). Modelled as its own case so
     /// callers can present the paywall instead of surfacing a raw 402 alert.
-    case quotaExceeded
+    /// Carries the entitlement from the 402 body, when it had one.
+    case quotaExceeded(EntitlementResponse?)
     /// This app version is below the server's minimum (HTTP 426, `please_update`).
     case updateRequired
 
@@ -95,13 +96,29 @@ final class APIClient: Sendable {
         return req
     }
 
-    /// The typed error for a non-2xx answer: a spent quota (402) and an app
-    /// too old for the server (426) get their own cases.
+    /// The typed error for a non-2xx answer: a spent quota (402, with the
+    /// entitlement it carries) and an app too old for the server (426) get
+    /// their own cases.
     static func httpError(status: Int, json: [String: Any]?) -> Error {
         let code = json?["error"] as? String
-        if isQuota(status: status, error: code) { return APIError.quotaExceeded }
-        if status == 426 { return APIError.updateRequired }
+        if isQuota(status: status, error: code) { return APIError.quotaExceeded(entitlement(in: json)) }
+        if status == 426 { return updateRequired() }
         return APIError.http(status: status, message: code)
+    }
+
+    /// Any endpoint's 426 raises the update screen (AppEnvironment observes
+    /// this), so an outdated app says so wherever it first hits the server.
+    static func updateRequired() -> APIError {
+        NotificationCenter.default.post(name: .algoMinutesUpdateRequired, object: nil)
+        return APIError.updateRequired
+    }
+
+    /// The 402 body's `entitlement` (EntitlementResponse), or nil.
+    private static func entitlement(in json: [String: Any]?) -> EntitlementResponse? {
+        guard let raw = json?["entitlement"] as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: raw)
+        else { return nil }
+        return try? JSONDecoder().decode(EntitlementResponse.self, from: data)
     }
 
     private func post(path: String, body: [String: Any]) async throws -> [String: Any] {
@@ -535,7 +552,7 @@ final class APIClient: Sendable {
                         var body = Data()
                         for try await byte in bytes { body.append(byte) }
                         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
-                        if http.statusCode == 426 { throw APIError.updateRequired }
+                        if http.statusCode == 426 { throw APIClient.updateRequired() }
                         throw APIError.http(status: http.statusCode, message: json?["error"] as? String ?? "Chat failed (\(http.statusCode))")
                     }
 
@@ -668,4 +685,9 @@ final class APIClient: Sendable {
         body["occurredAt"] = ISO8601DateFormatter.entitlement.string(from: Date())
         return try await post(path: "v1/events", body: body)
     }
+}
+
+extension Notification.Name {
+    /// Posted when the api answers 426: this build is below its minimum.
+    static let algoMinutesUpdateRequired = Notification.Name("AlgoMinutesUpdateRequired")
 }

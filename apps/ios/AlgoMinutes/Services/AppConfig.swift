@@ -7,6 +7,7 @@ import Foundation
 enum AppConfig {
     static let apiBaseURLKey = "AlgoMinutesAPIBaseURL"
     static let billingBaseURLKey = "AlgoMinutesBillingBaseURL"
+    static let updateURLKey = "AlgoMinutesUpdateURL"
 
     /// Used only if a build's Info.plist lacks a valid value (never expected).
     static let fallbackBaseURL = URL(string: "https://api.algominutes.com")!
@@ -15,6 +16,20 @@ enum AppConfig {
     static let apiBaseURL = baseURL(forKey: apiBaseURLKey)
     /// The billing service (/v1/purchases/verify): its own Cloud Run host.
     static let billingBaseURL = baseURL(forKey: billingBaseURLKey)
+
+    /// Where the update screen sends the user (UPDATE_URL): the TestFlight app
+    /// while builds ship through TestFlight. Nil when unset, and the screen
+    /// then shows no button.
+    static let updateURL = updateURL(info: Bundle.main.infoDictionary)
+
+    static func updateURL(info: [String: Any]?) -> URL? {
+        guard let raw = (info?[updateURLKey] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty, !raw.hasPrefix("$("),
+              let url = URL(string: raw), let scheme = url.scheme,
+              ["itms-beta", "itms-apps", "https"].contains(scheme)
+        else { return nil }
+        return url
+    }
 
     static func baseURL(forKey key: String, info: [String: Any]? = Bundle.main.infoDictionary) -> URL {
         if let raw = info?[key] as? String, let url = validatedBaseURL(raw) { return url }

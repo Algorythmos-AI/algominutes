@@ -136,7 +136,10 @@ final class BillingService {
     }
 
     /// Called when the server refuses a metered action (402 quota_exceeded).
-    func onQuotaExceeded() {
+    /// `entitlement` is the server's state from the 402 body, so the paywall
+    /// shows the real usage without another round trip.
+    func onQuotaExceeded(entitlement: EntitlementResponse? = nil) {
+        if let entitlement { self.entitlement = entitlement }
         Task { await track(.quotaHit) }
         presentPaywall(.quotaHit)
     }

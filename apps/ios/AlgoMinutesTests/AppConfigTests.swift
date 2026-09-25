@@ -30,6 +30,17 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(APIClient.baseURL, AppConfig.apiBaseURL)
     }
 
+    /// The update screen's button: the TestFlight app in every build for now,
+    /// and no button for an unset or unexpanded value.
+    func testUpdateURL() {
+        XCTAssertEqual(AppConfig.updateURL?.scheme, "itms-beta")
+        XCTAssertEqual(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "itms-apps://apps.apple.com/app/id1"])?.scheme, "itms-apps")
+        XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "$(UPDATE_URL)"]))
+        XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": ""]))
+        XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "http://example.com"]))
+        XCTAssertNil(AppConfig.updateURL(info: [:]))
+    }
+
     /// The old Firebase project's Google client (909388484461) is gone, and the
     /// app's own deep-link scheme is registered.
     func testURLSchemes() {
