@@ -28,10 +28,26 @@ async function noteExists(client, { noteId, workspaceId }) {
   return rowCount > 0;
 }
 
+/**
+ * The note's status in the task's workspace, or null when it is gone or isn't
+ * there (the kickoff's replay guard).
+ */
+async function noteStatus(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? rows[0].status : null;
+}
+
 // Scoped to the task's workspace (CLAUDE.md §1): a note id from another
 // workspace, or a deleted note, matches nothing and throws NOTE_NOT_FOUND,
 // which the handler treats as "note gone".
-async function upsertNoteStatus(client, { noteId, workspaceId, status, durationSecProbed, chunksTotal, errorMessage }) {
+// `onlyIfStatus` (a list) makes the write conditional: a note whose status has
+// moved on is left alone and NOTE_MOVED_ON is thrown. The kickoff passes it on
+// every write, so an attempt that stalled past its replay can't drag a note
+// that finished meanwhile back to 'transcribing'.
+async function upsertNoteStatus(client, { noteId, workspaceId, status, durationSecProbed, chunksTotal, errorMessage, onlyIfStatus }) {
   if (!workspaceId) throw new Error('upsertNoteStatus: workspaceId is required');
   const sets = ['status = $3', 'updated_at = NOW()'];
   const params = [noteId, workspaceId, status];
@@ -39,9 +55,16 @@ async function upsertNoteStatus(client, { noteId, workspaceId, status, durationS
   if (durationSecProbed != null) { sets.push(`duration_sec_probed = $${next++}`); params.push(durationSecProbed); }
   if (chunksTotal != null) { sets.push(`chunks_total = $${next++}`); params.push(chunksTotal); }
   if (errorMessage !== undefined) { sets.push(`error_message = $${next++}`); params.push(errorMessage); }
-  const sql = `UPDATE notes SET ${sets.join(', ')} WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL RETURNING id`;
+  let where = 'id = $1 AND workspace_id = $2 AND deleted_at IS NULL';
+  if (onlyIfStatus) { where += ` AND status = ANY($${next++}::text[])`; params.push(onlyIfStatus); }
+  const sql = `UPDATE notes SET ${sets.join(', ')} WHERE ${where} RETURNING id`;
   const { rows } = await client.query(sql, params);
   if (rows.length === 0) {
+    if (onlyIfStatus && (await noteExists(client, { noteId, workspaceId }))) {
+      const err = new Error(`note_moved_on:${noteId}`);
+      err.code = 'NOTE_MOVED_ON';
+      throw err;
+    }
     const err = new Error(`note_missing_in_postgres:${noteId}`);
     err.code = 'NOTE_NOT_FOUND';
     throw err;
@@ -275,6 +298,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
 
 module.exports = {
   noteExists,
+  noteStatus,
   fetchPriorChunkEndMs,
   upsertNoteStatus,
   insertAudioChunkRow,
