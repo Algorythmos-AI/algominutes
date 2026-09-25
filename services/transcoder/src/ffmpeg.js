@@ -19,15 +19,22 @@ function runChild(cmd, args, { stdoutSink } = {}) {
     });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
     child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       if (code === 0) resolve({ stdout, stderr });
       else {
-        const err = new Error(`${cmd} exited ${code}: ${stderr.slice(0, 500)}`);
+        const err = new Error(`${cmd} exited ${code}${signal ? ` (${signal})` : ''}: ${stderr.slice(0, 500)}`);
         err.code = code;
+        err.signal = signal || null;
         reject(err);
       }
     });
   });
+}
+
+// A spawn failure (a string code like ENOENT) or a process killed by a signal,
+// as opposed to the tool running and rejecting the file (a numeric exit code).
+function isInfraFault(err) {
+  return !!err && (typeof err.code === 'string' || (err.code == null && !!err.signal));
 }
 
 async function probeDuration(localPath) {
@@ -71,6 +78,9 @@ async function probeDuration(localPath) {
 
   const err = new Error(`could not determine duration for ${localPath}`);
   err.cause = fallbackError || ffprobeError;
+  // The tools failing to run (not spawnable, or killed, e.g. out of memory) says
+  // nothing about the file: that is worth a retry, not "damaged recording".
+  err.transient = isInfraFault(ffprobeError) || isInfraFault(fallbackError);
   throw err;
 }
 

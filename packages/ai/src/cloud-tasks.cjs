@@ -47,6 +47,9 @@ async function enqueueTask({
   oidcServiceAccount,
   traceId,
   log,
+  // Optional deterministic task id: a second create with the same id (a replay,
+  // or a duplicate chain) is dropped by Cloud Tasks, and treated here as done.
+  taskId,
   client = getClient(),
 }) {
   if (!projectId || !location || !queue || !targetUrl || !oidcServiceAccount) {
@@ -74,8 +77,27 @@ async function enqueueTask({
   if (scheduleSeconds && scheduleSeconds > 0) {
     task.scheduleTime = { seconds: Math.floor(Date.now() / 1000) + Math.floor(scheduleSeconds) };
   }
+  if (taskId !== undefined) {
+    // Cloud Tasks' own rule for task ids. Lead with something random (a uuid):
+    // sequential prefixes slow the queue down.
+    if (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,500}$/.test(taskId)) {
+      throw new Error('enqueueTask: taskId must be 1-500 letters, digits, - or _');
+    }
+    task.name = `${parent}/tasks/${taskId}`;
+  }
 
-  const [response] = await client.createTask({ parent, task });
+  let response;
+  try {
+    [response] = await client.createTask({ parent, task });
+  } catch (err) {
+    // ALREADY_EXISTS (gRPC 6): the same named task was created, or ran within
+    // the last hour or so. It is the same work, so the duplicate is dropped.
+    if (task.name && (err?.code === 6 || /ALREADY_EXISTS/.test(String(err?.message)))) {
+      if (log) log.info({ kind: payload && payload.kind, name: task.name, queue, traceId }, 'task_already_exists');
+      return task.name;
+    }
+    throw err;
+  }
   if (log) log.info({ kind: payload && payload.kind, name: response.name, queue, traceId }, 'task_enqueued');
   return response.name;
 }

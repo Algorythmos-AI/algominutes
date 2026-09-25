@@ -35,7 +35,8 @@ function makeClient({ env, log, traceId, uid }) {
   // the traceId, so every worker's logs can name the user.
   const withUid = (payload) => (uid ? { ...(payload || {}), uid } : payload);
 
-  function enqueue(payload, scheduleSeconds) {
+  // `taskId` (optional) makes the task idempotent: see cloud-tasks.cjs.
+  function enqueue(payload, scheduleSeconds, taskId) {
     return sharedTasks.enqueueTask({
       projectId: cfg.projectId,
       location: cfg.location,
@@ -46,6 +47,7 @@ function makeClient({ env, log, traceId, uid }) {
       scheduleSeconds,
       traceId,
       log,
+      taskId,
     });
   }
 
