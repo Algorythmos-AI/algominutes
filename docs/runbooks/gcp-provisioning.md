@@ -38,7 +38,7 @@ done
 cd infra/terraform/envs/staging
 # Required for the per-environment budget; never committed (public repo):
 export TF_VAR_billing_account=$(gcloud billing projects describe "$(basename "$PWD" | sed 's/^/algominutes-/')" \
-  --format='value(billingAccountName)' | sed 's#billingAccounts/##')
+  --account=algorythmos.france@gmail.com --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 # Who the alerts email (alerting.tf); never committed. Empty = console only:
 export TF_VAR_alert_emails='["you@example.com"]'
 terraform init                       # uses the gcs backend from step 1
@@ -52,15 +52,19 @@ Firestore location that is **permanent** once created.
 This provisions (both envs, `australia-southeast1`): APIs, a VPC + serverless connector + private services
 access, Cloud SQL Postgres (private IP), the `algominutes` DB + a Secret-Manager-stored password, the
 three buckets (staging recordings = 7-day lifecycle), the five Cloud Tasks queues, a Firestore database,
-an Artifact Registry repo, and the seven per-service runtime service accounts + IAM. It does **not** deploy
-Cloud Run services — images are built and deployed per-service in A11.
+an Artifact Registry repo, the seven per-service runtime service accounts + IAM, and the seven Cloud Run
+services + the `db-job` Cloud Run Job with a placeholder image (the deploy workflow builds and rolls out the
+real images), the GitHub WIF pool + deployer SA, the Scheduler jobs and the Firestore rules release.
 
 ## 3. Firestore mode + Firebase Auth (console / CLI — not Terraform)
 
 - Terraform creates the Firestore **database**; enable the sign-in providers in the Firebase console →
-  Authentication: **Google** and **Apple** (Apple needs the Team ID — A4-apple).
-- Confirm the default Firestore security rules are replaced by the repo's `firestore.rules` /
-  `storage.rules` at deploy (A11).
+  Authentication: **Anonymous** (the iOS app signs in anonymously at launch; without it the app falls back
+  to the login screen), **Google** and **Apple**. Sign in with Apple's token revocation also needs the
+  Apple provider's Services ID, Key ID and `.p8`.
+- Terraform releases the repo's `infra/firebase/firestore.rules` (`firebase-rules.tf`). There is no
+  `storage.rules`: recordings live in the api's own bucket, reached only through `/v1/uploads` and signed
+  URLs (DECISIONS).
 
 ## 4. Firebase app configs — REGENERATE per env, never copy the client's
 
@@ -94,7 +98,7 @@ Put the web config values in the web build env (public, domain-restricted keys �
 
 From a shell with Cloud SQL access (Auth Proxy or the bastion pattern):
 ```bash
-DATABASE_URL="postgres://…" npm run migrate      # applies packages/db/migrations 000-006
+DATABASE_URL="postgres://…" npm run migrate      # applies every numbered migration up to the head
 ```
 Migration `000_extensions.sql` runs `CREATE EXTENSION vector` (pgvector is a supported Cloud SQL extension).
 

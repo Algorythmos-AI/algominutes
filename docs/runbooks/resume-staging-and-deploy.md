@@ -40,6 +40,9 @@ terraform plan  -var-file=terraform.tfvars -out plan.out   # RECORD this output
 terraform apply plan.out
 ```
 
+A saved plan fixes its variables: exporting `TF_VAR_alert_emails` only at apply time
+does nothing. If the plan was made without it, re-plan with it set, then apply that plan.
+
 Creating the budget needs `billing.budgets.create` on the billing account
 (Billing Account Administrator or Costs Manager); the account owner has it.
 
@@ -58,7 +61,8 @@ pool/provider, the `gha-deployer` SA, and `google_billing_budget.env` all **crea
 The DB is empty (0 tables) after a pause. Nothing to do by hand: every deploy
 (step 3) builds the `db-job` image at the deploying commit, runs
 `JOB_NAME=migrate` inside the VPC, and only then rolls out services. The first
-deploy applies `000..012`. The job:
+deploy applies every numbered migration up to the head (the job reads it from
+disk; `018_deleted_notes.sql` as of 2026-09-25). The job:
 
 - runs as the Cloud SQL built-in user `algominutes_app` (a `cloudsqlsuperuser`
   member, so `000_extensions.sql` can create `vector`/`pg_trgm`/`uuid-ossp`);
@@ -79,6 +83,9 @@ npm run migrate                             # fallback only: same runner as the 
 ```
 
 ## 3. Turn on the deploy pipeline (`.github/workflows/deploy-staging.yml`)
+
+(The staging root exports `wif_provider_name` and `deployer_service_account_email`
+since the infra-staging-outputs PR; with an older checkout, `terraform output` fails.)
 
 The workflow is keyless (WIF) and does nothing until it is enabled. Set four
 **repository variables** (not secrets — none of these is sensitive) from the

@@ -131,3 +131,18 @@ output "vpc_connector_id" {
 output "db_password_secret_id" {
   value = module.environment.db_password_secret_id
 }
+
+# What runbook §3 reads to wire the deploy workflow (repo variables
+# GCP_WIF_PROVIDER / GCP_DEPLOYER_SA), plus the service URLs and the job name.
+output "wif_provider_name" {
+  value = module.environment.wif_provider_name
+}
+output "deployer_service_account_email" {
+  value = module.environment.deployer_service_account_email
+}
+output "cloud_run_service_urls" {
+  value = module.environment.cloud_run_service_urls
+}
+output "db_job_name" {
+  value = module.environment.db_job_name
+}
