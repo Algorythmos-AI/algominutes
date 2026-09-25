@@ -50,7 +50,10 @@ function transcoderDeps({ probe = async (): Promise<number> => 1500, op = { done
     },
     stt: { startLongRunning: async () => 'op-1', checkOperation: async () => op },
     tasks: { enqueue: async () => {} },
-    mirror: { mirrorStatus: async () => {}, mirrorProgress: async () => {}, mirrorError: async () => {}, db: () => fsStub },
+    mirror: {
+      mirrorStatus: async () => {}, mirrorProgress: async () => {}, db: () => fsStub,
+      mirrorError: async ({ errorMessage }: { errorMessage: string }) => void mirrored.push({ status: 'error', errorMessage }),
+    },
     fastPath: { run: async () => { throw new Error('fast path must not run'); } },
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => { terminal.push(a); } },
@@ -150,6 +153,7 @@ describe('the transcoder retries a failure it decided on, when Postgres missed i
     await breakFailedWrites();
     await expect(transcoder.handle(kickoff, transcoderDeps().d)).rejects.toThrow(/simulated outage/);
     expect((await note()).status).toBe('transcribing');
+    expect(mirrored).toEqual([]);
 
     await heal();
     await transcoder.handle(kickoff, transcoderDeps().d);

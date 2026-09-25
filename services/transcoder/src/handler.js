@@ -234,6 +234,10 @@ async function handleKickoff(payload, deps) {
     // is exactly the write that must not happen.
     if (isNoteGone(err) || err.code === 'NOTE_MOVED_ON') throw err;
     log.error({ err, noteId }, 'kickoff_failed');
+    // A failure decided above whose Postgres write missed: Postgres still has
+    // the note in progress, so Firestore must not say otherwise. The retry
+    // decides again (note-terminal retryOnPgError).
+    if (err.terminalPgWriteFailed) throw err;
     await mirror.mirrorError({ workspaceId, noteId, errorMessage: 'Processing failed.' });
     throw err;
   } finally {

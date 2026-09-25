@@ -829,17 +829,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       with Firestore ahead of Postgres~~ **fixed (terminal-failure-retries PR):** every failure a handler
       decides on itself (YouTube, `duration_unreadable`, a chunk already failed, a poll chain run out, a
       speech job that errored, and the summarizer's "no speech") passes `retryOnPgError`. A Postgres error
-      then throws before anything is mirrored, and the task retries the decision. The four poll paths
+      then throws before anything is mirrored (tagged, so the kickoff's catch-all doesn't mirror its own
+      `Processing failed.` either; the dual-write audit caught that), and the task retries the decision.
+      The four poll paths
       mark the note before the chunk, since a chunk already marked `error` makes a retry return early.
       The index.js last-attempt path keeps the old never-throw behaviour. Tested on Postgres with a
       trigger standing in for the outage (six cases, six mutations). Not covered by a test: the
       whole-file (AssemblyAI) poll sites and YouTube, which take the same flag.
       - [ ] **Queued (pre-existing, from that PR's silent-catch audit):**
-        - The kickoff's outer catch mirrors `Processing failed.` to Firestore on *every* throw, the
-          retryable ones included (a test pins it). Until the retry writes `chunking` again, Firestore
-          says failed while Postgres says in progress. The fix is to drop that mirror and let the last
-          attempt's `markNoteFailed` mark both stores. That changes what the app shows during retries,
-          so check the iOS retry button first.
+        - The kickoff's outer catch still mirrors `Processing failed.` to Firestore on any other throw (a
+          transient download or Postgres error; a test pins it). Until the retry writes `chunking` again,
+          Firestore says failed while Postgres says in progress, and the api refuses a user retry as in
+          flight. The fix is to drop that mirror and let the last attempt's `markNoteFailed` mark both
+          stores. That changes what the app shows during retries, so check the iOS retry button first.
         - The spend guard's catch in both `index.js` files rethrows a non-cap error without logging it.
           Under Express 4 the rejection goes unhandled: no log line, no response, and Cloud Tasks sees
           a timeout. It can't fire today, because the spend reader always returns 0. Fix it with the
@@ -848,6 +850,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           (the alert counts it). And if the speech job finishes before an exhausted poll's retry, that
           retry completes the chunk and the note can go on to `ready`, with no refund or failure
           notice sent. That's a good outcome, but the two stores briefly disagree.
+        - If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
+          carries the Postgres error and the request body, not `stt_operation_errored` / `stt_poll_exhausted`
+          and the chunk id. The user sees the generic "We could not process this recording."
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
       (`STT_PROVIDER=google`).
     - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
