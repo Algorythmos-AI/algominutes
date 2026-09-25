@@ -127,10 +127,11 @@ async function run({ log, traceId, env }) {
             FROM embeddings e
             JOIN notes n ON n.id = e.note_id
            WHERE e.workspace_id = $2
+             AND e.model = $4 -- vectors from different models don't compare
              AND n.deleted_at IS NULL
            ORDER BY e.embedding <=> $1::vector
            LIMIT $3`;
-        const r = await pool.query(sql, [vectorToSqlText(vec), wsId, K_MAX]);
+        const r = await pool.query(sql, [vectorToSqlText(vec), wsId, K_MAX, EMBED_MODEL]);
         topK = r.rows;
       } catch (err) {
         log.error({ traceId, queryId: q.id, err: { message: err?.message } }, 'eval_query_failed');
