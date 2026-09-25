@@ -72,12 +72,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   } catch (err) {
     pgErrored = true;
     log.error({ err, noteId, workspaceId }, `${name}_pg_failed`);
-    if (retryOnPgError) {
-      // Tagged so a caller's catch-all doesn't mirror an error of its own on
-      // the way out (the transcoder kickoff's does, for other failures).
-      err.terminalPgWriteFailed = true;
-      throw err;
-    }
+    if (retryOnPgError) throw err;
   }
 
   // Mirror to Firestore only if Postgres agrees the note is now failed, or if
