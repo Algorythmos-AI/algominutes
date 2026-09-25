@@ -154,7 +154,9 @@ async function memberWorkspaces(uid, log) {
 /// widen access. A note the caller cannot reach resolves to zero member
 /// workspaces here and the pre-check returns null, which the callers turn
 /// into a 404 rather than an empty result set.
-async function hybridSearch({ uid, query, k, apiKey, log, noteId }) {
+// `embed` is the query-embedding call (a seam for tests; production uses the
+// Vertex one above).
+async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQuery }) {
   const workspaces = await memberWorkspaces(uid, log);
   if (workspaces.length === 0) return [];
 
@@ -173,7 +175,11 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId }) {
 
   let vectorRows = [];
   try {
-    const vec = await embedQuery(apiKey, query, log);
+    const vec = await embed(apiKey, query, log);
+    // Only rows embedded by the model that embedded the query: vectors from
+    // different models don't compare, and the text-embedding-004 →
+    // gemini-embedding-001 migration (before 2027-04-01) re-embeds in place
+    // while both kinds of row exist.
     const r = await withQueryTimeout({
       timeoutMs: 12000,
       text: `SELECT e.note_id, n.title, e.chunk_text, e.start_ms, e.end_ms,
@@ -181,13 +187,14 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId }) {
                FROM embeddings e
                JOIN notes n ON n.id = e.note_id
               WHERE e.workspace_id = ANY($2)
+                AND e.model = $4
                 AND n.deleted_at IS NULL
-                ${noteId ? 'AND e.note_id = $4' : ''}
+                ${noteId ? 'AND e.note_id = $5' : ''}
               ORDER BY e.embedding <=> $1::vector
               LIMIT $3`,
       values: noteId
-        ? [vectorToSql(vec), workspaces, PER_LIST_LIMIT, noteId]
-        : [vectorToSql(vec), workspaces, PER_LIST_LIMIT],
+        ? [vectorToSql(vec), workspaces, PER_LIST_LIMIT, EMBED_MODEL, noteId]
+        : [vectorToSql(vec), workspaces, PER_LIST_LIMIT, EMBED_MODEL],
       log,
       op: 'vector',
     });
