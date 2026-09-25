@@ -64,6 +64,20 @@ describe('metering, one run at a time', () => {
     expect(await ledger()).toEqual(['debit 30', 'reversal -30']);
   });
 
+  it("a deleted note's key met again by a re-used id: logged, not silently free", async () => {
+    // A deleted note's ledger rows keep their keys but lose their note_id.
+    await pool.query(
+      `INSERT INTO usage_ledger (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
+         VALUES ('alice', 'ws-a', NULL, 'debit', 30, to_char(NOW(), 'YYYY-MM'), 'ingest', 'n1:ingest')`,
+    );
+    const errors: string[] = [];
+    await markQueued(fs, {
+      noteId: 'n1', workspaceId: 'ws-a', authorUid: 'alice', sourceType: 'recording',
+      storagePath: 'recordings/ws-a/n1.aac', meter: { minutes: 30, idempotencyKey: 'n1:ingest' },
+    }, { ...quietLog, error: (_o: unknown, m?: string) => void errors.push(String(m)) });
+    expect(errors).toContain('meter_debit_key_taken');
+  });
+
   it('a replayed refund of the same run is a no-op', async () => {
     await queue();
     await fail();
