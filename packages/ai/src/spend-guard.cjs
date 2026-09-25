@@ -91,9 +91,16 @@ async function assertUnderDailyCap({ log } = {}) {
  * used to be acknowledged alone, which left the note in progress until the
  * stuck-note sweep. Returns the response to send, or null to carry on.
  *
+ * `markFailed` resolves `{ failed }`: whether it moved the note to 'error'. Only
+ * that transition runs the hooks and stops the task. A note it didn't fail (work
+ * already started on it, it moved on, it's in another workspace, or a replay
+ * after this gate already failed it) carries on to the worker, which resumes or
+ * acknowledges it as it would anyway, and nobody is refunded or told twice.
+ *
  * `markFailed` throws if Postgres misses the write: the answer is then 500, so
- * the task retries (and checks the cap again) rather than acking a note
- * Postgres still has in progress.
+ * the task retries and checks again. On the queue's last attempt that drops the
+ * task with the note still queued in both stores, for the stuck-note sweep to
+ * fail and refund; guessing at the mirror without Postgres would be worse.
  */
 async function haltAtSpendCap({ log, noteId, workspaceId, markFailed, onCapped }) {
   try {
@@ -106,13 +113,19 @@ async function haltAtSpendCap({ log, noteId, workspaceId, markFailed, onCapped }
     }
     log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
     if (!noteId || !workspaceId) return { status: 200, body: { ok: false, reason: 'spend_cap' } };
+    let failed;
     try {
-      await markFailed();
+      ({ failed } = await markFailed());
     } catch (markErr) {
       log.error({ err: markErr, noteId, workspaceId }, 'spend_cap_note_write_failed');
       return { status: 500, body: { error: 'note_write_failed' } };
     }
-    await onCapped(err);
+    if (!failed) return null;
+    try {
+      await onCapped(err);
+    } catch (hookErr) {
+      log.error({ err: hookErr, noteId, workspaceId }, 'spend_cap_hooks_failed');
+    }
     return { status: 200, body: { ok: false, reason: 'spend_cap' } };
   }
 }

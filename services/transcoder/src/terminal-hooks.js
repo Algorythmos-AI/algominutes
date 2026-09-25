@@ -133,7 +133,7 @@ async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log: bas
  * The full A7.4 tail for a permanently-failed transcode: DLQ + refund + notify.
  * `payload` must be job METADATA only (no transcript/PII).
  */
-async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log }) {
+async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, refundReason = 'refund:transcode_failed' }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -147,7 +147,9 @@ async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err,
   }, log);
   await refundSafe({
     noteId,
-    reason: 'refund:transcode_failed',
+    // 'refund:spend_cap' for a note the cap stopped before any paid work: the
+    // spend reader nets those out (spend-repo.cjs).
+    reason: refundReason,
     idempotencyKey: `${noteId}:refund:transcode`,
   }, log);
   await enqueueNotify({

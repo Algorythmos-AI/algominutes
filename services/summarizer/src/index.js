@@ -28,13 +28,8 @@ const sharedTemplates = loadShared('summary-templates.cjs');
 const sharedIntelligence = loadShared('intelligence.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
-const spendGuard = loadShared('spend-guard.cjs');
-const spendRepo = loadShared('spend-repo.cjs');
 const handler = require('./handler');
 const terminalHooks = require('./terminal-hooks');
-
-// §4.6: the daily cap reads the minutes debited in the last 24 hours.
-spendGuard.setDailySpendReader(spendRepo.createLedgerSpendReader({ pool: () => handler.pool() }));
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));
@@ -56,25 +51,10 @@ app.post('/', async (req, res) => {
     userId: req.body && req.body.uid,
   });
 
-  // §4.6 spend circuit breaker — halt before the paid Gemini call if today's
-  // spend hit the daily cap. At the cap the note is failed, refunded and its
-  // author told (spend-guard haltAtSpendCap), instead of dropped.
-  {
-    const b = req.body || {};
-    const { noteId, workspaceId } = b;
-    const halted = await spendGuard.haltAtSpendCap({
-      log, noteId, workspaceId,
-      markFailed: () => handler.markNoteFailed({
-        noteId, workspaceId, message: spendGuard.SPEND_CAP_MESSAGE, log, retryOnPgError: true,
-      }),
-      onCapped: (err) => terminalHooks.onSummarizeTerminalFailure({
-        pool: handler.pool(), noteId, workspaceId, err, attempts: null, traceId,
-        payload: { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration },
-        log,
-      }),
-    });
-    if (halted) return res.status(halted.status).json(halted.body);
-  }
+  // §4.6: not gated here. The cap stops new work at the transcoder's kickoff;
+  // a note that reaches this far has its speech paid for, and failing it now
+  // would throw that away for the price of one Gemini call (DECISIONS "Spend
+  // cap"). Regenerations are rate-limited by the api.
 
   try {
     await handler.handle(req.body || {}, {

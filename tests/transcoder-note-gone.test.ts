@@ -190,7 +190,7 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     await expect(handler.handle({ kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'youtube', sourceUrl: 'https://youtu.be/x' }, deps))
       .resolves.toBeUndefined();
     const failed = queries.find((q) => /UPDATE notes SET status = 'error'/.test(q.sql));
-    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1']);
+    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1', null]);
     expect(mirrored).toEqual([{ path: 'workspaces/w1/notes/n1', data: expect.objectContaining({ status: 'error', errorMessage: 'This video is private.' }) }]);
     expect(hooks).toEqual(['terminal']);
   });

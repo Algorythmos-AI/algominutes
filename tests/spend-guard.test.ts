@@ -11,14 +11,14 @@ const noop = () => {};
 const errors: string[] = [];
 const log: any = { info: noop, warn: noop, error: (_o: unknown, m: string) => void errors.push(m) };
 
-function gate({ spent, markFailed = async () => {}, noteId = 'n1' as string | null }: { spent: number | (() => Promise<number>); markFailed?: () => Promise<void>; noteId?: string | null }) {
+function gate({ spent, markFailed = async () => ({ failed: true }), onCapped = async () => {}, noteId = 'n1' as string | null }: { spent: number | (() => Promise<number>); markFailed?: () => Promise<{ failed: boolean }>; onCapped?: () => Promise<void>; noteId?: string | null }) {
   spendGuard.setDailySpendReader(typeof spent === 'function' ? spent : async () => spent);
   const calls: string[] = [];
   let cappedErr: any;
   const run = spendGuard.haltAtSpendCap({
     log, noteId, workspaceId: 'ws',
-    markFailed: async () => { calls.push('markFailed'); await markFailed(); },
-    onCapped: async (err: unknown) => { calls.push('onCapped'); cappedErr = err; },
+    markFailed: async () => { calls.push('markFailed'); return markFailed(); },
+    onCapped: async (err: unknown) => { calls.push('onCapped'); cappedErr = err; await onCapped(); },
   });
   return { run, calls, cappedErr: () => cappedErr };
 }
@@ -46,6 +46,18 @@ describe('haltAtSpendCap', () => {
     expect(await g.run).toEqual({ status: 500, body: { error: 'note_write_failed' } });
     expect(g.calls).toEqual(['markFailed']);
     expect(errors).toContain('spend_cap_note_write_failed');
+  });
+
+  it("at the cap, a note it didn't fail (work started, moved on, another workspace, or already failed) carries on, with no refund or notice", async () => {
+    const g = gate({ spent: 50, markFailed: async () => ({ failed: false }) });
+    expect(await g.run).toBeNull();
+    expect(g.calls).toEqual(['markFailed']);
+  });
+
+  it('a hook that throws is logged, and the task is still acknowledged', async () => {
+    const g = gate({ spent: 50, onCapped: async () => { throw new Error('notify down'); } });
+    expect(await g.run).toEqual({ status: 200, body: { ok: false, reason: 'spend_cap' } });
+    expect(errors).toContain('spend_cap_hooks_failed');
   });
 
   it('at the cap with no note in the task: acks, with nothing to mark', async () => {

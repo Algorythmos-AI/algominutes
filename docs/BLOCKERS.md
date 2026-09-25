@@ -985,19 +985,39 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [x] **Done (spend-cap-reader PR, the env var pending your apply):** the §4.6 daily cap was inert, because
   its reader returned 0. It now estimates the last 24 hours' cost as the minutes debited in `usage_ledger`
   times `COGS_AUD_PER_MINUTE` (default A$0.03), cached for a minute.
-  - At the cap, a kickoff's note (or a summary's) is failed, Postgres first, with "We've reached today's
-    processing limit". It is refunded, its author told, and the task acknowledged. Before, the task was
-    dropped and the note stayed in progress until the sweep.
-  - Poll tasks aren't gated: their speech job is already paid for.
+  - At the cap, a kickoff whose note is still `queued` is failed, Postgres first, with "We've reached today's
+    processing limit". Only on that transition is it refunded (`refund:spend_cap`, which the reader nets
+    out), dead-lettered and its author told, and the task acknowledged. Before, the task was dropped and
+    the note stayed in progress until the sweep.
+  - A replay mid-run, a note that moved on, a poll task and the summarizer aren't stopped: their speech
+    is already paid for (DECISIONS "Spend cap").
   - Found on the way: staging read as `production` (Cloud Run's `NODE_ENV`) and would have had prod's
     A$200 cap. `ALGOMINUTES_ENV` is now set from `var.env`, which needs a re-plan.
-  - Tested: the gate as a unit, the reader and the transcoder gate on Postgres. Five mutations checked.
-    See DECISIONS "Spend cap".
+  - Tested:
+    - the gate as a unit;
+    - the reader on Postgres;
+    - the transcoder gate on Postgres, including the real refund hook, replays, and each in-progress status.
+
+    Eight mutations checked. See DECISIONS "Spend cap".
+  - **From its dual-write audit, fixed in the same PR:** the first version ran the refund, dead letter
+    and notice even when it failed nothing, and it failed notes past `queued`, including summarizing and
+    regenerating ones. Its cap refunds also kept the cap shut.
 - [ ] **Yours / A11:** replace the default rate with the measured blended cost per minute (speech + Gemini +
   storage), as `COGS_AUD_PER_MINUTE`. Also raise `DAILY_SPEND_CAP_AUD` on staging on heavy test days
   (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day).
-- [ ] **Queued:** the api doesn't refuse a kickoff at the cap (the transcoder fails and refunds it), and the
-  embedder and chat aren't gated.
+- [ ] **Queued:**
+  - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
+  - The embedder and chat aren't gated.
+  - **Pre-existing, from the audit:**
+    - A note refunded at the cap and retried re-queues with the same `${noteId}:ingest` key, so the
+      rerun is free and the reader never sees it. This is the per-run debit key item under "Residuals"
+      above; the cap makes it likelier.
+    - The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
+      nothing. For example, a note that is `ready` but whose later embedder enqueue kept failing is
+      refunded and told it failed. `markNoteFailed` now returns `{ failed }`; gate the hooks on it once
+      that branch is testable (extract it the way `spend-gate.js` was).
+    - The dead-letter insert and the notify task aren't deduplicated, so any replayed terminal path
+      adds a row and a push.
 
 ## Found while adding the audio smoke (2026-09-25)
 

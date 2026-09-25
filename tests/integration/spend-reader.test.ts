@@ -8,10 +8,10 @@ const require = createRequire(import.meta.url);
 const { createLedgerSpendReader, cogsPerMinuteAUD, DEFAULT_COGS_AUD_PER_MINUTE } = require('@algominutes/db/spend-repo.cjs');
 
 let n = 0;
-const entry = (uid: string, type: 'debit' | 'reversal', minutes: number, ago = '1 hour') => pool.query(
+const entry = (uid: string, type: 'debit' | 'reversal', minutes: number, ago = '1 hour', reason = type === 'debit' ? 'ingest' : 'refund:transcode_failed') => pool.query(
   `INSERT INTO usage_ledger (uid, entry_type, minutes, billing_period, reason, idempotency_key, created_at)
-   VALUES ($1, $2, $3, '2026-09', 'ingest', $4, NOW() - $5::interval)`,
-  [uid, type, minutes, `k${n++}`, ago],
+   VALUES ($1, $2, $3, '2026-09', $6, $4, NOW() - $5::interval)`,
+  [uid, type, minutes, `k${n++}`, ago, reason],
 );
 
 beforeEach(async () => {
@@ -30,6 +30,19 @@ describe('createLedgerSpendReader', () => {
     await entry('bob', 'debit', 500, '25 hours');
     const read = createLedgerSpendReader({ pool: () => pool, ratePerMinute: 0.1 });
     expect(await read()).toBeCloseTo(9);
+  });
+
+  it("a note the cap stopped nets out (nothing was paid for), so capped uploads can't hold the cap shut", async () => {
+    await entry('alice', 'debit', 60);
+    await entry('alice', 'debit', 40);
+    await entry('alice', 'reversal', -40, '1 hour', 'refund:spend_cap');
+    const read = createLedgerSpendReader({ pool: () => pool, ratePerMinute: 1 });
+    expect(await read()).toBe(60);
+  });
+
+  it("a cap refund that outlives its debit in the window doesn't go below 0", async () => {
+    await entry('alice', 'reversal', -40, '1 hour', 'refund:spend_cap');
+    expect(await createLedgerSpendReader({ pool: () => pool, ratePerMinute: 1 })()).toBe(0);
   });
 
   it('caches for a minute, then reads again', async () => {
