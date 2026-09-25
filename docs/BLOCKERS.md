@@ -513,8 +513,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - Found by the sweeper's audit (pre-existing): `run-api` had no Firebase Auth grant, so account
         deletion's Auth step would have failed in every deployed environment. Both the api and the sweep now
         get a custom role with only `firebaseauth.users.delete`.
-      - `process-intelligence.js` also writes root Firestore `analytics` docs. `analytics_events` exists in
-        Postgres, so stop writing them.
+      - ~~`process-intelligence.js` also writes root Firestore `analytics` docs~~ **fixed
+        (analytics-to-postgres PR):** it was the only server-side writer (`process_queued`). The event isn't
+        in the contract's `AnalyticsEvent` funnel, and the `kickoff_enqueued` log line already carries every
+        field, so the write is gone rather than moved. Account deletion still sweeps legacy docs.
     - [ ] Retire `functions/` onNoteDeleted. It isn't deployed, and its prefix sweep is unsafe.
   - **Fix (plan PR-34, moved ahead of M1):** one deletion path in the repo layer, used by both:
     - `DELETE /v1/notes/{id}` (an additive contract change; iOS moves to it in PR-17): a workspace-scoped
