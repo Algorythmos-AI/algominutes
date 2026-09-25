@@ -352,6 +352,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
  */
 async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;
+  // Gone, or a verdict whose run is over (superseded: exists is false too).
   if (!outcome.marked && !outcome.exists) return;
   await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked, notify: outcome.failed });
 }

@@ -63,12 +63,15 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  * - `pgErrored`: Postgres couldn't be asked.
  * - `exists`: the note is there in this workspace (ready, already failed, ...).
  * - `refunded`: a reversal was written (the note still had a net charge).
+ * - `superseded`: with `chunkId`, the chunk was gone or done, so nothing was
+ *   done: the run this verdict belonged to is over. `exists` is false then,
+ *   so a caller's tail treats it as gone.
  */
 async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false };
+    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false };
   }
 
   let pgOk = false;
@@ -78,6 +81,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let exists = false;
   let refunded = false;
   let minutesReversed = 0;
+  let superseded = false;
   try {
     const client = await pool.connect();
     try {
@@ -106,15 +110,26 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
          SELECT prev_status, error_message FROM upd`,
         [noteId, message, workspaceId, onlyIfStatus, chunkId],
       );
-      let rows;
-      if (!refund) {
+      let rows = [];
+      if (!refund && !chunkId) {
         ({ rows } = await failNote());
       } else {
         try {
           await client.query('BEGIN');
-          ({ rows } = await failNote());
+          if (chunkId) {
+            // A poll's verdict: its chunk first, the order completeChunkGate
+            // takes them (chunk, then note), so the two can't deadlock. A chunk
+            // that's gone (the note was re-queued; markQueued deleted this run's
+            // chunks, maybe while this waited) or done (another chain finished
+            // it) makes the verdict moot: nothing is failed or refunded.
+            const { rows: [chunk] } = await client.query(
+              'SELECT status FROM audio_chunks WHERE id = $1 AND note_id = $2 FOR UPDATE', [chunkId, noteId],
+            );
+            superseded = !chunk || chunk.status === 'done';
+          }
+          if (!superseded) ({ rows } = await failNote());
           // The refund in the failure's transaction, while its row lock holds.
-          if (rows.length > 0) {
+          if (refund && rows.length > 0) {
             const r = await reverseNoteUsage(client, {
               noteId, reason: refund.reason, idempotencyKey: refund.idempotencyKey,
             });
@@ -126,6 +141,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
           refunded = false;
           minutesReversed = 0;
           await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, `${name}_rollback_failed`));
+          superseded = false;
           if (retryOnPgError) throw err; // the task retries both
           // No retry left (a last attempt): fail the note without its refund,
           // so the two stores agree, and say the refund was lost. A Postgres
@@ -138,7 +154,9 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       prevStatus = pgOk ? rows[0].prev_status : null;
       if (pgOk && rows[0].error_message) storedMessage = rows[0].error_message;
       exists = pgOk;
-      if (!pgOk) {
+      if (superseded) {
+        log.info({ noteId, workspaceId, chunkId }, `${name}_superseded`);
+      } else if (!pgOk) {
         // Its own try: the UPDATE succeeded (it matched nothing), so a failure
         // here isn't a Postgres error on the failure, and mustn't mirror one.
         try {
@@ -208,7 +226,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   if (refund && pgOk) {
     log.info({ noteId, workspaceId, applied: refunded, minutesReversed, reason: refund.reason }, 'usage_refunded');
   }
-  return { failed, marked: pgOk, pgErrored, exists, refunded };
+  return { failed, marked: pgOk, pgErrored, exists, refunded, superseded };
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };

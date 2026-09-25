@@ -179,6 +179,45 @@ describe('a Google chunk poll that fails its chunk', () => {
     expect([await chunkStatus(c1), await chunkStatus(c2)]).toEqual(['error', 'error']);
   });
 
+  it('a re-queue that deleted this run\'s chunks while the verdict waited: the new run is left alone', async () => {
+    // The kickoff (markQueued) re-queues the note and deletes the old run's
+    // chunks, holding them until it commits.
+    const kickoff = await pool.connect();
+    let r: ReturnType<typeof run>;
+    try {
+      await kickoff.query('BEGIN');
+      await kickoff.query(`SELECT 1 FROM notes WHERE id = 'n1' FOR UPDATE`);
+      await kickoff.query(`UPDATE notes SET status = 'queued' WHERE id = 'n1'`);
+      await kickoff.query(`DELETE FROM audio_chunks WHERE note_id = 'n1'`);
+      r = run(c1);
+      let waiting = 0;
+      for (let i = 0; i < 500 && waiting < 1; i++) {
+        waiting = (await kickoff.query(`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`)).rows[0].n;
+        if (waiting < 1) await new Promise((res) => setTimeout(res, 10));
+      }
+      expect(waiting).toBeGreaterThanOrEqual(1);
+    } finally {
+      await kickoff.query('COMMIT');
+      kickoff.release();
+    }
+    await r!.done;
+    expect(await noteStatus()).toBe('queued');
+    expect(mirrored).toEqual([]);
+    expect(r!.hooks).toEqual([]);
+  });
+
+  it('a chunk another chain finished: its verdict fails nothing', async () => {
+    await pool.query(`UPDATE audio_chunks SET status = 'done' WHERE id = $1`, [c1]);
+    const noteTerminal = require('@algominutes/db/note-terminal.cjs');
+    const out = await noteTerminal.markNoteFailed({
+      pool: transcoderDb.pool(), firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log,
+      event: 'stt_operation_errored', retryOnPgError: true, chunkId: c1,
+    });
+    expect(out).toMatchObject({ superseded: true, marked: false });
+    expect(await noteStatus()).toBe('transcribing');
+    expect(await chunkStatus(c1)).toBe('done');
+  });
+
   it('the poll budget ran out: the same, as stt_poll_exhausted', async () => {
     googleOp = { done: false };
     const r = run(c1, { poll: MAX_STT_POLLS });
