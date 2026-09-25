@@ -351,8 +351,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   Was: **Transcoder fast path sends audio inline to Gemini** and `vertex-smoke` only exercised text.
 - [ ] **Embedding migration before 2027-04-01:** `text-embedding-004` → `gemini-embedding-001`
   (served in Sydney; set `outputDimensionality: 768` to keep `vector(768)`). Vectors
-  from different models don't compare, so: add `embeddings.model` to every query,
-  re-embed all rows with a db-job backfill, then switch `EMBED_MODEL`. The
+  from different models don't compare, so: ~~add `embeddings.model` to every query~~ **done
+  (search-filters-embedding-model PR: `/v1/search`, chat retrieval and eval-recall rank only rows of the
+  query's model)**, then re-embed all rows with a db-job backfill, then switch `EMBED_MODEL`. The
   tripwire in `tests/models.test.ts` fires around mid-February 2027 as a backstop.
 - [ ] **Newer models (3.6/3.7/3.8-flash, flash-lite) are not served in Sydney.** If
   quality or cost needs them, that's a data-residency decision for the owner.
@@ -584,14 +585,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   re-verifies every token server-side against the Play API.
   - [ ] **PR-32 (before any Apple billing):** verify the x5c chain to Apple Root CA - G3, the ES256
     signature, and the bundle id / environment. The paywall stays hidden behind its flag until then.
-- [ ] **Still open in CodeQL** (triage next):
-  - `js/polynomial-redos` in `redaction.cjs` (the PII pre-scrub runs over whole 2–4 h transcripts);
+- [x] **CodeQL backlog triaged** (only #63 remains, owned by PR-32):
+  - ~~`js/polynomial-redos` in `redaction.cjs` (#22)~~ and ~~`js/incomplete-multi-character-sanitization`
+    in the YouTube extractor (#24)~~: **fixed** (CodeQL closed both on 2026-09-24). Only **#63**
+    (`js/user-controlled-bypass`, Apple JWS) is open, and PR-32 closes it;
   - ~~`js/log-injection` in `client-error.js` (#62)~~ **fixed (client-error-log-sanitiser PR):** the
     flattening already removed every line break, but CodeQL only recognises a global replace of `"\n"`
     with `""` (its `StringReplaceSanitizer`), so that no-op step now ends the chain. The alert stayed
     open: numeric values were logged raw (a second, unsanitised flow). They are dropped now
     (client-error-strings-only PR); no capped field is numeric;
-  - `js/incomplete-multi-character-sanitization` in the YouTube extractor;
   - ~~`js/insecure-helmet-configuration` ×2~~ **fixed (strict-csp PR):** both JSON services send
     `default-src 'none'` instead of disabling CSP (DECISIONS);
   - ~~`js/missing-rate-limiting` ×6 on billing~~ **fixed (billing-rate-limits PR):** billing uses the
