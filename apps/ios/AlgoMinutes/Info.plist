@@ -51,12 +51,27 @@
 		<string>Rajdhani-SemiBold.ttf</string>
 		<string>Rajdhani-Bold.ttf</string>
 	</array>
+	<key>AlgoMinutesAPIBaseURL</key>
+	<string>$(API_BASE_URL)</string>
+	<key>AlgoMinutesBillingBaseURL</key>
+	<string>$(BILLING_BASE_URL)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<!-- Google Sign-In: set at build time to GoogleService-Info.plist's
+			     REVERSED_CLIENT_ID (project.yml post-build script). -->
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.909388484461-vaibtaa0ve0u35enqfusuhoc92ftosj6</string>
+				<string>reversed-client-id-set-at-build</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- algominutes:// deep links (DeepLinkRouter). -->
+			<key>CFBundleURLName</key>
+			<string>com.algorythmos.algominutes</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>algominutes</string>
 			</array>
 		</dict>
 	</array>
