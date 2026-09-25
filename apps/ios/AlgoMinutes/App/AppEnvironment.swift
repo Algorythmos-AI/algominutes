@@ -73,6 +73,19 @@ final class AppEnvironment {
             MainActor.assumeIsolated { self?.updateRequired = true }
         }
         startNetworkWatch()
+        // A transfer that finished while the app wasn't running (the system
+        // relaunched it to say so): finish the job, complete the upload session
+        // and kick processing off, under a background-time assertion so a
+        // relaunch in the background gets to do it.
+        backgroundUploads.onOrphanUploadFinished = { [weak self] in
+            guard let self else { return }
+            let bgTask = UIApplication.shared.beginBackgroundTask(withName: "finish-upload")
+            Task { @MainActor in
+                AppLog.info("bg_upload_finished_while_away_resuming")
+                await self.resumePendingUploads()
+                if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
+            }
+        }
     }
 
     /// Retry pending uploads the moment the network comes back.
