@@ -32,6 +32,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { listStoragePurgesForAccount, runStoragePurge } from './storage-purges-repo';
+import { AccountDeletedError, ensureUser } from './workspace-access';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorage as {
@@ -57,6 +58,16 @@ export async function deleteAccountData(
   if (!isPostgresEnabled()) throw new Error('deleteAccountData needs Postgres (WRITE_POSTGRES=true)');
   return withTx(
     async (client) => {
+      // Lock the users row, creating a placeholder first when there is none.
+      // With no row to lock, a first request racing this deletion (admitUser,
+      // an upload, a kickoff) could insert one that outlives it. Now that
+      // insert either committed first (and is locked and deleted here) or
+      // waits, then sees the tombstone and rolls back.
+      const placeholder = await client.query(
+        `INSERT INTO users (uid, email) VALUES ($1, $1 || '@firebase.local')
+         ON CONFLICT (uid) DO NOTHING RETURNING uid`,
+        [input.uid],
+      );
       await client.query('SELECT 1 FROM users WHERE uid = $1 FOR UPDATE', [input.uid]);
       const owned = await client.query<{ id: string }>(
         'SELECT id FROM workspaces WHERE owner_uid = $1 FOR UPDATE',
@@ -103,7 +114,8 @@ export async function deleteAccountData(
       const members = await client.query('SELECT 1 FROM workspace_members WHERE uid = $1', [input.uid]);
       const gone = await client.query('DELETE FROM users WHERE uid = $1', [input.uid]);
       return {
-        deleted: (gone.rowCount ?? 0) > 0,
+        // A real account row went (not just the placeholder made above).
+        deleted: (gone.rowCount ?? 0) > 0 && !placeholder.rowCount,
         workspaceIds,
         uploadSessionUris,
         notesQueued: notes.rows.length,
@@ -148,6 +160,49 @@ export async function completeAccountDeletion(uid: string): Promise<void> {
 export async function isAccountDeleted(uid: string): Promise<boolean> {
   const { rowCount } = await getPool().query('SELECT 1 FROM account_deletions WHERE uid = $1', [uid]);
   return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Admit an authenticated caller (both auth middlewares, on every request).
+ *
+ * A new user's first requests are onboarding (accept the terms, register for
+ * push, send analytics), well before any upload. Every one of those rows has a
+ * foreign key to users, and only the upload and kickoff paths used to create
+ * it, so they failed (23503), and the retention choice updated nothing. So the
+ * caller's row is ensured here, from the token's claims, and a deleted account
+ * is refused ('deleted') exactly as before: ensureUser checks the tombstone
+ * after its upsert, so a request racing the deletion can't re-create it.
+ *
+ * The upsert runs the first time this instance sees the uid, then at most
+ * every ADMIT_TTL_MS. In between it's the one tombstone read the middleware
+ * always did. Nothing but account deletion removes a users row, and that
+ * leaves the tombstone, so a remembered uid never skips the deletion check.
+ */
+const ADMIT_TTL_MS = 10 * 60 * 1000;
+const ADMIT_MAX = 50_000;
+const admitted = new Map<string, number>();
+
+export async function admitUser(
+  user: { uid: string; email?: string | null; name?: string | null },
+  log?: { error: (o: any, m?: string) => void },
+  now: number = Date.now(),
+): Promise<'live' | 'deleted'> {
+  const until = admitted.get(user.uid);
+  if (until !== undefined && until > now) {
+    return (await isAccountDeleted(user.uid)) ? 'deleted' : 'live';
+  }
+  try {
+    await withTx((client) => ensureUser(client, user), { log, fields: { userId: user.uid } });
+  } catch (err) {
+    if (err instanceof AccountDeletedError) {
+      admitted.delete(user.uid);
+      return 'deleted';
+    }
+    throw err;
+  }
+  if (admitted.size >= ADMIT_MAX) admitted.clear();
+  admitted.set(user.uid, now + ADMIT_TTL_MS);
+  return 'live';
 }
 
 /** An upload session was cancelled: take it off the tombstone. */

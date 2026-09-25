@@ -607,6 +607,19 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
     different notes can both pass it.
 
+- [x] **Fixed (admit-new-users PR): a new user's onboarding failed before their first recording.** Only
+  `/v1/uploads` and `/v1/process` created the `users` row, but a new user's first requests are onboarding.
+  `terms_acceptance`, `push_tokens`, `analytics_events` and `support_requests` all have a `users` foreign
+  key, so accept-terms, push registration, events and support failed with 23503 (reproduced), and
+  `setRetentionDays` saved nothing. Both auth middlewares now **admit** the caller (`admitUser`): the first
+  time an instance sees a uid, it upserts the row from the token's claims and checks the tombstone in one
+  transaction, then for 10 minutes does only the tombstone read the middleware always did.
+  - Found by its dual-write audit and reproduced: deleting an account that had **no** `users` row locked
+    nothing, so a first request racing the deletion could insert a row that outlived it. The same gap already
+    existed through uploads and the kickoff. `deleteAccountData` now inserts a placeholder row before
+    locking it, so the racer is either deleted or rolled back. Regression test with a real uncommitted
+    insert; mutation-checked.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
