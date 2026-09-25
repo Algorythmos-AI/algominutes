@@ -41,7 +41,9 @@ function emit(level, base, payload, msg) {
     // Error Reporting only finds a stack trace in a top-level field of the
     // entry (stack_trace, message or exception), not nested under err: without
     // this no error was ever grouped or reported there.
-    if ((level === 'error' || level === 'fatal') && record.err.stack) record.stack_trace = record.err.stack;
+    if ((level === 'error' || level === 'fatal') && record.err.stack && record.stack_trace === undefined) {
+      record.stack_trace = record.err.stack;
+    }
   }
   const line = JSON.stringify(record);
   if (level === 'error' || level === 'fatal') process.stderr.write(line + '\n');

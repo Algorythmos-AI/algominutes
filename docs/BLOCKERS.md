@@ -839,6 +839,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - **`docs/SLO.md`**: six objectives, each with its signal and alert.
 - [ ] **The e2e workflow** (a custom-token test user; a 10-minute fixture nightly, a 3-hour one weekly;
   fixtures in GCS): needs staging up.
+- [ ] **Check on staging (from the logger audit):**
+  - that Error Reporting groups errors whose message spans lines (ffmpeg stderr, Vertex error bodies);
+  - that it reads entries from the Cloud Run *job* (db-job);
+  - Error Reporting's retention against the 30-day promise.
+
 
 ## Found while adding the audio smoke (2026-09-25)
 

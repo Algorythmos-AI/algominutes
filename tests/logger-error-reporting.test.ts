@@ -29,6 +29,19 @@ describe('logger and Error Reporting', () => {
     const lines = capture();
     makeLogger().warn({ err: new Error('meh') }, 'soft');
     makeLogger().error({ reason: 'x' }, 'no_err');
-    expect(lines.map((l) => l.stack_trace)).toEqual([undefined, undefined]);
+    makeLogger().error({ err: 'a string' }, 'string_err');
+    makeLogger().error({ err: { message: 'plain' } }, 'object_err');
+    expect(lines.map((l) => l.stack_trace)).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it('fatal lines carry it too, and a stack_trace the caller set is kept', () => {
+    const lines = capture();
+    const err = new Error('down');
+    makeLogger().fatal({ err }, 'crash');
+    makeLogger().error({ err, stack_trace: 'forwarded stack' }, 'wrapped');
+    makeLogger({ stack_trace: 'bound' }).error({ err }, 'child_bound');
+    expect(lines.map((l) => [l.severity, l.stack_trace])).toEqual([
+      ['CRITICAL', err.stack], ['ERROR', 'forwarded stack'], ['ERROR', 'bound'],
+    ]);
   });
 });
