@@ -11,9 +11,9 @@
 //                        After MAX_PURGE_ATTEMPTS a purge is left and logged as
 //                        stuck, for a human (the alert counts it).
 //   2. stuck notes       a note in flight with no progress for STUCK_NOTE_MS is
-//                        failed (notes-repo failStuckNote re-checks that at the
-//                        UPDATE, Postgres first), and only then gets a dead
-//                        letter and its minutes refunded. The user sees an error
+//                        failed and refunded in one transaction (notes-repo
+//                        failStuckNote re-checks it at the UPDATE, Postgres
+//                        first), then gets a dead letter. The user sees an error
 //                        and can retry instead of an endless spinner.
 //   3. upload sessions   expired rows are deleted (GCS expires the sessions).
 //   4. account deletions a deletion the client never finished (it crashed, or
@@ -80,7 +80,7 @@ async function run({
   const deps = injected || firebaseDeps(env);
   const {
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
-    recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
+    recordDeadLetter, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
   } = repo;
@@ -175,15 +175,25 @@ async function run({
         const noteLog = log.child({ userId: n.authorUid });
         // Re-checked at the UPDATE: a note that moved on since the listing is left
         // alone, with no dead letter and no refund.
-        const r = await failStuckNote(deps.firestore, {
-          noteId: n.noteId,
-          workspaceId: n.workspaceId,
-          olderThanMs: STUCK_NOTE_MS,
-          message: 'Processing took too long and was stopped. Please try again.',
-        }, noteLog);
+        let r;
+        try {
+          r = await failStuckNote(deps.firestore, {
+            noteId: n.noteId,
+            workspaceId: n.workspaceId,
+            olderThanMs: STUCK_NOTE_MS,
+            message: 'Processing took too long and was stopped. Please try again.',
+            // Written in the failure's transaction, under the note's row lock.
+            refund: { reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` },
+          }, noteLog);
+        } catch (err) {
+          // One note's failure (its refund included) mustn't stop the batch;
+          // it's still stuck, so the next run tries it again.
+          noteLog.error({ err, ...fields }, 'sweep_stuck_note_failed');
+          continue;
+        }
         if (!r.failed) continue;
         failed += 1;
-        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status }, 'note_failed_stuck');
+        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status, refunded: r.refunded }, 'note_failed_stuck');
         await recordDeadLetter({
           queue: 'sweep',
           noteId: n.noteId,
@@ -193,8 +203,6 @@ async function run({
           attempts: null,
           traceId,
         }).catch((err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'));
-        await reverseUsageForNote({ noteId: n.noteId, reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` })
-          .catch((err) => log.error({ err, ...fields }, 'sweep_refund_failed'));
       }
       return failed;
     });

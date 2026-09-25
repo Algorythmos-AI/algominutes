@@ -1,10 +1,13 @@
 'use strict';
 
+const { transcodeRefund } = require('./terminal-hooks');
+
 // The queue's last attempt at a task that kept throwing: fail the note (both
 // stores, Postgres first), then dead-letter the job, refund the note's minutes
-// and tell its author. The refund runs for any note Postgres has failed (it's
-// net-guarded, so a note already failed and refunded changes nothing); the
-// notice only when this write is what failed it, so the author is told once.
+// and tell its author. The refund runs for any note Postgres has failed, in
+// the failure's own transaction (net-guarded, so a note already failed and
+// refunded changes nothing); the notice only when this write is what failed
+// it, so the author is told once.
 // A note that is ready anyway (the attempt threw after its commit, e.g. an
 // embedder enqueue) gets the dead letter alone, the one lasting record that
 // work was lost, as does one Postgres couldn't be asked about. A note that is
@@ -13,6 +16,7 @@ async function onLastAttempt({ body, headers, err, noteTerminal, terminalHooks, 
   const b = body || {};
   const { noteId, workspaceId } = b;
   const { failed, marked, pgErrored, exists } = await noteTerminal.markNoteFailed({
+    refund: transcodeRefund(noteId),
     pool: db.pool(),
     firestore: mirror.db(),
     noteId,

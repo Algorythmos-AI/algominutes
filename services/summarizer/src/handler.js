@@ -63,13 +63,14 @@ function fmtTime(ms) {
  * record the failure must not mask the original error. The one exception is
  * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
     firestore: firestore(),
     noteId, workspaceId, message, log,
     event: 'summarizer_mark_failed',
     retryOnPgError,
+    refund,
   });
 }
 
@@ -121,7 +122,13 @@ async function handle(payload, deps) {
     // fallback in stt.js). A note that will never finish must say so.
     log.warn({ noteId }, 'summarizer_no_transcript_lines');
     // Throws if Postgres misses the write, so the task retries (note-terminal).
-    await markNoteFailed({ noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true });
+    // Refunded with the failure: the recording gave the user nothing. Not a
+    // regeneration's (its task carries summaryGeneration): that charge stands.
+    const regeneration = summaryGeneration !== undefined && summaryGeneration !== null;
+    await markNoteFailed({
+      noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
+      refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
+    });
     return;
   }
 
