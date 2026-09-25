@@ -33,9 +33,11 @@ const enqueued: Array<Record<string, unknown>> = [];
 vi.mock('@algominutes/ai/cloud-tasks.cjs', () => ({
   default: { enqueueTask: async ({ payload }: { payload: Record<string, unknown> }) => { enqueued.push(payload); } },
 }));
+// A test can make the rate-limit step do something first, then refuse.
+let budgetHook: (() => Promise<void>) | null = null;
 vi.mock('@algominutes/ai/intelligence.cjs', async (importOriginal) => {
   const real = ((await importOriginal()) as { default: Record<string, unknown> }).default;
-  return { default: { ...real, enforceUsageBudget: async () => {} } };
+  return { default: { ...real, enforceUsageBudget: async () => { if (budgetHook) await budgetHook(); } } };
 });
 // @ts-expect-error: plain ESM route module, no type declarations
 const { processIntelligenceRoute } = await import('../../services/api/src/routes/process-intelligence.js');
@@ -48,6 +50,7 @@ beforeEach(async () => {
   await resetDb();
   docs.clear();
   enqueued.length = 0;
+  budgetHook = null;
 });
 afterAll(async () => {
   await pool.end();
@@ -111,6 +114,33 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(again).toMatchObject({ status: 202, body: { inFlight: true, status: 'queued' } });
     expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(1);
     expect(enqueued).toHaveLength(1);
+  });
+
+  // Two duplicates both pass the pre-check; the first queues the note while
+  // the second is refused at the rate limit. The refusal answers 429 but must
+  // not fail the run the first one started.
+  it("a duplicate refused at the rate limit leaves the note its twin queued running", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    budgetHook = async () => {
+      budgetHook = null;
+      expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(200); // the twin, in between
+      throw new Error('RATE_LIMIT');
+    };
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(429);
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('queued');
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'queued' });
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('a refusal of a note that is not in flight still marks it failed', async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    budgetHook = async () => { throw new Error('RATE_LIMIT'); };
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(429);
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'error' });
   });
 
   it('markQueued debits only when it queues: the in-transaction duplicate path charges nothing', async () => {

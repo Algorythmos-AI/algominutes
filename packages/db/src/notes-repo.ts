@@ -667,6 +667,42 @@ export async function markError(
 }
 
 /**
+ * A kickoff refused before it queued (too large, over the rate limit): the
+ * note is marked `error`, Postgres then the mirror, unless it is in flight. Two
+ * duplicate kickoffs (a client retry after a timeout) can both pass the
+ * route's pre-check; if one queues the note and the other is then refused, the
+ * refusal must not fail the run the first one started. The guard is in the
+ * UPDATE's own WHERE, so it is re-checked against a duplicate's just-committed
+ * row. A note with no Postgres row yet gets the mirror only, as markError does.
+ * Returns whether the note was marked.
+ */
+export async function markKickoffRejected(
+  firestore: Firestore,
+  input: MarkErrorInput,
+  log: { error: (o: any, m?: string) => void },
+): Promise<{ marked: boolean }> {
+  if (isPostgresEnabled()) {
+    const { rows } = await getPool().query<{ updated: number; present: number }>(
+      `WITH upd AS (
+         UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
+          WHERE id = $1 AND workspace_id = $2
+            AND NOT (status = ANY($4::text[]) AND updated_at > NOW() - ($5::bigint * INTERVAL '1 millisecond'))
+         RETURNING 1
+       )
+       SELECT (SELECT count(*) FROM upd)::int AS updated,
+              (SELECT count(*) FROM notes WHERE id = $1 AND workspace_id = $2)::int AS present`,
+      [input.noteId, input.workspaceId, input.errorMessage, IN_FLIGHT_STATUSES as unknown as string[], IN_FLIGHT_STALE_MS],
+    );
+    const { updated, present } = rows[0]!;
+    if (present && !updated) return { marked: false };
+  }
+  await firestore
+    .doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`)
+    .update({ status: 'error', errorMessage: input.errorMessage, updatedAt: ISO_NOW() });
+  return { marked: true };
+}
+
+/**
  * Persist a manual note edit (title / summary) to Postgres (system of record)
  * and mirror it to Firestore. As in markReady, a Postgres failure is NOT
  * swallowed — the edit fails hard so the Firestore cache never leads the

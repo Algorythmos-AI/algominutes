@@ -244,10 +244,13 @@ where testable so the fix PR proves itself:
         a duplicate with 202 and the current status, and a foreign id with 404. `markQueued` re-checks
         atomically (per-note advisory lock + `FOR UPDATE`), so concurrent duplicates queue once. Anything
         in flight longer than 3 h counts as stuck and may re-queue, until the PR-15 sweeper replaces that.
-        Residual (narrow, pre-existing): two duplicates can both pass the pre-check within milliseconds.
-        If the loser then fails the size or rate check, `failNote` can mark the winner's note `error`,
-        and the loser has already spent rate-limit budget. Close it in PR-16 by moving the pre-queue
-        rejections after `markQueued`, or by guarding `markError` against in-flight notes.
+        ~~Residual: two duplicates can both pass the pre-check within milliseconds, and if the loser then
+        fails the size or rate check, `failNote` marks the winner's note `error`~~ **fixed
+        (kickoff-reject-spares-inflight PR):** the two pre-queue refusals go through
+        `markKickoffRejected`, which leaves a note in flight alone (Postgres and the doc). The guard is in the
+        `UPDATE`'s `WHERE`, so it is re-checked against a duplicate that commits mid-refusal. Tested at the
+        repo (including that race) and the route; mutation-checked. Still true: the loser has spent
+        rate-limit budget.
         Was: **A duplicate `/v1/process` for an IN-FLIGHT note** (e.g. a client retry after a timeout)
         re-queues it, which resets the running job and deletes its `audio_chunks`. If the duplicate is
         rejected instead (rate limit, too large), it transiently marks the in-flight note `error`; the

@@ -36,6 +36,7 @@ import {
   ensureTrial,
   markQueued,
   markError,
+  markKickoffRejected,
   getNoteQueueState,
   WorkspaceBoundaryError,
 } from '@algominutes/db';
@@ -52,6 +53,16 @@ async function failNote(db, { noteId, workspaceId, userMsg, log, event }) {
   await markError(db, { noteId, workspaceId, errorMessage: userMsg }, log).catch((err) =>
     log.error({ err, event }, 'mark_error_failed'),
   );
+}
+// A refusal before markQueued (too large, rate limit): as failNote, but a note
+// a concurrent duplicate kickoff already queued is left running.
+async function rejectNote(db, { noteId, workspaceId, userMsg, log, event }) {
+  try {
+    const { marked } = await markKickoffRejected(db, { noteId, workspaceId, errorMessage: userMsg }, log);
+    if (!marked) log.info({ event }, 'kickoff_rejection_spared_in_flight_note');
+  } catch (err) {
+    log.error({ err, event }, 'mark_error_failed');
+  }
 }
 
 export async function processIntelligenceRoute(req, res) {
@@ -140,7 +151,7 @@ export async function processIntelligenceRoute(req, res) {
     }
     if (probedSize > MAX_AUDIO_BYTES) {
       const userMsg = publicErrorFor(new Error('TOO_LARGE'));
-      await failNote(db, { noteId, workspaceId, userMsg, log, event: 'too_large' });
+      await rejectNote(db, { noteId, workspaceId, userMsg, log, event: 'too_large' });
       return res.status(413).json({ error: userMsg });
     }
   }
@@ -150,7 +161,7 @@ export async function processIntelligenceRoute(req, res) {
     await enforceUsageBudget(db, callerUid, probedSize);
   } catch (err) {
     const userMsg = publicErrorFor(err);
-    await failNote(db, { noteId, workspaceId, userMsg, log, event: 'rate_limit' });
+    await rejectNote(db, { noteId, workspaceId, userMsg, log, event: 'rate_limit' });
     log.warn({ reason: err.message, bytes: probedSize }, 'usage_budget_exceeded');
     return res.status(429).json({ error: userMsg });
   }
