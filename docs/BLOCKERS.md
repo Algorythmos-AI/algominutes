@@ -816,6 +816,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - A replay mirrors the progress Postgres holds.
     - ffprobe or ffmpeg failing to *run* (not spawnable, or killed) is retried, not reported as a damaged
       recording.
+- [x] **Fixed (probe-adts-exact PR): ADTS AAC durations were bitrate guesses.** ADTS has no duration
+  header, so ffprobe estimates the length from the bitrate:
+  - a 4 h recording read 43 s short, so its end was never transcribed;
+  - a 30 s clip that opens with silence read as 223 s.
+
+  This already hit imported `.aac` files, and it matters most for the iOS recorder's crash-safe format
+  (PR-22). `probeDuration` now measures ADTS by decoding (4.7 s for 4 h). CI installs ffmpeg so the
+  real-binary test runs, rather than skipping.
   - [ ] **Queued (pre-existing, from that audit):**
     - `note-terminal markNoteFailed` never throws when its Postgres write errors, so a terminal path acks
       with Firestore ahead of Postgres. That covers the YouTube, `duration_unreadable` and poll paths.

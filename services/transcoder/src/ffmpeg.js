@@ -44,20 +44,29 @@ async function probeDuration(localPath) {
   try {
     const { stdout } = await runChild('ffprobe', [
       '-v', 'error',
-      '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '-show_entries', 'format=duration,format_name',
+      '-of', 'default=noprint_wrappers=1',
       localPath,
     ]);
-    const dur = Number(String(stdout).trim());
-    if (Number.isFinite(dur) && dur > 0) {
+    const fields = {};
+    for (const line of String(stdout).split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) fields[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+    const dur = Number(fields.duration);
+    // ADTS AAC (the iOS recorder's crash-safe format, and imported .aac files)
+    // has no duration header: ffprobe only estimates it from the bitrate. That
+    // read a 4 h recording as 43 s short (its end never transcribed) and a 30 s
+    // clip that opens with silence as 223 s. Measure it by decoding instead.
+    if (fields.format_name !== 'aac' && Number.isFinite(dur) && dur > 0) {
       return dur;
     }
   } catch (err) {
     ffprobeError = err;
   }
 
-  // Fallback for WebM (MediaRecorder) files without duration header:
-  // Decode the audio quickly and parse the final time=00:00:00.00
+  // Fallback for files without a trustworthy duration header (WebM from
+  // MediaRecorder, ADTS AAC): decode the audio and parse the final time=00:00:00.00
   try {
     const { stderr } = await runChild('ffmpeg', ['-i', localPath, '-f', 'null', '-']);
     // Look for the last 'time=XX:XX:XX.XX' in stderr
