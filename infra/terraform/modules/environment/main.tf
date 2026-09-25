@@ -197,6 +197,13 @@ resource "google_sql_database_instance" "pg" {
       point_in_time_recovery_enabled = var.db_point_in_time_recovery
       start_time                     = "16:00" # 02:00–03:00 Sydney, off-peak
       transaction_log_retention_days = var.db_point_in_time_recovery ? 7 : null
+      # Backups age out inside the 30-day deletion window (docs/DATA-RETENTION.md
+      # §4): 7 daily backups, and 7 days of PITR logs above. Stated here so a
+      # console change or a provider default can't drift past the promise.
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
     }
   }
 }
@@ -524,4 +531,16 @@ resource "google_storage_bucket_iam_member" "object_admin" {
   bucket = google_storage_bucket.buckets[each.value.bucket].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime[each.value.sa].email}"
+}
+
+# Logs (traceId, uid, noteId, workspaceId; never transcript text) are kept 30
+# days, the deletion window (docs/DATA-RETENTION.md §3/§4). This is the _Default
+# bucket's own default, pinned here so it can't be raised by hand unnoticed.
+resource "google_logging_project_bucket_config" "default" {
+  project        = var.project_id
+  location       = "global"
+  bucket_id      = "_Default"
+  retention_days = 30
+
+  depends_on = [google_project_service.apis]
 }
