@@ -1197,6 +1197,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - [ ] **Verify on a real iPhone (M1):** a 3 h locked-screen recording with a call mid-way; force-quit
     mid-recording, relaunch, and the recording is offered and uploads; playback seeks accurately.
 
+- [x] **Done in code (ios-recorder-interruptions PR, plan PR-23):** a long recording now stops and keeps its audio,
+  with a message saying why, in two more cases:
+  - **The disk runs low mid-recording.** Free space is checked every 30 s. Below 50 MB it stops. Other apps
+    can fill the disk after the 250 MB start check.
+  - **The system's media services restart.** That invalidates the recorder; the ADTS file is intact up to it.
+
+  Thermal state (serious or critical) is logged only: audio capture is light, and stopping a meeting because
+  the phone is warm would lose more than it saves. Tested (XCTest): the storage floor, and the new messages.
+  The app type-checks against the stubs.
+  - [ ] **Verify on device (M1):** fill the disk during a recording (a large download), and check the stop and
+    the kept file.
+
 ## Found while adding the audio smoke (2026-09-25)
 
 - [x] **Fixed (workers-drop-gemini-key-gate PR): no note could ever be summarised on a deployed backend.**

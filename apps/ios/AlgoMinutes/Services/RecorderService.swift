@@ -49,6 +49,11 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             case interruptionNotResumable
             case sessionReactivationFailed
             case routeRecoveryFailed
+            /// The disk ran low mid-recording (`minFreeBytesWhileRecording`).
+            case lowStorage
+            /// The system's media services restarted, which invalidates the
+            /// recorder and the session. The ADTS file is intact up to it.
+            case mediaServicesReset
         }
 
         let reason: Reason
@@ -73,6 +78,10 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
                 return "Recording stopped after an interruption and couldn't resume. \(kept)"
             case .routeRecoveryFailed:
                 return "Recording stopped because the microphone became unavailable. \(kept)"
+            case .lowStorage:
+                return "Recording stopped because your iPhone is almost out of storage. \(kept)"
+            case .mediaServicesReset:
+                return "Recording stopped because your iPhone's audio system restarted. \(kept)"
             }
         }
     }
@@ -83,6 +92,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     private(set) var currentFileURL: URL?
     private var recordingFailed = false
     private var tickTimer: Timer?
+    private var lastDiskCheck: Date?
     private var startedAt: Date?
     private var accumulatedSeconds = 0
 
@@ -150,6 +160,19 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     /// A 4-hour recording is ~120 MB at 64 kbps mono AAC (ADTS). Refuse below about
     /// double that, leaving headroom for the OS so a recording cannot fill the disk.
     static let minFreeBytesToRecord: Int64 = 250 * 1024 * 1024
+
+    /// Mid-recording floor: below this the recording stops and is kept, rather
+    /// than the disk filling and the OS failing writes (the recorder's, and every
+    /// other app's). Checked every `diskCheckInterval`, not every tick.
+    nonisolated static let minFreeBytesWhileRecording: Int64 = 50 * 1024 * 1024
+    nonisolated static let diskCheckInterval: TimeInterval = 30
+
+    /// Whether a mid-recording check should stop the recording. Unknown free
+    /// space (the query failed) never stops it.
+    nonisolated static func isStorageTooLow(freeBytes: Int64?) -> Bool {
+        guard let freeBytes else { return false }
+        return freeBytes < minFreeBytesWhileRecording
+    }
 
     /// Free space on the volume holding the recordings directory.
     ///
@@ -224,6 +247,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             divergedSince = nil
             lastResumeAttempt = nil
             hasWarnedAboutDivergence = false
+            lastDiskCheck = nil
             startedAt = Date()
             isRecording = true
 
@@ -337,7 +361,22 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
         let db = recorder.averagePower(forChannel: 0) // -160...0 dB
         level = max(0, min(1, (db + 50) / 50))
         enforceHardCap()
+        enforceStorageFloor()
         runWatchdog()
+    }
+
+    /// Stop and keep the recording if the disk runs low mid-way (PR-23). The
+    /// start-time check (`minFreeBytesToRecord`) leaves room for a full-length
+    /// recording, but other apps can fill the disk while this one records.
+    private func enforceStorageFloor(now: Date = Date()) {
+        guard isRecording, autoStopped == nil else { return }
+        if let last = lastDiskCheck, now.timeIntervalSince(last) < Self.diskCheckInterval { return }
+        lastDiskCheck = now
+        let free = Self.freeDiskBytes(at: store.directory)
+        if Self.isStorageTooLow(freeBytes: free) {
+            AppLog.info("recording_low_storage freeBytes=\(free ?? -1)")
+            autoStop(reason: .lowStorage)
+        }
     }
 
     /// Compare what we believe against what the recorder is doing, and act.
@@ -480,6 +519,36 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             self, selector: #selector(handleWillTerminate),
             name: UIApplication.willTerminateNotification, object: nil
         )
+        center.addObserver(
+            self, selector: #selector(handleMediaServicesReset),
+            name: AVAudioSession.mediaServicesWereResetNotification, object: session
+        )
+        center.addObserver(
+            self, selector: #selector(handleThermalStateChange),
+            name: ProcessInfo.thermalStateDidChangeNotification, object: nil
+        )
+    }
+
+    /// The system's media services restarted (rare; audio daemon crash or
+    /// reset). The recorder and session are no longer valid, so stop and keep
+    /// what was written: the ADTS file is decodable up to this point, which a
+    /// silent recorder that never produced another frame would hide until the
+    /// user looked. Delivered on the main thread.
+    @objc private nonisolated func handleMediaServicesReset(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isRecording else { return }
+            AppLog.info("recording_media_services_reset")
+            self.autoStop(reason: .mediaServicesReset)
+        }
+    }
+
+    /// Logged for diagnosis only: audio capture is light, and stopping a
+    /// meeting recording because the phone is warm would lose more than it
+    /// saves. The OS throttles on its own.
+    @objc private nonisolated func handleThermalStateChange(_ notification: Notification) {
+        let state = ProcessInfo.processInfo.thermalState
+        guard state == .serious || state == .critical else { return }
+        AppLog.info("recording_thermal_state state=\(state.rawValue)")
     }
 
     private func removeObservers() {
