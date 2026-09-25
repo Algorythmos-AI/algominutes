@@ -34,11 +34,10 @@ enum APIError: LocalizedError {
     }
 }
 
-/// HTTPS client for the AlgoMinutes backend.
-/// TODO(A9-infra): api.algominutes.com is the target origin; confirm it is live
-/// (the web client still points at the old hosting origin until infra lands).
+/// HTTPS client for the AlgoMinutes backend. The origin is the build
+/// configuration's (AppConfig: Debug and Staging → staging, Release → prod).
 final class APIClient: Sendable {
-    static let baseURL = URL(string: "https://api.algominutes.com")!
+    static let baseURL = AppConfig.apiBaseURL
 
     private let session: URLSession
 

@@ -65,7 +65,8 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       `/delete-account` page → `/v1/account/delete`) onto one.
 - [ ] Extend `AnalyticsEvent` with support/terms/retention/deletion events + emit them (funnel is complete
       without them).
-- [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7).
+- [ ] Reconcile iOS `StoragePaths.maxBytes` 50MB vs 120MB doc (carried from A7). Folded into iOS PR-17 D (see
+      "Clients still on the legacy `/api/*` surface").
 
 ## Diarisation launch blockers — needs YOU (AssemblyAI go-live)
 
@@ -688,7 +689,25 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
   `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so **neither client works
   against the deployed backend yet.**
-  - **iOS:** plan PR-17 (the `/v1` client, built on the now-complete contract).
+  - **iOS (plan PR-17), in five PRs** (scoped 2026-09-25; every api call also lacked the required
+    `X-AlgoMinutes-Client` header, so each would get a 400):
+    - [x] **A, build config (ios-staging-config PR):** Debug, Staging and Release configurations, each
+      with its api and billing origins (`AppConfig.swift`, no hardcoded URL). An `AlgoMinutes-Staging`
+      scheme archives Staging. The Google Sign-In scheme is written from the bundled `GoogleService-Info.plist`
+      at build time, replacing the old project's 909388484461 client. `algominutes://` is registered.
+      Staging and Release fail without the plist, and dSYMs upload for every non-Debug build.
+    - [ ] **B, the `/v1` client:** the version header, the `/v1` path table (GET entitlement, upload ids in
+      the path, billing's own host for purchases), a 426 "please update" state, `durationSec`, an injectable
+      URLSession with URLProtocol tests for every endpoint.
+    - [ ] **C, delete through `POST /v1/notes/delete`** (the Firestore rules now refuse client deletes),
+      and the auto-retitle through `/v1/notes/update`.
+    - [ ] **D, uploads through `/v1/uploads`** (the api's recordings bucket; the Firebase SDK uploads to the
+      default bucket, which the api never reads), and **playback through a signed URL** (`/v1` has no audio
+      route yet; the api's recordings bucket isn't a Firebase bucket).
+    - [ ] **E, hardening:** the 202/404/413/429 kickoff answers, the 402's entitlement, and the client watchdog's
+      Firestore-only `error` flip (it drifts from Postgres).
+    - Recording cap: iOS `StoragePaths` says 50 MB (its comment and copy say 120 MB). `/v1/uploads` bypasses
+      `storage.rules`, and `CreateUploadSessionRequest.totalBytes` has no maximum. The server must cap it (D).
   - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
     (`POST /v1/uploads` + `/v1/process`, then Firestore status), and `lib/*` to the `/v1` paths.
 

@@ -8,9 +8,9 @@ name: ios
 on:
   push:
     branches: [integration, main]
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+    paths: ['apps/ios/**', 'packages/contracts/**', '.github/workflows/ios.yml']
   pull_request:
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+    paths: ['apps/ios/**', 'packages/contracts/**', '.github/workflows/ios.yml']
 
 permissions:
   contents: read
