@@ -205,8 +205,8 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
 - **A7.3 real push (plan rev 8, Wave 3):** the app has no `aps-environment` and sends the raw APNs token
   where the notifier expects an FCM one. Needs the Push capability and an APNs `.p8` in Firebase (owner),
   then FirebaseMessaging in the app. Local notifications work meanwhile. Android push is B2.
-- **iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment** — flagged by the A7 map;
-  reconcile before finalising upload size limits (not changed this run).
+- ~~**iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment**~~ **fixed
+  (ios-m0-readiness PR):** one 500 MB cap in the api and the app (see "one upload cap" above).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
   the palette is a provisional, accessible v1. Full light-mode wiring across the (dark-first) UI is a follow-up.
 - **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
@@ -365,9 +365,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   the `@google/genai` dependency are gone. Was: **`@google/genai` 1 → 2** (#29 declined): its only user is
   `services/api/src/routes/process-audio.js`, the synchronous route plan PR-16 retires.
   Delete the dependency with that route; don't migrate it.
-- [ ] **Three Dependabot majors held open, because nothing tests the code they change** (off the M1
-  path; CI is green on each, but CI never calls them). Each needs a test around its call site first, then
-  the bump:
+- [x] ~~**Three Dependabot majors held open, because nothing tests the code they change**~~ **merged
+  (#52, #107, #108), each after a test around its call site; two of the tests caught a real break first**
+  (below). Kept for the record:
   - **#52 `stripe` 17 → 22** (`services/billing/src/lib/stripe.js`, used by `routes/portal.js` and
     `webhooks/stripe.js`). Every Stripe major pins a newer API version, which changes object shapes. It's the
     web rail; M1 is StoreKit. **Test in place (billing-stripe-tests PR):** `tests/integration/billing-stripe.test.ts`
@@ -852,8 +852,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     "global" query had no workspace filter and logged the first 80 characters of the top chunks, with
     note titles, from any workspace, so an operator run on staging or prod would have copied users'
     meeting text into Cloud Logging. `eval-recall` stays: it is scoped to the e2e test workspace.
-  - [ ] **iOS renders chapters (PR-13b):** decode `summary.chapters`, list them on the note screen, and
-    tap to seek.
+  - [x] ~~**iOS renders chapters (PR-13b)**~~ **done (#128):** the summary lists a long recording's chapters,
+    and a tap plays from there. An edit keeps them (#161).
 ## Long recordings: the transcoder on replay (plan rev 8, PR-12, 2026-09-25)
 
 - [x] **Fixed (transcoder-resumable-chunks PR): a replayed kickoff re-paid for speech it had already bought.**
@@ -1309,9 +1309,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       AlgoMinutes" cover (its button opens TestFlight, `UPDATE_URL`). The Files list's "Retry" goes through
       `env.retry` like the note screen, so it re-uploads a recording still on disk. Unit-tested (the
       mapping, the 402 body, the 426 notification, the update URL).
-    - [ ] **E2, the client watchdog:** it flips a note to `error` in Firestore only after 90 s `queued`,
-      but the server refuses a re-queue for 3 h and fails a stuck note itself at 3.5 h (the sweep, Postgres
-      first). Make it local-only ("taking longer than usual") and leave failing to the server.
+    - [x] ~~**E2, the client watchdog**~~ **done (#124):** a slow note is reported ("taking longer than
+      usual"), never failed from the app; the sweep fails a stuck run, Postgres first. The web followed
+      (#157).
     - ~~Recording cap~~ **done:** the api caps `/v1/uploads` at 500 MB (#97), and the app checks the same cap
       first (ios-m0-readiness PR).
   - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
