@@ -63,6 +63,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         Task { @MainActor in
             BackgroundUploadService.shared?.backgroundCompletionHandler = completionHandler
+            // Recreate the session so the system delivers what it queued for it.
+            BackgroundUploadService.shared?.reconnect()
         }
     }
 

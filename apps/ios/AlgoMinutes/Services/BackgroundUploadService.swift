@@ -19,10 +19,18 @@ import Foundation
 ///     from the offset (confirmed against `uploadSessionStatus`) rather than
 ///     restarting from byte 0 — the one thing the Firebase fallback cannot do.
 ///
-/// Cross-launch note: the continuation bridge below only spans the current
-/// process. If the app is killed mid-chunk, the persisted offset plus
-/// `AppEnvironment.resumePendingUploads` re-drives this from the saved anchor on
-/// the next launch.
+/// The rest of a file goes as ONE background PUT (PR-24). Chunked PUTs only
+/// moved while the app ran, so a suspended or killed app finished the chunk in
+/// flight and nothing more until it was opened again; a 3-hour recording then
+/// waited on the user. One task for the remainder runs to the end in the
+/// system's upload daemon, app or no app. A failure asks the server how far it
+/// got (`uploadSessionStatus`) and sends the rest again.
+///
+/// Cross-launch: the continuation bridge below only spans the current process.
+/// When the system relaunches the app for a task that finished while it wasn't
+/// running, `onOrphanUploadFinished` re-drives `AppEnvironment.resumePendingUploads`,
+/// which finds the session complete and finishes the job (complete + kickoff).
+/// A task still running from an earlier launch is joined, never duplicated.
 @MainActor
 final class BackgroundUploadService: NSObject {
     static let sessionIdentifier = "com.algorythmos.algominutes.upload"
@@ -30,13 +38,16 @@ final class BackgroundUploadService: NSObject {
     /// completion handler after a background wake.
     static weak var shared: BackgroundUploadService?
 
-    private static let maxChunkRetries = 4
-    private static let minChunkBytes: Int64 = 256 * 1024
+    private static let maxAttempts = 4
 
     /// Handed over by the AppDelegate's
     /// `handleEventsForBackgroundURLSession`; called once the session has
     /// flushed its queued delegate events.
     nonisolated(unsafe) var backgroundCompletionHandler: (() -> Void)?
+
+    /// Called on the main actor when a transfer finishes that no caller in this
+    /// process is waiting for (it was started before the app was killed).
+    var onOrphanUploadFinished: (() -> Void)?
 
     private let store: RecordingStore
     private let api: APIClient
@@ -46,6 +57,7 @@ final class BackgroundUploadService: NSObject {
     // session's private queue, not the main actor.
     private let lock = NSLock()
     nonisolated(unsafe) private var continuations: [Int: CheckedContinuation<Void, Error>] = [:]
+    nonisolated(unsafe) private var progressHandlers: [Int: @Sendable (Int64) -> Void] = [:]
 
     init(store: RecordingStore, api: APIClient) {
         self.store = store
@@ -59,6 +71,14 @@ final class BackgroundUploadService: NSObject {
     nonisolated static func sessionError(_ error: Error) -> Error {
         if case APIError.http(let status, _) = error, status == 404 { return UploadError.noteGone }
         return error
+    }
+
+    /// Recreate the background session after a wake, so the system can deliver
+    /// the events it queued for it (the AppDelegate calls this). Without it the
+    /// lazy session was never touched on a background launch, no event arrived,
+    /// and the system's completion handler was never called.
+    func reconnect() {
+        _ = session
     }
 
     private lazy var session: URLSession = {
@@ -99,7 +119,6 @@ final class BackgroundUploadService: NSObject {
         var uploadId = pending?.uploadId
         var sessionUri = pending?.uploadSessionUri
         var offset: Int64 = 0
-        var chunkSize = Self.minChunkBytes
         if let id = uploadId, sessionUri != nil,
            let status = try? await api.uploadSessionStatus(uploadId: id) {
             offset = status.complete ? total : min(status.receivedBytes, total)
@@ -118,7 +137,6 @@ final class BackgroundUploadService: NSObject {
             }
             uploadId = created.uploadId
             sessionUri = created.sessionUri
-            chunkSize = max(Self.minChunkBytes, Int64(created.chunkSize))
             if let pending {
                 store.setUploadSession(fileName: pending.fileName, uploadId: created.uploadId, sessionUri: created.sessionUri)
             }
@@ -128,23 +146,32 @@ final class BackgroundUploadService: NSObject {
             store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: offset)
         }
 
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-
+        var attempt = 0
         while offset < total {
-            let end = min(offset + chunkSize, total)
-            try handle.seek(toOffset: UInt64(offset))
-            let data = handle.readData(ofLength: Int(end - offset))
-            try await putChunkWithBackoff(
-                to: sessionUri, data: data, start: offset, end: end, total: total
-            )
-            offset = end
+            do {
+                try await putRemainder(
+                    of: fileURL, from: offset, total: total, to: sessionUri, uploadId: uploadId, onProgress: onProgress
+                )
+                offset = total
+            } catch {
+                attempt += 1
+                if attempt >= Self.maxAttempts {
+                    AppLog.error("bg_upload_give_up offset=\(offset) err=\(error.localizedDescription)")
+                    throw error
+                }
+                // The PUT may have landed part of the file: continue from where
+                // the server is, not from where this attempt started.
+                if let status = try? await api.uploadSessionStatus(uploadId: uploadId) {
+                    offset = status.complete ? total : min(status.receivedBytes, total)
+                }
+                let backoff = min(30.0, pow(2.0, Double(attempt)))
+                try? await Task.sleep(for: .seconds(backoff))
+            }
             if let pending {
                 store.setUploadState(fileName: pending.fileName, state: .uploading, uploadedBytes: offset)
             }
-            let percent = Int((Double(offset) / Double(total) * 100).rounded())
-            onProgress(min(100, percent))
         }
+        onProgress(100)
 
         let done = try await api.completeUpload(uploadId: uploadId)
         if let pending {
@@ -154,44 +181,81 @@ final class BackgroundUploadService: NSObject {
         return done.storagePath
     }
 
-    // MARK: - Chunk transfer
+    // MARK: - Transfer
 
-    private func putChunkWithBackoff(
-        to sessionUri: String, data: Data, start: Int64, end: Int64, total: Int64
+    /// `Content-Range` for the rest of a file from `offset`: the final (and only)
+    /// PUT of a GCS resumable session, which may be any size.
+    nonisolated static func contentRange(from offset: Int64, total: Int64) -> String {
+        "bytes \(offset)-\(total - 1)/\(total)"
+    }
+
+    /// Where a resume's tail copy lives until its transfer ends: Caches, not tmp,
+    /// because the system's upload daemon reads it after the app may be gone.
+    nonisolated static func tailDirectory() -> URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("upload-tails", isDirectory: true)
+    }
+
+    /// Copy the bytes of `fileURL` from `offset` to the end into a file of their
+    /// own: a background upload task reads its whole body from a file.
+    nonisolated static func writeTail(of fileURL: URL, from offset: Int64, uploadId: String) throws -> URL {
+        let dir = tailDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let tail = dir.appendingPathComponent("\(uploadId)-\(offset)")
+        try? FileManager.default.removeItem(at: tail)
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(offset))
+        FileManager.default.createFile(atPath: tail.path, contents: nil)
+        let out = try FileHandle(forWritingTo: tail)
+        defer { try? out.close() }
+        // Copy in slices so a 3-hour recording's tail never sits in memory whole.
+        while true {
+            let slice = handle.readData(ofLength: 4 * 1024 * 1024)
+            if slice.isEmpty { break }
+            out.write(slice)
+        }
+        return tail
+    }
+
+    private func putRemainder(
+        of fileURL: URL, from offset: Int64, total: Int64, to sessionUri: String, uploadId: String,
+        onProgress: @escaping @MainActor (Int) -> Void
     ) async throws {
         guard let url = URL(string: sessionUri) else { throw UploadError.failed }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
-        request.setValue("bytes \(start)-\(end - 1)/\(total)", forHTTPHeaderField: "Content-Range")
+        request.setValue(Self.contentRange(from: offset, total: total), forHTTPHeaderField: "Content-Range")
 
-        // Background upload tasks must be backed by a file, not an in-memory body.
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("amchunk_\(UUID().uuidString)")
-        try data.write(to: tmp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        // From byte 0 the body is the file itself; a resume sends a copy of the tail.
+        let tail = offset == 0 ? nil : try Self.writeTail(of: fileURL, from: offset, uploadId: uploadId)
+        defer { if let tail { try? FileManager.default.removeItem(at: tail) } }
 
-        var attempt = 0
-        while true {
-            do {
-                try await send(request, fromFile: tmp)
-                return
-            } catch {
-                attempt += 1
-                if attempt > Self.maxChunkRetries {
-                    AppLog.error("bg_upload_chunk_give_up start=\(start) err=\(error.localizedDescription)")
-                    throw error
-                }
-                let backoff = min(30.0, pow(2.0, Double(attempt)))
-                try? await Task.sleep(for: .seconds(backoff))
-            }
+        let report: @Sendable (Int64) -> Void = { sent in
+            let percent = Int((Double(offset + sent) / Double(total) * 100).rounded())
+            Task { @MainActor in onProgress(min(99, percent)) }
         }
+        try await send(request, fromFile: tail ?? fileURL, uploadId: uploadId, onSent: report)
     }
 
-    private func send(_ request: URLRequest, fromFile file: URL) async throws {
-        let task = session.uploadTask(with: request, fromFile: file)
+    private func send(
+        _ request: URLRequest, fromFile file: URL, uploadId: String, onSent: @escaping @Sendable (Int64) -> Void
+    ) async throws {
+        // A transfer for this session already running (started before the app
+        // was killed) is joined: a second PUT to the same session would race it.
+        let running = await session.allTasks.first { $0.taskDescription == uploadId && $0.state == .running }
+        let task: URLSessionTask
+        if let running {
+            AppLog.info("bg_upload_joined_running_task uploadId=\(uploadId)")
+            task = running
+        } else {
+            task = session.uploadTask(with: request, fromFile: file)
+            task.taskDescription = uploadId
+        }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
             continuations[task.taskIdentifier] = cont
+            progressHandlers[task.taskIdentifier] = onSent
             lock.unlock()
             task.resume()
         }
@@ -206,11 +270,31 @@ final class BackgroundUploadService: NSObject {
 
 extension BackgroundUploadService: URLSessionDataDelegate {
     nonisolated func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64, totalBytesExpectedToSend: Int64
+    ) {
+        lock.lock()
+        let report = progressHandlers[task.taskIdentifier]
+        lock.unlock()
+        report?(totalBytesSent)
+    }
+
+    nonisolated func urlSession(
         _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
     ) {
         lock.lock()
         let cont = continuations.removeValue(forKey: task.taskIdentifier)
+        progressHandlers.removeValue(forKey: task.taskIdentifier)
         lock.unlock()
+
+        // Nobody in this process is waiting: it was started before the app was
+        // killed, and the system relaunched the app to deliver it. Hand it to the
+        // resume path, which reads the session's state from the server and
+        // finishes (or retries) the upload.
+        if cont == nil {
+            Task { @MainActor [weak self] in self?.onOrphanUploadFinished?() }
+            return
+        }
 
         if let error {
             cont?.resume(throwing: error)
