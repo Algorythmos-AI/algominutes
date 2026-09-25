@@ -89,13 +89,14 @@ locals {
     api = merge(local.db_env, local.admin_env, {
       STORAGE_BUCKET    = local.region_bucket["recordings"]
       ALLOWED_ORIGINS   = var.allowed_origins
+      PUBLIC_SITE_URL   = var.public_site_url
       BROADCAST_CAPTURE = var.broadcast_capture
     })
     transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     summarizer = local.db_env
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
-    billing    = local.db_env
+    billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
     notifier   = local.db_env
   }
 

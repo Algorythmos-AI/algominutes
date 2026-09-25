@@ -13,15 +13,14 @@
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import shareLinksModule from '@algominutes/db/share-links.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
+import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 const { isValidId } = intelligenceModule;
 const shareLinks = shareLinksModule;
 const { pool, postgresEnabled } = pgQueryModule;
 
-// Where a share link points. Deliberately a constant — this value is the
-// hosting origin, which is fixed for the project and already hardcoded
-// client-side.
-const SHARE_BASE_URL = 'https://algominutes.com';
+// Where a share link points: the public site (PUBLIC_SITE_URL).
+const { publicSiteUrl } = siteUrlModule;
 
 // ── shareCreate ────────────────────────────────────────────────────────
 // The raw token is returned HERE AND NOWHERE ELSE. Only sha256(token) is
@@ -76,7 +75,7 @@ export async function shareCreateRoute(req, res) {
     return res.status(200).json({
       shareId: created.id,
       token: raw,
-      url: `${SHARE_BASE_URL}/s/${raw}`,
+      url: `${publicSiteUrl()}/s/${raw}`,
       scope: opts.scope,
       expiresAt: created.expiresAt,
     });

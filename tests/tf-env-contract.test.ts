@@ -124,8 +124,9 @@ describe.each(ENVS)('%s: Terraform sets every env a service requires', (env: Env
 });
 
 describe('the api env', () => {
-  it('carries the broadcast kill switch', () => {
-    expect(envOfService('api')).toMatchObject({ BROADCAST_CAPTURE: 'var.broadcast_capture' });
+  it('carries the broadcast kill switch, and the public site for the api and billing', () => {
+    expect(envOfService('api')).toMatchObject({ BROADCAST_CAPTURE: 'var.broadcast_capture', PUBLIC_SITE_URL: 'var.public_site_url' });
+    expect(envOfService('billing')).toMatchObject({ PUBLIC_SITE_URL: 'var.public_site_url' });
   });
 
   it.each(ENVS)('%s: gives the api a real CORS origin', (env) => {

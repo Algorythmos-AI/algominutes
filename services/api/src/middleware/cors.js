@@ -8,9 +8,9 @@
 // functions default list, which is the one that keeps the native clients
 // working. `ALLOWED_ORIGINS` (comma-separated env) is added on top / overrides.
 //
-// NOTE: production origins (https://algominutes.com, https://api.algominutes.com)
-// are supplied at deploy time via ALLOWED_ORIGINS; only the localhost dev
-// origins are baked in here so the native clients keep working.
+// NOTE: deployed origins (the public site, https://algominutes.algorythmos.com)
+// come from Terraform's var.allowed_origins as ALLOWED_ORIGINS; only the
+// localhost dev origins are baked in here so the native clients keep working.
 
 import cors from 'cors';
 
