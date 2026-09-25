@@ -88,11 +88,6 @@ async function setChunkOperation(client, { chunkId, operationName }) {
   await client.query('UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1', [chunkId, operationName]);
 }
 
-/** A chunk that can't be transcribed (the terminal path fails its note next). */
-async function markChunkError(client, chunkId) {
-  await client.query(`UPDATE audio_chunks SET status = 'error' WHERE id = $1`, [chunkId]);
-}
-
 async function markChunkDone(client, { chunkId, noteId }) {
   // Atomic + idempotent.
   await client.query(
@@ -368,7 +363,6 @@ module.exports = {
   insertAudioChunkRow,
   setChunkOperation,
   markChunkDone,
-  markChunkError,
   claimSummarizerEnqueue,
   claimEmbedderEnqueue,
   fetchTailWords,

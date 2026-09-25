@@ -130,7 +130,7 @@ async function onReady({ pool, noteId, workspaceId, uid, traceId, log }) {
 }
 
 /** FINAL-ATTEMPT FAILURE: DLQ + refund + notify. `payload` is metadata only. */
-async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log }) {
+async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false, notify = true }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -142,11 +142,18 @@ async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err,
     attempts: attempts != null ? attempts : null,
     traceId: traceId || null,
   }, log);
+  // Only the record, for work lost on a note that isn't failed (ready anyway,
+  // or Postgres couldn't say): no refund, no "failed" notice.
+  if (deadLetterOnly) return;
+  // The refund runs for any failed note: it's net-guarded, so a second chunk,
+  // a retry or an earlier refund leaves it a no-op. The notice (`notify`) goes
+  // with a new failure only.
   await refundSafe({
     noteId,
     reason: 'refund:summary_failed',
     idempotencyKey: `${noteId}:refund:summarize`,
   }, log);
+  if (!notify) return;
   await enqueueNotify({
     type: 'note_failed',
     noteId,

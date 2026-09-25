@@ -459,7 +459,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   spent minutes in Gemini, then wrote without re-checking it, so an older run could land over a regenerate
   claimed in that window.
 - [x] **Fixed (transcoder-sql-into-repo + shared-writers-into-repo PRs): every Postgres write is in the
-  repo layer, and CI gates it.** The transcoder's SQL (the chunk gates, status writes, `markChunkError`, and
+  repo layer, and CI gates it.** The transcoder's SQL (the chunk gates, status writes, and
   the fast path's whole result in one transaction) lives in `packages/db/src/pipeline-repo.cjs`. The shared
   writers moved whole from `packages/ai` into `packages/db` (`note-terminal.cjs`, `note-edit.cjs`,
   `share-links.cjs`, `note-feedback.cjs`), and the embedder's transcript read and embeddings write moved to
@@ -953,10 +953,53 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               commits only over an in-progress note, so a duplicate delivery gets `NOTE_MOVED_ON` (acked)
               instead of overwriting the finished note and the user's edits since.
               - Tested on Postgres (eight cases); five mutations checked.
-            - The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
-              when `markNoteFailed` matched nothing, e.g. a `ready` note whose later embedder enqueue or
-              doc check kept failing. Gate the hooks on the note not being finished (the parked #139 adds
-              a `{ failed }` return for this).
+            - ~~The workers' last-attempt path runs the refund, dead letter and "note failed" notice even
+              when `markNoteFailed` matched nothing~~ **fixed (final-attempt-hooks PR):** every terminal
+              path (each worker's last attempt, the transcoder's four poll terminals, its two kickoff
+              failures) follows one rule. `markNoteFailed` reads the status it replaces under
+              `FOR NO KEY UPDATE` and returns `marked` (Postgres has the note at `error`) and `failed`
+              (this write moved it there). The refund keys on `marked`: `reverseUsageForNote` is
+              net-guarded, so a second chunk, a retry or an earlier refund leaves it a no-op. The "failed" notice keys on
+              `failed`, so the author is told once. A note that is ready anyway gets the dead letter alone
+              (the one record of lost work, such as an embedder enqueue after the commit), as does one
+              Postgres couldn't be asked about; one that is gone gets nothing. A poll's chunk is marked
+              `error` in the note's statement and only with it, so a retry after a Postgres error finds
+              neither written; a poll that finds its chunk already failed re-runs the mirror and the tail
+              while the note is still failed (so a poll terminal that died after its commit is refunded on
+              its retry), and leaves a note that has moved on (a regeneration) alone.
+              A failed note keeps its first message. A failed existence probe no longer mirrors `error`
+              onto a ready note. `note_failed` (the alert's line) fires only for a new failure or a
+              Postgres error. Tested on Postgres (both workers' last attempts; 13 poll cases, one holding
+              the note's lock; the ledger through the real hooks); mutations checked.
+              - [ ] **Queued (from its re-reviews):**
+                - **A crash after the commit still loses the tail outside the poll terminals:** the
+                  kickoff's YouTube and unreadable-length failures and the spend cap (the retry hits the
+                  replay guard), and each worker's last attempt (no retry left). The sweep doesn't look at
+                  failed notes. Writing the reversal in the failure's own transaction, under
+                  `lockNoteId`, covers every path (with the "kickoff racing a refund" item).
+                - **A failed regeneration refunds the whole recording:** a regeneration takes a `ready` note
+                  to `summarizing`; if the summarizer's last attempt fails it, the ingest debit is reversed
+                  (`refund:summary_failed`), and the next successful regeneration leaves it ready at net 0.
+                  A regeneration's failure shouldn't refund the transcription.
+                - `markNoteFailed` with a chunk locks note then chunk; `completeChunkGate` locks chunk then
+                  note. Two poll chains on one chunk with opposite verdicts can deadlock (reproduced,
+                  `40P01`; either victim retries into a consistent state). Taking the chunk lock first
+                  (the item below) removes it.
+                - When Postgres errors, the mirror writes the caller's message while Postgres keeps the
+                  first; mirror repair compares status only, so they don't converge.
+                - A re-drive's dead letter says `chunk_already_failed`, not the original reason.
+                - A crash between the commit and the notice loses the push (the in-app status is right).
+                  A deterministic notify task name would let every terminal path enqueue it.
+                - A re-driven poll records its dead letter again (the dedupe item below).
+                - A poll from a run that was just re-queued can fail the new run: its statement waits on
+                  the note's lock, then fails the `queued` note (the chunk write matches nothing, as
+                  `markQueued` deleted it). Lock the chunk first in the same statement and require it.
+                - The chunk write has no status guard: a second poll chain for the same chunk can turn
+                  `done` into `error`. Add `AND c.status = 'pending'`.
+                - A poll task's last attempt (`last-attempt.js`) passes no `chunkId`, and its dead letter
+                  drops the chunk, job and reason.
+                - The summarizer's "No speech was found" failure has no refund, notice or dead letter,
+                  and the sweep's `refund:stuck` path never notifies.
             - ~~The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
               while Postgres may be in flight~~ **fixed (web-watchdog-reports-slow PR):** as on iOS
               (#124), a note the server owns is reported slow ("Taking longer than usual"), never
@@ -968,9 +1011,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               whole Firestore `summary` map, which drops `summary.chapters` there.
         - ~~The spend guard's catch in both `index.js` files rethrows a non-cap error without logging
           it~~ **fixed (spend-cap-reader PR):** `haltAtSpendCap` logs `spend_guard_failed` and answers 500.
-        - If the note write lands but `markChunkError` then fails, the retry logs a second `note_failed`
-          (the alert counts it). And if the speech job finishes before an exhausted poll's retry, that
-          retry completes the chunk and the note can go on to `ready`, with no refund or failure
+        - ~~If the note write lands but `markChunkError` then fails, the retry logs a second `note_failed`
+          (the alert counts it)~~ **fixed (final-attempt-hooks PR):** one statement writes both. If the
+          speech job finishes before an exhausted poll's retry, that retry completes the chunk and the note can go on to `ready`, with no refund or failure
           notice sent. That's a good outcome, but the two stores briefly disagree.
         - If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
           carries the Postgres error and the request body, not `stt_operation_errored` / `stt_poll_exhausted`
@@ -1084,8 +1127,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       from the transcoder's probed duration.
     - ~~A note retried after a refund reuses its `${noteId}:ingest` key, so the rerun is free~~ **fixed
       (metering-per-run PR)**, with the refund keys.
-    - The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
-      nothing. `markNoteFailed` now returns `{ failed }` to gate it with.
+    - ~~The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
+      nothing~~ **fixed (final-attempt-hooks PR).**
     - The dead-letter insert and the notify task aren't deduplicated.
 
 ## Embedder: batches and retries (plan rev 8, PR-14, 2026-09-25)
