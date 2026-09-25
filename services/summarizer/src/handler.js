@@ -63,14 +63,16 @@ function fmtTime(ms) {
  * foregrounded, so a note stuck this way could stay stuck for days.
  *
  * Best-effort and never throws: it runs on the failure path, and a failure to
- * record the failure must not mask the original error.
+ * record the failure must not mask the original error. The one exception is
+ * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
     firestore: firestore(),
     noteId, workspaceId, message, log,
     event: 'summarizer_mark_failed',
+    retryOnPgError,
   });
 }
 
@@ -121,7 +123,8 @@ async function handle(payload, deps) {
     // happens whenever STT returns zero words (silence, or the proto-decode
     // fallback in stt.js). A note that will never finish must say so.
     log.warn({ noteId }, 'summarizer_no_transcript_lines');
-    await markNoteFailed({ noteId, workspaceId, message: 'No speech was found in this recording.', log });
+    // Throws if Postgres misses the write, so the task retries (note-terminal).
+    await markNoteFailed({ noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true });
     return;
   }
 

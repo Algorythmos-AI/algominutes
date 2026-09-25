@@ -36,10 +36,17 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  * Best-effort, and never throws: this runs on the failure path, and a failure
  * to record the failure must not mask the original error.
  *
+ * Except with `retryOnPgError`, for a failure the handler decided on itself (an
+ * unreadable file, a speech job that errored, no words) and would otherwise
+ * acknowledge. There a Postgres error throws before anything is mirrored, so
+ * the task is retried and decides again, instead of acking a note Postgres
+ * still has in progress. The queue's last attempt ends in the index.js
+ * terminal path, which calls this without the flag.
+ *
  * The `status <> 'ready'` guard matters — a late-arriving failure from a
  * retried task must not walk back a note that has since succeeded.
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
@@ -65,6 +72,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   } catch (err) {
     pgErrored = true;
     log.error({ err, noteId, workspaceId }, `${name}_pg_failed`);
+    if (retryOnPgError) throw err;
   }
 
   // Mirror to Firestore only if Postgres agrees the note is now failed, or if

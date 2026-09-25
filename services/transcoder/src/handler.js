@@ -142,6 +142,7 @@ async function handleKickoff(payload, deps) {
             message: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
             log,
             event: 'youtube_permanent_failure',
+            retryOnPgError: true,
           });
           // A7.4 tail for a permanent (non-retryable) terminal failure — DLQ +
           // refund + notify. Best-effort; never throws (guarded when the hooks
@@ -181,6 +182,7 @@ async function handleKickoff(payload, deps) {
         message: "We couldn't read this recording's length, so it may be damaged. Please record or upload it again.",
         log,
         event: 'duration_unreadable',
+        retryOnPgError: true,
       });
       if (terminalHooks) {
         await terminalHooks.onTranscodeTerminalFailure({
@@ -288,7 +290,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_failed');
       await noteTerminal.markNoteFailed({
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
-        message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed',
+        message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
       });
       return;
     }
@@ -380,13 +382,13 @@ async function handleSttPoll(payload, deps) {
     // 'transcribing' and nothing anywhere reporting a problem.
     if (poll >= MAX_STT_POLLS) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
-      const c2 = await db.pool().connect();
-      try {
-        await db.markChunkError(c2, chunkId);
-      } finally { c2.release(); }
       // Terminal, and decided here rather than by a retry count — this loop
       // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
       // alone left Postgres at 'transcribing' forever.
+      //
+      // The note before the chunk: if Postgres misses the note write this
+      // throws and the task retries, and a chunk already marked 'error' would
+      // make that retry return early with the note still in progress.
       await noteTerminal.markNoteFailed({
         pool: db.pool(),
         firestore: mirror.db(),
@@ -394,7 +396,12 @@ async function handleSttPoll(payload, deps) {
         message: 'Transcription took too long and was stopped.',
         log,
         event: 'stt_poll_exhausted',
+        retryOnPgError: true,
       });
+      const c2 = await db.pool().connect();
+      try {
+        await db.markChunkError(c2, chunkId);
+      } finally { c2.release(); }
       // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
       // never sees a final attempt here — DLQ/refund/notify must be driven from
       // this terminal decision, not from the index.js final-attempt branch.
@@ -420,10 +427,7 @@ async function handleSttPoll(payload, deps) {
 
   if (op.error) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
-    const c2 = await db.pool().connect();
-    try {
-      await db.markChunkError(c2, chunkId);
-    } finally { c2.release(); }
+    // The note before the chunk, as for stt_poll_exhausted above.
     await noteTerminal.markNoteFailed({
       pool: db.pool(),
       firestore: mirror.db(),
@@ -431,7 +435,12 @@ async function handleSttPoll(payload, deps) {
       message: 'Transcription failed for part of this recording.',
       log,
       event: 'stt_operation_errored',
+      retryOnPgError: true,
     });
+    const c2 = await db.pool().connect();
+    try {
+      await db.markChunkError(c2, chunkId);
+    } finally { c2.release(); }
     // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
     if (terminalHooks) {
       await terminalHooks.onTranscodeTerminalFailure({
@@ -611,7 +620,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
     plog.warn({}, 'chunk_already_failed');
     await noteTerminal.markNoteFailed({
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
-      message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed',
+      message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
     });
     return;
   }
@@ -679,14 +688,15 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   if (!op.done) {
     if (poll >= MAX_STT_POLLS) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
-      const c2 = await db.pool().connect();
-      try { await db.markChunkError(c2, chunkId); }
-      finally { c2.release(); }
+      // The note before the chunk, as in handleSttPoll.
       await noteTerminal.markNoteFailed({
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
-        log, event: 'stt_poll_exhausted',
+        log, event: 'stt_poll_exhausted', retryOnPgError: true,
       });
+      const c2 = await db.pool().connect();
+      try { await db.markChunkError(c2, chunkId); }
+      finally { c2.release(); }
       if (terminalHooks) {
         await terminalHooks.onTranscodeTerminalFailure({
           pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
@@ -707,14 +717,15 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
 
   if (op.error) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
-    const c2 = await db.pool().connect();
-    try { await db.markChunkError(c2, chunkId); }
-    finally { c2.release(); }
+    // The note before the chunk, as in handleSttPoll.
     await noteTerminal.markNoteFailed({
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
-      log, event: 'stt_operation_errored',
+      log, event: 'stt_operation_errored', retryOnPgError: true,
     });
+    const c2 = await db.pool().connect();
+    try { await db.markChunkError(c2, chunkId); }
+    finally { c2.release(); }
     if (terminalHooks) {
       await terminalHooks.onTranscodeTerminalFailure({
         pool: db.pool(), noteId, workspaceId,

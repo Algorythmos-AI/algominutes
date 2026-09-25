@@ -825,9 +825,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   (PR-22). `probeDuration` now measures ADTS by decoding (4.7 s for 4 h). CI installs ffmpeg so the
   real-binary test runs, rather than skipping.
   - [ ] **Queued (pre-existing, from that audit):**
-    - `note-terminal markNoteFailed` never throws when its Postgres write errors, so a terminal path acks
-      with Firestore ahead of Postgres. That covers the YouTube, `duration_unreadable` and poll paths.
-      It's a shared helper: change it with all its callers.
+    - ~~`note-terminal markNoteFailed` never throws when its Postgres write errors, so a terminal path acks
+      with Firestore ahead of Postgres~~ **fixed (terminal-failure-retries PR):** every failure a handler
+      decides on itself (YouTube, `duration_unreadable`, a chunk already failed, a poll chain run out, a
+      speech job that errored, and the summarizer's "no speech") passes `retryOnPgError`. A Postgres error
+      then throws before anything is mirrored, and the task retries the decision. The four poll paths
+      mark the note before the chunk, since a chunk already marked `error` makes a retry return early.
+      The index.js last-attempt path keeps the old never-throw behaviour. Tested on Postgres with a
+      trigger standing in for the outage (six cases, six mutations). Not covered by a test: the
+      whole-file (AssemblyAI) poll sites and YouTube, which take the same flag.
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
       (`STT_PROVIDER=google`).
     - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
