@@ -903,7 +903,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               across lines like the summarizer's preview. A doc written in the last 10 minutes is left alone,
               because the clients' Retry writes `queued` there before Postgres moves. It covers the fast
               path's failed mirror after its commit, a last attempt's lost `error` mirror, and any other lost
-              mirror write. Tested on Postgres with a precondition-honouring fake (13 cases); eight mutations
+              mirror write. Tested on Postgres with a precondition-honouring fake (13 cases); seven mutations
               checked.
               - [ ] **Queued (from its audit):** a run lists at most 200 notes, oldest first, and warns
                 (`mirror_repair_limit_reached`) when it hits that; past it, newer notes can age out of the
