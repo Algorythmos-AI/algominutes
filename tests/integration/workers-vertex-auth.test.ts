@@ -56,7 +56,7 @@ describe('workers need no GEMINI_API_KEY (Vertex via ADC)', () => {
     const fastPath = require('../../services/transcoder/src/fast-path.js');
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
-      query: async (sql: string, params: unknown[] = []) => { queries.push({ sql, params }); return { rows: [], rowCount: 1 }; },
+      query: async (sql: string, params: unknown[] = []) => { queries.push({ sql, params }); return { rows: [{ id: 'n1' }], rowCount: 1 }; },
       release: noop,
     };
     const db = {
@@ -64,6 +64,8 @@ describe('workers need no GEMINI_API_KEY (Vertex via ADC)', () => {
       upsertNoteStatus: async () => {},
       deleteTranscriptLinesForNote: async () => {},
       claimEmbedderEnqueue: async () => false,
+      // The real repo function, over the fake client below.
+      persistFastPathResult: require('@algominutes/db/pipeline-repo.cjs').persistFastPathResult,
     };
     const input = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fastpath-')), 'clip.m4a');
     fs.writeFileSync(input, Buffer.from('not really audio'));

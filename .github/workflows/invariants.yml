@@ -41,6 +41,9 @@ jobs:
       - name: No direct Firestore note mutations outside the repo/mirror layer
         run: bash scripts/check-no-direct-firestore.sh
 
+      - name: No Postgres note-table writes outside the repo layer (syntax-aware)
+        run: node scripts/check-no-direct-pg-writes.mjs
+
       - name: Migration integrity (never edit a committed migration)
         run: bash scripts/check-migrations.sh
 
