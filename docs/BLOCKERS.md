@@ -582,9 +582,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   add `uid` to the kickoff payload, and have the transcoder pass it on to the summarize and embed payloads.
   Then the transcoder, embedder and summarizer entry loggers can bind it. (Task payloads are internal and
   aren't in `packages/contracts`.) Small; queued.
-- [ ] **No test covers the summarizer skipping `onReady` when `markSummaryReady` wrote nothing.** The
-  repo side is tested. There is no handler-level summarizer test yet (it needs a fake Gemini ladder). Add
-  it with PR-13 (map-reduce), which rewrites this handler anyway.
+- [x] **Tested (summarizer-skips-onready PR):** the real summarizer handler, on Postgres with a fake Gemini
+  ladder, writes nothing and skips `onReady` (the "ready" push) when a regenerate is claimed, or the note is
+  deleted, during its Gemini call. Mutation-checked. Was: **No test covers the summarizer skipping
+  `onReady` when `markSummaryReady` wrote nothing.**
 - [x] **Fixed (pg-connection-budget PR; owner chose "cap the pools"):** a per-environment budget
   (`connection-budget.json` → max instances + `PG_POOL_MAX`), enforced by a Terraform precondition, a test,
   and a CI run with every pool capped at 1. See DECISIONS. Was: **Postgres connections vs `db-f1-micro` (staging).** That tier allows about 25 connections. Each
