@@ -240,3 +240,57 @@ describe('sweep', () => {
     expect(f.objects.has('recordings/ws-a/newer.m4a')).toBe(false);
   });
 });
+
+describe('sweep: retention and trials', () => {
+  const DAY = 24 * HOUR;
+  it("deletes notes older than their author's retention choice, through deleteNote, and purges them", async () => {
+    const f = fakes();
+    await pool.query(`UPDATE users SET retention_days = 30 WHERE uid = 'alice'`);
+    await seedUser('bob'); // keeps everything (retention_days NULL)
+    await seedWorkspace('ws-b', 'bob');
+    for (const [id, ws, author, age] of [['old', 'ws-a', 'alice', 40], ['recent', 'ws-a', 'alice', 10], ['bobs', 'ws-b', 'bob', 400]] as const) {
+      await seedNote(id, ws, author);
+      await pool.query('UPDATE notes SET created_at = $2, storage_path = $3 WHERE id = $1', [id, ago(age * DAY), `recordings/${ws}/${id}.m4a`]);
+      f.objects.add(`recordings/${ws}/${id}.m4a`);
+      f.docs.set(`workspaces/${ws}/notes/${id}`, {});
+    }
+    const counts = await runSweep(f.deps);
+    expect(counts.retention).toBe(1);
+    expect((await pool.query('SELECT id FROM notes ORDER BY id')).rows.map((r) => r.id)).toEqual(['bobs', 'recent']);
+    expect([...f.objects].sort()).toEqual(['recordings/ws-a/recent.m4a', 'recordings/ws-b/bobs.m4a']);
+    expect(f.docs.has('workspaces/ws-a/notes/old')).toBe(false);
+    expect(await count(`SELECT 1 FROM storage_purges`)).toBe(0); // purged in the same run
+    expect(errors).toEqual([]);
+  });
+
+  it('a failed purge stays queued for the storage_purges step; the note is still gone', async () => {
+    const f = fakes({ storageFails: true });
+    await pool.query(`UPDATE users SET retention_days = 7 WHERE uid = 'alice'`);
+    await seedNote('old', 'ws-a', 'alice');
+    await pool.query(`UPDATE notes SET created_at = $1, storage_path = 'recordings/ws-a/old.m4a' WHERE id = 'old'`, [ago(8 * DAY)]);
+    f.objects.add('recordings/ws-a/old.m4a');
+    await runSweep(f.deps);
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'old'`)).toBe(0);
+    expect(await count(`SELECT 1 FROM storage_purges WHERE note_id = 'old' AND attempts = 1`)).toBe(1);
+  });
+
+  it("flips elapsed trials to free_floor, and leaves live trials and paid periods alone", async () => {
+    const f = fakes();
+    await seedUser('bob');
+    await seedUser('carol');
+    await pool.query(
+      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, current_period_end) VALUES
+         ('alice', 'free', 'trialing', 'trialing', NOW() - INTERVAL '8 days', NOW() - INTERVAL '1 day', NULL),
+         ('bob',   'free', 'trialing', 'trialing', NOW() - INTERVAL '2 days', NOW() + INTERVAL '5 days', NULL),
+         ('carol', 'pro',  'active',   'trialing', NOW() - INTERVAL '8 days', NOW() - INTERVAL '1 day', NOW() + INTERVAL '20 days')`,
+    );
+    const counts = await runSweep(f.deps);
+    expect(counts.trials).toBe(1);
+    const { rows } = await pool.query('SELECT uid, entitlement_state FROM subscriptions ORDER BY uid');
+    expect(rows).toEqual([
+      { uid: 'alice', entitlement_state: 'free_floor' },
+      { uid: 'bob', entitlement_state: 'trialing' },
+      { uid: 'carol', entitlement_state: 'trialing' },
+    ]);
+  });
+});
