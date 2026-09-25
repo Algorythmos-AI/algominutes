@@ -179,6 +179,72 @@ describe('a Google chunk poll that fails its chunk', () => {
     expect([await chunkStatus(c1), await chunkStatus(c2)]).toEqual(['error', 'error']);
   });
 
+  it('a re-queue that deleted this run\'s chunks while the verdict waited: the new run is left alone', async () => {
+    // The kickoff (markQueued) locks the note, and only later re-queues it and
+    // deletes the old run's chunks: the verdict arrives in that gap. (Taking the
+    // chunk first here deadlocked with it.)
+    const kickoff = await pool.connect();
+    let r: ReturnType<typeof run>;
+    try {
+      await kickoff.query('BEGIN');
+      await kickoff.query(`SELECT 1 FROM notes WHERE id = 'n1' FOR UPDATE`);
+      r = run(c1);
+      let waiting = 0;
+      for (let i = 0; i < 500 && waiting < 1; i++) {
+        waiting = (await kickoff.query(`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`)).rows[0].n;
+        if (waiting < 1) await new Promise((res) => setTimeout(res, 10));
+      }
+      expect(waiting).toBeGreaterThanOrEqual(1);
+      await kickoff.query(`UPDATE notes SET status = 'queued' WHERE id = 'n1'`);
+      await kickoff.query(`DELETE FROM audio_chunks WHERE note_id = 'n1'`);
+    } finally {
+      await kickoff.query('COMMIT');
+      kickoff.release();
+    }
+    await r!.done;
+    expect(await noteStatus()).toBe('queued');
+    expect(mirrored).toEqual([]);
+    expect(r!.hooks).toEqual([]);
+  });
+
+  it("a late completion of a failed note's chunk: the note stays failed, the chunk too", async () => {
+    await run(c1).done; // the verdict fails the note and its chunk
+    const client = await transcoderDb.pool().connect();
+    try {
+      const gate = await transcoderDb.completeChunkGate(client, { chunkId: c1, noteId: 'n1', workspaceId: 'ws', log });
+      expect(gate).toMatchObject({ finished: true, allDone: false, summarizerClaimed: false });
+    } finally { client.release(); }
+    expect(await noteStatus()).toBe('error');
+    expect(await chunkStatus(c1)).toBe('error');
+  });
+
+  it('with a chunk and no retry left, a transaction that fails still reports the real error', async () => {
+    const noteTerminal = require('@algominutes/db/note-terminal.cjs');
+    const seen: Array<{ o: any; m: string }> = [];
+    const watch: any = { info: noop, warn: noop, error: (o: any, m: string) => void seen.push({ o, m }), child: () => watch };
+    await withOutage('notes', async () => {
+      const out = await noteTerminal.markNoteFailed({
+        pool: transcoderDb.pool(), firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log: watch,
+        event: 'ev', chunkId: c1,
+      });
+      expect(out).toMatchObject({ pgErrored: true, marked: false });
+    });
+    const pgFailed = seen.find((l) => l.m === 'ev_pg_failed');
+    expect(String(pgFailed?.o.err?.message)).toContain('simulated outage');
+  });
+
+  it('a chunk another chain finished: its verdict fails nothing', async () => {
+    await pool.query(`UPDATE audio_chunks SET status = 'done' WHERE id = $1`, [c1]);
+    const noteTerminal = require('@algominutes/db/note-terminal.cjs');
+    const out = await noteTerminal.markNoteFailed({
+      pool: transcoderDb.pool(), firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log,
+      event: 'stt_operation_errored', retryOnPgError: true, chunkId: c1,
+    });
+    expect(out).toMatchObject({ superseded: true, marked: false });
+    expect(await noteStatus()).toBe('transcribing');
+    expect(await chunkStatus(c1)).toBe('done');
+  });
+
   it('the poll budget ran out: the same, as stt_poll_exhausted', async () => {
     googleOp = { done: false };
     const r = run(c1, { poll: MAX_STT_POLLS });

@@ -352,6 +352,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
  */
 async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;
+  // Gone, or a verdict whose run is over (superseded: exists is false too).
   if (!outcome.marked && !outcome.exists) return;
   await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked, notify: outcome.failed });
 }
@@ -573,9 +574,16 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
   let allDone;
   let summarizerClaimed;
   let embedderClaimed;
+  let gate;
   try {
-    ({ allDone, summarizerClaimed, embedderClaimed } = await db.completeChunkGate(c5, { chunkId, noteId, workspaceId, log }));
+    gate = await db.completeChunkGate(c5, { chunkId, noteId, workspaceId, log });
+    ({ allDone, summarizerClaimed, embedderClaimed } = gate);
   } finally { c5.release(); }
+  if (gate.finished) {
+    // Its run is over (failed, finished or gone): nothing to advance.
+    log.info({ noteId, workspaceId, chunkId, status: gate.status }, 'chunk_complete_note_finished');
+    return;
+  }
 
   // Past the commit above, a failed mirror is logged, not thrown: a retry of
   // this poll finds the chunk done and returns, so a throw here skipped the
