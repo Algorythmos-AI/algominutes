@@ -11,6 +11,7 @@
  */
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess } from './workspace-access';
+import { lockNoteId } from './note-lock';
 
 export interface UploadSession {
   id: string;
@@ -24,6 +25,15 @@ export interface UploadSession {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The note was deleted (its purge is still pending): nothing may be uploaded into it. */
+export class NoteDeletedError extends Error {
+  readonly code = 'NOTE_DELETED';
+  constructor(noteId: string) {
+    super(`note ${noteId} was deleted`);
+    this.name = 'NoteDeletedError';
+  }
+}
 
 export class UploadSessionsUnavailableError extends Error {
   constructor() {
@@ -44,6 +54,15 @@ export async function createUploadSession(
   if (!isPostgresEnabled()) throw new UploadSessionsUnavailableError();
   return withTx(
     async (client) => {
+      // The note lock first (the kickoff's and deleteNote's order). A deletion
+      // either committed before this, and its purge row refuses the session, or
+      // waits, then deletes this session's row and cancels its URI.
+      await lockNoteId(client, input.noteId);
+      const purging = await client.query(
+        'SELECT 1 FROM storage_purges WHERE note_id = $1 AND workspace_id = $2 LIMIT 1',
+        [input.noteId, input.workspaceId],
+      );
+      if (purging.rowCount) throw new NoteDeletedError(input.noteId);
       await ensureUser(client, { uid: input.uid, email: input.email, name: input.name });
       await ensureWorkspaceAccess(
         client,
