@@ -49,8 +49,12 @@ const { enqueueTask } = cloudTasksModule;
 // Mark the note failed through the repo layer (Postgres scoped to the caller's
 // workspace, then the Firestore mirror). Never throws: the caller is already on
 // an error path, and a failure to record the failure is itself logged.
+// Refunded in the failure's transaction: past markQueued the run was already
+// charged, and it never started (net-guarded, so a note never charged gets
+// nothing back).
 async function failNote(db, { noteId, workspaceId, userMsg, log, event }) {
-  await markError(db, { noteId, workspaceId, errorMessage: userMsg }, log).catch((err) =>
+  const refund = { reason: 'refund:enqueue_failed', idempotencyKey: `${noteId}:refund:enqueue` };
+  await markError(db, { noteId, workspaceId, errorMessage: userMsg, refund }, log).catch((err) =>
     log.error({ err, event }, 'mark_error_failed'),
   );
 }

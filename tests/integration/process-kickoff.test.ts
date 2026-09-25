@@ -30,8 +30,14 @@ vi.mock('firebase-admin/storage', () => ({
   getStorage: () => ({ bucket: () => ({ file: () => ({ getMetadata: async () => [{ size: '1000' }] }) }) }),
 }));
 const enqueued: Array<Record<string, unknown>> = [];
+let enqueueFails = false;
 vi.mock('@algominutes/ai/cloud-tasks.cjs', () => ({
-  default: { enqueueTask: async ({ payload }: { payload: Record<string, unknown> }) => { enqueued.push(payload); } },
+  default: {
+    enqueueTask: async ({ payload }: { payload: Record<string, unknown> }) => {
+      if (enqueueFails) throw new Error('tasks 503');
+      enqueued.push(payload);
+    },
+  },
 }));
 // A test can make the rate-limit step do something first, then refuse.
 let budgetHook: (() => Promise<void>) | null = null;
@@ -50,6 +56,7 @@ beforeEach(async () => {
   await resetDb();
   docs.clear();
   enqueued.length = 0;
+  enqueueFails = false;
   budgetHook = null;
 });
 afterAll(async () => {
@@ -103,6 +110,23 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(await count(`SELECT 1 FROM subscriptions WHERE uid = 'bob'`)).toBe(1);
     expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'y1' AND entry_type = 'debit'`)).toBe(1);
     expect(enqueued).toHaveLength(1);
+  });
+
+  it("an enqueue that fails after the debit: the note fails and its charge comes back; the retry is charged once", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    enqueueFails = true;
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(500);
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('error');
+    const ledger = async () => (await pool.query(
+      `SELECT entry_type, minutes::float8 AS m, reason FROM usage_ledger WHERE note_id = 'n1' ORDER BY id`,
+    )).rows.map((r: any) => `${r.entry_type} ${r.m} ${r.reason}`);
+    expect(await ledger()).toEqual(['debit 3 ingest', 'reversal -3 refund:enqueue_failed']);
+
+    enqueueFails = false;
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(200);
+    expect(await ledger()).toEqual(['debit 3 ingest', 'reversal -3 refund:enqueue_failed', 'debit 3 ingest']);
   });
 
   it('a duplicate kickoff of the in-flight note neither re-queues nor debits again', async () => {
