@@ -45,6 +45,12 @@ async function handle(payload, deps) {
     if (kind === KICKOFF) return await handleKickoff(payload, deps);
     if (kind === STT_POLL) return await handleSttPoll(payload, deps);
   } catch (err) {
+    // A replayed or stalled kickoff whose note moved on (another attempt, or the
+    // pipeline, finished it): nothing to do, and nothing was written.
+    if (err && err.code === 'NOTE_MOVED_ON') {
+      deps.log.info({ noteId: payload.noteId, workspaceId: payload.workspaceId }, 'kickoff_replay_after_progress');
+      return undefined;
+    }
     // A missing Firestore doc alone doesn't prove the note is gone: Firestore
     // answers NOT_FOUND for a wrong project or database too, and a half-failed
     // account deletion removes docs first. Ask Postgres, the source of truth.
@@ -81,6 +87,10 @@ async function handle(payload, deps) {
 // note still being transcribed. One that moved on (summarizing, ready, error) is
 // acknowledged: rewriting its status would drag a finished note backwards.
 const KICKOFF_RESUMABLE = new Set(['queued', 'chunking', 'transcribing']);
+// Every kickoff status write is conditional on this, not just the first
+// (pipeline-repo upsertNoteStatus onlyIfStatus): an attempt that stalls past its
+// dispatch deadline can wake after its replay finished the note.
+const ONLY_IF_IN_PROGRESS = [...KICKOFF_RESUMABLE];
 
 // Poll tasks carry a deterministic id, so a replayed kickoff or a duplicate poll
 // chain collapses into the running one instead of polling twice (cloud-tasks.cjs).
@@ -99,7 +109,9 @@ async function handleKickoff(payload, deps) {
   let status;
   try {
     status = await db.noteStatus(pre, { noteId, workspaceId });
-    if (KICKOFF_RESUMABLE.has(status)) await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking' });
+    if (KICKOFF_RESUMABLE.has(status)) {
+      await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking', onlyIfStatus: ONLY_IF_IN_PROGRESS });
+    }
   } finally { pre.release(); }
   if (status == null) throw new NoteGoneError('postgres');
   if (!KICKOFF_RESUMABLE.has(status)) {
@@ -156,6 +168,8 @@ async function handleKickoff(payload, deps) {
     try {
       durationSec = await ffmpeg.probeDuration(inputLocal);
     } catch (err) {
+      // ffprobe/ffmpeg didn't run (not spawnable, or killed): retry.
+      if (err.transient) throw err;
       // Permanent: the same bytes won't have a length on a retry, and guessing
       // one would send a long recording down the single-call fast path.
       log.error({ err, noteId, workspaceId }, 'duration_unreadable');
@@ -187,6 +201,7 @@ async function handleKickoff(payload, deps) {
         workspaceId,
         status: decision === 'fast' ? 'transcribing' : 'chunking',
         durationSecProbed: durationSec,
+        onlyIfStatus: ONLY_IF_IN_PROGRESS,
       });
     } finally {
       client.release();
@@ -215,7 +230,7 @@ async function handleKickoff(payload, deps) {
   } catch (err) {
     // A vanished note is acknowledged by handle(). Mirroring an error to it
     // is exactly the write that must not happen.
-    if (isNoteGone(err)) throw err;
+    if (isNoteGone(err) || err.code === 'NOTE_MOVED_ON') throw err;
     log.error({ err, noteId }, 'kickoff_failed');
     await mirror.mirrorError({ workspaceId, noteId, errorMessage: 'Processing failed.' });
     throw err;
@@ -234,12 +249,17 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: plan.length });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: plan.length, onlyIfStatus: ONLY_IF_IN_PROGRESS });
   } finally {
     client.release();
   }
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'transcribing' });
-  await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: plan.length });
+  // What Postgres holds: a replay may resume with chunks already done.
+  const pc = await db.pool().connect();
+  let progress;
+  try { progress = await db.chunkProgress(pc, { noteId, workspaceId }); }
+  finally { pc.release(); }
+  await mirror.mirrorProgress({ workspaceId, noteId, done: (progress && progress.done) || 0, total: plan.length });
 
   for (const slice of plan) {
     const gcsPath = `transcoder/${noteId}/chunk-${slice.idx}.flac`;
@@ -261,6 +281,16 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
     if (row && row.status === 'done') {
       log.info({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_done');
       continue;
+    }
+    if (row && row.status === 'error') {
+      // The run already failed on this chunk (its terminal path ran). Re-mark
+      // the note (idempotent) rather than restart or re-poll a failed run.
+      log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_failed');
+      await noteTerminal.markNoteFailed({
+        pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+        message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed',
+      });
+      return;
     }
     if (row && row.sttOperationId) {
       // Its speech job is already running (and paid for): don't start another.
@@ -323,6 +353,12 @@ async function handleSttPoll(payload, deps) {
   }
   if (chunkRow.status === 'done') {
     log.info({ chunkId }, 'stt_poll_already_done');
+    return;
+  }
+  // Its run already failed (another poll chain exhausted it, or its job
+  // errored): a late chain must not revive it.
+  if (chunkRow.status === 'error') {
+    log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
     return;
   }
 
@@ -548,7 +584,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: 1 });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: 1, onlyIfStatus: ONLY_IF_IN_PROGRESS });
   } finally {
     client.release();
   }
@@ -569,6 +605,14 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   // (and paid for). Don't submit it again; make sure it is polled.
   if (row && row.status === 'done') {
     plog.info({}, 'chunk_already_done');
+    return;
+  }
+  if (row && row.status === 'error') {
+    plog.warn({}, 'chunk_already_failed');
+    await noteTerminal.markNoteFailed({
+      pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+      message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed',
+    });
     return;
   }
   if (row && row.sttOperationId) {

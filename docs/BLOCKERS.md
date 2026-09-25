@@ -807,6 +807,24 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     chunks (543 MB) in 5.4 s on the dev Mac. Even at 5× on Cloud Run's 2 vCPU, plus the in-region
     transfer, the serial kickoff is minutes against Cloud Tasks' 30-minute dispatch deadline. Recheck on
     staging with a real 3 h upload (M1).
+  - **From its dual-write audit, fixed in the same PR:**
+    - Every kickoff status write is conditional on the note still being in progress, not just the first.
+      An attempt that stalls past its dispatch deadline (30 min, against the transcoder's 60) can wake
+      after its replay finished the note.
+    - A poll on a chunk whose run already failed stops.
+    - A replay that finds a failed chunk re-marks the note failed instead of re-polling.
+    - A replay mirrors the progress Postgres holds.
+    - ffprobe or ffmpeg failing to *run* (not spawnable, or killed) is retried, not reported as a damaged
+      recording.
+  - [ ] **Queued (pre-existing, from that audit):**
+    - `note-terminal markNoteFailed` never throws when its Postgres write errors, so a terminal path acks
+      with Firestore ahead of Postgres. That covers the YouTube, `duration_unreadable` and poll paths.
+      It's a shared helper: change it with all its callers.
+    - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
+      (`STT_PROVIDER=google`).
+    - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
+    - A kickoff of a note's previous run can continue into a re-queued note. Checking the kickoff's
+      `jobId` needs `markQueued` to store it.
 
 ## Found while adding the audio smoke (2026-09-25)
 

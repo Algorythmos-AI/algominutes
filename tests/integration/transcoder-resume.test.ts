@@ -15,11 +15,12 @@ const transcoderDb = require('../../services/transcoder/src/db.js');
 const noop = () => {};
 const log: any = { info: noop, warn: noop, error: noop, child: () => log };
 
-function deps({ duration = 1500 as number | Error, sttFailOn = -1 } = {}) {
+function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = async () => {} } = {}) {
   const extracted: number[] = [];
   const started: number[] = [];
   const enqueued: Array<{ payload: any; delay: number; taskId?: string }> = [];
   const terminal: any[] = [];
+  const progress: any[] = [];
   let op = 0;
   const d = {
     log, env: {}, traceId: 't-resume',
@@ -31,7 +32,7 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1 } = {}) {
     ffmpeg: {
       ensureTempDir: () => '/tmp/transcoder-resume-test',
       cleanupTempDir: noop,
-      probeDuration: async () => { if (duration instanceof Error) throw duration; return duration; },
+      probeDuration: async () => { await onProbe(); if (duration instanceof Error) throw duration; return duration; },
       extractChunk: async ({ startSec }: { startSec: number }) => { extracted.push(startSec / 600); },
     },
     stt: {
@@ -45,14 +46,14 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1 } = {}) {
     },
     tasks: { enqueue: async (payload: any, delay: number, taskId?: string) => { enqueued.push({ payload, delay, taskId }); } },
     mirror: {
-      mirrorStatus: async () => {}, mirrorProgress: async () => {}, mirrorError: async () => {},
+      mirrorStatus: async () => {}, mirrorProgress: async (p: any) => { progress.push(p); }, mirrorError: async () => {},
       db: () => ({ doc: () => ({ update: async () => {} }) }),
     },
     fastPath: { run: async () => { throw new Error('fast path must not run for a long recording'); } },
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => { terminal.push(a); } },
   };
-  return { d, extracted, started, enqueued, terminal };
+  return { d, extracted, started, enqueued, terminal, progress };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', type: 'recording', storagePath: 'recordings/ws/n1.m4a' };
 const chunks = async () => (await pool.query(
@@ -108,6 +109,52 @@ describe('transcoder kickoff, replayed', () => {
     expect(f.started).toEqual([]);
     expect(f.enqueued).toEqual([]);
     expect(await count(`SELECT 1 FROM audio_chunks`)).toBe(0);
+  });
+
+  // An attempt that stalled (past Cloud Tasks' dispatch deadline) wakes up after
+  // its replay finished the note: its later status writes are conditional.
+  it('a note that finishes while this attempt is mid-way is left alone: no status write, no chunk, no poll', async () => {
+    const f = deps({ onProbe: async () => { await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'n1'`); } });
+    await expect(handler.handle(kickoff, f.d)).resolves.toBeUndefined();
+    expect((await status()).status).toBe('ready');
+    expect(f.started).toEqual([]);
+    expect(f.enqueued).toEqual([]);
+  });
+
+  it("a replay that finds a failed chunk re-marks the note failed, and starts nothing", async () => {
+    const first = deps();
+    await handler.handle(kickoff, first.d);
+    await pool.query(`UPDATE audio_chunks SET status = 'error' WHERE note_id = 'n1' AND idx = 1`);
+    const replay = deps();
+    await handler.handle(kickoff, replay.d);
+    expect(replay.started).toEqual([]);
+    expect((await status()).status).toBe('error');
+  });
+
+  it("a poll for a chunk whose run already failed stops (a late chain can't revive it)", async () => {
+    const f = deps();
+    await handler.handle(kickoff, f.d);
+    const [c0] = await chunks();
+    await pool.query(`UPDATE audio_chunks SET status = 'error' WHERE id = $1`, [c0.id]);
+    const poll = deps();
+    await handler.handle({ kind: 'stt-poll', jobId: 'j', chunkId: c0.id, noteId: 'n1', workspaceId: 'ws', poll: 3 }, poll.d);
+    expect(poll.enqueued).toEqual([]);
+  });
+
+  it('a replay mirrors the progress Postgres holds, not zero', async () => {
+    const first = deps();
+    await handler.handle(kickoff, first.d);
+    await pool.query(`UPDATE notes SET chunks_done = 2 WHERE id = 'n1'`);
+    const replay = deps();
+    await handler.handle(kickoff, replay.d);
+    expect(replay.progress).toEqual([{ workspaceId: 'ws', noteId: 'n1', done: 2, total: 3 }]);
+  });
+
+  it('ffprobe/ffmpeg failing to run is retried, not reported as a damaged recording', async () => {
+    const f = deps({ duration: Object.assign(new Error('could not determine duration'), { transient: true }) });
+    await expect(handler.handle(kickoff, f.d)).rejects.toThrow(/could not determine duration/);
+    expect((await status()).status).not.toBe('error');
+    expect(f.terminal).toEqual([]);
   });
 
   it("an unreadable duration fails the note for good (no retry), and never takes the fast path", async () => {
