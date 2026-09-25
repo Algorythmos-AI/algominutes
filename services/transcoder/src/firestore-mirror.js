@@ -57,14 +57,6 @@ async function mirrorReady({ workspaceId, noteId, summary, transcriptPreview }, 
   await updateNote(fsdb, { workspaceId, noteId }, patch);
 }
 
-async function mirrorError({ workspaceId, noteId, errorMessage }, fsdb = db()) {
-  await updateNote(fsdb, { workspaceId, noteId }, {
-    status: 'error',
-    errorMessage: errorMessage || 'Processing failed.',
-    updatedAt: new Date().toISOString(),
-  });
-}
-
 async function mirrorProgress({ workspaceId, noteId, done, total }, fsdb = db()) {
   await updateNote(fsdb, { workspaceId, noteId }, {
     progress: { done, total },
@@ -74,4 +66,4 @@ async function mirrorProgress({ workspaceId, noteId, done, total }, fsdb = db())
 
 // `db` is exported so the terminal-failure helper can write the same Firestore
 // mirror without opening a second admin app.
-module.exports = { db, mirrorStatus, mirrorReady, mirrorError, mirrorProgress };
+module.exports = { db, mirrorStatus, mirrorReady, mirrorProgress };

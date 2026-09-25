@@ -30,7 +30,6 @@ describe('firestore-mirror', () => {
     const fs = fakeFs();
     await mirror.mirrorStatus({ workspaceId: 'w', noteId: 'n', status: 'chunking' }, fs);
     expect(fs.updates[0]).toMatchObject({ path: 'workspaces/w/notes/n', data: { status: 'chunking' } });
-    await expect(mirror.mirrorError({ workspaceId: 'w', noteId: 'n' }, fakeFs({ missing: true }))).rejects.toBeInstanceOf(NoteGoneError);
     await expect(mirror.mirrorProgress({ workspaceId: 'w', noteId: 'n', done: 1, total: 2 }, fakeFs({ missing: true }))).rejects.toBeInstanceOf(NoteGoneError);
   });
 
@@ -154,10 +153,10 @@ describe('transcoder kickoff for a deleted note', () => {
     expect(d.errors).toContainEqual(expect.objectContaining({ m: 'transcoder_mirror_doc_missing' }));
   });
 
-  it('any other failure still mirrors the error and throws (so the task retries)', async () => {
+  it("any other failure throws so the task retries, and mirrors no failure Postgres doesn't have", async () => {
     const d = deps({ upsertErr: new Error('connection reset') });
     await expect(handler.handle(kickoff, d.deps)).rejects.toThrow('connection reset');
-    expect(d.calls).toContain('mirrorError');
+    expect(d.calls).not.toContain('mirrorError');
   });
 });
 

@@ -234,11 +234,11 @@ async function handleKickoff(payload, deps) {
     // is exactly the write that must not happen.
     if (isNoteGone(err) || err.code === 'NOTE_MOVED_ON') throw err;
     log.error({ err, noteId }, 'kickoff_failed');
-    // A failure decided above whose Postgres write missed: Postgres still has
-    // the note in progress, so Firestore must not say otherwise. The retry
-    // decides again (note-terminal retryOnPgError).
-    if (err.terminalPgWriteFailed) throw err;
-    await mirror.mirrorError({ workspaceId, noteId, errorMessage: 'Processing failed.' });
+    // Rethrown for Cloud Tasks to retry, and nothing mirrored: Postgres still
+    // has the note in progress, so Firestore must not say it failed. (It used
+    // to mirror 'Processing failed.' here; the app then showed a failure the
+    // api refused to retry, as in flight.) The queue's last attempt marks both
+    // stores, in index.js.
     throw err;
   } finally {
     // Best-effort cleanup. Do not fail the task on cleanup errors.
@@ -387,8 +387,8 @@ async function handleSttPoll(payload, deps) {
     if (poll >= MAX_STT_POLLS) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
       // Terminal, and decided here rather than by a retry count — this loop
-      // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
-      // alone left Postgres at 'transcribing' forever.
+      // re-enqueues, so Cloud Tasks never sees a final attempt. A Firestore-only
+      // error mirror used to leave Postgres at 'transcribing'.
       //
       // The note before the chunk: if Postgres misses the note write this
       // throws and the task retries, and a chunk already marked 'error' would

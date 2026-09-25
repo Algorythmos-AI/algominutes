@@ -6,6 +6,7 @@
 // Run service so the kickoff Function can stay thin.
 
 const fs = require('node:fs');
+const { isNoteGone } = require('./note-gone');
 
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
@@ -80,16 +81,26 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     model,
   }, log);
 
-  await mirror.mirrorReady({
-    workspaceId,
-    noteId,
-    summary: {
-      gist: parsed.gist || '',
-      actionItems: parsed.actionItems || [],
-      keyDecisions: parsed.keyDecisions || [],
-    },
-    transcriptPreview: redacted,
-  });
+  // Postgres now holds the result and 'ready'. A retry of this task would find
+  // the note finished and acknowledge it without coming back here, so a failed
+  // mirror is logged, not thrown: throwing would only skip the embedder below.
+  // The doc stays behind Postgres (BLOCKERS: a sweep step that re-mirrors
+  // finished notes). A doc that's gone still throws, for handle() to judge.
+  try {
+    await mirror.mirrorReady({
+      workspaceId,
+      noteId,
+      summary: {
+        gist: parsed.gist || '',
+        actionItems: parsed.actionItems || [],
+        keyDecisions: parsed.keyDecisions || [],
+      },
+      transcriptPreview: redacted,
+    });
+  } catch (err) {
+    if (isNoteGone(err)) throw err;
+    log.error({ err, noteId, workspaceId }, 'fast_path_ready_mirror_failed');
+  }
 
   // Best-effort embedder enqueue (claim is exactly-once).
   const c2 = await db.pool().connect();
