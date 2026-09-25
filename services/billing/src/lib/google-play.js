@@ -17,10 +17,20 @@ let _publisher = null;
 
 async function androidPublisher() {
   if (_publisher) return _publisher;
-  const auth = new google.auth.GoogleAuth({
-    scopes: ['https://www.googleapis.com/auth/androidpublisher'],
-  });
-  _publisher = google.androidpublisher({ version: 'v3', auth });
+  // A stand-in Play API for tests: PLAY_API_ROOT_URL is unset in every deployed
+  // environment, where the client uses ADC against androidpublisher.googleapis.com.
+  // With it set, a static token stands in, so no real credential is looked up.
+  const rootUrl = process.env.PLAY_API_ROOT_URL;
+  let auth;
+  if (rootUrl) {
+    auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: 'stand-in' });
+  } else {
+    auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/androidpublisher'],
+    });
+  }
+  _publisher = google.androidpublisher({ version: 'v3', auth, ...(rootUrl ? { rootUrl } : {}) });
   return _publisher;
 }
 
