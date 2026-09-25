@@ -1,15 +1,23 @@
 import crypto from 'node:crypto';
-import { setRetentionDays, recordTermsAcceptance, createSupportRequest } from '@algominutes/db';
+import { setRetentionDays, recordTermsAcceptance, createSupportRequest, trackEvent } from '@algominutes/db';
 import { SetRetentionRequest, AcceptTermsRequest, SupportRequest } from '@algominutes/contracts/schemas';
 
 // Bodies are validated with the published contract schemas (packages/contracts),
 // so what the generated clients send and what the server accepts can't drift.
+
+// Server-observed analytics (ServerAnalyticsEvent): recorded after the action
+// succeeded, and never allowed to fail it.
+function recordEvent(req, event, props) {
+  return trackEvent({ uid: req.uid, event, props })
+    .catch((err) => req.log.warn({ err, event }, 'analytics_write_failed'));
+}
 
 // A10 #5 — user-set note retention.
 export async function setRetentionRoute(req, res) {
   const parsed = SetRetentionRequest.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: 'invalid_retention' });
   await setRetentionDays(req.uid, parsed.data.retentionDays);
+  await recordEvent(req, 'retention_set', { days: parsed.data.retentionDays ?? 'keep' });
   return res.status(200).json({ ok: true });
 }
 
@@ -22,6 +30,7 @@ export async function acceptTermsRoute(req, res) {
     ? crypto.createHash('sha256').update(String(req.ip)).digest('hex').slice(0, 32)
     : null;
   await recordTermsAcceptance({ uid: req.uid, termsVersion, privacyVersion, ipHash, appVersion, platform });
+  await recordEvent(req, 'terms_accepted', { termsVersion, privacyVersion, ...(platform ? { platform } : {}) });
   return res.status(200).json({ ok: true });
 }
 
@@ -41,5 +50,6 @@ export async function supportRoute(req, res) {
     device,
     platform,
   });
+  await recordEvent(req, 'support_requested', { kind, ...(platform ? { platform } : {}) });
   return res.status(201).json({ ok: true, id: created.id });
 }
