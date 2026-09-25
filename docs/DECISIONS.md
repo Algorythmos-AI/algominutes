@@ -3,6 +3,21 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Audio playback through api-signed URLs, not Storage rules (2026-09-25)
+
+The api's recordings bucket (`algominutes-<env>-recordings`) isn't a Firebase Storage bucket, and the iOS
+player read audio through the Firebase SDK from the default bucket, which the api never writes. Rather than
+connect the bucket to Firebase and keep a second access policy (`storage.rules`) in step with Postgres
+membership, **clients never touch the bucket**:
+- uploads go through `POST /v1/uploads` (server-minted resumable sessions);
+- playback goes through `POST /v1/notes/audio-url`: the api checks membership in Postgres, then signs a
+  15-minute V4 GET for the note's own object only (the client-supplied `storage_path` is never trusted
+  past that).
+
+Signing on Cloud Run uses the IAM Credentials API as the service's own identity, which needs
+`roles/iam.serviceAccountTokenCreator` on itself, and nothing wider. The URL is a bearer capability, so it
+is never logged, and the response is `no-store`.
+
 ## Firestore security rules live in the repo, least privilege, released by Terraform (2026-09-25)
 
 Staging had **no rules released**, so every client request was denied: the app couldn't list, create or
