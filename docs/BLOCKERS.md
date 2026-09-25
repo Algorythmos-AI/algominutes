@@ -576,6 +576,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     shared limiter (`@algominutes/ai/rate-limit.cjs`): per client IP on everything but health (the store
     webhooks included), per uid after auth. Its `trust proxy` is the hop count, not `true`. Its auth also
     refuses a deleted account, as the api's does;
+  - ~~`js/missing-rate-limiting` ×27 on the api (#87–#113, opened by the billing-rate-limits PR)~~
+    **fixed (api-limiter-visible-to-codeql PR):** that PR made the api's `middleware/rate-limit.js` a
+    destructured re-export of the shared module, which CodeQL can't follow to the express-rate-limit call,
+    so every `/v1` route looked unlimited. They never were: the client-IP limit covers `/v1` and `authed`
+    carries the per-uid one. The api now imports the shared module directly, as billing does, and the shim
+    is gone;
   - ~~`actions/missing-workflow-permissions` ×7 and `actions/unpinned-tag` ×14~~ **fixed
     (harden-workflows PR):** every workflow has a least-privilege top-level `permissions` block
     (`promotion-guard` has none), and the six third-party actions are pinned to commit SHAs with

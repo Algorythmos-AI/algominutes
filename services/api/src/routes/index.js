@@ -12,7 +12,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 import { authMiddleware } from '../middleware/auth.js';
 import { adminMiddleware } from '../middleware/admin.js';
-import { userRateLimit } from '../middleware/rate-limit.js';
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 
 // server.ts-derived routes (ESM).
 import { updateNoteRoute } from './update-note.js';
@@ -51,6 +51,7 @@ const { handleSharedNote } = sharedNoteModule;
 const { pool } = pgQueryModule;
 const readPool = pool;
 const { pingPool } = pgConfigModule;
+const { userRateLimit } = rateLimitModule;
 
 const DOCX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
