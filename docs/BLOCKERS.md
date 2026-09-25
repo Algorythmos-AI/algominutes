@@ -1027,6 +1027,28 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - A kickoff of a note's previous run can continue into a re-queued note. Checking the kickoff's
       `jobId` needs `markQueued` to store it.
 
+## Uploads finish without the app (plan rev 8, PR-24, 2026-09-25)
+
+- [x] **Done in code (ios-uploads-finish-in-background PR):** uploads went in 8 MB chunked PUTs from an async
+  loop, so a suspended or killed app finished the chunk in flight and nothing more. A 3-hour recording
+  waited until the user opened the app again.
+  - The rest of a file now goes as one background PUT: the file itself from byte 0, or a copy of its tail
+    (in Caches) when resuming. The system's upload daemon finishes it without the app.
+  - A failure asks the server how far it got and sends the rest.
+  - Found on the way: on a background relaunch the session was never recreated (it's lazy), so the system's
+    queued events never arrived and its completion handler was never called. The AppDelegate now reconnects
+    it.
+  - A transfer that finished while the app was away re-runs the resume path (session complete, then the
+    kickoff) under a background task.
+  - A transfer still running from an earlier launch is joined, never duplicated.
+  - Tested (XCTest): the final range, and the tail copy, byte for byte, across several copy slices. The app
+    type-checks under strict concurrency against the stubs.
+- [ ] **Verify on device (M1):**
+  - record 10+ minutes, stop, lock the phone at once: the note should finish processing without the app
+    being opened;
+  - force-quit is different: iOS cancels a force-quit app's background transfers, so the next launch
+    resumes it.
+
 ## Observability (plan rev 8, PR-16c, 2026-09-25)
 
 - [x] **Done (observability-uptime-dashboard PR, pending your apply):**
