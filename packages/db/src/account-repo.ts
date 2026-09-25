@@ -32,7 +32,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { listStoragePurgesForAccount, runStoragePurge } from './storage-purges-repo';
-import { AccountDeletedError, ensureUser } from './workspace-access';
+import { AccountDeletedError, ensureUser, ensureWorkspaceAccess } from './workspace-access';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorage as {
@@ -173,6 +173,9 @@ export async function isAccountDeleted(uid: string): Promise<boolean> {
  * is refused ('deleted') exactly as before: ensureUser checks the tombstone
  * after its upsert, so a request racing the deletion can't re-create it.
  *
+ * The personal workspace (workspace_<uid>) and the owner's membership are
+ * ensured in the same transaction.
+ *
  * The upsert runs the first time this instance sees the uid, then at most
  * every ADMIT_TTL_MS. In between it's the one tombstone read the middleware
  * always did. Nothing but account deletion removes a users row, and that
@@ -192,7 +195,18 @@ export async function admitUser(
     return (await isAccountDeleted(user.uid)) ? 'deleted' : 'live';
   }
   try {
-    await withTx((client) => ensureUser(client, user), { log, fields: { userId: user.uid } });
+    await withTx(async (client) => {
+      await ensureUser(client, user);
+      // The personal workspace and its owner membership too: deleting a note
+      // checks membership, and a user whose notes never reached Postgres (a
+      // scanned-text note lives only in Firestore) had none, so it answered 404.
+      await ensureWorkspaceAccess(
+        client,
+        `workspace_${user.uid}`,
+        user.uid,
+        user.name ? `${user.name}'s Workspace` : 'My Workspace',
+      );
+    }, { log, fields: { userId: user.uid } });
   } catch (err) {
     if (err instanceof AccountDeletedError) {
       admitted.delete(user.uid);

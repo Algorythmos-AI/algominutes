@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import {
   getPool, deleteAccountData, recordTermsAcceptance, registerPushToken, trackEvent,
-  createSupportRequest, setRetentionDays, getRetentionDays, admitUser,
+  createSupportRequest, setRetentionDays, getRetentionDays, admitUser, deleteNote,
 } from '@algominutes/db';
 import { pool, resetDb, count, quietLog } from './helpers';
 
@@ -61,6 +61,17 @@ describe('a brand-new user is admitted by the auth middleware', () => {
     await createSupportRequest({ uid: 'onboarding', kind: 'contact', message: 'hi' });
     await setRetentionDays('onboarding', 30);
     expect(await getRetentionDays('onboarding')).toBe(30);
+  });
+
+  it('also creates the personal workspace, so a Firestore-only note (a scan) can be deleted', async () => {
+    expect((await through(authMiddleware, 'scanner')).next).toBe(true);
+    expect(await count(`SELECT 1 FROM workspace_members WHERE workspace_id = 'workspace_scanner' AND uid = 'scanner' AND role = 'owner'`)).toBe(1);
+    const docs: string[] = [];
+    const fs = { doc: (p: string) => ({ delete: async () => void docs.push(p) }) } as never;
+    // The scan note never reached Postgres: only its doc exists.
+    expect(await deleteNote(fs, { noteId: 'scan-1', workspaceId: 'workspace_scanner', uid: 'scanner' }, quietLog))
+      .toMatchObject({ allowed: true, deleted: false });
+    expect(docs).toEqual(['workspaces/workspace_scanner/notes/scan-1']);
   });
 
   it('an instance upserts a uid once per TTL, then only checks the tombstone', async () => {

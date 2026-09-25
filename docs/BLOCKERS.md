@@ -685,6 +685,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   plain `timeStrToMs`. `tests/integration/workers-vertex-auth.test.ts` runs both with no key; it fails on
   the old code with the exact error.
 
+- [x] **Fixed (admit-personal-workspace PR): a user whose notes never reached Postgres couldn't delete
+  them.** `deleteNote` checks workspace membership, and only an upload or a kickoff created it. So a
+  scanned-text note, which lives only in Firestore, answered 404 on delete. Admission (the auth middleware's
+  `admitUser`) now also ensures the personal workspace and its owner membership. Tested and
+  mutation-checked.
+
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
 - [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
