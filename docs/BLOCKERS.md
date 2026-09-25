@@ -1007,9 +1007,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               failed from the browser; the sweep fails a stuck run, Postgres first. Only the client's own
               `processing` note (before the kickoff, so no server run exists) is still failed once its
               upload goes quiet. `lib/noteWatchdog.ts`, unit-tested; one mutation checked.
-            - `persistFastPathResult` doesn't reset `summaries.chapters`, so a note re-run through the
-              fast path keeps an older summary's chapters in Postgres. And `applyNoteEdit` replaces the
-              whole Firestore `summary` map, which drops `summary.chapters` there.
+            - ~~`persistFastPathResult` doesn't reset `summaries.chapters`, and `applyNoteEdit` replaces the
+              whole Firestore `summary` map, which drops `summary.chapters`~~ **fixed (edit-keeps-chapters
+              PR):** an edit mirrors by field path, so a long recording keeps its chapters (and a
+              Firestore-only key-points list) when an action item is edited; the fast path clears an
+              earlier run's chapters in both stores. Tested on Postgres; three mutations checked.
         - ~~The spend guard's catch in both `index.js` files rethrows a non-cap error without logging
           it~~ **fixed (spend-cap-reader PR):** `haltAtSpendCap` logs `spend_guard_failed` and answers 500.
         - ~~If the note write lands but `markChunkError` then fails, the retry logs a second `note_failed`

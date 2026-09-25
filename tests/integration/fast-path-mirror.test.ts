@@ -23,7 +23,7 @@ const noop = () => {};
 const errors: string[] = [];
 const log: any = { info: noop, warn: noop, error: (_o: unknown, m: string) => void errors.push(m), child: () => log };
 
-async function run(mirrorReady: () => Promise<void>) {
+async function run(mirrorReady: (arg?: any) => Promise<void>) {
   const embeds: any[] = [];
   const input = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fastpath-mirror-')), 'clip.aac');
   fs.writeFileSync(input, Buffer.from('not really audio'));
@@ -51,6 +51,17 @@ afterAll(async () => {
   await transcoderDb.pool().end();
   await pool.end();
   await getPool().end();
+});
+
+describe("fast path: an earlier run's chapters", () => {
+  it('are cleared in both stores: a short recording has none', async () => {
+    await pool.query(`INSERT INTO summaries (note_id, gist, chapters) VALUES ('n1', 'old', '[{"startMs":0,"title":"Old"}]'::jsonb)`);
+    let mirrored: any = null;
+    const r = await run(async (arg?: any) => { mirrored = arg; });
+    await r.done;
+    expect((await pool.query(`SELECT chapters FROM summaries WHERE note_id = 'n1'`)).rows[0].chapters).toEqual([]);
+    expect(mirrored.summary.chapters).toEqual([]);
+  });
 });
 
 describe('fast path: the mirror after the commit', () => {
