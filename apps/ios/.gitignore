@@ -5,8 +5,18 @@
 #   (the build writes its REVERSED_CLIENT_ID into the app's URL schemes)
 AlgoMinutes/Resources/GoogleService-Info.plist
 
-# XcodeGen output — regenerate with `xcodegen generate`
-AlgoMinutes.xcodeproj/
+# XcodeGen output — regenerate with `xcodegen generate`. Everything in it is
+# ignored except the resolved package versions, which Xcode Cloud needs and
+# every build must share. Git can't re-include a file under an ignored folder,
+# so each level is re-included in turn.
+AlgoMinutes.xcodeproj/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/
+AlgoMinutes.xcodeproj/project.xcworkspace/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/
+AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # Xcode noise
 DerivedData/
@@ -15,3 +25,6 @@ build/
 xcuserdata/
 test-results.txt
 clean-test.txt
+
+# Pinned build tools (scripts/install-xcodegen.sh)
+.tools/
