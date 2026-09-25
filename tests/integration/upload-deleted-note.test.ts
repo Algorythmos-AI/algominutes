@@ -58,6 +58,16 @@ describe('an upload session for a deleted note', () => {
     expect(await count(`SELECT 1 FROM upload_sessions`)).toBe(0);
   });
 
+  it('after the purge finished (no purge row left), the tombstone still refuses it', async () => {
+    await deleteNote(fs, { noteId: 'n1', workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
+    await pool.query('DELETE FROM storage_purges'); // what a completed purge leaves
+    await expect(createUploadSession(session('n1'), quietLog)).rejects.toMatchObject({ code: 'NOTE_DELETED' });
+    expect(await count(`SELECT 1 FROM upload_sessions`)).toBe(0);
+    // Only that workspace's note: the same id elsewhere is another note.
+    await seedWorkspace('workspace_other', 'alice');
+    await expect(createUploadSession({ ...session('n1'), workspaceId: 'workspace_other' }, quietLog)).resolves.toEqual(expect.any(String));
+  });
+
   it('the route answers 404 and cancels the session it had just minted', async () => {
     await deleteNote(fs, { noteId: 'n1', workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
     expect(await upload('n1')).toEqual({ status: 404, body: { error: 'Note not found' } });

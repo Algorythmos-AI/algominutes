@@ -542,9 +542,23 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         used to miss its purge. `createUploadSession` now takes the note lock first (the order the kickoff
         and `deleteNote` use) and refuses a note with a pending purge. The route cancels the session it just
         minted and answers 404. Tested at the repo and the route; mutation-checked.
-      - [ ] Still open: a session for a note whose purge already *finished* (no purge row left) is allowed.
-        Its object can't be processed (the kickoff refuses a missing doc), but it stays in the bucket. Have
-        the sweeper remove `recordings/` objects whose note doesn't exist, or keep a deleted-note tombstone.
+      - [x] **Fixed (deleted-note-tombstone PR):** `deleteNote` and account deletion now write a
+        `deleted_notes` tombstone (migration 018, ids only) in their transaction. `createUploadSession` and
+        the kickoff refuse a note with a pending purge *or* a tombstone, so a stale client can't upload into
+        a note whose purge finished, and a doc re-written by a stale web client (R2) can't re-queue it. The
+        sweeper prunes tombstones after 30 days (DATA-RETENTION.md). After that, a months-stale client
+        could still upload an object, and only the optional `recordings_lifecycle_days` rule removes it.
+        Tested (upload, kickoff, account deletion, sweep); four mutations checked. Was: a session for a
+        note whose purge already *finished* (no purge row left) was allowed, and its object stayed in the
+        bucket.
+        - [ ] **iOS, queued (found by the audit of that PR):** `recoverRecording` / `resumePendingUploads`
+          re-upload a saved recording into its original note id without checking the note still exists,
+          and deleting a note doesn't remove its saved recording. The server now refuses that id for 30
+          days (was: until the purge finished), so the app retries into a 404 on every foreground. With
+          `backgroundResumableUpload` off it's worse and pre-existing: the file uploads, the local copy is
+          removed, then the kickoff 404s and the recording is lost. Fix in the client: a note that's gone
+          gets a fresh note id (the comment in `AppEnvironment` already says so), and deleting a note
+          removes its saved recording.
     - [x] The sweeper drains `storage_purges` (#71; capped at 10 attempts), and a stuck row is logged every run
       and alerts (`storage_purge_stuck`, #90).
     - [x] **Done (account-deletion-path PR):** account deletion uses this path. Postgres goes first, in

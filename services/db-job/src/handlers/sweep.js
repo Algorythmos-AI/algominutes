@@ -19,7 +19,9 @@
 //   4. account deletions a deletion the client never finished (it crashed, or
 //                        gave up after a 500) is finished here: the same steps
 //                        as the route (account-repo finishAccountDeletion).
-//   5. tombstones        completed ones older than TOMBSTONE_DAYS are pruned.
+//   5. tombstones        completed account deletions, and deleted-note
+//                        tombstones (note_tombstones), older than TOMBSTONE_DAYS
+//                        are pruned.
 //   6. retention         notes older than their author's retention choice
 //                        (users.retention_days) are deleted through deleteNote,
 //                        the manual-delete path, and purged right away as the
@@ -71,7 +73,7 @@ async function run({
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
     recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
-    expireElapsedTrials,
+    expireElapsedTrials, pruneDeletedNotes,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
@@ -211,6 +213,7 @@ async function run({
     });
 
     await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
+    await step('note_tombstones', () => pruneDeletedNotes({ olderThanDays: TOMBSTONE_DAYS }));
 
     await step('trials', () => expireElapsedTrials());
 
