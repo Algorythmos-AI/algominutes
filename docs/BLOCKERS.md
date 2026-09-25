@@ -725,6 +725,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   out of Search and Chat. It now throws, after rolling back the write: the embedder answers 5xx, the last
   attempt dead-letters (and alerts, #90), and a deleted note's foreign-key error is still acknowledged. A
   vector count that doesn't match the chunks is an error too. Tested on Postgres; mutation-checked.
+- [ ] **Xcode Cloud → TestFlight (plan PR-30), repo side done (xcode-cloud-scripts PR).**
+  `apps/ios/ci_scripts/ci_post_clone.sh` stamps `CI_BUILD_NUMBER`, writes the plist from the secret
+  `GOOGLE_SERVICE_INFO_PLIST_B64`, and generates the project (dry-run tested, including a bad secret failing
+  fast). **Yours:** the App Store Connect record, testers and agreements, connecting the repo, and creating
+  the "Staging → TestFlight" workflow with the secret: `docs/runbooks/xcode-cloud.md`.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
