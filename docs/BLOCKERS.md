@@ -691,6 +691,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   scanned-text note, which lives only in Firestore, answered 404 on delete. Admission (the auth middleware's
   `admitUser`) now also ensures the personal workspace and its owner membership. Tested and
   mutation-checked.
+- [x] **Done (audio-url-route PR): playback had no `/v1` route.** The iOS player read audio from Firebase's
+  default bucket, which the api never writes. `POST /v1/notes/audio-url` returns a 15-minute V4 signed GET,
+  only for a member of the note's workspace and only for the note's own object. `run-api` gets Token
+  Creator on itself for signing (pending your apply). See DECISIONS. The iOS player switches in PR-17 D.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

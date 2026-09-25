@@ -17,6 +17,7 @@ import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 // server.ts-derived routes (ESM).
 import { updateNoteRoute } from './update-note.js';
 import { deleteNoteRoute } from './delete-note.js';
+import { noteAudioUrlRoute } from './note-audio.js';
 import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
 // functions/index.js HTTP handlers, ported to services/api (ESM).
@@ -104,6 +105,9 @@ export function buildRouter() {
 
   // ── /v1/notes/delete ── the single deletion path (notes-repo deleteNote) ──
   router.post('/notes/delete', authed, wrap(deleteNoteRoute));
+
+  // ── POST /v1/notes/audio-url ── a 15-minute signed URL for playback ──────
+  router.post('/notes/audio-url', authed, wrap(noteAudioUrlRoute));
 
   // ── POST /v1/notes/:id/speakers ── name diarised speakers (ADR 0005) ────
   router.post('/notes/:id/speakers', authed, wrap(setNoteSpeakersRoute));

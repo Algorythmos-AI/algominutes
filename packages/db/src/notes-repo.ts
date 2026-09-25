@@ -14,6 +14,11 @@ import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
 import { lockNoteId } from './note-lock';
+import noteStorage from '@algominutes/ai/note-storage.cjs';
+
+const { ownedStoragePath } = noteStorage as {
+  ownedStoragePath: (storagePath: string | null, workspaceId: string, noteId: string) => string | null;
+};
 // Shared, Postgres-only edit writer. Same module the deployed Cloud Function
 // (functions/index.js exports.updateNote) uses, so the edit SQL lives in one
 // place. Imported as a default (CJS) — see server.ts for the same pattern.
@@ -792,6 +797,24 @@ export async function deleteNote(
   // after a failed mirror delete finishes it. Deleting a missing doc succeeds.
   await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).delete();
   return outcome;
+}
+
+/**
+ * The object to sign for playback (POST /v1/notes/audio-url): the note's
+ * storage_path, only for a live note in a workspace the caller belongs to
+ * (CLAUDE.md §1), and only if it names this note's own object (storage_path
+ * came from the client and is only prefix-checked). Null otherwise.
+ */
+export async function getNoteAudioPath(
+  input: { noteId: string; workspaceId: string; uid: string },
+): Promise<string | null> {
+  const { rows } = await getPool().query<{ storage_path: string | null }>(
+    `SELECT n.storage_path FROM notes n
+       JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.uid = $3
+      WHERE n.id = $1 AND n.workspace_id = $2 AND n.deleted_at IS NULL`,
+    [input.noteId, input.workspaceId, input.uid],
+  );
+  return ownedStoragePath(rows[0]?.storage_path ?? null, input.workspaceId, input.noteId);
 }
 
 /**
