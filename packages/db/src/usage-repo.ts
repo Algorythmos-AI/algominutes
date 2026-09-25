@@ -79,3 +79,17 @@ export async function usedMinutes(uid: string, billingPeriod: string = currentBi
   );
   return Number(rows[0]?.used ?? 0);
 }
+
+/**
+ * Drop paid-work records (usage_events, written by the transcoder for the §4.6
+ * spend cap) older than olderThanDays. The cap reads only the last 24 hours;
+ * the rest is kept a while for cost attribution. Returns how many went.
+ */
+export async function pruneUsageEvents(input: { olderThanDays: number }): Promise<number> {
+  if (!isPostgresEnabled()) return 0;
+  const { rowCount } = await getPool().query(
+    `DELETE FROM usage_events WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`,
+    [input.olderThanDays],
+  );
+  return rowCount ?? 0;
+}

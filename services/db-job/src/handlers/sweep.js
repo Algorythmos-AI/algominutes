@@ -30,6 +30,8 @@
 //   7. trials            elapsed trials are flipped to free_floor in the stored
 //                        state (reads already derive it; this keeps reporting
 //                        and the rails' view honest).
+//   8. usage_events      paid-work records (the spend cap's input) older than
+//                        USAGE_EVENTS_DAYS are pruned; the cap reads 24 hours.
 
 'use strict';
 
@@ -44,6 +46,7 @@ const MAX_PURGE_ATTEMPTS = 10;
 const STUCK_NOTE_MS = IN_FLIGHT_STALE_MS + 30 * 60 * 1000; // after a client re-queue's chance
 const ACCOUNT_DELETION_GRACE_MS = 15 * 60 * 1000; // the client's own retry goes first
 const TOMBSTONE_DAYS = 30;
+const USAGE_EVENTS_DAYS = 90;
 const LOCK_KEY = 'algominutes:sweep';
 
 function firebaseDeps(env) {
@@ -73,7 +76,7 @@ async function run({
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
     recordDeadLetter, reverseUsageForNote, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
-    expireElapsedTrials, pruneDeletedNotes,
+    expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
@@ -216,6 +219,7 @@ async function run({
     await step('note_tombstones', () => pruneDeletedNotes({ olderThanDays: TOMBSTONE_DAYS }));
 
     await step('trials', () => expireElapsedTrials());
+    await step('usage_events', () => pruneUsageEvents({ olderThanDays: USAGE_EVENTS_DAYS }));
 
     log.info({ counts, failures }, 'sweep_done');
     if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);
