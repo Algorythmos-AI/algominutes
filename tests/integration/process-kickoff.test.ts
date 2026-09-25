@@ -115,6 +115,7 @@ describe('POST /v1/process, first kickoff of a new note', () => {
 
   it('markQueued debits only when it queues: the in-transaction duplicate path charges nothing', async () => {
     await seedUser('alice');
+    noteDoc('alice', 'n2');
     const input = {
       noteId: 'n2', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'recording',
       storagePath: 'recordings/workspace_alice/n2.m4a', meter: { minutes: 4, idempotencyKey: 'n2:ingest' },
