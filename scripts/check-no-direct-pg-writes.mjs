@@ -37,18 +37,6 @@ const WRITE = new RegExp([
 // A write whose table name is interpolated: `UPDATE ${table} SET ...`.
 const DYNAMIC = /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE(?:\s+TABLE)?)\s*$/i;
 
-// Shared packages/ai writers still to move into packages/db (BLOCKERS: "Postgres
-// note writes still bypass the repo layer"), with the number of write literals
-// each may still hold. A count may only go DOWN (and must be lowered here when it
-// does); a file off this list may hold none.
-const PENDING_MOVE = new Map([
-  ['packages/ai/src/note-terminal.cjs', 1],
-  ['packages/ai/src/note-edit.cjs', 9],
-  ['packages/ai/src/embeddings.cjs', 2],
-  ['packages/ai/src/share-links.cjs', 4],
-  ['packages/ai/src/note-feedback.cjs', 1],
-]);
-
 function* sourceFiles(dir) {
   if (!fs.existsSync(dir)) return;
   for (const name of fs.readdirSync(dir)) {
@@ -106,24 +94,13 @@ export function findDirectWrites(file, text) {
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const hits = [];
-  const budget = [];
-  const seen = new Set();
   let files = 0;
   for (const root of ROOTS) {
     for (const f of sourceFiles(root)) {
       files += 1;
-      const found = findDirectWrites(f, fs.readFileSync(f, 'utf8'));
-      if (PENDING_MOVE.has(f)) {
-        seen.add(f);
-        const allowed = PENDING_MOVE.get(f);
-        if (found.length > allowed) budget.push(`${f}: ${found.length} writes, allowed ${allowed} (it may only shrink)`);
-        else if (found.length < allowed) budget.push(`${f}: now ${found.length}; lower PENDING_MOVE to ${found.length}${found.length ? '' : ' (remove it)'}`);
-        continue;
-      }
-      hits.push(...found);
+      hits.push(...findDirectWrites(f, fs.readFileSync(f, 'utf8')));
     }
   }
-  for (const f of PENDING_MOVE.keys()) if (!seen.has(f)) budget.push(`${f}: gone; remove it from PENDING_MOVE`);
   let failed = false;
   if (files === 0) {
     console.log('ERROR: scanned no files (run from the repo root).');
@@ -135,11 +112,6 @@ if (isMain) {
     console.log('repo layer (@algominutes/db) and call it (CLAUDE.md §1).');
     failed = true;
   }
-  if (budget.length) {
-    for (const b of budget) console.log(`PENDING_MOVE: ${b}`);
-    failed = true;
-  }
   if (failed) process.exit(1);
-  const pending = [...PENDING_MOVE.values()].reduce((a, b) => a + b, 0);
-  console.log(`OK: no Postgres writes outside the repo layer (${files} files; ${pending} pending move in ${PENDING_MOVE.size} files).`);
+  console.log(`OK: no Postgres writes outside the repo layer (${files} files).`);
 }

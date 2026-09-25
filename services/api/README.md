@@ -12,9 +12,9 @@ framework-agnostic handlers (`src/routes/*.cjs`) are copied verbatim from
 from the workspace packages instead of copied in:
 
 - `@algominutes/db` → `pg-query.cjs` (pool + per-query timeout), `notes-repo`
-  (the note dual-write layer: `markReady` / `markError` / `applyNoteEdit`).
-- `@algominutes/ai` → `intelligence.cjs`, `redaction.cjs`, `share-links.cjs`,
-  `note-edit.cjs`, `logger.cjs`.
+  (the note dual-write layer: `markReady` / `markError` / `applyNoteEdit`),
+  `share-links.cjs`, `note-edit.cjs`, `note-feedback.cjs`.
+- `@algominutes/ai` → `intelligence.cjs`, `redaction.cjs`, `logger.cjs`.
 
 No shared lib is duplicated into this service.
 
@@ -136,9 +136,9 @@ rather than re-created:
   on the **shared** `pool()`, never a local one.
 - **Cloud Tasks enqueue** → `@algominutes/ai` `cloud-tasks.cjs` `enqueueTask`.
 - **`validateStoragePath`** → `@algominutes/db` `storage-paths.cjs`.
-- **feedback / share-link / summary-template / redaction helpers** →
-  `@algominutes/ai` (`note-feedback.cjs`, `share-links.cjs`,
-  `summary-templates.cjs`, `redaction.cjs`).
+- **feedback / share-link writers** → `@algominutes/db` (`note-feedback.cjs`,
+  `share-links.cjs`); **summary-template / redaction helpers** → `@algominutes/ai`
+  (`summary-templates.cjs`, `redaction.cjs`).
 - **Firebase `defineString` deploy params** (`TRANSCODER_URL`, `SUMMARIZER_URL`,
   `JOBS_SA_EMAIL`, `TASKS_PROJECT`, `TASKS_LOCATION`, `TASKS_QUEUE`) become plain
   Cloud Run env vars with the source's defaults.

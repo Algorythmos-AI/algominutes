@@ -341,7 +341,7 @@ resource "google_cloud_tasks_queue" "queues" {
   retry_config {
     # Single source of truth for the attempt budget: every service is deployed
     # with MAX_TASK_ATTEMPTS set to this SAME value so the terminal-failure/DLQ
-    # write (packages/ai/note-terminal.cjs isFinalAttempt) fires on the queue's
+    # write (packages/db/note-terminal.cjs isFinalAttempt) fires on the queue's
     # genuine last attempt — not before, not after.
     max_attempts       = var.task_max_attempts
     min_backoff        = "5s"

@@ -8,7 +8,8 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote, count } from './helpe
 // chunkCount 0, which the embedder answered 200: never retried, the note silently
 // absent from Search and Chat.
 const require = createRequire(import.meta.url);
-const { indexEmbeddings, EMBED_DIM } = require('@algominutes/ai/embeddings.cjs');
+const { indexEmbeddings } = require('@algominutes/db/embeddings-repo.cjs');
+const { EMBED_DIM } = require('@algominutes/ai/embeddings.cjs');
 const noop = () => {};
 const log = { info: noop, warn: noop, error: noop };
 const transcript = [{ speaker: 'A', text: 'We agreed to ship the beta on Friday after the review.', time: '00:05' }];

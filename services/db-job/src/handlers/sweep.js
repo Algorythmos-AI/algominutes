@@ -34,7 +34,7 @@
 // The repo layer is TypeScript, loaded under tsx in the job image. Tests pass
 // their own (see run's `repo` / `noteTerminal`), so it's required lazily.
 const loadRepo = () => require('@algominutes/db');
-const loadNoteTerminal = () => require('@algominutes/ai/note-terminal.cjs');
+const loadNoteTerminal = () => require('@algominutes/db/note-terminal.cjs');
 
 const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000; // notes-repo IN_FLIGHT_STALE_MS (asserted equal in tests)
 const PURGE_GRACE_MS = 5 * 60 * 1000; // the api runs a new purge inline; leave it that long

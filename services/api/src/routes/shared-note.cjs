@@ -24,7 +24,7 @@
 //    so the caller pairs this with an IP-keyed limiter and maxInstances.
 
 const { withQueryTimeout, pool } = require('@algominutes/ai/pg-query.cjs');
-const shareLinks = require('@algominutes/ai/share-links.cjs');
+const shareLinks = require('@algominutes/db/share-links.cjs');
 const redaction = require('@algominutes/ai/redaction.cjs');
 
 const TIMEOUT_MS = 10000;
