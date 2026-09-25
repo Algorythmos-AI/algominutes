@@ -82,11 +82,14 @@ async function handleKickoff(payload, deps) {
   const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
 
   // Postgres first: a note deleted between kickoff and now must not be touched
-  // (the mirror below would otherwise be the first write, to a deleted note).
+  // (the mirror below would otherwise be the first write, to a deleted note),
+  // and the mirror only ever shows a status Postgres holds.
   const pre = await db.pool().connect();
   let exists;
-  try { exists = await db.noteExists(pre, { noteId, workspaceId }); }
-  finally { pre.release(); }
+  try {
+    exists = await db.noteExists(pre, { noteId, workspaceId });
+    if (exists) await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking' });
+  } finally { pre.release(); }
   if (!exists) throw new NoteGoneError('postgres');
 
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'chunking' });
@@ -437,6 +440,8 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     if (allDone) {
       summarizerClaimed = await db.claimSummarizerEnqueue(c5, noteId);
       embedderClaimed = await db.claimEmbedderEnqueue(c5, noteId);
+      // Postgres holds 'summarizing' before the mirror shows it (below).
+      if (summarizerClaimed) await db.upsertNoteStatus(c5, { noteId, workspaceId, status: 'summarizing' });
     }
   } finally { c5.release(); }
 
