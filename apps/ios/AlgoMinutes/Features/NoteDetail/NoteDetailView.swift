@@ -191,7 +191,8 @@ struct NoteDetailView: View {
                             status: note.status,
                             progress: note.progress,
                             uploadPercent: env.uploadProgress[note.id]
-                        )
+                        ),
+                        isSlow: env.notes.slowNoteIds.contains(note.id)
                     )
                 }
             }

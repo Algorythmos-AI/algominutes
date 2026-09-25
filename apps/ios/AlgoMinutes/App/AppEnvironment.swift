@@ -442,9 +442,6 @@ final class AppEnvironment {
         guard let wsId = auth.workspaceId else { return .blocked(message: "Not signed in") }
         let fileURL = recordingStore.audioURL(for: pending)
 
-        // Re-arm the stuck watchdog — the note is going back in-progress.
-        notes.resetStuckGuard(noteId: noteId)
-
         var fields: [String: Any] = [
             "status": NoteStatus.queued.rawValue,
             "errorMessage": NSNull(),
