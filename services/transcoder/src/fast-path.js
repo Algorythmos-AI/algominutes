@@ -21,10 +21,11 @@ const geminiCall = loadShared('gemini-call.cjs');
 const embeddings = loadShared('embeddings.cjs');
 
 async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps }) {
-  const { db, mirror, tasks, env } = deps;
+  const { db, mirror, tasks } = deps;
 
-  const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  // No API key: the ladder calls Vertex AI with the service's identity (ADC),
+  // in AIPLATFORM_LOCATION. A GEMINI_API_KEY gate here used to fail every clip
+  // of 10 minutes or less, since nothing sets one.
 
   const buf = fs.readFileSync(inputLocal);
   const resolvedMime = intelligence.resolveGeminiAudioMime(mimeType, inputLocal);
@@ -37,7 +38,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   // call. Without responseSchema + maxOutputTokens=16384, chatty content
   // truncates mid-JSON and parseGeminiJson throws. PR-C closure.
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
-    apiKey, parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
+    parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: intelligence.FAST_PATH_RESPONSE_SCHEMA,
@@ -75,7 +76,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     await db.deleteTranscriptLinesForNote(client, noteId);
     for (let i = 0; i < redacted.length; i++) {
       const l = redacted[i];
-      const startMs = intelligence.MODEL_LADDER && embeddings.timeStrToMs(l.time);
+      const startMs = embeddings.timeStrToMs(l.time);
       await client.query(
         `INSERT INTO transcript_lines (note_id, speaker_tag, start_ms, end_ms, text, confidence)
            VALUES ($1, NULL, $2, $2, $3, NULL)`,

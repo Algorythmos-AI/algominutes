@@ -57,7 +57,6 @@ const env = {
   TRANSCODER_URL: process.env.TRANSCODER_URL || '',
   SUMMARIZER_URL: process.env.SUMMARIZER_URL || '',
   EMBEDDER_URL: process.env.EMBEDDER_URL || '',
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   LANGUAGE_CODES: process.env.LANGUAGE_CODES || 'en-US,en-GB,en-AU',
   // Long-path STT engine seam. Default 'google' keeps the legacy per-chunk path
   // (shadow-eval baseline / a1 fallback). Flip to 'assemblyai' after the shadow

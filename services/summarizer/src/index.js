@@ -36,7 +36,6 @@ const app = express();
 app.use(express.json({ limit: '64kb' }));
 
 const env = {
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
 };
 
 const rootLog = sharedLogger.logger.child({ svc: 'summarizer' });
