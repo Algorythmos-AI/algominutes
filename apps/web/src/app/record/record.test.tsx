@@ -8,7 +8,7 @@ import { AuthProvider } from '../auth/AuthContext';
 import { NoticeProvider } from '../Notice';
 import { NotesProvider } from '../notes/NotesContext';
 import { RecordingStore } from '../../lib/recorder/store';
-import { FakeRecorder, fakeStream } from '../../test/fakeRecorder';
+import { FakeRecorder, fakeLocks, fakeStream } from '../../test/fakeRecorder';
 import { fakeAuth, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, ORIGINS } from '../../test/renderApp';
 import { RecordPage, type RecorderEnv } from './RecordPage';
@@ -22,14 +22,16 @@ afterEach(() => {
 const SESSION = { uploadId: 'u1', sessionUri: 'https://storage.googleapis.com/s', storagePath: 'recordings/workspace_u1/x.webm', chunkSize: 8388608, expiresAt: '2026-10-03T00:00:00Z' };
 const ENT = { state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 1, remainingMinutes: 59, overQuota: false };
 
-function setup(over: Partial<RecorderEnv> = {}) {
+function setup(over: Partial<RecorderEnv> = {}, routes: Record<string, () => Response> = {}) {
   const store = new RecordingStore(new IDBFactory());
-  const { stream, stopped } = fakeStream();
+  const mic = fakeStream();
+  const { stream, stopped } = mic;
   const calls: string[] = [];
   const api = (async (url: RequestInfo | URL) => {
     const path = new URL(String(url)).pathname;
     calls.push(path);
     const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
+    if (routes[path]) return routes[path]();
     if (path === '/v1/entitlement') return json(ENT);
     if (path === '/v1/uploads') return json(SESSION);
     if (path === '/v1/uploads/u1/complete') return json({ uploadId: 'u1', storagePath: SESSION.storagePath, complete: true });
@@ -57,7 +59,7 @@ function setup(over: Partial<RecorderEnv> = {}) {
       </ApiProvider>
     </AuthProvider>,
   );
-  return { env, store, stopped, calls, writer, router };
+  return { env, store, stopped, calls, writer, router, mic };
 }
 
 describe('recording in the browser', () => {
@@ -141,7 +143,7 @@ describe('recording in the browser', () => {
   it('a recording left by a closed tab can be uploaded or discarded', async () => {
     const { store } = setup();
     await store.create({ id: 'old', uid: 'u1', mimeType: 'audio/webm', startedAt: Date.parse('2026-09-26T01:00:00Z'), seconds: 125 });
-    await store.append('old', 0, new Blob(['left']), 125);
+    await store.append('old', 0, new Blob(['left']), 125, Date.now() - 60_000);
     cleanup();
     setup({ store } as Partial<RecorderEnv>);
     expect(await screen.findByText(/2:05 \(cut off\)/)).toBeTruthy();
@@ -150,3 +152,75 @@ describe('recording in the browser', () => {
     expect(await store.list('u1')).toEqual([]);
   });
 });
+
+const begin = async () => {
+  fireEvent.click(await screen.findByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+  await screen.findByText('● RECORDING');
+  FakeRecorder.last!.emit('audio');
+};
+
+describe('recording, when things go wrong', () => {
+  it("never offers a recording another tab is still making (it would lose the rest of that meeting)", async () => {
+    const { locks } = fakeLocks();
+    const store = new RecordingStore(new IDBFactory());
+    for (const id of ['live', 'left']) {
+      await store.create({ id, uid: 'u1', mimeType: 'audio/webm', startedAt: Date.parse('2026-09-26T01:00:00Z'), seconds: 60 });
+      await store.append(id, 0, new Blob(['a']), 60, Date.now() - 60_000);
+    }
+    // Another tab is recording "live": it holds its lock.
+    void locks.request('algominutes-recording:live', () => new Promise(() => {}));
+    setup({ store, locks });
+    expect(await screen.findByText('A recording wasn’t uploaded')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Upload it' })).toHaveLength(1);
+  });
+
+  it('a microphone that goes away stops the recording, saves it, and says why', async () => {
+    const { mic } = setup();
+    await begin();
+    mic.end();
+    FakeRecorder.last!.stopOnItsOwn();
+    expect(await screen.findByText(/The microphone stopped/)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+  });
+
+  it('leaving the page mid-recording (as signing out does) turns the microphone off and keeps the audio', async () => {
+    const { store, stopped } = setup();
+    await begin();
+    cleanup();
+    await waitFor(() => expect(stopped).toEqual(['track']));
+    await waitFor(async () => expect((await store.list('u1'))[0]?.stoppedAt).toBeTypeOf('number'));
+  });
+
+  it('a second click on Upload does nothing: one note, one upload', async () => {
+    const { store, calls } = setup();
+    await store.create({ id: 'old', uid: 'u1', mimeType: 'audio/webm', startedAt: Date.parse('2026-09-26T01:00:00Z'), seconds: 60 });
+    await store.append('old', 0, new Blob(['left']), 60, Date.now() - 60_000);
+    cleanup();
+    const again = setup({ store } as Partial<RecorderEnv>);
+    const button = await screen.findByRole('button', { name: 'Upload it' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    expect(again.calls.filter((c) => c === '/v1/uploads')).toHaveLength(1);
+    void calls;
+  });
+
+  it("a kickoff that fails after the upload is retried on the same note, never uploaded again", async () => {
+    let refuse = true;
+    const { store, calls, writer } = setup({}, { '/v1/process': () => (refuse ? new Response('{"error":"internal"}', { status: 500 }) : new Response(JSON.stringify({ success: true, noteId: 'n', jobId: 'j', status: 'queued' }), { status: 202 })) });
+    await begin();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and save' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/still saved in this browser/);
+    const [meta] = await store.list('u1');
+    expect(meta.kickoff?.noteId).toMatch(/^web/);
+    refuse = false;
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload it' }));
+    expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    expect(calls.filter((c) => c === '/v1/uploads')).toHaveLength(1);
+    expect(calls.filter((c) => c === '/v1/process')).toHaveLength(2);
+    expect(writer.createNoteDoc).toHaveBeenCalledTimes(1);
+    expect(await store.list('u1')).toEqual([]);
+  });
+});
+

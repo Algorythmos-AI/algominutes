@@ -1392,6 +1392,16 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
       api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
+- [ ] **Verify before the web recorder ships: WebM on the Gemini fast path.** Chromium and Firefox record
+      WebM/Opus. `services/transcoder/src/fast-path.js` sends the original bytes to Gemini with
+      `resolveGeminiAudioMime`, which labels WebM `audio/ogg` (`packages/ai/src/intelligence.cjs`); Gemini's listed
+      audio formats don't include WebM. Long recordings go through ffmpeg and Speech-to-Text, which read WebM. Check with a
+      one-minute browser recording on staging; if Gemini refuses it, remux on the fast path
+      (`ffmpeg -i in.webm -c:a copy out.ogg`, no re-encode) before the call. A transcoder PR, after auditing
+      `gemini-call.cjs`'s other caller.
+- [ ] **A recording left in a browser stays on its disk after sign-out.** It's only shown to its own account
+      (`RecordingStore.list` filters by uid), but the audio remains in IndexedDB until uploaded or discarded. On a
+      shared computer, offer to upload or delete it at sign-out.
 - [ ] **The retention shown on the web is this browser's, not the account's.** There's no read for
       `users.retention_days`, so a limit set on iOS or in another browser shows as nothing chosen (saving still
       works, and a shorter limit is confirmed first). Fix: return `retentionDays` from `/v1/entitlement` or
