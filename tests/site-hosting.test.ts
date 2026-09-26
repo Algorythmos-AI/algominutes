@@ -24,6 +24,8 @@ describe('security headers', () => {
       expect(h['Permissions-Policy']).toMatch(/camera=\(\)/);
       // Only the app records; the public pages can't ask for the microphone.
       expect(h['Permissions-Policy']).toMatch(p.startsWith('/app') ? /microphone=\(self\)/ : /microphone=\(\)/);
+      // Sharing another tab's call, likewise the app's alone.
+      expect(h['Permissions-Policy']).toMatch(p.startsWith('/app') ? /display-capture=\(self\)/ : /display-capture=\(\)/);
       expect(h['Permissions-Policy']).toMatch(/geolocation=\(\)/);
     },
   );
