@@ -17,7 +17,7 @@
 
 | # | Data collected | Why (purpose) | Where it goes | Linked to user? | Used for tracking? | Retention (see DATA-RETENTION) |
 |---|---|---|---|---|---|---|
-| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Stored in **Cloud Storage** (GCS) in **Australia** (`australia-southeast1`). For transcription, longer recordings are sent to **AssemblyAI in the United States** (sub-processor under a DPA), which transcribes then deletes the audio; shorter clips go to Google's models. | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload; provider copy deleted after processing |
+| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Stored in **Cloud Storage** (GCS) in **Australia** (`australia-southeast1`). Longer recordings are transcribed by **Google Cloud Speech-to-Text on its `global` endpoint** (`stt.js`, `STT_PROVIDER=google`), so audio **may be processed outside Australia**; short clips are transcribed by Gemini on Vertex AI in `australia-southeast1`. AssemblyAI is a code path (ADR 0005) that isn't enabled. | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload; provider copy deleted after processing |
 | 2 | **Transcripts** (user content derived from audio) | Core function — the readable record + summaries/action items | **Postgres** (source of truth: `transcript_lines`, `summaries`, `action_items`, `key_decisions`, `embeddings`) + **Firestore** cache | Yes | No | Until user deletes / user-set retention |
 | 3 | **Account email + Firebase uid** | Account identity, auth, workspace membership | **Firebase Auth** + **Postgres** (`users`, `workspace_members`) + **Firestore** cache | Yes | No | Until account deletion |
 | 4 | **Device push token (FCM)** | Notify user when a recording is transcribed/ready | **FCM** + stored server-side to target the device | Yes | No | Until token rotates / account deletion |
@@ -30,13 +30,14 @@ Notes:
   tracking, no location.** This is what "tracking = NONE" means concretely.
 - Camera / Photo Library (see §4) are used for **on-device text scanning input** and the
   scanned image is treated as **user content** (same class as transcripts) if uploaded.
-- **Cross-border processing (diarisation / ADR 0005):** storage is in Australia, but audio
-  is **processed in the United States** by AssemblyAI (speech-to-text) and transcript text
-  by Google Vertex AI (summaries/chat/embeddings). This is disclosed in the Privacy Policy
-  under APP 8. ⚠️ **The "not shared / sub-processor" position below holds ONLY if we have
-  opted out of AssemblyAI using our content to train its models** — that opt-out is
-  account-level and requires a paid plan (see `docs/BLOCKERS.md`). Until it is in place, a
-  "no sharing" store declaration would be inaccurate.
+- **Cross-border processing (as deployed, 2026-09-26):** storage, Postgres, Firestore and Vertex AI
+  (Gemini, embeddings) are in Australia (`australia-southeast1`). Speech-to-Text runs on Google's
+  `global` endpoint, and Firebase Auth, FCM/APNs, Crashlytics and Cloud Logging are global services,
+  so some processing may happen outside Australia. The published Privacy Policy
+  (`apps/site`, "Information sent outside Australia") says so under APP 8, rendered from
+  `apps/site/src/data/processing.json`, which `tests/site-facts.test.ts` checks against Terraform and
+  the code. **If AssemblyAI is enabled** (`STT_PROVIDER=assemblyai`), that test fails until the
+  policy names it, and the training opt-out below becomes a precondition of the "not shared" answers.
 
 ---
 
@@ -79,21 +80,20 @@ Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the ac
 | **Financial info → Purchase history** | Yes | No | App functionality | No | No |
 | **Location** | **No** | — | — | — | — |
 
-¹ **Sharing = No, conditional on the training opt-out.** Under Play's Data Safety
-definition, transferring data to a *service provider that processes it on your behalf* is
-not "sharing." AssemblyAI (US) and Google Vertex AI are sub-processors under that carve-out
-— BUT only while they do **not** use our content for their own purposes. AssemblyAI trains
-on customer data by default, so this "No" is accurate **only once the account-level
-model-training opt-out is in place** (paid plan; see BLOCKERS). If that opt-out is not done,
-change this to "Yes (shared)".
+¹ **Sharing = No.** Under Play's Data Safety definition, transferring data to a *service
+provider that processes it on your behalf* is not "sharing." Google Cloud (Speech-to-Text,
+Vertex AI) processes our content only on our behalf and doesn't train on it. **If AssemblyAI is
+enabled**, it becomes a sub-processor under the same carve-out, but only while it does **not** use
+our content for its own purposes. AssemblyAI trains on customer data by default, so enabling it
+needs the account-level model-training opt-out first (paid plan; see BLOCKERS), or this answer
+becomes "Yes (shared)".
 
 Play form global answers:
 - **Does your app collect or share any of the required user data types?** Yes (collect).
-  **No sharing** with third parties — Google-provided infra AND the AssemblyAI speech-to-text
-  sub-processor are processors acting on our behalf under data processing agreements, not
-  recipients we "share" with (see footnote ¹ and the opt-out precondition).
-- **Cross-border:** audio is processed in the **United States** (AssemblyAI) and transcript
-  text in the United States (Vertex AI); storage is in Australia. Disclosed in the Privacy
+  **No sharing** with third parties — Google Cloud and Firebase are processors acting on our
+  behalf under their data processing terms, not recipients we "share" with (footnote ¹).
+- **Cross-border:** storage and Vertex AI are in Australia; Speech-to-Text (global endpoint) and
+  the global Firebase services may process data outside Australia. Disclosed in the Privacy
   Policy (APP 8).
 - **Is all collected data encrypted in transit?** Yes (HTTPS/TLS). State it.
 - **Do you provide a way for users to request that their data is deleted?** **Yes** — see
@@ -231,12 +231,13 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 - **URL:** `https://algominutes.algorythmos.com/delete-account` (the site, `apps/site`)
   (must be publicly reachable without installing the app; submit this exact URL in Play
   Console "Data deletion").
-- **What it does:** explains what deletion removes (recordings, transcripts, summaries,
-  account) and the propagation window; offers (a) a **"Sign in and delete now"** button
-  that calls the same `delete-account` endpoint, and (b) a fallback **email request**
-  (`privacy@algorythmos.com`) for users who cannot sign in. State the
-  backup-propagation window from `docs/DATA-RETENTION.md` (e.g. deleted within 30 days
-  including backups).
+- **What it does (built, `apps/site/src/pages/delete-account.astro`):** the in-app path
+  (Settings → Delete my account, type DELETE), an **email request** to `privacy@algorythmos.com`
+  from the sign-in address (with the User ID if the user has it), answered within 30 days, what
+  deletion removes, and the window: live data at once, backups within 30 days
+  (`docs/DATA-RETENTION.md` §4). No backend is needed for Play.
+- **Later (plan Phase 3, with the web app):** a **"Sign in and delete now"** button that calls the
+  same `/v1/account/delete` endpoint.
 - `TODO(legal):` Confirm the page's stated retention/propagation window and that
   "what is kept vs deleted" matches the Privacy Policy exactly.
 

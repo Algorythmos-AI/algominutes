@@ -116,3 +116,23 @@ describe('path resolution (cleanUrls, rewrites, 404)', () => {
     expect(sourceRegex('/(app|billing)(/.*)?').test('/application')).toBe(false);
   });
 });
+
+// monitoring.tf watches the public site from exactly one environment (one site,
+// so two would alert twice), and staging's api admits the staging web app.
+describe('the site in Terraform', () => {
+  const env = (e: string) => fs.readFileSync(`infra/terraform/envs/${e}/main.tf`, 'utf8').replace(/#.*$/gm, '');
+  const host = (e: string) => /^\s*site_uptime_host\s*=\s*"([^"]*)"/m.exec(env(e))?.[1] ?? '';
+
+  it('exactly one environment runs the site uptime checks, on the public host', () => {
+    const watching = ['staging', 'prod'].filter((e) => host(e) !== '');
+    expect(watching).toHaveLength(1);
+    expect(host(watching[0])).toBe('algominutes.algorythmos.com');
+    expect(fs.readFileSync('infra/terraform/modules/environment/variables.tf', 'utf8')).toMatch(/variable "site_uptime_host"\s*\{[^}]*default\s*=\s*""/);
+  });
+
+  it("staging's api allows the site and the staging web app; prod's allows only the site", () => {
+    const origins = (e: string) => /^\s*allowed_origins\s*=\s*"([^"]+)"/m.exec(env(e))![1].split(',');
+    expect(origins('staging')).toEqual(['https://algominutes.algorythmos.com', 'https://staging.algominutes.algorythmos.com']);
+    expect(origins('prod')).toEqual(['https://algominutes.algorythmos.com']);
+  });
+});
