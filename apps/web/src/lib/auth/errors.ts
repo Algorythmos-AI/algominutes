@@ -30,8 +30,8 @@ function codeOf(err: unknown): string {
  * `null` for the cancellation cases: someone who closed the popup knows they
  * closed it, and an alert telling them so is noise.
  */
-export function signInErrorMessage(err: unknown, provider: 'apple' | 'google'): string | null {
-  const label = provider === 'apple' ? 'Apple' : 'Google';
+export function signInErrorMessage(err: unknown, provider: 'apple' | 'google' | 'guest'): string | null {
+  const label = provider === 'apple' ? 'Apple' : provider === 'google' ? 'Google' : 'Guest';
 
   switch (codeOf(err)) {
     case 'auth/popup-closed-by-user':

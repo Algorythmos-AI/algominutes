@@ -59,7 +59,7 @@ jobs:
       - name: Typecheck apps/web
         run: npm run typecheck -w apps/web
       - name: Lint apps/web (errors in the new app; the legacy code still waiting to be ported warns)
-        run: npx eslint . --max-warnings 46
+        run: npx eslint . --max-warnings 18
         working-directory: apps/web
       - name: Unit tests apps/web (vitest, jsdom)
         run: npm test -w apps/web
@@ -96,6 +96,15 @@ jobs:
         run: node scripts/build-site.mjs
         env:
           APP_ENABLED: 'true'
+          # Staging's (public URLs, not secrets); build-site checks the CSP allows them.
+          VITE_API_ORIGIN: https://api-627101926311.australia-southeast1.run.app
+          VITE_BILLING_ORIGIN: https://billing-627101926311.australia-southeast1.run.app
+          # Placeholders: the browser checks render the signed-out app, which calls no Firebase endpoint.
+          VITE_FIREBASE_API_KEY: ci-placeholder
+          VITE_FIREBASE_PROJECT_ID: algominutes-staging
+          VITE_FIREBASE_APP_ID: ci-placeholder
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ci-placeholder
+          VITE_FIREBASE_AUTH_DOMAIN: staging.algominutes.algorythmos.com
       - name: Built pages and browser checks, with the web app
         run: npx vitest run --config vitest.site.config.ts
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
+import { firebase } from '../firebase';
 import type { Note, NoteStatus } from '../types';
 
 interface JobStatusProps {
@@ -36,7 +36,7 @@ export default function JobStatus({ workspaceId, noteId }: JobStatusProps) {
 
   useEffect(() => {
     const unsub = onSnapshot(
-      doc(db, `workspaces/${workspaceId}/notes/${noteId}`),
+      doc(firebase().db, `workspaces/${workspaceId}/notes/${noteId}`),
       (snap) => {
         if (!snap.exists()) {
           setNote(null);
