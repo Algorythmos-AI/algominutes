@@ -3,12 +3,13 @@
 <plist version="1.0">
 <!--
 	A10 #3 privacy manifest. MUST stay in sync with docs/STORE-COMPLIANCE.md §4.1
-	and the App Store Connect Nutrition Labels (§2). Analytics/tracking is OFF
-	(A6.9/A10 decision) — NSPrivacyTracking=false, tracking domains empty, no
-	Usage-Data / advertising-identifier types declared. Do NOT add analytics here.
-	TODO(A4-apple): validate this manifest against Apple's current required-reason
-	API list and the Privacy Report at build time (needs a signed build on the
-	Algorythmos team; can't be exercised in this environment).
+	and the App Store Connect Nutrition Labels (§2). No tracking: NSPrivacyTracking
+	is false, there are no tracking domains and no advertising identifier. The app
+	does send product-interaction events (POST /v1/events: first recording, paywall
+	viewed, and so on), tied to the account, for its own analytics: declared below
+	as ProductInteraction with the Analytics purpose, never tracking.
+	Checked against the archive's Xcode Privacy Report before each TestFlight build
+	(docs/runbooks/testflight-internal.md).
 -->
 <dict>
 	<key>NSPrivacyTracking</key>
@@ -17,6 +18,54 @@
 	<array/>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeCustomerSupport</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
@@ -101,6 +150,7 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
+				<string>1C8F.1</string>
 			</array>
 		</dict>
 		<dict>

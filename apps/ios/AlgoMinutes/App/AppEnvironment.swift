@@ -39,6 +39,13 @@ final class AppEnvironment {
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
 
+    /// A capture of another app finished without this session's pre-recording
+    /// notice (it was started from Control Center). RootView asks the user to
+    /// confirm they had permission before it becomes a note.
+    var isBroadcastConsentPending = false
+    /// The kill switch held a finished capture back; said once per session.
+    @ObservationIgnored private var broadcastHoldNoticeShown = false
+
     /// The api answered 426: this build is below its minimum. RootView covers
     /// the app with the update screen; nothing else works until the update.
     private(set) var updateRequired = false
@@ -411,6 +418,25 @@ final class AppEnvironment {
     /// recording: called whenever the app comes to the foreground, since the
     /// capture ends while another app is in front.
     func claimBroadcastCapture() async {
+        let decision = BroadcastHandoff.decide(
+            hasFinishedCapture: broadcast.hasFinishedCapture,
+            switchOn: switches.broadcastCapture,
+            consented: await consentGate.satisfied(for: .appAudio)
+        )
+        switch decision {
+        case .hold:
+            AppLog.info("broadcast_held_by_switch")
+            if !broadcastHoldNoticeShown {
+                broadcastHoldNoticeShown = true
+                alertMessage = "Capturing audio from another app is turned off right now, so your capture hasn't been uploaded. It stays on this iPhone and becomes a note when the feature is back."
+            }
+            return
+        case .askConsent:
+            isBroadcastConsentPending = true
+            return
+        case .claim:
+            break
+        }
         switch await broadcast.claim() {
         case .none:
             break
@@ -427,6 +453,20 @@ final class AppEnvironment {
         case .failed(let message):
             alertMessage = message
         }
+    }
+
+    /// The user confirmed they had permission for a capture started outside
+    /// the app: record that on the consent gate, then make the note.
+    func confirmBroadcastConsent() async {
+        isBroadcastConsentPending = false
+        consentGate.acknowledge()
+        await claimBroadcastCapture()
+    }
+
+    /// The user declined: the capture is thrown away, never uploaded.
+    func discardBroadcastCapture() {
+        isBroadcastConsentPending = false
+        broadcast.discardFinished()
     }
 
     // MARK: - Retry / recovery (durable re-upload from disk)

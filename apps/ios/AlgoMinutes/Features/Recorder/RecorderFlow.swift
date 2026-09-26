@@ -44,7 +44,7 @@ struct RecorderConsentFlow: View {
                     .font(Typography.heading(22, weight: .bold))
                     .foregroundStyle(Theme.heading)
                 if !consentShownBefore {
-                    Text("AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded to be transcribed and summarised, then kept in your account until you delete it.")
+                    Text("AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded, then transcribed and summarised by Google Cloud's speech and AI services, and kept in your account until you delete it.")
                         .font(Typography.body(15))
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
