@@ -109,6 +109,12 @@ variable "allowed_origins" {
   }
 }
 
+variable "site_uptime_host" {
+  description = "Host of the public site to watch with uptime checks (monitoring.tf), or \"\" for none. Exactly one environment watches it: staging until prod exists, then prod."
+  type        = string
+  default     = ""
+}
+
 variable "public_site_url" {
   description = "Origin of the public site (privacy, terms, support, share links, billing return pages), without a trailing slash. The api and billing read it as PUBLIC_SITE_URL."
   type        = string
