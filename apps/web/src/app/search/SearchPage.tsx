@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import type { z } from 'zod';
 import type { SearchHit } from '@algominutes/contracts';
@@ -7,6 +7,7 @@ import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { displayTitle, formatClock } from '../../lib/notes/format';
 import { useApi } from '../ApiContext';
+import { useAuth } from '../auth/AuthContext';
 import { useNotes } from '../notes/NotesContext';
 
 type Hit = z.infer<typeof SearchHit>;
@@ -25,19 +26,44 @@ export function splitCitations(text: string): Array<{ text: string } | { cite: n
   return out;
 }
 
+type Mode = 'search' | 'ask';
+
+/**
+ * The page as the user left it, so opening a hit or a source and coming Back
+ * finds the query, results and answers still there. In memory only (never
+ * storage: it holds transcript text), for one user, and gone on reload.
+ */
+let kept: { uid: string; mode: Mode; query: string; hits: Hit[] | null; answers: Answer[] } | null = null;
+
+/** Test hook: a fresh page. */
+export function forgetSearchPage() {
+  kept = null;
+}
+
 const hitLink = (h: Hit) => `/notes/${encodeURIComponent(h.noteId)}?t=${Math.max(0, Math.floor(h.startMs))}`;
 
 /** Search every note, or ask them a question: parity with iOS's search and chat. */
 export function SearchPage() {
   const { api } = useApi();
+  const { user } = useAuth();
   const { visible } = useNotes();
-  const [mode, setMode] = useState<'search' | 'ask'>('search');
-  const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<Hit[] | null>(null);
+  const uid = user?.uid ?? '';
+  const [restored] = useState(() => (kept && kept.uid === uid ? kept : null));
+  const [mode, setMode] = useState<Mode>(restored?.mode ?? 'search');
+  const [query, setQuery] = useState(restored?.query ?? '');
+  const [hits, setHits] = useState<Hit[] | null>(restored?.hits ?? null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [answers, setAnswers] = useState<Answer[]>([]);
+  // An answer still streaming when the page was left was stopped by leaving it.
+  const [answers, setAnswers] = useState<Answer[]>(() => (restored?.answers ?? []).map((a) => (a.status === 'streaming' ? { ...a, status: 'stopped' } : a)));
+  const [announce, setAnnounce] = useState('');
   const stop = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    kept = { uid, mode, query, hits, answers };
+  }, [uid, mode, query, hits, answers]);
+  // Leaving the page ends its answer: nothing keeps streaming (and costing) behind another page.
+  useEffect(() => () => stop.current?.abort(), []);
 
   const titleOf = (h: Hit) => displayTitle(visible.find((n) => n.id === h.noteId)?.title ?? h.noteTitle);
 
@@ -59,19 +85,28 @@ export function SearchPage() {
     stop.current = controller;
     const idx = answers.length;
     setAnswers((a) => [...a, { question, text: '', citations: [], status: 'streaming' }]);
+    setAnnounce('');
     const patch = (fn: (a: Answer) => Answer) => setAnswers((list) => list.map((a, i) => (i === idx ? fn(a) : a)));
     try {
       for await (const ev of api.chat({ query: question }, controller.signal) as AsyncGenerator<ChatEvent>) {
         if (ev.type === 'citations') patch((a) => ({ ...a, citations: ev.hits }));
         else if (ev.type === 'text') patch((a) => ({ ...a, text: a.text + ev.text }));
-        else if (ev.type === 'done') patch((a) => ({ ...a, status: 'done' }));
-        else if (ev.type === 'error') patch((a) => ({ ...a, status: 'failed', error: ev.error === 'timeout' ? 'The answer took too long.' : 'The answer was cut short.' }));
+        else if (ev.type === 'done') {
+          patch((a) => ({ ...a, status: 'done' }));
+          setAnnounce('Answer ready.');
+        }
+        else if (ev.type === 'error') {
+          const error = ev.error === 'timeout' ? 'The answer took too long.' : 'The answer was cut short.';
+          patch((a) => ({ ...a, status: 'failed', error }));
+        }
       }
       // Stopped by the user: the stream ends quietly.
       patch((a) => (a.status === 'streaming' ? { ...a, status: controller.signal.aborted ? 'stopped' : 'done' } : a));
+      if (controller.signal.aborted) setAnnounce('The answer was stopped.');
     } catch (err) {
       if (err instanceof ApiError && err.kind === 'cancelled') {
         patch((a) => ({ ...a, status: 'stopped' }));
+        setAnnounce('The answer was stopped.');
         return;
       }
       patch((a) => ({ ...a, status: 'failed', error: err instanceof ApiError ? err.message : 'The answer didn’t come through.' }));
@@ -93,16 +128,33 @@ export function SearchPage() {
   };
 
   const streaming = answers.some((a) => a.status === 'streaming');
-  const tab = (m: 'search' | 'ask', label: string) => (
-    <button type="button" role="tab" aria-selected={mode === m} className={`rounded-lg px-3 py-2 ${mode === m ? 'bg-card text-heading' : 'text-body'}`} onClick={() => setMode(m)}>
+  const tab = (m: Mode, label: string) => (
+    <button
+      type="button"
+      role="tab"
+      id={`tab-${m}`}
+      aria-selected={mode === m}
+      aria-controls={`panel-${m}`}
+      tabIndex={mode === m ? 0 : -1}
+      className={`rounded-lg px-3 py-2 ${mode === m ? 'bg-card text-heading' : 'text-body'}`}
+      onClick={() => setMode(m)}
+    >
       {label}
     </button>
   );
+  // The tablist pattern: arrows move between the two tabs (and select them).
+  const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const next: Mode = mode === 'search' ? 'ask' : 'search';
+    setMode(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
 
   return (
     <section aria-labelledby="search-title" className="flex flex-col gap-6">
       <h1 id="search-title" className="text-3xl font-bold text-heading">Search</h1>
-      <div role="tablist" aria-label="Search or ask" className="flex gap-1">
+      <div role="tablist" aria-label="Search or ask" className="flex gap-1" onKeyDown={onTabKey}>
         {tab('search', 'Search transcripts')}
         {tab('ask', 'Ask your notes')}
       </div>
@@ -126,7 +178,7 @@ export function SearchPage() {
       </form>
 
       {mode === 'search' && (
-        <div aria-live="polite">
+        <div id="panel-search" role="tabpanel" aria-labelledby="tab-search" aria-live="polite">
           {searching && <p role="status" className="text-muted">Searching…</p>}
           {searchError && <p role="alert" className="text-body">{searchError}</p>}
           {hits && !searching && hits.length === 0 && <p className="text-muted">Nothing found. Try other words.</p>}
@@ -145,8 +197,11 @@ export function SearchPage() {
         </div>
       )}
 
+      {/* Announced once an answer ends, not on every word as it streams (a failure is its own alert). */}
+      <p role="status" className="sr-only">{mode === 'ask' ? announce : ''}</p>
       {mode === 'ask' && (
-        <ol className="flex flex-col gap-6" aria-live="polite">
+        <div id="panel-ask" role="tabpanel" aria-labelledby="tab-ask">
+        <ol className="flex flex-col gap-6">
           {answers.map((a, i) => (
             <li key={i} className="flex flex-col gap-2">
               <p className="self-end rounded-2xl bg-accent/20 px-4 py-2 text-heading">{a.question}</p>
@@ -191,6 +246,7 @@ export function SearchPage() {
             </li>
           ))}
         </ol>
+        </div>
       )}
     </section>
   );

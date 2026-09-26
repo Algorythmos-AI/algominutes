@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { fakeAuth, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, renderApp } from '../../test/renderApp';
-import { splitCitations } from './SearchPage';
+import { forgetSearchPage, splitCitations } from './SearchPage';
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  forgetSearchPage();
 });
 
 const hit = (noteId: string, startMs: number, chunkText: string) => ({ noteId, noteTitle: `Title ${noteId}`, chunkText, startMs, endMs: startMs + 5000 });
@@ -100,5 +101,55 @@ describe('ask your notes', () => {
   it('splits [n] citations out of the text', () => {
     expect(splitCitations('A [1] and [12].')).toEqual([{ text: 'A ' }, { cite: 1 }, { text: ' and ' }, { cite: 12 }, { text: '.' }]);
     expect(splitCitations('none')).toEqual([{ text: 'none' }]);
+  });
+});
+
+describe('leaving the page', () => {
+  it('keeps the query and results for Back, after a hit is opened', async () => {
+    const f = route({ '/v1/search': () => new Response(JSON.stringify({ hits: [hit('n1', 75_000, 'the budget is fine')] }), { status: 200 }) });
+    const router = openSearch(f);
+    fireEvent.change(await screen.findByLabelText('Search your notes'), { target: { value: 'budget' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(await screen.findByRole('link', { name: /Title n1/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/notes/n1'));
+    await act(() => router.navigate(-1));
+    expect(await screen.findByRole('link', { name: /Title n1/ })).toBeTruthy();
+    expect((screen.getByLabelText('Search your notes') as HTMLInputElement).value).toBe('budget');
+  });
+
+  it('ends an answer still streaming, and shows it as stopped on return', async () => {
+    const s = sse();
+    let signal: AbortSignal | undefined;
+    const f = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(url)).pathname === '/v1/chat') {
+        signal = init?.signal ?? undefined;
+        return s.response();
+      }
+      return new Response('{"ok":true}', { status: 200 });
+    }) as typeof fetch;
+    const router = openSearch(f);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ask your notes' }));
+    fireEvent.change(screen.getByLabelText('Ask a question about your notes'), { target: { value: 'q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    s.send('data: {"text":"partial"}\n\n');
+    await screen.findByText('partial');
+    await act(() => router.navigate('/settings'));
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+    await act(() => router.navigate('/search'));
+    expect(await screen.findByText('partial')).toBeTruthy();
+    expect(screen.getByText('Stopped.')).toBeTruthy();
+  });
+});
+
+describe('the tabs', () => {
+  it('arrow keys move between them, and each controls its panel', async () => {
+    openSearch(route({}));
+    const searchTab = await screen.findByRole('tab', { name: 'Search transcripts' });
+    expect(searchTab.getAttribute('aria-controls')).toBe('panel-search');
+    fireEvent.keyDown(searchTab, { key: 'ArrowRight' });
+    const ask = screen.getByRole('tab', { name: 'Ask your notes' });
+    expect(ask.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(ask);
+    expect(screen.getByRole('tabpanel', { name: 'Ask your notes' })).toBeTruthy();
   });
 });
