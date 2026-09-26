@@ -4,7 +4,7 @@ import {
   getRedirectResult,
   linkWithPopup,
   linkWithRedirect,
-  onAuthStateChanged,
+  onIdTokenChanged,
   signInAnonymously,
   signInWithCredential,
   signInWithPopup,
@@ -31,7 +31,9 @@ const toUser = (u: User | null): AuthUser | null =>
 /** The real adapter, on the app's Firebase Auth. */
 export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
   return {
-    onChange: (cb) => onAuthStateChanged(auth, (u) => cb(toUser(u))),
+    // onIdTokenChanged, not onAuthStateChanged: linking Apple or Google to a guest keeps the uid, so
+    // only the token changes, and the user must stop reading as a guest at once.
+    onChange: (cb) => onIdTokenChanged(auth, (u) => cb(toUser(u))),
     completeRedirect: async () => {
       await getRedirectResult(auth);
     },

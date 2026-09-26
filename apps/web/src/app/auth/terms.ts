@@ -22,10 +22,21 @@ function read(storage: KV, k: string): string | null {
   }
 }
 
+// A post in flight per uid: two calls in the same moment (a re-render, StrictMode) post once.
+const inFlight = new Map<string, Promise<boolean>>();
+
 /** Posts the acceptance unless this uid already accepted these versions. Resolves true when it posted. */
-export async function recordTermsAcceptanceIfNeeded(api: Pick<ApiClient, 'acceptTerms'>, user: AuthUser | null, storage: KV = localStorage): Promise<boolean> {
-  if (!user || user.isAnonymous) return false;
-  if (read(storage, key(user.uid)) === tag) return false;
+export function recordTermsAcceptanceIfNeeded(api: Pick<ApiClient, 'acceptTerms'>, user: AuthUser | null, storage: KV = localStorage): Promise<boolean> {
+  if (!user || user.isAnonymous) return Promise.resolve(false);
+  if (read(storage, key(user.uid)) === tag) return Promise.resolve(false);
+  const pending = inFlight.get(user.uid);
+  if (pending) return pending.then(() => false);
+  const p = post(api, user.uid, storage).finally(() => inFlight.delete(user.uid));
+  inFlight.set(user.uid, p);
+  return p;
+}
+
+async function post(api: Pick<ApiClient, 'acceptTerms'>, uid: string, storage: KV): Promise<boolean> {
   try {
     await api.acceptTerms({ termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, appVersion: pkg.version, platform: 'web' });
   } catch (err) {
@@ -34,7 +45,7 @@ export async function recordTermsAcceptanceIfNeeded(api: Pick<ApiClient, 'accept
     return false;
   }
   try {
-    storage.setItem(key(user.uid), tag);
+    storage.setItem(key(uid), tag);
   } catch (err) {
     reportCrash('terms.storageWrite', err);
   }

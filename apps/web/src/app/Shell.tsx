@@ -16,9 +16,11 @@ const nav = [
 export function Shell() {
   const { api, updateRequired } = useApi();
   const { user } = useAuth();
+  const uid = user?.uid;
+  const permanent = user ? !user.isAnonymous : false;
   useEffect(() => {
-    void recordTermsAcceptanceIfNeeded(api, user);
-  }, [api, user]);
+    if (uid && permanent) void recordTermsAcceptanceIfNeeded(api, { uid, isAnonymous: false, email: null, displayName: null });
+  }, [api, uid, permanent]);
   return (
     <div className="flex min-h-screen flex-col">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-card focus:px-3 focus:py-2">

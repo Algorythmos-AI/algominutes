@@ -45,7 +45,8 @@ install at the monorepo root (npm workspaces), production branch `main`.
 without every value below, or when `vercel.json` would block them: the api and billing origins must be in `/app`'s
 `connect-src`, and a `/__/auth` rewrite must lead to the project's `firebaseapp.com`.
 
-Vercel → algominutes-site → Settings → Environment Variables, **Preview** (the `integration` branch):
+Vercel → algominutes-site → Settings → Environment Variables, **Preview**, each scoped to the **`integration`
+branch** only (so PR previews keep the placeholder and never build the app):
 
 | Variable | Staging value |
 |---|---|
@@ -55,6 +56,7 @@ Vercel → algominutes-site → Settings → Environment Variables, **Preview** 
 | `VITE_FIREBASE_PROJECT_ID` | `algominutes-staging` |
 | `VITE_FIREBASE_APP_ID` | `1:627101926311:web:3b656d832081e12b19ac82` ("AlgoMinutes Web") |
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `627101926311` |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `staging.algominutes.algorythmos.com` (where `/__/auth` is proxied) |
 | `VITE_FIREBASE_API_KEY` | **owner:** the "AlgoMinutes Web" app's key (Firebase → Project settings → Your apps) |
 
 Production gets none of these until the launch (plan Phase 3), so it keeps the "coming soon" page.

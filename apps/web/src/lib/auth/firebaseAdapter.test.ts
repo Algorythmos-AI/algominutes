@@ -10,7 +10,7 @@ const m = vi.hoisted(() => ({
   signInWithCredential: vi.fn(),
   signInAnonymously: vi.fn(),
   getRedirectResult: vi.fn(),
-  onAuthStateChanged: vi.fn(),
+  onIdTokenChanged: vi.fn(),
   signOut: vi.fn(),
   credentialFromError: vi.fn(),
 }));
@@ -83,5 +83,16 @@ describe('firebaseAdapter', () => {
     const auth = guestAuth();
     expect(await firebaseAdapter(auth as never).idToken(true)).toBe('fresh');
     expect(await firebaseAdapter({ currentUser: null } as never).idToken(false)).toBeNull();
+  });
+
+  it('follows the ID token, so a guest who links an account stops being a guest at once', () => {
+    const cb = vi.fn();
+    m.onIdTokenChanged.mockImplementation((_a, listener: (u: unknown) => void) => {
+      listener({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null });
+      return () => {};
+    });
+    firebaseAdapter({} as never).onChange(cb);
+    expect(m.onIdTokenChanged).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null });
   });
 });

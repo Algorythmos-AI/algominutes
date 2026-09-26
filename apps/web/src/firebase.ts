@@ -25,15 +25,16 @@ export interface FirebaseWebConfig {
 }
 
 /**
- * The config from the build's env. authDomain is the page's own host: the
- * site proxies /__/auth/* to the project's firebaseapp.com (vercel.json), so
- * the sign-in popup and its iframe are same-origin and survive browsers that
- * block third-party storage. A local dev server has no proxy, so it uses the
- * project's own domain.
+ * The config from the build's env. authDomain is VITE_FIREBASE_AUTH_DOMAIN,
+ * the environment's own site host (staging.algominutes.algorythmos.com): the
+ * site proxies /__/auth/* there to the project's firebaseapp.com (vercel.json),
+ * so the popup and its iframe are same-origin and survive browsers that block
+ * third-party storage. It's set per environment, not taken from the page, so a
+ * build on a host without the proxy (a PR preview) still signs in, through
+ * the project's own domain. A local dev server always uses that.
  */
 export function firebaseConfigFromEnv(
   env: Record<string, string | undefined> = import.meta.env,
-  pageHost: string = typeof window === 'undefined' ? '' : window.location.host,
   dev: boolean = Boolean(import.meta.env.DEV),
 ): FirebaseWebConfig {
   const need = (name: string) => {
@@ -47,7 +48,7 @@ export function firebaseConfigFromEnv(
     projectId,
     appId: need('VITE_FIREBASE_APP_ID'),
     messagingSenderId: need('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-    authDomain: dev || !pageHost ? `${projectId}.firebaseapp.com` : pageHost,
+    authDomain: (!dev && (env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim()) || `${projectId}.firebaseapp.com`,
   };
 }
 

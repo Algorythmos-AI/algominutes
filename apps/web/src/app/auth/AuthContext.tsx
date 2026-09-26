@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AuthAdapter, AuthUser, LinkResult, Provider } from '../../lib/auth/adapter';
 import { signInErrorMessage } from '../../lib/auth/errors';
 import { reportCrash } from '../../lib/crashReport';
@@ -14,6 +14,8 @@ interface AuthValue {
   signIn(provider: Provider): Promise<void>;
   continueAsGuest(): Promise<void>;
   linkGuest(provider: Provider): Promise<LinkResult>;
+  /** Runs a conflict's switchToExisting, surfacing any failure like a sign-in's. */
+  switchAccount(go: () => Promise<void>): Promise<void>;
   signOut(): Promise<void>;
   idToken(forceRefresh: boolean): Promise<string | null>;
 }
@@ -28,7 +30,7 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
 
   useEffect(() => {
     adapter.completeRedirect().catch((err) => {
-      setError(signInErrorMessage(err, 'google'));
+      setError(signInErrorMessage(err, 'guest'));
       reportCrash('auth.redirectResult', err);
     });
     return adapter.onChange((u) => {
@@ -37,8 +39,12 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
     });
   }, [adapter]);
 
+  // One identity for the adapter's lifetime: the api client is built on it, and rebuilding it on every
+  // busy or error change re-ran everything keyed on the client (the Terms acceptance posted twice).
+  const idToken = useCallback((force: boolean) => adapter.idToken(force), [adapter]);
+
   const value = useMemo<AuthValue>(() => {
-    const run = async <T,>(provider: Provider, fn: () => Promise<T>): Promise<T | undefined> => {
+    const run = async <T,>(provider: Provider | 'guest', fn: () => Promise<T>): Promise<T | undefined> => {
       setBusy(true);
       setError(null);
       try {
@@ -57,12 +63,20 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
       error,
       busy,
       signIn: async (p) => void (await run(p, () => adapter.signIn(p))),
-      continueAsGuest: async () => void (await run('google', () => adapter.continueAsGuest())),
+      continueAsGuest: async () => void (await run('guest', () => adapter.continueAsGuest())),
       linkGuest: async (p) => (await run(p, () => adapter.linkGuest(p))) ?? { outcome: 'cancelled' },
-      signOut: () => adapter.signOut(),
-      idToken: (force) => adapter.idToken(force),
+      signOut: async () => {
+        try {
+          await adapter.signOut();
+        } catch (err) {
+          setError('Signing out didn’t complete. Try again.');
+          reportCrash('auth.signOut', err);
+        }
+      },
+      switchAccount: async (go) => void (await run('guest', go)),
+      idToken,
     };
-  }, [adapter, status, user, error, busy]);
+  }, [adapter, status, user, error, busy, idToken]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -10,7 +10,7 @@ type Dialog = null | 'create' | 'sign-out' | { conflict: Provider; switchToExist
  * guest can't get back into a guest account. Parity with iOS Settings (#185).
  */
 export function AccountControls() {
-  const { user, signOut, linkGuest, busy, error } = useAuth();
+  const { user, signOut, linkGuest, switchAccount, busy, error } = useAuth();
   const [dialog, setDialog] = useState<Dialog>(null);
   if (!user) return null;
   const guest = user.isAnonymous;
@@ -24,6 +24,11 @@ export function AccountControls() {
 
   return (
     <div className="flex items-center gap-2">
+      {error && !dialog && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
       {guest && (
         <button type="button" className={`${btn} bg-accent font-semibold text-white`} onClick={() => setDialog('create')}>
           Create account
@@ -66,7 +71,7 @@ export function AccountControls() {
                   The {dialog.conflict === 'apple' ? 'Apple' : 'Google'} account you chose already has its own AlgoMinutes notes. Switching signs you in to it, and this guest account's notes stay behind.
                 </p>
                 <div className="flex flex-col gap-2">
-                  <button type="button" className="rounded-xl border border-border px-4 py-3 font-semibold text-heading" onClick={() => { const go = dialog.switchToExisting; setDialog(null); void go(); }}>Switch to that account</button>
+                  <button type="button" className="rounded-xl border border-border px-4 py-3 font-semibold text-heading" onClick={() => { const go = dialog.switchToExisting; setDialog(null); void switchAccount(go); }}>Switch to that account</button>
                   <button type="button" className="rounded-xl bg-accent px-4 py-3 font-semibold text-white" onClick={() => setDialog(null)}>Keep using these notes</button>
                 </div>
               </>

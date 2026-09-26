@@ -50,6 +50,14 @@ describe('sign-in', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
+  it("a failed guest start doesn't blame Google", async () => {
+    const auth = fakeAuth(null);
+    auth.adapter.continueAsGuest.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'auth/operation-not-allowed' }));
+    renderApp('/app', auth.adapter);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try it as a guest' }));
+    expect((await screen.findByRole('alert')).textContent).toBe("Guest sign-in isn't available yet. Please use the other sign-in option for now.");
+  });
+
   it('links the Terms and Privacy Policy on the public site', async () => {
     renderApp('/app/sign-in', fakeAuth(null).adapter);
     await heading('Sign in to AlgoMinutes');
@@ -107,6 +115,23 @@ describe('a guest', () => {
     expect(auth.adapter.signOut).toHaveBeenCalledTimes(1);
   });
 
+  it('a sign-out or account switch that fails says so, instead of an unhandled rejection', async () => {
+    const auth = fakeAuth(PERMANENT);
+    auth.adapter.signOut.mockRejectedValueOnce(new Error('network'));
+    renderApp('/app', auth.adapter);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByText('Signing out didn’t complete. Try again.')).toBeTruthy();
+    cleanup();
+
+    const g = fakeAuth(GUEST);
+    g.adapter.linkGuest.mockResolvedValueOnce({ outcome: 'conflict', switchToExisting: async () => { throw Object.assign(new Error('x'), { code: 'auth/network-request-failed' }); } });
+    renderApp('/app', g.adapter);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch to that account' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/network problem/);
+  });
+
   it('a permanent account signs out straight away', async () => {
     const auth = fakeAuth(PERMANENT);
     renderApp('/app', auth.adapter);
@@ -153,6 +178,28 @@ describe('Terms acceptance', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with Google' }));
     await waitFor(() => expect(sent.map((s) => s.url)).toContain('https://api.example.test/v1/account/accept-terms'));
     expect(sent.find((s) => s.url.endsWith('/accept-terms'))!.auth).toBe('Bearer token-for-google-uid');
+    // Once, though sign-in re-renders the app several times (busy, then signed in).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent.filter((s) => s.url.endsWith('/accept-terms'))).toHaveLength(1);
+  });
+
+  it('two calls at the same moment post once', async () => {
+    const a = api();
+    const store = memory();
+    const [x, y] = await Promise.all([recordTermsAcceptanceIfNeeded(a, PERMANENT, store), recordTermsAcceptanceIfNeeded(a, PERMANENT, store)]);
+    expect([x, y].sort()).toEqual([false, true]);
+    expect(a.acceptTerms).toHaveBeenCalledTimes(1);
+  });
+
+  it('a guest who creates an account records the acceptance then, without a reload', async () => {
+    const sent: string[] = [];
+    const auth = fakeAuth(GUEST);
+    renderApp('/app', auth.adapter, async (url) => { sent.push(String(url)); return new Response(JSON.stringify({ ok: true }), { status: 200 }); });
+    await screen.findByRole('button', { name: 'Create account' });
+    expect(sent.filter((u) => u.endsWith('/accept-terms'))).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    await waitFor(() => expect(sent.filter((u) => u.endsWith('/accept-terms'))).toHaveLength(1));
   });
 });
 
