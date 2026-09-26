@@ -48,6 +48,8 @@ export interface ImportDeps {
   signal?: AbortSignal;
   /** Records the upload as this browser's (ownUploads.ts), so a closed tab's is cleaned up. */
   track?: { start: (noteId: string) => void; end: (noteId: string) => void };
+  /** A recording made here, not an imported file: its note type and title. */
+  recording?: { title: string };
 }
 
 export async function importAudio(file: File, deps: ImportDeps): Promise<ImportResult> {
@@ -79,8 +81,9 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   }
 
   if (deps.signal?.aborted) return cancelled();
+  const type = deps.recording ? 'recording' : 'import_audio';
   try {
-    await deps.createNoteDoc({ noteId, uid: deps.uid, title: titleFrom(file.name), type: 'import_audio', mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
+    await deps.createNoteDoc({ noteId, uid: deps.uid, title: deps.recording?.title ?? titleFrom(file.name), type, mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
     deps.track?.start(noteId);
   } catch (err) {
     // No doc, no note: stop before uploading (the minted session just expires).
@@ -97,6 +100,16 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     }
   };
   const fail = async (message: string): Promise<ImportResult> => {
+    // A recording's audio is still safe on this browser, and a retry makes a new note: remove this one
+    // rather than leave a failure behind. An imported file's note stays, marked, as iOS leaves it.
+    if (deps.recording) {
+      try {
+        await deps.api.deleteNote({ noteId, workspaceId });
+        return { ok: false, noteId: null, message };
+      } catch (err) {
+        reportCrash('import.failDelete', err);
+      }
+    }
     await mark(message);
     return { ok: false, noteId, message };
   };
@@ -131,7 +144,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   }
 
   try {
-    await deps.api.process({ noteId, workspaceId, type: 'import_audio', storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) });
+    await deps.api.process({ noteId, workspaceId, type, storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) });
   } catch (err) {
     const f = kickoffFailure(err, "Your recording uploaded, but processing couldn't start. Try again.");
     const onNote = noteError(f);
