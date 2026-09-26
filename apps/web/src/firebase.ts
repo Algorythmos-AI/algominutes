@@ -14,7 +14,7 @@ import {
   initializeAuth,
   type Auth,
 } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import type { Firestore } from 'firebase/firestore';
 
 export interface FirebaseWebConfig {
   apiKey: string;
@@ -52,7 +52,7 @@ export function firebaseConfigFromEnv(
   };
 }
 
-let instance: { app: FirebaseApp; auth: Auth; db: Firestore } | null = null;
+let instance: { app: FirebaseApp; auth: Auth } | null = null;
 
 export function firebase() {
   if (instance) return instance;
@@ -62,6 +62,18 @@ export function firebase() {
     // initializeAuth, unlike getAuth, doesn't bundle the popup/redirect resolver.
     popupRedirectResolver: browserPopupRedirectResolver,
   });
-  instance = { app, auth, db: getFirestore(app) };
+  instance = { app, auth };
   return instance;
+}
+
+let db: Promise<Firestore> | null = null;
+
+/**
+ * Firestore, loaded on first use. It's the biggest part of the Firebase SDK
+ * (with its re2js dependency, over a third of the app), and nothing before
+ * sign-in needs it, so it stays out of the first download.
+ */
+export function firestore(): Promise<Firestore> {
+  db ??= import('firebase/firestore').then(({ getFirestore }) => getFirestore(firebase().app));
+  return db;
 }

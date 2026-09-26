@@ -2,7 +2,9 @@ import type { RouteObject } from 'react-router';
 import { Shell } from './app/Shell';
 import { RequireAuth } from './app/auth/RequireAuth';
 import { SignInPage } from './app/auth/SignInPage';
-import { NotFoundPage, NotesPage, SearchPage, SettingsPage } from './app/pages';
+import { NotFoundPage, SearchPage, SettingsPage } from './app/pages';
+import { NoteDetailPage } from './app/notes/NoteDetailPage';
+import { NotesPage } from './app/notes/NotesPage';
 
 /** The app's routes, under the router's basename (/app). Each feature PR (plan W2–W11) adds its own. */
 export const routes: RouteObject[] = [
@@ -15,6 +17,7 @@ export const routes: RouteObject[] = [
     ),
     children: [
       { index: true, element: <NotesPage /> },
+      { path: 'notes/:noteId', element: <NoteDetailPage /> },
       { path: 'search', element: <SearchPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },

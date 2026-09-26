@@ -24,9 +24,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 
-const ROOTS = ['functions', 'services', 'packages/db', 'packages/ai'];
+const ROOTS = ['functions', 'services', 'packages/db', 'packages/ai', 'apps/web/src'];
 const skip = (p) => /(^|\/)(node_modules|dist|build|generated)(\/|$)/.test(p) || p.endsWith('.d.ts');
 const WRITES = new Set(['set', 'update', 'delete', 'create']);
+// The web SDK's modular writes: setDoc(ref, …), writeBatch(db), runTransaction(db, …) and the like.
+const MODULAR_WRITES = new Set(['setDoc', 'updateDoc', 'deleteDoc', 'addDoc', 'writeBatch', 'runTransaction']);
 const MARKER = /firestore-write-ok:[ \t]*[^\s*]/;
 
 // The only files allowed to write Firestore documents, each with its reason.
@@ -37,6 +39,7 @@ export const ALLOWLIST = new Map([
   ['packages/db/src/note-terminal.cjs', 'the repo layer: the terminal-failure writer, workspace-scoped Postgres, then the mirror'],
   ['packages/db/src/mirror-repair.ts', 'the repo layer: the sweep repairs a finished note\'s mirror from Postgres, under an update-time precondition'],
   ['services/transcoder/src/firestore-mirror.js', "the transcoder's mirror module"],
+  ['apps/web/src/lib/notes/noteCache.ts', "the web app's workspace doc at sign-in and a new note's doc before kickoff, both as iOS does and as the rules allow"],
 ]);
 
 function* sourceFiles(dir) {
@@ -45,7 +48,7 @@ function* sourceFiles(dir) {
     const p = path.join(dir, name);
     if (skip(p)) continue;
     if (fs.statSync(p).isDirectory()) yield* sourceFiles(p);
-    else if (/\.(c|m)?[jt]s$/.test(name)) yield p;
+    else if (/\.(c|m)?[jt]sx?$/.test(name)) yield p;
   }
 }
 
@@ -60,14 +63,15 @@ function isDocRef(node) {
 
 /** Direct document writes in one file: [{ line, snippet }]. */
 export function findDirectWrites(file, source) {
-  const kind = /\.tsx?$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.jsx') ? ts.ScriptKind.JSX : /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind);
   const lines = source.split('\n');
   const out = [];
   const visit = (node) => {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+    const modular = ts.isCallExpression(node) && ts.isIdentifier(node.expression) && MODULAR_WRITES.has(node.expression.text);
+    if (modular || (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
         && WRITES.has(node.expression.name.text)
-        && (isDocRef(node.expression.expression) || isDocRef(node.arguments[0]))) {
+        && (isDocRef(node.expression.expression) || isDocRef(node.arguments[0])))) {
       const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
       const marked = MARKER.test(lines[line] || '') || MARKER.test(lines[line - 1] || '');
       if (!marked) out.push({ line: line + 1, snippet: node.getText(sf).replace(/\s+/g, ' ').slice(0, 100) });
