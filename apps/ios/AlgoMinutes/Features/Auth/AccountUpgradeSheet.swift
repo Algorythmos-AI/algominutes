@@ -99,6 +99,21 @@ struct AccountUpgradeSheet: View {
         .onChange(of: env.auth.isAnonymous) { _, anon in
             if !anon { dismiss() }
         }
+        // That Apple or Google account is already a separate AlgoMinutes
+        // account: switching leaves this guest's notes behind, so ask.
+        .confirmationDialog(
+            "That account already has AlgoMinutes",
+            isPresented: Binding(
+                get: { env.auth.needsExistingAccountConfirmation },
+                set: { if !$0 { env.auth.keepGuestAccount() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Switch to that account") { Task { await env.auth.switchToExistingAccount() } }
+            Button("Keep using this iPhone's notes", role: .cancel) { env.auth.keepGuestAccount() }
+        } message: {
+            Text("Switching signs you in to it. The notes you made on this iPhone as a guest stay with the guest and won't move to that account.")
+        }
     }
 
     /// The prompt's promise. The trial is only mentioned when there's a paywall
