@@ -24,7 +24,7 @@ describe('a shared note', () => {
     expect(screen.getByText('Budget approved.')).toBeTruthy();
     expect(screen.getByText('Send minutes')).toBeTruthy();
     expect(screen.getByText('Welcome.')).toBeTruthy();
-    expect(screen.getByText('Only part of the transcript was shared.')).toBeTruthy();
+    expect(screen.getByText('The transcript is long, so only its beginning is shown.')).toBeTruthy();
     expect(sent).toEqual([{ url: 'https://api.example.test/v1/shares/read', auth: null, body: { token: 'tok_123' } }]);
   });
 

@@ -33,7 +33,9 @@ export function SharedNotePage() {
 
   const shell = (children: React.ReactNode) => (
     <main id="main" className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-10">
-      <p className="text-sm text-muted">Shared from <a href={SITE_URL}>AlgoMinutes</a></p>
+      {/* The URL holds the share's token: nothing this page loads or links to is told it (React puts this in <head>). */}
+      <meta name="referrer" content="no-referrer" />
+      <p className="text-sm text-muted">Shared from <a href={SITE_URL} rel="noreferrer">AlgoMinutes</a></p>
       {children}
     </main>
   );
@@ -84,7 +86,7 @@ export function SharedNotePage() {
               </li>
             ))}
           </ol>
-          {transcript.truncated && <p className="mt-3 text-sm text-muted">Only part of the transcript was shared.</p>}
+          {transcript.truncated && <p className="mt-3 text-sm text-muted">The transcript is long, so only its beginning is shown.</p>}
         </section>
       )}
     </article>,
