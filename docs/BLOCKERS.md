@@ -1377,8 +1377,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       `recordTermsAcceptanceIfNeeded` posts the new acceptance without showing the documents. The pages
       promise to announce a significant change in the app or by email, and don't claim the app asks. Before
       any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
-- [ ] `apps/web`'s own `PrivacyPolicy.tsx` / `TermsOfService.tsx` are stale (they name AssemblyAI and US
-      Gemini). They aren't served anywhere; the web app's W1 replaces them with links to the site.
+- [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
+      `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
+      api's allowlist (`ALLOWED_ORIGINS`) before web checkout (S3-PR10).
+- [ ] **The api ignores the web's `X-Trace-Id`.** `traceIdFrom` reads only `X-Cloud-Trace-Context`, which a
+      browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
+      api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
+- [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

@@ -58,6 +58,11 @@ jobs:
       - run: npm ci
       - name: Typecheck apps/web
         run: npm run typecheck -w apps/web
+      - name: Lint apps/web (errors in the new app; the legacy code still waiting to be ported warns)
+        run: npx eslint . --max-warnings 18
+        working-directory: apps/web
+      - name: Unit tests apps/web (vitest, jsdom)
+        run: npm test -w apps/web
       - name: Build apps/web
         run: npm run build -w apps/web
 
@@ -86,6 +91,16 @@ jobs:
         run: npx vitest run --config vitest.site.config.ts
       - name: Lighthouse (every category >= 95)
         run: npx -y @lhci/cli@0.15.1 autorun --config=apps/site/lighthouserc.json
+      # Staging's shape: the web app composed at /app (APP_ENABLED=true), under the app's CSP.
+      - name: Build the site with the web app (staging's shape)
+        run: node scripts/build-site.mjs
+        env:
+          APP_ENABLED: 'true'
+          # Staging's (public URLs, not secrets); build-site checks the CSP allows them.
+          VITE_API_ORIGIN: https://api-627101926311.australia-southeast1.run.app
+          VITE_BILLING_ORIGIN: https://billing-627101926311.australia-southeast1.run.app
+      - name: Built pages and browser checks, with the web app
+        run: npx vitest run --config vitest.site.config.ts
 
   # infra/firebase/firestore.rules against the Firestore emulator (it needs Java).
   firestore-rules:
