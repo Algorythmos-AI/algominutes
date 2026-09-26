@@ -1,0 +1,118 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+// @ts-expect-error: a plain .mjs script, no types
+import { loadConfig, headersFor, resolve, sourceRegex } from '../scripts/serve-site.mjs';
+
+// apps/site/vercel.json: the security headers each path gets, and how paths
+// resolve (cleanUrls, the /s and /app rewrites, the 404 page). Read through
+// scripts/serve-site.mjs, the same emulation the site's browser tests run on,
+// so what's asserted here is what those tests exercised.
+const config = loadConfig();
+const csp = (p: string) => headersFor(config, p)['Content-Security-Policy'] as string;
+
+describe('security headers', () => {
+  it.each(['/', '/privacy', '/terms', '/support', '/delete-account', '/s/abc', '/app', '/billing/success', '/nope'])(
+    '%s gets the full set',
+    (p) => {
+      const h = headersFor(config, p);
+      expect(Number(/max-age=(\d+)/.exec(h['Strict-Transport-Security'])![1])).toBeGreaterThanOrEqual(31536000);
+      expect(h['X-Content-Type-Options']).toBe('nosniff');
+      expect(h['X-Frame-Options']).toBe('DENY');
+      expect(h['Referrer-Policy']).toMatch(/^(strict-origin-when-cross-origin|no-referrer)$/);
+      expect(h['Permissions-Policy']).toMatch(/camera=\(\)/);
+      expect(h['Permissions-Policy']).toMatch(/microphone=\(\)/);
+      expect(h['Permissions-Policy']).toMatch(/geolocation=\(\)/);
+    },
+  );
+
+  it('the CSP is strict: self only, no inline or eval, no framing', () => {
+    const policy = csp('/privacy');
+    const directives = Object.fromEntries(policy.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+    expect(directives['default-src']).toEqual(["'self'"]);
+    expect(directives['script-src']).toEqual(["'self'"]);
+    expect(directives['style-src']).toEqual(["'self'"]);
+    expect(directives['object-src']).toEqual(["'none'"]);
+    expect(directives['frame-ancestors']).toEqual(["'none'"]);
+    expect(directives['base-uri']).toEqual(["'self'"]);
+    expect(policy).not.toMatch(/unsafe-inline|unsafe-eval|\*/);
+  });
+
+  it('share links are never indexed, cached, or leaked in a Referer', () => {
+    for (const p of ['/s', '/s/abc', '/s/a/b']) {
+      const h = headersFor(config, p);
+      expect(h['X-Robots-Tag'], p).toBe('noindex, nofollow');
+      expect(h['Cache-Control'], p).toBe('no-store');
+      expect(h['Referrer-Policy'], p).toBe('no-referrer');
+    }
+  });
+
+  it('the app and billing pages are kept out of search; the public pages are not', () => {
+    for (const p of ['/app', '/app/notes/1', '/billing', '/billing/success', '/billing/cancel']) {
+      expect(headersFor(config, p)['X-Robots-Tag'], p).toBe('noindex, nofollow');
+    }
+    for (const p of ['/', '/privacy', '/terms', '/support', '/delete-account', '/sitemap.xml', '/robots.txt', '/.well-known/security.txt', '/apple-touch-icon.png']) {
+      expect(headersFor(config, p)['X-Robots-Tag'], p).toBeUndefined();
+    }
+  });
+
+  it('hashed assets are cached for a year; pages are not', () => {
+    expect(headersFor(config, '/_astro/Base.abc.css')['Cache-Control']).toMatch(/max-age=31536000, immutable/);
+    expect(headersFor(config, '/privacy')['Cache-Control']).toBeUndefined();
+  });
+});
+
+describe('path resolution (cleanUrls, rewrites, 404)', () => {
+  let dist: string;
+  beforeAll(() => {
+    dist = fs.mkdtempSync(path.join(os.tmpdir(), 'site-dist-'));
+    for (const f of ['index.html', 'privacy.html', 's.html', 'app.html', '404.html', 'billing.html', 'billing/success.html', 'robots.txt']) {
+      fs.mkdirSync(path.dirname(path.join(dist, f)), { recursive: true });
+      fs.writeFileSync(path.join(dist, f), f);
+    }
+  });
+  afterAll(() => fs.rmSync(dist, { recursive: true, force: true }));
+  const served = (p: string) => {
+    const r = resolve(config, dist, p);
+    return r.redirect ? `→ ${r.redirect}` : `${r.status} ${path.relative(dist, r.file)}`;
+  };
+
+  it('serves pages without .html, and redirects the .html and trailing-slash forms', () => {
+    expect(served('/')).toBe('200 index.html');
+    expect(served('/privacy')).toBe('200 privacy.html');
+    expect(served('/billing/success')).toBe('200 billing/success.html');
+    expect(served('/robots.txt')).toBe('200 robots.txt');
+    expect(served('/privacy.html')).toBe('→ /privacy');
+    expect(served('/index.html')).toBe('→ /');
+    expect(served('/privacy/')).toBe('→ /privacy');
+    expect(served('/index')).toBe('→ /');
+    expect(served('/billing/success.html')).toBe('→ /billing/success');
+  });
+
+  it('a rewrite to a .html path is refused: with cleanUrls, Vercel serves s.html only at /s', () => {
+    const broken = { ...config, rewrites: [{ source: '/s/:token*', destination: '/s.html' }] };
+    expect(() => resolve(broken, dist, '/s/tok')).toThrow(/use \/s$/);
+    const missing = { ...config, rewrites: [{ source: '/s/:token*', destination: '/share' }] };
+    expect(() => resolve(missing, dist, '/s/tok')).toThrow(/doesn't serve/);
+  });
+
+  it('every share link and every /app path reaches its placeholder', () => {
+    expect(served('/s/tok_123')).toBe('200 s.html');
+    expect(served('/s/a/b')).toBe('200 s.html');
+    expect(served('/app/notes/1')).toBe('200 app.html');
+    expect(served('/app')).toBe('200 app.html');
+  });
+
+  it('anything else is the 404 page, with a 404', () => {
+    expect(served('/nope')).toBe('404 404.html');
+    expect(served('/billing/other')).toBe('404 404.html');
+    expect(served('/../package.json')).toBe('404 404.html');
+  });
+
+  it('reads the source patterns vercel.json uses', () => {
+    expect(sourceRegex('/s/:token*').test('/s/abc/def')).toBe(true);
+    expect(sourceRegex('/s(/.*)?').test('/sitemap.xml')).toBe(false);
+    expect(sourceRegex('/(app|billing)(/.*)?').test('/application')).toBe(false);
+  });
+});

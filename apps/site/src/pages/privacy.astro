@@ -1,0 +1,189 @@
+---
+import Base from '../layouts/Base.astro';
+import LegalNotice from '../components/LegalNotice.astro';
+import { PRIVACY_VERSION, facts, longDate, operator, processors, retentionChoices } from '../lib/site';
+
+const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
+---
+<Base
+  title="Privacy Policy"
+  description="What AlgoMinutes collects, why, who processes it and where, how long it's kept, and your rights."
+>
+  <article class="prose">
+    <h1>Privacy Policy</h1>
+    <p class="meta">Version {PRIVACY_VERSION} · last updated {longDate(PRIVACY_VERSION)}</p>
+    <LegalNotice />
+
+    <p>
+      This policy explains how {operator.name} (ABN {operator.abn}, "we", "us") handles personal information in
+      AlgoMinutes: the app, this website and the service behind them. We follow the Australian Privacy Principles
+      in the <em>Privacy Act 1988</em> (Cth), and, where they apply to you, the EU and UK GDPR and US state privacy
+      laws such as California's.
+    </p>
+
+    <h2 id="summary">The short version</h2>
+    <ul>
+      <li>We collect what AlgoMinutes needs to work: your account, your recordings and the notes made from them.</li>
+      <li>We don't sell your information, show you ads, or track you across other apps and websites.</li>
+      <li>Your notes and recordings are stored in {facts.primaryRegionLabel}. Some processing happens outside Australia; <a href="#processors">the table below</a> says where.</li>
+      <li>We don't use your recordings or notes to train AI models.</li>
+      <li>You can delete any note, or your whole account, at any time.</li>
+    </ul>
+
+    <h2 id="collect">What we collect</h2>
+    <h3>Your account</h3>
+    <p>
+      When you sign in with Apple or Google we receive an account ID, your email address and, if the provider shares
+      it, your name. If you use AlgoMinutes as a guest, we create an anonymous account ID and nothing else. We also
+      record when you accepted these documents, and which versions.
+    </p>
+    <h3>Your recordings and notes</h3>
+    <p>
+      The audio you record or import, and what AlgoMinutes makes from it: transcripts, summaries, action items,
+      decisions, chapters, speaker names you add, and the search index. The questions you ask about your notes are
+      processed to answer them, and aren't saved to your account.
+      Text you scan from a document or photo is used to create a note the same way. Your recordings contain the
+      voices of the people you record; see <a href="#others">People you record</a>.
+    </p>
+    <h3>How you use the app</h3>
+    <p>
+      A small set of product events tied to your account, such as "first recording completed" or "plan screen
+      viewed", so we can understand whether AlgoMinutes works for people. They don't contain your recordings or note
+      content, and we don't use any third-party analytics or advertising tools.
+    </p>
+    <h3>Support messages</h3>
+    <p>What you send us from Help &amp; Support or by email, with your app version, device type and, if you choose, a note's reference.</p>
+    <h3>Device and diagnostic information</h3>
+    <p>
+      Your device's push token, so we can tell you when a note is ready. Crash reports from the app. Server records
+      of requests and errors, which carry account and note IDs but are designed to exclude your recordings and note
+      content.
+    </p>
+    <h3>Subscriptions</h3>
+    <p>
+      When subscriptions go on sale, your plan and its status. Apple handles payment in the App Store, and Stripe on
+      the web; we never receive your card details. Nothing is sold during the beta.
+    </p>
+
+    <h2 id="use">How we use it</h2>
+    <ul>
+      <li>To provide AlgoMinutes: transcribing and summarising your recordings, keeping your notes in sync, search and chat, and notifications.</li>
+      <li>To keep it working and secure: fixing faults, preventing abuse, and enforcing usage limits.</li>
+      <li>To answer your support requests.</li>
+      <li>To improve AlgoMinutes, using product events and the feedback you send us. Not your recordings or notes.</li>
+      <li>To meet our legal obligations.</li>
+    </ul>
+    <p>
+      Under the GDPR, we rely on performing our contract with you for the service itself, and on our legitimate
+      interests for security, reliability and product improvement.
+    </p>
+
+    <h2 id="ai">AI processing</h2>
+    <p>
+      AlgoMinutes uses Google Cloud's speech and AI models to transcribe and summarise your recordings. Card numbers and
+      similar identifiers are removed from transcripts before they're stored, and from transcript text before it's sent
+      to an AI model to summarise, search or answer a question. Audio is sent as recorded: for a short recording, the
+      model transcribes the audio itself. The models process your content only to produce your results. We don't use your content to train AI models, and our providers' terms
+      don't allow them to use it to train theirs. AI output can be wrong: check anything important against the
+      recording.
+    </p>
+
+    <h2 id="processors">Who processes your information, and where</h2>
+    <p>These service providers process personal information on our behalf, under contract, only to provide AlgoMinutes:</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th scope="col">Service</th><th scope="col">What for</th><th scope="col">What</th><th scope="col">Where</th></tr>
+        </thead>
+        <tbody>
+          {processors.map((p) => (
+            <tr id={`processor-${p.id}`}>
+              <th scope="row">{p.service}</th>
+              <td data-label="What for">{p.purpose}</td>
+              <td data-label="What">{p.data}</td>
+              <td data-label="Where">{p.where}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 id="overseas">Information sent outside Australia</h3>
+    <p>
+      Your notes and recordings are stored in {facts.primaryRegionLabel}. The following services may process
+      information in other countries, including the United States: {overseas.map((p) => p.service).join('; ')}.
+      We choose providers that protect information to a standard comparable to the Australian Privacy Principles,
+      and, for information from the EU or UK, use the safeguards those laws require, such as standard contractual
+      clauses.
+    </p>
+
+    <h2 id="sharing">When we share information</h2>
+    <p>We don't sell or rent personal information, and we don't share it for advertising. We disclose it only:</p>
+    <ul>
+      <li>to the service providers above, to run AlgoMinutes;</li>
+      <li>when you ask us to, for example by exporting a note (share links are not available yet);</li>
+      <li>when the law requires it, or to protect people's safety or our legal rights;</li>
+      <li>to a buyer of our business, who would have to keep this policy's promises.</li>
+    </ul>
+
+    <h2 id="retention">How long we keep it</h2>
+    <ul>
+      <li><strong>Notes and recordings:</strong> until you delete them. In Settings → Data retention you can have notes deleted automatically after {retentionChoices()}.</li>
+      <li><strong>The copy on your phone:</strong> a recording stays on your device only until its upload is confirmed.</li>
+      <li><strong>Your account:</strong> until you delete it. Deleting it deletes everything in it at once.</li>
+      <li><strong>Backups:</strong> deleted information is removed from our backups within {facts.backupWindowDays} days.</li>
+      <li><strong>Server logs:</strong> {facts.logRetentionDays} days.</li>
+      <li><strong>Records of deletions and usage:</strong> a record that an account or note was deleted (IDs only, no content) for 30 days, and records of processing usage for 90 days, to prevent abuse and control costs.</li>
+      <li><strong>Payment records,</strong> once subscriptions are sold: as long as tax law requires, without your recordings or notes.</li>
+    </ul>
+
+    <h2 id="others">People you record</h2>
+    <p>
+      If you're recorded by an AlgoMinutes user, the recording belongs to their account and we process it on their
+      behalf. You must be told before you're recorded; our <a href="/terms">Terms</a> require it. You can ask the
+      person who recorded you to delete it, or contact us at <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>.
+    </p>
+
+    <h2 id="rights">Your rights and choices</h2>
+    <ul>
+      <li><strong>Access and export:</strong> your notes are in the app, and you can export any note.</li>
+      <li><strong>Correction:</strong> edit a note's title, summary and speaker names in the app, or ask us.</li>
+      <li><strong>Deletion:</strong> delete a note, or your account in Settings → Delete my account. <a href="/delete-account">Other ways to delete your account</a>.</li>
+      <li><strong>Notifications:</strong> turn them off in your device's settings.</li>
+    </ul>
+    <p>
+      Depending on where you live, you may also have the right to object to or restrict our processing, to data
+      portability, and to withdraw consent. California residents have the right to know, delete and correct their
+      personal information, and we don't sell or share it as those laws define. We won't treat you differently for
+      using these rights. To use any of them, email <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>;
+      we may need to confirm it's your account. We reply within 30 days.
+    </p>
+
+    <h2 id="security">Security</h2>
+    <p>
+      Information is encrypted in transit and at rest, access to it is limited to the systems and people who need it,
+      and every request is checked against your account. No system is perfectly secure; if a data breach is likely to
+      cause you serious harm, we'll tell you and the regulator as the law requires.
+    </p>
+
+    <h2 id="children">Children</h2>
+    <p>
+      AlgoMinutes isn't for children. You must be at least 13, and old enough where you live to agree to our Terms
+      yourself. If you believe a child has given us personal information, contact us and we'll delete it.
+    </p>
+
+    <h2 id="changes">Changes to this policy</h2>
+    <p>
+      When we change this policy we update its version and date above. Before a significant change takes effect,
+      we'll tell you in the app or by email.
+    </p>
+
+    <h2 id="contact">Contact and complaints</h2>
+    <p>
+      {operator.name}, {operator.locality}. Email <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>.
+      If you're not satisfied with our response to a privacy complaint, you can contact the Office of the Australian
+      Information Commissioner (<a href="https://www.oaic.gov.au">oaic.gov.au</a>), or the data protection authority
+      where you live.
+    </p>
+  </article>
+</Base>
