@@ -1409,6 +1409,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       allow pop-ups (or use the iOS app); a redirect would leave the page mid-delete. The Apple token is also
       revoked before the server delete, as on iOS: if the delete then fails, the account remains and the user
       signs in again. A delete that resumes after a redirect would close both.
+- [ ] **Owner, for web push (W8):** generate the staging Web Push certificate (Firebase → Project settings →
+      Cloud Messaging → Web Push certificates → Generate key pair) and put its **public** key in Vercel as
+      `VITE_FIREBASE_VAPID_KEY` (Preview, `integration`). Without it the web app simply has no push. If the
+      Browser key has API restrictions, allow the FCM, FCM Registration and Firebase Installations APIs.
+- [ ] **There's no push-token unregister endpoint.** Web sign-out deletes the browser's FCM token (so FCM stops
+      delivering to it at once), and the notifier prunes a token FCM reports dead, but the `push_tokens` row stays
+      until then. iOS has the same gap. A `POST /v1/push/unregister` would close it; not needed for the beta.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

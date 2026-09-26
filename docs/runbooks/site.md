@@ -58,6 +58,7 @@ branch** only (so PR previews keep the placeholder and never build the app):
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `627101926311` |
 | `VITE_FIREBASE_AUTH_DOMAIN` | `staging.algominutes.algorythmos.com` (where `/__/auth` is proxied) |
 | `VITE_FIREBASE_API_KEY` | **owner:** the "AlgoMinutes Web" app's key (Firebase → Project settings → Your apps) |
+| `VITE_FIREBASE_VAPID_KEY` | **owner, optional:** Firebase → Project settings → Cloud Messaging → Web Push certificates → Generate key pair, then the **public** key. Without it the build has no push: no prompt, no Settings section |
 
 Production gets none of these until the launch (plan Phase 3), so it keeps the "coming soon" page.
 
@@ -78,7 +79,16 @@ paths keep Firebase's own headers: no site CSP, no `X-Frame-Options`, no COOP. `
    `https://staging.algominutes.algorythmos.com/__/auth/handler`.
 4. Google Cloud → Credentials → the **Browser key**: set its website restrictions to
    `https://staging.algominutes.algorythmos.com/*` and `https://algominutes.algorythmos.com/*` (it allows
-   `algominutes.com`, which we don't own, today).
+   `algominutes.com`, which we don't own, today). If the key also has **API restrictions**, web push needs
+   **Firebase Cloud Messaging API**, **FCM Registration API** and **Firebase Installations API** on the list
+   (all three are enabled on the project).
+
+**Web push.** The app's service worker is `/app/sw.js` (scope `/app/`), built by `apps/web/vite.sw.config.ts` and
+checked for by `scripts/build-site.mjs`. It caches nothing. A tapped notification opens `notes/<id>` relative to
+the worker's own scope, so staging opens staging, whatever deep link the notifier sent (iOS's
+`algominutes://note/<id>`). The browser is only asked after a click, on a card shown once the user has a note, or
+from Settings; sign-out deletes the browser's FCM token first. To check: turn notifications on, upload a short
+file, switch to another tab, and wait for "ready"; tapping it opens the note.
 
 ## DNS (Cloudflare, zone `algorythmos.com`)
 

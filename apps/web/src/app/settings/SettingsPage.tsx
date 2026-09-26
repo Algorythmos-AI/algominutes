@@ -10,6 +10,7 @@ import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 import { SITE_URL } from '../site';
+import { usePush } from '../push/PushContext';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
 
@@ -43,6 +44,7 @@ export function SettingsPage() {
       <AccountCard />
       <PlanCard />
       <RetentionCard uid={user.uid} />
+      <NotificationsCard />
       <SupportCard />
       <Card title="About">
         <p className="text-body">AlgoMinutes for the web, version {pkg.version}.</p>
@@ -54,6 +56,24 @@ export function SettingsPage() {
       </Card>
       <DeleteAccountCard />
     </div>
+  );
+}
+
+function NotificationsCard() {
+  const { state, enable } = usePush();
+  if (state === 'off' || state === 'loading') return null;
+  return (
+    <Card title="Notifications">
+      {state === 'granted' && <p className="text-body">On. This browser is told when a note is ready, or if one fails.</p>}
+      {state === 'denied' && <p className="text-body">Blocked for this site. To turn them on, allow notifications in your browser’s site settings, then reload.</p>}
+      {state === 'unsupported' && <p className="text-body">This browser can’t show notifications from AlgoMinutes.</p>}
+      {state === 'default' && (
+        <>
+          <p className="text-body">Get told in this browser when a note is ready, or if one fails.</p>
+          <button type="button" className="mt-3 rounded-xl bg-accent px-4 py-2 font-semibold text-white" onClick={() => void enable()}>Turn on notifications</button>
+        </>
+      )}
+    </Card>
   );
 }
 

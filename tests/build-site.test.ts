@@ -30,6 +30,7 @@ describe('compose', () => {
     fs.writeFileSync(path.join(site, 'index.html'), 'home');
     fs.writeFileSync(path.join(web, 'index.html'), 'spa');
     fs.writeFileSync(path.join(web, 'assets/app.js'), 'js');
+    fs.writeFileSync(path.join(web, 'sw.js'), 'worker');
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -39,6 +40,12 @@ describe('compose', () => {
     expect(fs.readFileSync(path.join(site, 'app/index.html'), 'utf8')).toBe('spa');
     expect(fs.readFileSync(path.join(site, 'app/assets/app.js'), 'utf8')).toBe('js');
     expect(fs.readFileSync(path.join(site, 'index.html'), 'utf8')).toBe('home');
+    expect(fs.readFileSync(path.join(site, 'app/sw.js'), 'utf8')).toBe('worker');
+  });
+
+  it('refuses a web build without its service worker', () => {
+    fs.rmSync(path.join(web, 'sw.js'));
+    expect(() => compose(site, web)).toThrow(/sw\.js is missing/);
   });
 
   it('refuses a failed web build, and a site that already has app/', () => {

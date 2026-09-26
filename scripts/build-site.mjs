@@ -73,7 +73,10 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
 
 /** Puts the web build at dist/app, replacing the placeholder (both would be served at /app). */
 export function compose(siteDist = SITE_DIST, webDist = WEB_DIST) {
-  if (!fs.existsSync(path.join(webDist, 'index.html'))) throw new Error(`build-site: ${webDist}/index.html is missing; the web build failed`);
+  // Both halves of the web build: the app, and its service worker (built second, vite.sw.config.ts).
+  for (const f of ['index.html', 'sw.js']) {
+    if (!fs.existsSync(path.join(webDist, f))) throw new Error(`build-site: ${webDist}/${f} is missing; the web build failed`);
+  }
   const target = path.join(siteDist, 'app');
   if (fs.existsSync(target)) throw new Error(`build-site: ${target} already exists; the site must not have an app/ directory of its own`);
   fs.rmSync(path.join(siteDist, 'app.html'), { force: true });
