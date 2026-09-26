@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { chromium, type Browser } from 'playwright';
 // @ts-expect-error: a plain .mjs script, no types
 import { createServer } from '../../scripts/serve-site.mjs';
+import { APP } from './shape';
 
 // Every page in a real browser, served with vercel.json's headers
 // (scripts/serve-site.mjs): nothing the CSP refuses, no console errors, it
@@ -54,6 +55,12 @@ describe.each(PAGES)('%s', (route) => {
     const context = await browser.newContext({ javaScriptEnabled: false });
     const page = await context.newPage();
     await page.goto(`${origin}${route}`);
+    if (APP && route === '/app') {
+      // The app needs JavaScript, and says so.
+      expect(await page.locator('body').textContent()).toMatch(/needs JavaScript/);
+      await context.close();
+      return;
+    }
     expect(await page.locator('h1').first().isVisible()).toBe(true);
     expect((await page.locator('h1').first().textContent())!.length).toBeGreaterThan(3);
     await context.close();
@@ -68,5 +75,24 @@ describe.each(PAGES)('%s', (route) => {
       expect(overflow, colorScheme).toBeLessThanOrEqual(0);
       await context.close();
     }
+  });
+});
+
+describe.runIf(APP)('the web app in the browser (staging shape)', () => {
+  it.each([
+    ['/app', 'Your notes'],
+    ['/app/search', 'Search'],
+    ['/app/settings', 'Settings'],
+    ['/app/no-such-page', 'Page not found'],
+  ])('%s renders %s, straight from the address bar, with nothing refused by the CSP', async (route, heading) => {
+    const page = await browser.newPage();
+    const problems: string[] = [];
+    page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    const res = await page.goto(`${origin}${route}`);
+    expect(res!.status()).toBe(200);
+    await expect.poll(() => page.locator('h1').first().textContent()).toBe(heading);
+    expect(problems).toEqual([]);
+    await page.close();
   });
 });
