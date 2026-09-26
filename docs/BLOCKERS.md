@@ -1392,6 +1392,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
       api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
+- [ ] **Owner, for the web e2e (`web-e2e`):** create Vercel's Protection Bypass for Automation secret and add it to
+      GitHub as `VERCEL_AUTOMATION_BYPASS_SECRET` (`docs/runbooks/site.md`). The journey has been run only against a
+      local stand-in so far; its first real run needs this secret, the staging sign-in settings, and the applied
+      `allowed_origins`.
 - [x] **WebM on the Gemini fast path: verified 2026-09-27.** Chromium and Firefox record WebM/Opus, and
       `resolveGeminiAudioMime` (`packages/ai/src/intelligence.cjs`) labels it `audio/ogg` for the fast path
       (`services/transcoder/src/fast-path.js`, which sends the original bytes). A synthetic WebM/Opus speech clip

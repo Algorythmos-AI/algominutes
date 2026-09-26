@@ -103,6 +103,31 @@ Two records, both **DNS only** (grey cloud), like the zone's other Vercel record
 
 Check: `dig +short algominutes.algorythmos.com CNAME` and `curl -sI https://algominutes.algorythmos.com/privacy`.
 
+## The web app, end to end (`web-e2e`)
+
+`scripts/e2e-web.mjs` walks one guest's life on staging in headless Chromium:
+- sign in as a guest;
+- import `tests/fixtures/e2e-speech.ogg` (ten seconds of synthetic speech), and it gets a summary;
+- search, then ask a question;
+- record in the browser, with a fake microphone playing the same speech;
+- delete the account.
+
+The deletion runs even after a failed step. Any console or page error fails the run, including a CSP refusal.
+`.github/workflows/web-e2e.yml` runs it nightly, on demand, and after each successful staging deploy.
+
+**Owner, once:** Vercel → algominutes-site → Settings → Deployment Protection → **Protection Bypass for
+Automation** → create a secret, then add it to GitHub as the Actions secret `VERCEL_AUTOMATION_BYPASS_SECRET`.
+Until then, the job warns and stops. The journey also needs the staging sign-in settings above, since the guest signs
+in on the staging domain, and the api's `allowed_origins` apply (`terraform apply`).
+
+To run it by hand:
+
+```bash
+VERCEL_BYPASS=… node scripts/e2e-web.mjs
+```
+
+It needs Playwright's Chromium (`npx playwright install chromium`) and ffmpeg.
+
 ## Check a deploy
 
 ```bash

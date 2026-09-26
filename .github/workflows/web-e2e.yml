@@ -1,0 +1,59 @@
+name: web-e2e
+
+# The web app end to end, in a real browser, against staging
+# (scripts/e2e-web.mjs): a guest imports a recording, it's summarised, search
+# and chat find it, a browser recording becomes a note, and the account is
+# deleted. Nightly, on demand, and after each staging deploy of `integration`.
+#
+# Staging is behind Vercel Authentication: the run needs the project's
+# "Protection Bypass for Automation" secret as VERCEL_AUTOMATION_BYPASS_SECRET.
+# Until the owner adds it (docs/runbooks/site.md), the job says so and stops.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 18 * * *' # nightly, 04:17 Sydney
+  deployment_status:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    # From a deployment: only a successful one of `integration` (staging), not a PR preview or production.
+    if: github.event_name != 'deployment_status' || (github.event.deployment_status.state == 'success' && github.event.deployment.ref == 'integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SITE_URL: https://staging.algominutes.algorythmos.com
+      VERCEL_BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - name: Needs the Vercel bypass secret
+        id: gate
+        run: |
+          if [ -z "$VERCEL_BYPASS" ]; then
+            echo "::warning::VERCEL_AUTOMATION_BYPASS_SECRET isn't set, so staging (behind Vercel Authentication) can't be reached. See docs/runbooks/site.md."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v7
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci
+      - if: steps.gate.outputs.run == 'true'
+        name: Install Chromium and ffmpeg (the fake microphone)
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - if: steps.gate.outputs.run == 'true'
+        name: The journey
+        run: node scripts/e2e-web.mjs
