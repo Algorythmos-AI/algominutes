@@ -223,7 +223,7 @@ export function createApiClient(opts: ApiClientOptions) {
       const { res, traceId } = await send({ method: 'POST', path: '/v1/chat', body, timeoutMs: 120_000, signal }, 'text/event-stream');
       if (!res.body) throw new ApiError('invalid_response', { status: res.status, traceId });
       try {
-        for await (const frame of readSse(res.body)) {
+        for await (const frame of readSse(res.body, signal)) {
           const data = parseJson(frame.data);
           if (frame.event === 'citations') {
             const hits = ChatCitationsEvent.safeParse(data);
@@ -248,7 +248,8 @@ export function createApiClient(opts: ApiClientOptions) {
         yield { type: 'error', error: transportError(err, traceId).kind === 'timeout' ? 'timeout' : 'stream_ended' };
         return;
       }
-      // The stream closed without `done`: the answer may be cut short.
+      // Stopped by the caller: end quietly. Otherwise the stream closed without `done`: the answer may be cut short.
+      if (signal?.aborted) return;
       yield { type: 'error', error: 'stream_ended' };
     },
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { NoteReadResponse, TranscriptLine } from '@algominutes/contracts';
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
@@ -30,6 +30,10 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const notice = useNotice();
   const navigate = useNavigate();
   const workspaceId = user ? workspaceIdFor(user.uid) : '';
+  // A search hit or a chat citation links here at its moment (?t=<ms>).
+  const [params] = useSearchParams();
+  const startAt = Number(params.get('t'));
+  const jumpTo = Number.isFinite(startAt) && startAt > 0 ? startAt : null;
   // `visible`: a note being deleted is already gone from here, as from the list.
   const live = visible.find((n) => n.id === noteId);
   const ready = live?.status === 'ready';
@@ -149,6 +153,11 @@ function NoteDetail({ noteId }: { noteId: string }) {
           {ready && live.storagePath && (
             <button type="button" className="rounded-lg border border-border px-3 py-2" onClick={() => void audio.start()} disabled={audio.busy}>
               {audio.src ? 'Playing below' : 'Play recording'}
+            </button>
+          )}
+          {ready && live.storagePath && jumpTo != null && (
+            <button type="button" className="rounded-lg border border-accent px-3 py-2 text-heading" onClick={() => void audio.seek(jumpTo)} disabled={audio.busy}>
+              Play from {formatClock(jumpTo)}
             </button>
           )}
           <button type="button" className="rounded-lg border border-danger/60 px-3 py-2 text-danger" onClick={() => setConfirmDelete(true)}>
