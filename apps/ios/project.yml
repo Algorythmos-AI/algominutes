@@ -34,6 +34,9 @@ settings:
     CURRENT_PROJECT_VERSION: "14"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # Share links (POST /v1/shares) open on the public site, which has no
+    # viewer yet. Off everywhere until it does; the share sheet still exports.
+    SHARE_LINKS_ENABLED: "NO"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
     # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic
@@ -55,9 +58,13 @@ settings:
       # No paywall until the products exist and purchases verify (PR-32).
       PAYWALL_ENABLED: "NO"
     Release:
-      # TODO(prod): the production origins once prod is applied (BLOCKERS: domain).
-      API_BASE_URL: https://api.algominutes.com
-      BILLING_BASE_URL: https://api.algominutes.com
+      # TODO(prod): the production Cloud Run origins, once prod is applied
+      # (https://api-<prod project number>.australia-southeast1.run.app). Until
+      # then they're empty, and the "Backend origins are set" phase fails a
+      # Release build rather than shipping one that talks to nothing (it named
+      # api.algominutes.com, a domain that isn't registered).
+      API_BASE_URL: ""
+      BILLING_BASE_URL: ""
       # The update screen's button (426). TestFlight until the App Store
       # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
       UPDATE_URL: itms-beta://
@@ -94,6 +101,22 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+    preBuildScripts:
+      # Every build that reaches a device talks to a real backend: fail early,
+      # and clearly, when a configuration has no API or billing origin.
+      - name: Backend origins are set
+        script: |
+          set -eu
+          for pair in "API_BASE_URL=${API_BASE_URL:-}" "BILLING_BASE_URL=${BILLING_BASE_URL:-}"; do
+            value="${pair#*=}"
+            case "$value" in
+              https://?*) ;;
+              *)
+                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Release waits for the production origins: TODO(prod)."
+                exit 1 ;;
+            esac
+          done
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       # The Google Sign-In callback scheme is the bundled GoogleService-Info.plist's
       # REVERSED_CLIENT_ID, written into the built Info.plist (before signing), so

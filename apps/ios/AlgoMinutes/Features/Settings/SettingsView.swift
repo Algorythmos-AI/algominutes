@@ -37,14 +37,6 @@ struct SettingsView: View {
 
                     subscriptionCard
 
-                    AlgoMinutesCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Link(destination: LegalLinks.webApp) {
-                                linkRow(label: "Web version", icon: "macbook")
-                            }
-                        }
-                    }
-
                     // A7.2 (P1): Wi-Fi-only uploads. The uploader reads this via
                     // UploadPreferences.wifiOnly at session creation.
                     AlgoMinutesCard {
@@ -184,9 +176,13 @@ struct SettingsView: View {
         }
     }
 
-    /// Subscription status + entry points. The Restore button lives here (and on
-    /// the paywall) so it is always reachable, including for a guest who has not
-    /// created a permanent account — an App Review requirement.
+    /// Subscription status + entry points. With the paywall on, the Restore
+    /// button lives here (and on the paywall) so it is always reachable,
+    /// including for a guest who has not created a permanent account: an App
+    /// Review requirement. With the paywall off (PAYWALL_ENABLED=NO: no products
+    /// on sale yet), nothing here offers a purchase, a restore or a
+    /// subscription to manage. The card shows the plan and the server's
+    /// minutes instead.
     @ViewBuilder
     private var subscriptionCard: some View {
         AlgoMinutesCard {
@@ -211,22 +207,37 @@ struct SettingsView: View {
                             .background(Capsule().fill(Theme.inverse))
                     }
                 }
-                Divider().overlay(Theme.borderSoft)
-                Button("Restore Purchases") {
-                    Task { await env.billing.store.restore(); await env.billing.refresh() }
+                if let usage = Self.minutesLine(env.billing.entitlement) {
+                    Text(usage)
+                        .font(Typography.body(13))
+                        .foregroundStyle(Theme.muted)
                 }
-                .font(Typography.body(15))
-                .foregroundStyle(Theme.body)
-                if env.billing.entitlement?.state == .active {
+                if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
-                    Button("Manage Subscription") {
-                        Task { await env.billing.store.showManageSubscriptions() }
+                    Button("Restore Purchases") {
+                        Task { await env.billing.store.restore(); await env.billing.refresh() }
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
+                    if env.billing.entitlement?.state == .active {
+                        Divider().overlay(Theme.borderSoft)
+                        Button("Manage Subscription") {
+                            Task { await env.billing.store.showManageSubscriptions() }
+                        }
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                    }
                 }
             }
         }
+    }
+
+    /// "340 of 1,500 minutes used this month", from the server's metering
+    /// (the same numbers the quota enforces). Nil when unknown or unmetered.
+    static func minutesLine(_ entitlement: EntitlementResponse?) -> String? {
+        guard let e = entitlement, let included = e.includedMinutes, included > 0 else { return nil }
+        let used = Int(e.usedMinutes.rounded(.down)), total = Int(included.rounded())
+        return "\(used.formatted()) of \(total.formatted()) minutes used this month"
     }
 
     private var planLabel: String {

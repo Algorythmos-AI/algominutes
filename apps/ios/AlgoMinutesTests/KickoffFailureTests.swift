@@ -12,6 +12,34 @@ final class KickoffFailureTests: XCTestCase {
         XCTAssertEqual(failure.noteError, KickoffFailure.quotaMessage)
     }
 
+    /// Without a paywall, a quota refusal doesn't send the user to one: it
+    /// says when the minutes come back, or where to ask.
+    func testWithoutAPaywallTheQuotaMessageSaysWhenMinutesReset() {
+        let e = EntitlementResponse(state: .active, plan: "pro", billingPeriod: "2026-10", includedMinutes: 1500,
+                                    usedMinutes: 1500, remainingMinutes: 0, overQuota: true, trialEndsAt: nil)
+        let message = KickoffFailure.quotaMessage(e, paywallEnabled: false, locale: Locale(identifier: "en_AU"))
+        XCTAssertEqual(message, "You've used this month's 1,500 included minutes. They reset on 1 November.")
+        XCTAssertFalse(message.contains("Upgrade"))
+        XCTAssertEqual(KickoffFailure.quotaMessage(e, paywallEnabled: true), KickoffFailure.quotaMessage)
+    }
+
+    func testWithoutAPaywallAndNoIncludedMinutesItSaysWhereToAsk() {
+        let floor = EntitlementResponse(state: .freeFloor, plan: "free", billingPeriod: "2026-10", includedMinutes: 0,
+                                        usedMinutes: 0, remainingMinutes: 0, overQuota: true, trialEndsAt: nil)
+        for e in [floor, nil] as [EntitlementResponse?] {
+            let message = KickoffFailure.quotaMessage(e, paywallEnabled: false)
+            XCTAssertTrue(message.contains("Help & Support"), message)
+            XCTAssertFalse(message.contains("Upgrade"))
+        }
+    }
+
+    func testTheResetIsTheFirstOfTheNextMonthInUTC() {
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(identifier: "UTC")!
+        XCTAssertEqual(KickoffFailure.nextPeriodStart("2026-12"), utc.date(from: DateComponents(year: 2027, month: 1, day: 1)))
+        XCTAssertNil(KickoffFailure.nextPeriodStart("2026-13"))
+        XCTAssertNil(KickoffFailure.nextPeriodStart("nonsense"))
+    }
+
     func testAnOutdatedAppAsksForTheUpdate() {
         let failure = KickoffFailure(APIError.updateRequired, fallback: fallback)
         guard case .updateRequired = failure else { return XCTFail("\(failure)") }

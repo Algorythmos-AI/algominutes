@@ -57,6 +57,8 @@
 	<string>$(UPDATE_URL)</string>
 	<key>AlgoMinutesPaywallEnabled</key>
 	<string>$(PAYWALL_ENABLED)</string>
+	<key>AlgoMinutesShareLinksEnabled</key>
+	<string>$(SHARE_LINKS_ENABLED)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

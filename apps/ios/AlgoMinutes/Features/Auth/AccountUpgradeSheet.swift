@@ -24,7 +24,7 @@ struct AccountUpgradeSheet: View {
                 Text("Save your notes")
                     .font(Typography.title())
                     .foregroundStyle(Theme.heading)
-                Text("Create a free account so your recordings and summaries are backed up and available on your other devices. Your 7-day trial keeps going — nothing is lost.")
+                Text(Self.message(paywallEnabled: AppConfig.paywallEnabled))
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
@@ -72,12 +72,15 @@ struct AccountUpgradeSheet: View {
             }
 
             VStack(spacing: Theme.Spacing.sm) {
-                Button("See Pro plans") {
-                    dismiss()
-                    onSeePlans()
+                // No plans to see while the paywall is off (no products on sale).
+                if AppConfig.paywallEnabled {
+                    Button("See Pro plans") {
+                        dismiss()
+                        onSeePlans()
+                    }
+                    .font(Typography.body(14).weight(.medium))
+                    .foregroundStyle(Theme.body)
                 }
-                .font(Typography.body(14).weight(.medium))
-                .foregroundStyle(Theme.body)
 
                 Button("Maybe later") { dismiss() }
                     .font(Typography.body(13))
@@ -96,5 +99,12 @@ struct AccountUpgradeSheet: View {
         .onChange(of: env.auth.isAnonymous) { _, anon in
             if !anon { dismiss() }
         }
+    }
+
+    /// The prompt's promise. The trial is only mentioned when there's a paywall
+    /// it leads to.
+    static func message(paywallEnabled: Bool) -> String {
+        let save = "Create a free account so your recordings and summaries are backed up and available on your other devices."
+        return paywallEnabled ? save + " Your 7-day trial keeps going — nothing is lost." : save + " Nothing is lost."
     }
 }

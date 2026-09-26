@@ -17,11 +17,26 @@ enum AppConfig {
     static let paywallEnabled = paywallEnabled(info: Bundle.main.infoDictionary)
 
     static func paywallEnabled(info: [String: Any]?) -> Bool {
-        (info?[paywallEnabledKey] as? String)?.trimmingCharacters(in: .whitespaces).uppercased() == "YES"
+        flag(paywallEnabledKey, info: info)
+    }
+
+    static let shareLinksEnabledKey = "AlgoMinutesShareLinksEnabled"
+
+    /// SHARE_LINKS_ENABLED: whether the share sheet offers a public link. A link
+    /// opens on the public site, which has no viewer yet, so it's off in every
+    /// configuration until it does. Missing or not "YES" means off.
+    static let shareLinksEnabled = flag(shareLinksEnabledKey, info: Bundle.main.infoDictionary)
+
+    /// A build-setting flag carried in Info.plist: on only when exactly "YES".
+    static func flag(_ key: String, info: [String: Any]?) -> Bool {
+        (info?[key] as? String)?.trimmingCharacters(in: .whitespaces).uppercased() == "YES"
     }
 
     /// Used only if a build's Info.plist lacks a valid value (never expected).
-    static let fallbackBaseURL = URL(string: "https://api.algominutes.com")!
+    /// `.invalid` is reserved (RFC 6761) and never resolves, so a misconfigured
+    /// build fails its requests instead of sending ID tokens to a host someone
+    /// could register. (It was api.algominutes.com, which isn't registered.)
+    static let fallbackBaseURL = URL(string: "https://api.invalid")!
 
     /// The api service: every /v1 route except billing's.
     static let apiBaseURL = baseURL(forKey: apiBaseURLKey)

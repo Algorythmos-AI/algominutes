@@ -117,12 +117,14 @@ struct NoteDetailView: View {
                                 transcript: exportLines(for: note), api: env.api
                             ) { env.alertMessage = $0 }
                         },
-                        onCreateLink: { scope in
+                        // A public link opens on the site, which has no viewer
+                        // yet: offered only when SHARE_LINKS_ENABLED is on.
+                        onCreateLink: AppConfig.shareLinksEnabled ? { scope in
                             viewModel.createShareLink(
                                 scope: scope, noteId: note.id, workspaceId: note.workspaceId,
                                 api: env.api
                             ) { env.alertMessage = $0 }
-                        },
+                        } : nil,
                         mintedLink: viewModel.mintedShareLink,
                         isMintingLink: viewModel.isMintingShareLink
                     )
