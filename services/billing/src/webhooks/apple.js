@@ -2,9 +2,9 @@
 //
 // App Store Server Notifications V2. The body is { signedPayload }, a JWS whose
 // decoded payload carries { notificationType, subtype, data:{ signedTransactionInfo } }.
-// The signed payload IS the credential. Until full x5c-chain verification lands
-// (PR-32, lib/apple.js), verifyAndDecodeJws refuses and this answers 503, so
-// Apple retries and no forged notification is ever trusted. We decode the transaction to the durable
+// The signed payload IS the credential: lib/apple.js verifies it (and the
+// transaction inside it) to Apple Root CA - G3, and both must be for our app,
+// so a forged or foreign notification is refused with 400. We decode the transaction to the durable
 // `originalTransactionId`, resolve it to a uid, and drive the state machine:
 //
 //   DID_RENEW              → renew (activate with new expiresDate)
@@ -24,7 +24,7 @@ import {
   trackEvent,
 } from '@algominutes/db';
 
-import { verifyAndDecodeJws, extractTransaction } from '../lib/apple.js';
+import { assertOurApp, verifyAndDecodeJws, extractTransaction } from '../lib/apple.js';
 
 export async function appleWebhookRoute(req, res) {
   const signedPayload = req.body?.signedPayload;
@@ -35,15 +35,16 @@ export async function appleWebhookRoute(req, res) {
   let notification;
   let tx;
   try {
-    // TODO(A4-apple)/TODO(A11): verifyAndDecodeJws decodes today; production must
-    // verify the x5c chain to Apple Root CA - G3 before trusting the payload.
+    // Apple-signed (the x5c chain to Apple Root CA - G3 and ES256), and for our app, or refused.
     notification = verifyAndDecodeJws(signedPayload);
+    assertOurApp(notification?.data?.bundleId);
     const signedTx = notification?.data?.signedTransactionInfo;
     if (!signedTx) {
       req.log.warn({ event: 'apple_no_transaction_info' }, 'apple_no_transaction_info');
       return res.status(400).json({ error: 'No transaction info' });
     }
     tx = extractTransaction(verifyAndDecodeJws(signedTx));
+    assertOurApp(tx.bundleId);
   } catch (err) {
     req.log.warn({ err, event: 'apple_payload_invalid' }, 'apple_payload_invalid');
     const status = err?.status === 503 ? 503 : 400;

@@ -40,8 +40,16 @@ export async function verifyPurchaseRoute(req, res) {
     if (!body.jwsRepresentation) {
       return res.status(400).json({ error: 'Missing jwsRepresentation' });
     }
-    // TODO(A4-apple)/TODO(A11): real JWS cert-chain verification lives in lib/apple.js.
-    const tx = verifyStoreKitPurchase(body.jwsRepresentation);
+    // Apple-signed (lib/apple.js: the x5c chain to Apple Root CA - G3, ES256) and for our app, or it throws 400.
+    let tx;
+    try {
+      tx = verifyStoreKitPurchase(body.jwsRepresentation);
+    } catch (err) {
+      if (err?.status !== 400) throw err;
+      // Not signed by Apple, or not for our app: a forged or foreign receipt grants nothing.
+      req.log.warn({ uid, err, event: 'apple_receipt_invalid' }, 'apple_receipt_invalid');
+      return res.status(400).json({ error: 'Invalid receipt' });
+    }
     if (!tx.originalTransactionId) {
       return res.status(400).json({ error: 'Unverifiable transaction' });
     }
