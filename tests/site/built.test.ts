@@ -4,16 +4,16 @@ import path from 'node:path';
 // @ts-expect-error: a plain .mjs script, no types
 import { loadConfig, resolve } from '../../scripts/serve-site.mjs';
 import { PUBLIC_PAGES } from '../../apps/site/src/lib/public-pages';
+import { APP, DIST } from './shape';
 
 // The built site (apps/site/dist), resolved as Vercel serves it
 // (scripts/serve-site.mjs): every page the apps, server and stores link to
 // exists, every link on every page resolves, and each page has its metadata.
-const DIST = path.resolve('apps/site/dist');
 const SITE = 'https://algominutes.algorythmos.com';
 const config = loadConfig();
 if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error('apps/site/dist is missing: run `npm run build -w apps/site` first');
 
-const htmlFiles = (fs.readdirSync(DIST, { recursive: true }) as string[]).filter((f) => f.endsWith('.html'));
+const htmlFiles = (fs.readdirSync(DIST, { recursive: true }) as string[]).filter((f) => f.endsWith('.html') && !f.startsWith(`app${path.sep}`));
 const routeOf = (f: string) => `/${f.replace(/\.html$/, '').replace(/(^|\/)index$/, '')}`;
 const pages = htmlFiles.map((f) => ({ file: f, route: routeOf(f), html: fs.readFileSync(path.join(DIST, f), 'utf8') }));
 const status = (p: string) => {
@@ -38,12 +38,14 @@ describe('the built site', () => {
 
   it('builds exactly the expected pages', () => {
     expect(pages.map((p) => p.route).sort()).toEqual(
-      ['/', '/404', '/app', '/billing', '/billing/cancel', '/billing/success', '/delete-account', '/privacy', '/s', '/support', '/terms'].sort(),
+      ['/', '/404', ...(APP ? [] : ['/app']), '/billing', '/billing/cancel', '/billing/success', '/delete-account', '/privacy', '/s', '/support', '/terms'].sort(),
     );
   });
 
   it('ships no JavaScript on the public pages', () => {
-    const js = (fs.readdirSync(DIST, { recursive: true }) as string[]).filter((f) => f.endsWith('.js') || f.endsWith('.mjs'));
+    const js = (fs.readdirSync(DIST, { recursive: true }) as string[])
+      .filter((f) => !f.startsWith(`app${path.sep}`))
+      .filter((f) => f.endsWith('.js') || f.endsWith('.mjs'));
     expect(js).toEqual([]);
     for (const p of pages) expect(p.html, p.route).not.toMatch(/<script/i);
   });
@@ -119,5 +121,28 @@ describe('robots.txt, sitemap.xml, security.txt', () => {
     const processing = (await import('../../apps/site/src/data/processing.json')).default;
     const html = read('privacy.html');
     for (const p of processing.processors) expect(html, p.id).toContain(`id="processor-${p.id}"`);
+  });
+});
+
+describe.runIf(APP)('the web app at /app (staging shape)', () => {
+  const html = APP ? fs.readFileSync(path.join(DIST, 'app/index.html'), 'utf8') : '';
+
+  it('replaces the placeholder: /app and every deep link serve the app', () => {
+    expect(fs.existsSync(path.join(DIST, 'app.html'))).toBe(false);
+    for (const p of ['/app', '/app/search', '/app/notes/123']) {
+      const r = resolve(config, DIST, p);
+      expect(r.file, p).toBe(path.join(DIST, 'app/index.html'));
+    }
+  });
+
+  it('is kept out of search, and loads only its own files under /app/', () => {
+    expect(html).toMatch(/<meta name="robots" content="noindex"/);
+    const refs = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1]);
+    expect(refs.length).toBeGreaterThan(2);
+    for (const ref of refs) {
+      expect(ref, ref).toMatch(/^\/app\//);
+      expect(status(ref), ref).toBe(200);
+    }
+    expect(html).not.toMatch(/<style|\sstyle=|<script(?![^>]*\ssrc=)/i);
   });
 });

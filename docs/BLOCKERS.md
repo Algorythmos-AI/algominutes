@@ -53,15 +53,18 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
 - [ ] **State-by-state / export-market recording-consent opinion** — NOT commissioned. Blocks the full
       consent layer (jurisdiction, per-participant log, audible announcement). The seam is built; the rules
       must not be guessed.
-- [ ] **Terms of Service + Privacy Policy** drafting/review — must be linked from both store listings, the
-      consent notice, the deletion page, and signup. Blocking.
+- [ ] **Terms of Service + Privacy Policy: legal review (D1).** Drafted with the true facts and published
+      by `apps/site` at `/privacy` and `/terms` (2026-09-26, version 2026-09-26), marked "pending legal
+      review". The processors table is data (`processing.json`), checked against the code. Review still
+      blocks external beta.
 - [ ] UGC/moderation applicability + final age rating; MediaProjection justification vs current Play policy;
       any billing/tax minimum-retention obligation; confirm the 30-day retention figure so the plist,
       policy, and deletion page all match.
 
 **Brand (`TODO(brand)`):**
 - [ ] All store imagery (screenshots, icon, feature graphic, app-preview video) — blocks the listing.
-- [ ] The public deletion-page domain + a support/privacy email address — blocks Play submission.
+- [x] The public deletion page: `https://algominutes.algorythmos.com/delete-account` (`apps/site`), with
+      `support@` and `privacy@algorythmos.com`. The Zoho aliases themselves are an owner step (below).
 
 **Infra (`TODO(A11)`):**
 - [x] **Done (retention-windows PR, pending your apply):** Cloud SQL keeps 7 daily backups and 7 days of PITR
@@ -104,7 +107,7 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
 - [ ] **Execute the AssemblyAI Data Processing Addendum** (effective 2026-01-22; SCCs + Data Privacy
       Framework) before production audio flows to the US. Deepgram DPA/BAA only if/when Deepgram is enabled.
 - [ ] **Consent opinion must cover cross-border disclosure (APP 8).** The privacy-policy draft now states
-      US processing + APP 8 accountable-disclosure wording (`apps/web/src/pages/PrivacyPolicy.tsx`); legal
+      processing outside Australia + APP 8 wording (`apps/site/src/pages/privacy.astro`: Speech-to-Text's global endpoint and the global Firebase services, not AssemblyAI, which isn't enabled); legal
       must confirm the wording and that reasonable steps + accountability (APP 8.1) are satisfied. This rides
       alongside the existing recording-consent opinion item above.
 
@@ -1361,6 +1364,26 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   the same sitting (§3), by 2026-10-10.
 - [ ] **Yours, after your first sign-in:** re-plan with `TF_VAR_admin_uids` (runbook §5), so the
   dead-letter view answers you.
+
+## The public site (plan "site and web app", PR-S1/S2, 2026-09-26)
+
+- [x] `apps/site` built: pages, legal copy with the true facts (L21), `vercel.json` headers and CSP, the
+      `site-build` CI job, `site-smoke`, uptime checks, and the runbook (`docs/runbooks/site.md`).
+- [ ] **Owner:** re-apply `bash scripts/github-settings.sh --apply`, so `site-build` becomes a required check.
+- [ ] **Owner:** `terraform apply` staging: the five site uptime checks and alert, and
+      `staging.algominutes.algorythmos.com` in the api's `allowed_origins` (for the Phase 2 web app).
+- [ ] **Owner:** create the Zoho aliases `support@` and `privacy@algorythmos.com`. The published pages name
+      them, and the deletion page's email path depends on `privacy@`.
+- [ ] **Owner, for the web app (Phase 2), not the public pages:** add `staging.algominutes.algorythmos.com`
+      and `algominutes.algorythmos.com` to Firebase Auth's authorized domains, the OAuth redirect URI, and
+      the Apple Services ID's domains and return URLs. Set the Browser API key's referrers to the two
+      domains (it allows `algominutes.com` today).
+- [ ] **A new document version is accepted silently.** On a `TERMS_VERSION` / `PRIVACY_VERSION` bump, iOS
+      `recordTermsAcceptanceIfNeeded` posts the new acceptance without showing the documents. The pages
+      promise to announce a significant change in the app or by email, and don't claim the app asks. Before
+      any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
+- [ ] `apps/web`'s own `PrivacyPolicy.tsx` / `TermsOfService.tsx` are stale (they name AssemblyAI and US
+      Gemini). They aren't served anywhere; the web app's W1 replaces them with links to the site.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

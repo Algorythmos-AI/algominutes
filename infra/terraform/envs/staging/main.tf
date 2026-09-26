@@ -124,10 +124,14 @@ module "environment" {
   billing_account = var.billing_account
   alert_emails    = var.alert_emails
 
-  # The api's CORS allowlist (the public site) and its operator/kill-switch
-  # settings. A blank allowed_origins fails the plan (the api can't boot on it).
-  allowed_origins   = "https://algominutes.algorythmos.com"
-  admin_uids        = var.admin_uids
+  # The api's CORS allowlist (the public site, and the web app's staging
+  # address, staging.algominutes.algorythmos.com, behind Vercel Authentication)
+  # and its operator/kill-switch settings. A blank allowed_origins fails the
+  # plan (the api can't boot on it).
+  allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com"
+  admin_uids      = var.admin_uids
+  # The public site's uptime checks live here until prod exists (S3-PR4).
+  site_uptime_host  = "algominutes.algorythmos.com"
   broadcast_capture = var.broadcast_capture
   monthly_budget    = 100
 

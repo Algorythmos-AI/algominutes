@@ -1,5 +1,6 @@
 // RFC 9116. Expires must be under a year away, so it's set from the build date:
-// any deploy in the next 180 days renews it (the uptime check alerts if it lapses).
+// any deploy in the next 180 days renews it. The daily site-smoke workflow fails
+// once fewer than 30 days are left.
 import type { APIRoute } from 'astro';
 import processing from '../../data/processing.json';
 

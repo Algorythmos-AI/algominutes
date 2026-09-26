@@ -12,8 +12,8 @@ interface SearchHit {
   chunkText: string;
   startMs: number;
   endMs: number;
-  score: number;
-  source: 'vector' | 'keyword' | 'fused';
+  score?: number;
+  source?: 'vector' | 'keyword' | 'fused';
 }
 
 interface SearchTabProps {

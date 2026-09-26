@@ -42,6 +42,8 @@ function copyTesseractAssets(): Plugin {
 
 export default defineConfig(() => {
   return {
+    // Served at <site>/app (apps/site composes this build into its dist/app; vercel.json rewrites /app/*).
+    base: '/app/',
     plugins: [
       react(),
       tailwindcss(),
