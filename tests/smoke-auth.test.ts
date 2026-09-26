@@ -98,7 +98,7 @@ describe('the authenticated deploy smoke', () => {
 
   it('sends what the api and GCS require', async () => {
     const { calls } = await run();
-    const apiCalls = calls.filter((c) => c.url.startsWith(API));
+    const apiCalls = calls.filter((c) => new URL(c.url).origin === API);
     for (const c of apiCalls) {
       expect(c.headers.Authorization).toBe(`Bearer ${TOKEN}`);
       expect(c.headers['X-AlgoMinutes-Client']).toBe('smoke/1.0.0');
@@ -113,7 +113,7 @@ describe('the authenticated deploy smoke', () => {
     // GCS: every chunk but the last is a multiple of 256 KiB.
     expect(FIRST_CHUNK % (256 * 1024)).toBe(0);
     // The API key travels in a header, never in a URL.
-    for (const c of calls.filter((x) => x.url.includes('identitytoolkit'))) {
+    for (const c of calls.filter((x) => new URL(x.url).host === 'identitytoolkit.googleapis.com')) {
       expect(c.url).not.toContain('key=');
       expect(c.headers['X-Goog-Api-Key']).toBe('the-key');
     }
