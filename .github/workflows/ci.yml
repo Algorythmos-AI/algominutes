@@ -59,12 +59,14 @@ jobs:
       - name: Typecheck apps/web
         run: npm run typecheck -w apps/web
       - name: Lint apps/web (errors in the new app; the legacy code still waiting to be ported warns)
-        run: npx eslint . --max-warnings 18
+        run: npx eslint . --max-warnings 16
         working-directory: apps/web
       - name: Unit tests apps/web (vitest, jsdom)
         run: npm test -w apps/web
       - name: Build apps/web
         run: npm run build -w apps/web
+      - name: First-download budget (<= 250 KB gzipped)
+        run: node scripts/check-web-bundle.mjs apps/web/dist
 
   # The public site (apps/site, algominutes.algorythmos.com): types, the build,
   # valid HTML, then the built pages in Chromium under vercel.json's headers and

@@ -60,6 +60,7 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'trackEvent', run: (c) => c.trackEvent({ event: 'paywall_viewed' }), method: 'POST', url: `${ORIGINS.api}/v1/events`, body: { event: 'paywall_viewed' } },
   { name: 'registerPush', run: (c) => c.registerPush({ token: 'fcm', platform: 'web' }), method: 'POST', url: `${ORIGINS.api}/v1/push/register`, body: { token: 'fcm', platform: 'web' } },
   { name: 'readNote', run: (c) => c.readNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/read`, body: { noteId: 'n1', workspaceId: 'w1' } },
+  { name: 'readNotePage', run: (c) => c.readNotePage({ noteId: 'n1', workspaceId: 'w1', cursor: 'c2' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/read`, body: { noteId: 'n1', workspaceId: 'w1', cursor: 'c2' } },
   { name: 'updateNote', run: (c) => c.updateNote({ noteId: 'n1', workspaceId: 'w1', title: 'T' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/update`, body: { noteId: 'n1', workspaceId: 'w1', title: 'T' } },
   { name: 'deleteNote', run: (c) => c.deleteNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/delete`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'noteAudioUrl', run: (c) => c.noteAudioUrl({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/audio-url`, body: { noteId: 'n1', workspaceId: 'w1' } },
@@ -103,7 +104,7 @@ describe('every call sends the right request', () => {
       .flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ':p')}`))
       .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
       .sort();
-    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api))
+    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
       .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1')}`)
       .sort();
     expect(covered).toEqual(operations);
