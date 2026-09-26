@@ -40,6 +40,45 @@ final class BroadcastHandoff {
         self.now = now
     }
 
+    /// A finished capture is waiting to be claimed.
+    var hasFinishedCapture: Bool {
+        defaults?.string(forKey: "state") == "finished" && defaults?.string(forKey: "completedBroadcastFile") != nil
+    }
+
+    /// Throws away a finished capture without making a note (the user declined
+    /// to confirm they had permission to record it).
+    func discardFinished() {
+        guard let d = defaults, hasFinishedCapture else { return }
+        if let path = d.string(forKey: "completedBroadcastFile") {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        d.removeObject(forKey: "completedBroadcastFile")
+        d.set("claimed", forKey: "state")
+        AppLog.info("broadcast_discarded")
+    }
+
+    /// What to do with a finished capture when the app comes back.
+    enum ClaimDecision: Equatable {
+        /// Nothing finished waits: claim anyway, which reports a capture that
+        /// failed or whose extension died.
+        case claim
+        /// The server's kill switch is off: leave the capture where it is,
+        /// untouched, until the switch is back. Say so once.
+        case hold
+        /// A capture started from Control Center, with no pre-recording
+        /// notice acknowledged this session: ask before uploading it.
+        case askConsent
+    }
+
+    /// The broadcast extension can be started from Control Center, outside the
+    /// app's consent step and whatever the kill switch says. Nothing it
+    /// captured is uploaded without both.
+    nonisolated static func decide(hasFinishedCapture: Bool, switchOn: Bool, consented: Bool) -> ClaimDecision {
+        guard hasFinishedCapture else { return .claim }
+        if !switchOn { return .hold }
+        return consented ? .claim : .askConsent
+    }
+
     /// The extension is capturing right now (and alive).
     var isCapturing: Bool {
         defaults?.bool(forKey: "isBroadcasting") == true && !heartbeatStale

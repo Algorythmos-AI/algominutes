@@ -69,6 +69,22 @@ struct RootView: View {
                 Task { await env.refreshSwitches() }
             }
         }
+        // A capture started from Control Center skipped the app's consent step:
+        // it isn't uploaded until the user confirms, the same as in the app.
+        .confirmationDialog(
+            "Turn your capture into a note?",
+            isPresented: Binding(
+                get: { env.isBroadcastConsentPending },
+                set: { if !$0 { env.isBroadcastConsentPending = false } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("I have permission") { Task { await env.confirmBroadcastConsent() } }
+            Button("Discard the capture", role: .destructive) { env.discardBroadcastCapture() }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Confirm you have permission from everyone whose voice was captured. If others were present, let them know it was recorded.")
+        }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { env.alertMessage != nil },
             set: { if !$0 { env.alertMessage = nil } }

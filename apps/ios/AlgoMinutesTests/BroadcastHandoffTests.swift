@@ -125,4 +125,43 @@ final class BroadcastHandoffTests: XCTestCase {
         let result = await h.claim()
         XCTAssertEqual(result, .none)
     }
+
+    // MARK: - Consent and the kill switch
+
+    /// Nothing captured outside the app is uploaded without the pre-recording
+    /// consent and the server's switch; failures are still reported.
+    func testAFinishedCaptureNeedsTheSwitchAndConsent() {
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, consented: true), .claim)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, consented: false), .askConsent)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, consented: true), .hold)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, consented: false), .hold)
+        // No finished capture: claim, so a failed or dead capture is still reported.
+        for (on, ok) in [(true, true), (false, false), (false, true), (true, false)] {
+            XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: false, switchOn: on, consented: ok), .claim)
+        }
+    }
+
+    func testAHeldCaptureIsLeftUntouched() throws {
+        let file = try tone("held.m4a", on: 0...1, total: 1)
+        defaults.set("finished", forKey: "state")
+        defaults.set(file.path, forKey: "completedBroadcastFile")
+        let h = handoff()
+        XCTAssertTrue(h.hasFinishedCapture)
+        // Deciding to hold (or to ask) claims nothing: the capture is still there.
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: h.hasFinishedCapture, switchOn: false, consented: true), .hold)
+        XCTAssertTrue(h.hasFinishedCapture)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testADeclinedCaptureIsDiscardedAndNeverClaimed() async throws {
+        let file = try tone("declined.m4a", on: 0...1, total: 1)
+        defaults.set("finished", forKey: "state")
+        defaults.set(file.path, forKey: "completedBroadcastFile")
+        let h = handoff()
+        h.discardFinished()
+        XCTAssertFalse(h.hasFinishedCapture)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let pickup = await h.claim()
+        XCTAssertEqual(pickup, .none)
+    }
 }
