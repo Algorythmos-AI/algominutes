@@ -30,7 +30,14 @@ export function importProblem(file: File): string | null {
 
 export const titleFrom = (fileName: string) => fileName.replace(/\.[^.]+$/, '').trim().slice(0, 300) || 'Imported recording';
 
-export type ImportResult = { ok: true; noteId: string } | { ok: false; noteId: string | null; message: string };
+/**
+ * `kickoff` is set when the audio uploaded but processing didn't start: retrying
+ * that (retryKickoff) processes the same note, where uploading again would make a
+ * second note, and a second charge if the first kickoff had in fact gone through.
+ */
+export type ImportResult =
+  | { ok: true; noteId: string }
+  | { ok: false; noteId: string | null; message: string; kickoff?: { noteId: string; workspaceId: string; storagePath: string; mimeType: string; durationSec?: number } };
 
 export interface ImportDeps {
   api: Pick<ApiClient, 'entitlement' | 'createUpload' | 'uploadStatus' | 'completeUpload' | 'process' | 'deleteNote'>;
@@ -48,6 +55,8 @@ export interface ImportDeps {
   signal?: AbortSignal;
   /** Records the upload as this browser's (ownUploads.ts), so a closed tab's is cleaned up. */
   track?: { start: (noteId: string) => void; end: (noteId: string) => void };
+  /** A recording made here, not an imported file: its note type and title. */
+  recording?: { title: string };
 }
 
 export async function importAudio(file: File, deps: ImportDeps): Promise<ImportResult> {
@@ -79,8 +88,9 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   }
 
   if (deps.signal?.aborted) return cancelled();
+  const type = deps.recording ? 'recording' : 'import_audio';
   try {
-    await deps.createNoteDoc({ noteId, uid: deps.uid, title: titleFrom(file.name), type: 'import_audio', mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
+    await deps.createNoteDoc({ noteId, uid: deps.uid, title: deps.recording?.title ?? titleFrom(file.name), type, mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
     deps.track?.start(noteId);
   } catch (err) {
     // No doc, no note: stop before uploading (the minted session just expires).
@@ -97,6 +107,16 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     }
   };
   const fail = async (message: string): Promise<ImportResult> => {
+    // A recording's audio is still safe on this browser, and a retry makes a new note: remove this one
+    // rather than leave a failure behind. An imported file's note stays, marked, as iOS leaves it.
+    if (deps.recording) {
+      try {
+        await deps.api.deleteNote({ noteId, workspaceId });
+        return { ok: false, noteId: null, message };
+      } catch (err) {
+        reportCrash('import.failDelete', err);
+      }
+    }
     await mark(message);
     return { ok: false, noteId, message };
   };
@@ -131,13 +151,13 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   }
 
   try {
-    await deps.api.process({ noteId, workspaceId, type: 'import_audio', storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) });
+    await deps.api.process({ noteId, workspaceId, type, storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) });
   } catch (err) {
     const f = kickoffFailure(err, "Your recording uploaded, but processing couldn't start. Try again.");
     const onNote = noteError(f);
     if (onNote) await mark(onNote);
     deps.track?.end(noteId);
-    return { ok: false, noteId, message: failureMessage(f) };
+    return { ok: false, noteId, message: failureMessage(f), kickoff: { noteId, workspaceId, storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) } };
   }
   // The server owns the note now.
   deps.track?.end(noteId);
@@ -162,3 +182,21 @@ export function probeDuration(file: File): Promise<number | null> {
     el.src = url;
   });
 }
+
+/**
+ * Processes a recording's note whose audio is already uploaded (ImportResult.kickoff).
+ * The server answers a note that's ready, or already queued, without starting
+ * (or charging) it again.
+ */
+export async function retryKickoff(
+  api: Pick<ApiClient, 'process'>,
+  k: NonNullable<Extract<ImportResult, { ok: false }>['kickoff']>,
+): Promise<ImportResult> {
+  try {
+    await api.process({ noteId: k.noteId, workspaceId: k.workspaceId, type: 'recording', storagePath: k.storagePath, mimeType: k.mimeType, ...(k.durationSec ? { durationSec: k.durationSec } : {}) });
+    return { ok: true, noteId: k.noteId };
+  } catch (err) {
+    return { ok: false, noteId: k.noteId, message: failureMessage(kickoffFailure(err, "Processing couldn't start. Try again.")), kickoff: k };
+  }
+}
+

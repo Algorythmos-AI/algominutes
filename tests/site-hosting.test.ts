@@ -22,7 +22,8 @@ describe('security headers', () => {
       expect(h['X-Frame-Options']).toBe('DENY');
       expect(h['Referrer-Policy']).toMatch(/^(strict-origin-when-cross-origin|no-referrer)$/);
       expect(h['Permissions-Policy']).toMatch(/camera=\(\)/);
-      expect(h['Permissions-Policy']).toMatch(/microphone=\(\)/);
+      // Only the app records; the public pages can't ask for the microphone.
+      expect(h['Permissions-Policy']).toMatch(p.startsWith('/app') ? /microphone=\(self\)/ : /microphone=\(\)/);
       expect(h['Permissions-Policy']).toMatch(/geolocation=\(\)/);
     },
   );
