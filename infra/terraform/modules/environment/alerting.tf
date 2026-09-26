@@ -105,20 +105,27 @@ resource "google_monitoring_alert_policy" "event" {
   combiner     = "OR"
   severity     = each.value.severity
 
-  conditions {
-    display_name = "${each.key} > ${each.value.threshold} in ${each.value.window}"
-    condition_threshold {
-      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.event[each.key].name}\""
-      comparison      = "COMPARISON_GT"
-      threshold_value = each.value.threshold
-      duration        = "0s"
-      aggregations {
-        alignment_period     = each.value.window
-        per_series_aligner   = "ALIGN_SUM"
-        cross_series_reducer = "REDUCE_SUM"
-      }
-      trigger {
-        count = 1
+  # Monitoring refuses an alert filter with no resource.type (the first staging
+  # apply failed on every one), and a log-based metric's series carry the
+  # resource of the line that made them: a Cloud Run service's, or a job's
+  # (db-job, db-sweep). So one condition per resource type, either one firing.
+  dynamic "conditions" {
+    for_each = ["cloud_run_revision", "cloud_run_job"]
+    content {
+      display_name = "${each.key} > ${each.value.threshold} in ${each.value.window} (${conditions.value})"
+      condition_threshold {
+        filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.event[each.key].name}\" AND resource.type=\"${conditions.value}\""
+        comparison      = "COMPARISON_GT"
+        threshold_value = each.value.threshold
+        duration        = "0s"
+        aggregations {
+          alignment_period     = each.value.window
+          per_series_aligner   = "ALIGN_SUM"
+          cross_series_reducer = "REDUCE_SUM"
+        }
+        trigger {
+          count = 1
+        }
       }
     }
   }
