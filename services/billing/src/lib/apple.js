@@ -147,6 +147,22 @@ export function verifyAndDecodeJws(jws, opts) {
 }
 
 /**
+ * An App Store Server Notification, verified whole: the notification JWS and
+ * the transaction JWS inside it are each Apple-signed and for our app, or it
+ * throws (400; 503 when the pinned root is unavailable). One call, so the
+ * webhook never decides anything from a payload before it's verified.
+ */
+export function verifyAppleNotification(signedPayload, opts) {
+  const notification = verifyAndDecodeJws(signedPayload, opts);
+  assertOurApp(notification?.data?.bundleId);
+  const signedTx = notification?.data?.signedTransactionInfo;
+  if (!signedTx) throw invalid('no transaction info');
+  const tx = extractTransaction(verifyAndDecodeJws(signedTx, opts));
+  assertOurApp(tx.bundleId);
+  return { notification, tx };
+}
+
+/**
  * Normalise a decoded StoreKit 2 transaction payload (from a client
  * jwsRepresentation OR from a webhook's data.signedTransactionInfo) into the
  * fields the repo needs. `expiresDate` is epoch milliseconds.

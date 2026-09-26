@@ -24,27 +24,17 @@ import {
   trackEvent,
 } from '@algominutes/db';
 
-import { assertOurApp, verifyAndDecodeJws, extractTransaction } from '../lib/apple.js';
+import { verifyAppleNotification } from '../lib/apple.js';
 
 export async function appleWebhookRoute(req, res) {
+  // A missing payload is refused by the verification like any other (400).
   const signedPayload = req.body?.signedPayload;
-  if (!signedPayload) {
-    return res.status(400).json({ error: 'Missing signedPayload' });
-  }
-
   let notification;
   let tx;
   try {
-    // Apple-signed (the x5c chain to Apple Root CA - G3 and ES256), and for our app, or refused.
-    notification = verifyAndDecodeJws(signedPayload);
-    assertOurApp(notification?.data?.bundleId);
-    const signedTx = notification?.data?.signedTransactionInfo;
-    if (!signedTx) {
-      req.log.warn({ event: 'apple_no_transaction_info' }, 'apple_no_transaction_info');
-      return res.status(400).json({ error: 'No transaction info' });
-    }
-    tx = extractTransaction(verifyAndDecodeJws(signedTx));
-    assertOurApp(tx.bundleId);
+    // Apple-signed (the x5c chain to Apple Root CA - G3 and ES256) and for our app, notification and
+    // transaction alike, or refused.
+    ({ notification, tx } = verifyAppleNotification(signedPayload));
   } catch (err) {
     req.log.warn({ err, event: 'apple_payload_invalid' }, 'apple_payload_invalid');
     const status = err?.status === 503 ? 503 : 400;
