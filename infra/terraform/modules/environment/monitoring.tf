@@ -146,6 +146,96 @@ locals {
   dash_order = ["api_requests", "api_latency_p95", "worker_requests", "queue_depth", "notes_failed", "dead_letters", "sql_cpu", "sql_connections"]
 }
 
+# The public site (apps/site on Vercel): each page the apps and the stores
+# link to answers 200 with its heading. One environment watches it
+# (site_uptime_host; staging until prod exists, then prod), every 5 minutes.
+locals {
+  site_pages = var.site_uptime_host == "" ? {} : {
+    home           = { path = "/", content = "Every meeting, summed up" }
+    privacy        = { path = "/privacy", content = "Privacy Policy" }
+    terms          = { path = "/terms", content = "Terms of Service" }
+    support        = { path = "/support", content = "Support" }
+    delete-account = { path = "/delete-account", content = "Delete your AlgoMinutes account" }
+  }
+}
+
+resource "google_monitoring_uptime_check_config" "site" {
+  for_each     = local.site_pages
+  project      = var.project_id
+  display_name = "algominutes site: ${each.value.path}"
+  timeout      = "10s"
+  period       = "300s"
+
+  http_check {
+    path         = each.value.path
+    port         = 443
+    use_ssl      = true
+    validate_ssl = true
+    accepted_response_status_codes {
+      status_class = "STATUS_CLASS_2XX"
+    }
+  }
+
+  content_matchers {
+    content = each.value.content
+    matcher = "CONTAINS_STRING"
+  }
+
+  monitored_resource {
+    type = "uptime_url"
+    labels = {
+      project_id = var.project_id
+      host       = var.site_uptime_host
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# Any page failing from more than one region for two periods running: the
+# store listings' Privacy, Support and deletion URLs are down.
+locals {
+  site_check_ids = join("|", [for c in google_monitoring_uptime_check_config.site : c.uptime_check_id])
+}
+
+resource "google_monitoring_alert_policy" "site_uptime" {
+  count        = var.site_uptime_host == "" ? 0 : 1
+  project      = var.project_id
+  display_name = "algominutes site down (${var.site_uptime_host})"
+  combiner     = "OR"
+  severity     = "ERROR"
+
+  conditions {
+    display_name = "a public page failing from more than one region"
+    condition_threshold {
+      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.label.check_id=monitoring.regex.full_match(\"${local.site_check_ids}\") AND resource.type=\"uptime_url\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 1
+      duration        = "600s"
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_NEXT_OLDER"
+        cross_series_reducer = "REDUCE_COUNT_FALSE"
+        group_by_fields      = ["metric.label.check_id"]
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  documentation {
+    content   = "A page of ${var.site_uptime_host} has failed from more than one region for 10 minutes. The App Store and Google Play link to these pages. See docs/runbooks/site.md: check the Vercel project algominutes-site's latest Production deployment, roll back to the previous one if it's the cause, and check the Cloudflare CNAME."
+    mime_type = "text/markdown"
+  }
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+
+  notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
+}
+
 resource "google_monitoring_dashboard" "pipeline" {
   project = var.project_id
   dashboard_json = jsonencode({

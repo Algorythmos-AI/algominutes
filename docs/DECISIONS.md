@@ -3,6 +3,39 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The public site: apps/site, Astro on Vercel, one origin (2026-09-26)
+
+- **What.** `apps/site`, a static Astro site with no client JavaScript, at `algominutes.algorythmos.com`:
+  home, `/privacy`, `/terms`, `/support`, `/delete-account`, and placeholders for every path the server
+  already links to (`/s/<token>`, `/billing`, `/billing/success`, `/billing/cancel`) and for `/app`. The
+  React web app (`apps/web`) mounts at `/app` on the same origin in Phase 2 (plan "site and web app").
+- **Why Astro, not the web app's own legal pages.** The store listings and the iOS app need these pages
+  now, with no sign-in, and they must render and be crawlable without JavaScript. The old web copy was
+  wrong in several places (L21). Static HTML also lets the CSP be strict: `'self'` only, with no inline
+  scripts or styles.
+- **The legal facts are data.** The Privacy Policy's processor table renders from
+  `apps/site/src/data/processing.json`. `tests/site-facts.test.ts` checks it against Terraform and the
+  code: region, Vertex location, Speech-to-Text provider and endpoint, log bucket, backups, Crashlytics.
+  A code change that makes the policy untrue fails CI.
+- **Hosting: Vercel Pro** (verified 2026-09-26: team "skalaliya's projects" is on Pro, active). The team
+  already pays for its one member, so the site adds **no cost**. Project `algominutes-site`, root
+  `apps/site`. Cloudflare stays the DNS, with DNS-only CNAMEs.
+- **Environments.**
+  - `main` → Production, `algominutes.algorythmos.com`.
+  - `integration` → the branch domain `staging.algominutes.algorythmos.com`, behind Vercel
+    Authentication.
+  - Site changes go public through the normal promotion PR.
+- **One origin, paths not subdomains.** `/app`, `/s`, `/billing` and (Phase 2) `/__/auth` all live on
+  the site's origin. The api's CORS already allows it, and Firebase sign-in on its own domain survives
+  browsers that block third-party storage. Staging's `allowed_origins` also gains the staging site.
+- **No web analytics or trackers** on the site. It keeps "No ads. No tracking." literally true.
+- **Operating surface.**
+  - The `site-build` CI job, a required check.
+  - `site-smoke`, after each deploy and daily.
+  - Five Cloud Monitoring uptime checks and one alert (within the free uptime allowance). They sit in
+    staging's project until prod exists, then move to prod (`site_uptime_host`).
+  - Runbook `docs/runbooks/site.md`. Rollback is Vercel Instant Rollback.
+
 ## TestFlight launch: domain, site, api URLs, analytics and paywall (2026-09-26)
 
 - **Domain: `algorythmos.com`.** The company owns it (Cloudflare DNS, Zoho mail, renews 2026-12-06).
