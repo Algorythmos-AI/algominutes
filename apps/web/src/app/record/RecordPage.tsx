@@ -3,13 +3,14 @@ import { Link, useBlocker, useNavigate } from 'react-router';
 import { maxRecordingSecondsForPlan, type PlanId } from '@algominutes/contracts';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
-import { extensionFor, pickMimeType, startRecording, type ActiveRecording } from '../../lib/recorder/recorder';
+import { extensionFor, leftOver, pickMimeType, RecordingGoneError, startRecording, type ActiveRecording, type Locks } from '../../lib/recorder/recorder';
 import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
-import { importAudio } from '../../lib/uploads/importAudio';
+import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
 import { endedUpload, startedUpload } from '../../lib/uploads/ownUploads';
 import { useApi } from '../ApiContext';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../Modal';
+import { useNotice } from '../Notice';
 import { useNotes } from '../notes/NotesContext';
 import { recorderEnv } from './env';
 
@@ -20,6 +21,8 @@ export interface RecorderEnv {
   isTypeSupported?: (t: string) => boolean;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Web Locks (undefined: the browser's; null: none, as in a browser without them). */
+  locks?: Locks | null;
 }
 
 type Phase =
@@ -38,10 +41,13 @@ function useWakeLock(active: boolean) {
   useEffect(() => {
     if (!active || !('wakeLock' in navigator)) return;
     let lock: WakeLockSentinel | null = null;
+    let disposed = false;
     const acquire = () =>
       navigator.wakeLock.request('screen').then(
         (l) => {
-          lock = l;
+          // Granted after recording stopped: let it go at once, or the screen stays on.
+          if (disposed) void l.release().catch((err: unknown) => reportCrash('record.wakeLockRelease', err));
+          else lock = l;
         },
         (err: unknown) => reportCrash('record.wakeLock', err),
       );
@@ -50,6 +56,7 @@ function useWakeLock(active: boolean) {
     const onVisible = () => document.visibilityState === 'visible' && void acquire();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
+      disposed = true;
       document.removeEventListener('visibilitychange', onVisible);
       void lock?.release().catch((err: unknown) => reportCrash('record.wakeLockRelease', err));
     };
@@ -62,12 +69,31 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const { api } = useApi();
   const { writer } = useNotes();
   const navigate = useNavigate();
+  const notice = useNotice();
   const [phase, setPhase] = useState<Phase>({ kind: 'consent' });
   const [agreed, setAgreed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [capSeconds, setCapSeconds] = useState(() => maxRecordingSecondsForPlan());
   const active = useRef<ActiveRecording | null>(null);
+  // Set synchronously, so a second click (or Start) during the slow read of a long recording does nothing.
+  const uploading = useRef(false);
+  const capRef = useRef(capSeconds);
   const recording = phase.kind === 'recording';
+
+  useEffect(() => {
+    capRef.current = capSeconds;
+  }, [capSeconds]);
+
+  // Leaving the page with a recording running (signing out unmounts it too): the microphone goes off, and
+  // what was recorded stays in this browser, offered for upload next time.
+  useEffect(
+    () => () => {
+      const rec = active.current;
+      active.current = null;
+      rec?.stop().catch((err: unknown) => reportCrash('record.unmountStop', err));
+    },
+    [],
+  );
 
   useWakeLock(recording);
   // Leaving the page inside the app while recording would leave the microphone on with no Stop: ask first.
@@ -95,33 +121,52 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
 
   const upload = useCallback(
     async (meta: RecordingMeta) => {
-      if (!user || !writer) return;
-      const blob = await env.store.blob(meta.id);
-      if (!blob || blob.size === 0) {
-        await env.store.remove(meta.id);
-        setPhase({ kind: 'failed', message: 'That recording has no audio.' });
+      if (uploading.current) return;
+      if (!user || !writer) {
+        setPhase({ kind: 'failed', message: 'Your recording is saved in this browser. Reload the page to upload it.' });
         return;
       }
+      uploading.current = true;
       setPhase({ kind: 'saving', fraction: 0 });
-      const file = new File([blob], `recording.${extensionFor(meta.mimeType)}`, { type: meta.mimeType });
-      const result = await importAudio(file, {
-        api,
-        uid: user.uid,
-        recording: { title: `Recording ${formatDate(new Date(meta.startedAt).toISOString())}` },
-        createNoteDoc: (n) => writer.createNoteDoc(n),
-        markNoteFailed: (noteId, message) => writer.markNoteFailed(user.uid, noteId, message),
-        probeDuration: async () => (meta.seconds > 0 ? meta.seconds : null),
-        track: { start: startedUpload, end: endedUpload },
-        fetchImpl: env.fetchImpl,
-        sleep: env.sleep,
-        onProgress: (fraction) => setPhase((p) => (p.kind === 'saving' ? { ...p, fraction } : p)),
-      });
-      if (result.ok) {
-        // Uploaded and handed to the server: this browser's copy goes, as iOS removes its own.
-        await env.store.remove(meta.id);
-        navigate(`/notes/${encodeURIComponent(result.noteId)}`);
-      } else {
-        setPhase({ kind: 'failed', message: `${result.message} Your recording is still saved in this browser.` });
+      try {
+        let result: ImportResult;
+        if (meta.kickoff) {
+          // Its audio is already uploaded: process that note, rather than uploading (and charging) again.
+          result = await retryKickoff(api, meta.kickoff);
+        } else {
+          const blob = await env.store.blob(meta.id);
+          if (!blob || blob.size === 0) {
+            await env.store.remove(meta.id);
+            setPhase({ kind: 'failed', message: 'That recording has no audio.' });
+            return;
+          }
+          const file = new File([blob], `recording.${extensionFor(meta.mimeType)}`, { type: meta.mimeType });
+          result = await importAudio(file, {
+            api,
+            uid: user.uid,
+            recording: { title: `Recording ${formatDate(new Date(meta.startedAt).toISOString())}` },
+            createNoteDoc: (n) => writer.createNoteDoc(n),
+            markNoteFailed: (noteId, message) => writer.markNoteFailed(user.uid, noteId, message),
+            probeDuration: async () => (meta.seconds > 0 ? meta.seconds : null),
+            track: { start: startedUpload, end: endedUpload },
+            fetchImpl: env.fetchImpl,
+            sleep: env.sleep,
+            onProgress: (fraction) => setPhase((p) => (p.kind === 'saving' ? { ...p, fraction } : p)),
+          });
+        }
+        if (result.ok) {
+          // Uploaded and handed to the server: this browser's copy goes, as iOS removes its own.
+          await env.store.remove(meta.id);
+          navigate(`/notes/${encodeURIComponent(result.noteId)}`);
+        } else {
+          if (result.kickoff) await env.store.setKickoff(meta.id, result.kickoff);
+          setPhase({ kind: 'failed', message: `${result.message} Your recording is still saved in this browser.` });
+        }
+      } catch (err) {
+        reportCrash('record.upload', err);
+        setPhase({ kind: 'failed', message: 'Your recording couldn’t be uploaded. It’s still saved in this browser: upload it from the list above.' });
+      } finally {
+        uploading.current = false;
       }
     },
     [api, env, navigate, user, writer],
@@ -129,12 +174,27 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
 
   const stop = useCallback(async () => {
     const rec = active.current;
-    if (!rec || !user) return;
+    if (!rec) return;
     active.current = null;
-    await rec.stop();
-    const meta = (await env.store.list(user.uid)).find((r) => r.id === rec.id);
-    if (meta) await upload(meta);
-  }, [env.store, upload, user]);
+    try {
+      await rec.stop();
+      const meta = await env.store.get(rec.id);
+      if (!meta) throw new RecordingGoneError();
+      await upload(meta);
+    } catch (err) {
+      if (err instanceof RecordingGoneError) {
+        setPhase({ kind: 'failed', message: 'This recording was uploaded or discarded in another tab, so the rest of it couldn’t be saved.' });
+      } else {
+        reportCrash('record.stop', err);
+        setPhase({ kind: 'failed', message: 'The recording couldn’t be saved. If it’s listed above, upload it from there.' });
+      }
+    }
+  }, [env.store, upload]);
+  // The callbacks a running recording holds call the current stop, never the one from when it started.
+  const stopRef = useRef(stop);
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   // The cap: stop on its own at the plan's limit.
   const elapsed = recording ? Math.max(0, (now - phase.startedAt) / 1000) : 0;
@@ -143,7 +203,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   }, [recording, elapsed, capSeconds, stop]);
 
   const start = async () => {
-    if (!user) return;
+    if (!user || uploading.current) return;
     const mimeType = pickMimeType(env.isTypeSupported);
     if (!mimeType || !env.getUserMedia) {
       setPhase({ kind: 'unsupported' });
@@ -167,10 +227,17 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
         store: env.store,
         mimeType,
         Recorder: env.Recorder,
+        locks: env.locks,
         onStoreError: (err) => {
-          reportCrash('record.store', err);
-          void stop();
+          if (!(err instanceof RecordingGoneError)) reportCrash('record.store', err);
+          void stopRef.current();
         },
+        onInterrupted: () => {
+          notice.show('The microphone stopped (it was disconnected, or its permission was taken away), so the recording was saved as it was.');
+          void stopRef.current();
+        },
+        // Checked per chunk too: a hidden tab's clock is throttled, and the cap must still hold.
+        onProgress: (seconds) => seconds >= capRef.current && void stopRef.current(),
       });
       setNow(Date.now());
       setPhase({ kind: 'recording', startedAt: Date.now() });
@@ -187,8 +254,9 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       <p><Link to="/">← Your notes</Link></p>
       <h1 id="rec-title" className="text-3xl font-bold text-heading">Record a meeting</h1>
       <RecoveredRecordings env={env} busy={recording || phase.kind === 'saving'} onUpload={upload} />
+      {phase.kind === 'failed' && <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">{phase.message}</p>}
 
-      {phase.kind === 'consent' && (
+      {(phase.kind === 'consent' || phase.kind === 'failed') && (
         <div className="rounded-2xl border border-border bg-card p-5">
           <h2 className="mb-2 text-xl font-bold text-heading">Before you record</h2>
           <p className="text-body">
@@ -240,7 +308,6 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       {phase.kind === 'saving' && (
         <p role="status" className="rounded-2xl border border-border bg-card p-4 text-heading">Uploading your recording… {Math.round(phase.fraction * 100)}%</p>
       )}
-      {phase.kind === 'failed' && <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">{phase.message}</p>}
     </section>
   );
 }
@@ -253,14 +320,18 @@ function RecoveredRecordings({ env, busy, onUpload }: { env: RecorderEnv; busy: 
   useEffect(() => {
     if (!user || busy) return;
     let cancelled = false;
-    env.store.list(user.uid).then(
-      (l) => !cancelled && setLeft(l),
-      (err: unknown) => reportCrash('record.listLeft', err),
-    );
+    // Never one still being made in another tab: uploading or discarding it would lose the rest of it.
+    env.store
+      .list(user.uid)
+      .then((all) => leftOver(all, env.locks))
+      .then(
+        (l) => !cancelled && setLeft(l),
+        (err: unknown) => reportCrash('record.listLeft', err),
+      );
     return () => {
       cancelled = true;
     };
-  }, [env.store, user, busy, version]);
+  }, [env.store, env.locks, user, busy, version]);
   if (busy || left.length === 0) return null;
   return (
     <div className="rounded-2xl border border-warning/50 bg-warning/10 p-4">

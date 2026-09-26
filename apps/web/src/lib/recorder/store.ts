@@ -17,6 +17,22 @@ export interface RecordingMeta {
   stoppedAt?: number;
   /** Seconds recorded so far (a running total, updated with each chunk). */
   seconds: number;
+  /** When the last chunk was written: a recording touched moments ago may still be live in another tab. */
+  touchedAt?: number;
+  /**
+   * Set once its audio is uploaded to a note whose processing didn't start: a retry
+   * asks the server to process that note, instead of uploading (and charging) again.
+   */
+  kickoff?: Kickoff;
+}
+
+/** What /v1/process needs for a note whose audio is already uploaded. */
+export interface Kickoff {
+  noteId: string;
+  workspaceId: string;
+  storagePath: string;
+  mimeType: string;
+  durationSec?: number;
 }
 
 type Idb = Pick<IDBFactory, 'open'>;
@@ -66,26 +82,48 @@ export class RecordingStore {
   /**
    * One chunk, and the running length, in one transaction: a crash never leaves
    * them disagreeing. Stored as its bytes, not a Blob: every engine keeps an
-   * ArrayBuffer (a 5-second chunk is about 40 KB).
+   * ArrayBuffer (a 5-second chunk is about 40 KB). False, and nothing written,
+   * when the recording is gone (uploaded or discarded elsewhere): its chunks
+   * would be orphans nothing lists or removes.
    */
-  async append(id: string, seq: number, blob: Blob, seconds: number): Promise<void> {
+  async append(id: string, seq: number, blob: Blob, seconds: number, now = Date.now()): Promise<boolean> {
     const bytes = await blob.arrayBuffer();
     const db = await this.open();
     const tx = db.transaction(['recordings', 'chunks'], 'readwrite');
-    tx.objectStore('chunks').put({ id, seq, bytes });
     const recs = tx.objectStore('recordings');
     const meta = (await request(recs.get(id))) as RecordingMeta | undefined;
-    if (meta) recs.put({ ...meta, seconds: Math.max(meta.seconds, seconds) });
+    if (meta) {
+      tx.objectStore('chunks').put({ id, seq, bytes });
+      recs.put({ ...meta, seconds: Math.max(meta.seconds, seconds), touchedAt: now });
+    }
     await done(tx);
+    return Boolean(meta);
   }
 
-  async stop(id: string, stoppedAt = Date.now()): Promise<void> {
+  /** Marks it stopped by the user. False when the recording is gone. */
+  async stop(id: string, stoppedAt = Date.now()): Promise<boolean> {
+    return this.update(id, (m) => ({ ...m, stoppedAt }));
+  }
+
+  /** Remembers the note its audio went to, when that note's processing didn't start. */
+  async setKickoff(id: string, kickoff: Kickoff): Promise<boolean> {
+    return this.update(id, (m) => ({ ...m, kickoff }));
+  }
+
+  private async update(id: string, fn: (m: RecordingMeta) => RecordingMeta): Promise<boolean> {
     const db = await this.open();
     const tx = db.transaction('recordings', 'readwrite');
     const recs = tx.objectStore('recordings');
     const meta = (await request(recs.get(id))) as RecordingMeta | undefined;
-    if (meta) recs.put({ ...meta, stoppedAt });
+    if (meta) recs.put(fn(meta));
     await done(tx);
+    return Boolean(meta);
+  }
+
+  /** One recording's details, or null when it's gone. */
+  async get(id: string): Promise<RecordingMeta | null> {
+    const db = await this.open();
+    return ((await request(db.transaction('recordings').objectStore('recordings').get(id))) as RecordingMeta | undefined) ?? null;
   }
 
   /** The user's recordings still on this browser (not yet uploaded), oldest first. */

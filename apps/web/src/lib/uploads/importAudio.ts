@@ -30,7 +30,14 @@ export function importProblem(file: File): string | null {
 
 export const titleFrom = (fileName: string) => fileName.replace(/\.[^.]+$/, '').trim().slice(0, 300) || 'Imported recording';
 
-export type ImportResult = { ok: true; noteId: string } | { ok: false; noteId: string | null; message: string };
+/**
+ * `kickoff` is set when the audio uploaded but processing didn't start: retrying
+ * that (retryKickoff) processes the same note, where uploading again would make a
+ * second note, and a second charge if the first kickoff had in fact gone through.
+ */
+export type ImportResult =
+  | { ok: true; noteId: string }
+  | { ok: false; noteId: string | null; message: string; kickoff?: { noteId: string; workspaceId: string; storagePath: string; mimeType: string; durationSec?: number } };
 
 export interface ImportDeps {
   api: Pick<ApiClient, 'entitlement' | 'createUpload' | 'uploadStatus' | 'completeUpload' | 'process' | 'deleteNote'>;
@@ -150,7 +157,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     const onNote = noteError(f);
     if (onNote) await mark(onNote);
     deps.track?.end(noteId);
-    return { ok: false, noteId, message: failureMessage(f) };
+    return { ok: false, noteId, message: failureMessage(f), kickoff: { noteId, workspaceId, storagePath: session.storagePath, mimeType, ...(duration ? { durationSec: duration } : {}) } };
   }
   // The server owns the note now.
   deps.track?.end(noteId);
@@ -175,3 +182,21 @@ export function probeDuration(file: File): Promise<number | null> {
     el.src = url;
   });
 }
+
+/**
+ * Processes a recording's note whose audio is already uploaded (ImportResult.kickoff).
+ * The server answers a note that's ready, or already queued, without starting
+ * (or charging) it again.
+ */
+export async function retryKickoff(
+  api: Pick<ApiClient, 'process'>,
+  k: NonNullable<Extract<ImportResult, { ok: false }>['kickoff']>,
+): Promise<ImportResult> {
+  try {
+    await api.process({ noteId: k.noteId, workspaceId: k.workspaceId, type: 'recording', storagePath: k.storagePath, mimeType: k.mimeType, ...(k.durationSec ? { durationSec: k.durationSec } : {}) });
+    return { ok: true, noteId: k.noteId };
+  } catch (err) {
+    return { ok: false, noteId: k.noteId, message: failureMessage(kickoffFailure(err, "Processing couldn't start. Try again.")), kickoff: k };
+  }
+}
+
