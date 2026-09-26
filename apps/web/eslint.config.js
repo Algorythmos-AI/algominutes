@@ -26,5 +26,5 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ['**/*.{ts,tsx}'], plugins: { 'react-hooks': reactHooks }, rules },
-  { files: LEGACY, ignores: ['src/lib/api/**', 'src/lib/auth/**'], rules: asWarnings },
+  { files: LEGACY, ignores: ['src/lib/api/**', 'src/lib/auth/**', 'src/lib/notes/**'], rules: asWarnings },
 );

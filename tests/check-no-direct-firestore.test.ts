@@ -18,12 +18,19 @@ describe('direct-Firestore gate (syntax-aware)', () => {
     ["await ref.set(patch, { merge: true })", "a bare `ref` variable (the old /Ref$/ missed it)"],
     ["await snap.ref.update({ status: 'x' })", 'a snapshot .ref'],
     ["// firestore-write-ok:\nref.set({})", 'a marker with no reason does not count'],
+    ["await setDoc(doc(db, 'workspaces', w, 'notes', n), { status: 'error' })", "the web SDK's setDoc"],
+    ["await updateDoc(noteRef, { title })", "the web SDK's updateDoc"],
+    ["deleteDoc(\n  ref,\n)", "the web SDK's deleteDoc, split across lines"],
+    ["await addDoc(collection(db, 'x'), {})", "the web SDK's addDoc"],
+    ["const b = writeBatch(db);", "a web SDK batch"],
+    ["await runTransaction(db, async (tx) => {})", "a web SDK transaction"],
   ])('flags %s (%s)', (src) => {
     expect(hits(src)).toBe(1);
   });
 
   it.each([
     ["const snap = await noteRef.get();", 'reads'],
+    ["const snap = await getDoc(doc(db, 'workspaces', w)); onSnapshot(q, cb);", "web SDK reads and listeners"],
     ["await markQueued(db, input, log);", 'repo calls'],
     ["map.set(k, v); cache.delete(k);", 'unrelated set/delete'],
     ["await db.collection('analytics').add({ event })", 'appending an analytics event'],

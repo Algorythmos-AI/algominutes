@@ -119,7 +119,6 @@ export type ChatEvent =
   | { type: 'error'; error: string };
 
 const ProcessResponse = ProcessQueuedResponse.or(ProcessCachedResponse).or(ProcessInFlightResponse);
-const NoteRead = NoteReadResponse.or(NoteReadPageResponse);
 /** A 204: no body. */
 const NoContent = z.undefined();
 
@@ -192,7 +191,10 @@ export function createApiClient(opts: ApiClientOptions) {
     registerPush: (body: z.infer<typeof RegisterPushTokenRequest>) => post('/v1/push/register', body, OkResponse),
 
     // Notes
-    readNote: (body: NoteReadRequest) => post('/v1/notes/read', body, NoteRead),
+    /** The note, its summary and the transcript's first page. */
+    readNote: (body: Omit<NoteReadRequest, 'cursor'>) => post('/v1/notes/read', body, NoteReadResponse),
+    /** A later transcript page (the previous page's nextCursor). */
+    readNotePage: (body: NoteReadRequest & { cursor: string }) => post('/v1/notes/read', body, NoteReadPageResponse),
     updateNote: (body: UpdateNoteRequest) => post('/v1/notes/update', body, UpdateNoteResponse),
     deleteNote: (body: DeleteNoteRequest) => post('/v1/notes/delete', body, DeleteNoteResponse),
     noteAudioUrl: (body: NoteAudioUrlRequest) => post('/v1/notes/audio-url', body, NoteAudioUrlResponse),

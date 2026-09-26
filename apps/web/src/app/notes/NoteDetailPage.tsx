@@ -1,0 +1,310 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
+import type { NoteReadResponse, TranscriptLine } from '@algominutes/contracts';
+import { ApiError } from '../../lib/api/errors';
+import { reportCrash } from '../../lib/crashReport';
+import { displayTitle, formatClock, formatDate, formatDuration, statusOf } from '../../lib/notes/format';
+import { workspaceIdFor } from '../../lib/notes/workspace';
+import { isSlow } from '../../lib/noteWatchdog';
+import { useApi } from '../ApiContext';
+import { useAuth } from '../auth/AuthContext';
+import { useNotice } from '../Notice';
+import { useNow } from '../useNow';
+import { useNotes } from './NotesContext';
+
+type Load = { status: 'loading' } | { status: 'ready'; data: NoteReadResponse } | { status: 'gone' } | { status: 'error'; message: string };
+
+export function NoteDetailPage() {
+  const { noteId = '' } = useParams();
+  // Keyed on the note, so moving to another note starts from a clean slate.
+  return <NoteDetail key={noteId} noteId={noteId} />;
+}
+
+function NoteDetail({ noteId }: { noteId: string }) {
+  const { user } = useAuth();
+  const { api } = useApi();
+  const { state, hide, unhide } = useNotes();
+  const notice = useNotice();
+  const navigate = useNavigate();
+  const workspaceId = user ? workspaceIdFor(user.uid) : '';
+  const live = state.status === 'ready' ? state.notes.find((n) => n.id === noteId) : undefined;
+  const ready = live?.status === 'ready';
+
+  const [load, setLoad] = useState<Load>({ status: 'loading' });
+  const [lines, setLines] = useState<TranscriptLine[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [moreBusy, setMoreBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // The note's content comes from the api (Postgres), once it's ready.
+  useEffect(() => {
+    if (!ready || !workspaceId) return;
+    let cancelled = false;
+    api
+      .readNote({ noteId, workspaceId })
+      .then((data) => {
+        if (cancelled) return;
+        setLoad({ status: 'ready', data });
+        setLines(data.transcript.lines);
+        setCursor(data.transcript.nextCursor);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.kind === 'not_found') setLoad({ status: 'gone' });
+        else setLoad({ status: 'error', message: err instanceof ApiError ? err.message : "This note couldn't be loaded." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, noteId, workspaceId, ready]);
+
+  const loadMore = async () => {
+    if (!cursor) return;
+    setMoreBusy(true);
+    try {
+      const page = await api.readNotePage({ noteId, workspaceId, cursor });
+      setLines((l) => [...l, ...page.transcript.lines]);
+      setCursor(page.transcript.nextCursor);
+    } catch (err) {
+      notice.show(err instanceof ApiError ? err.message : "The rest of the transcript couldn't be loaded.");
+    } finally {
+      setMoreBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setConfirmDelete(false);
+    hide(noteId);
+    navigate('/');
+    try {
+      await api.deleteNote({ noteId, workspaceId });
+      notice.show('Note deleted.');
+    } catch (err) {
+      unhide(noteId);
+      notice.show(err instanceof ApiError ? `The note wasn't deleted. ${err.message}` : "The note wasn't deleted. Try again.");
+      reportCrash('notes.delete', err);
+    }
+  };
+
+  const [audioRef, audio] = useAudio(noteId, workspaceId);
+  const now = useNow();
+
+  if (state.status === 'loading') return <p role="status" className="text-muted">Loading…</p>;
+  if (!live || load.status === 'gone') {
+    return (
+      <section aria-labelledby="nd-title">
+        <h1 id="nd-title" className="mb-2 text-3xl font-bold text-heading">This note isn't available</h1>
+        <p className="text-muted">It may have been deleted. <Link to="/">Back to your notes</Link></p>
+      </section>
+    );
+  }
+
+  const s = statusOf(live.status);
+  const meta = [formatDate(live.createdAt), formatDuration(live.duration)].filter(Boolean).join(' · ');
+  const data = load.status === 'ready' ? load.data : null;
+
+  return (
+    <article aria-labelledby="nd-title" className="flex flex-col gap-8">
+      <header>
+        <p className="mb-2"><Link to="/">← Your notes</Link></p>
+        <h1 id="nd-title" className="text-3xl font-bold text-heading">{displayTitle(data?.note.title ?? live.title)}</h1>
+        {meta && <p className="mt-1 text-muted">{meta}</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {ready && live.storagePath && (
+            <button type="button" className="rounded-lg border border-border px-3 py-2" onClick={() => void audio.start()} disabled={audio.busy}>
+              {audio.src ? 'Playing below' : 'Play recording'}
+            </button>
+          )}
+          <button type="button" className="rounded-lg border border-danger/60 px-3 py-2 text-danger" onClick={() => setConfirmDelete(true)}>
+            Delete
+          </button>
+        </div>
+        {audio.src && (
+          <audio ref={audioRef} src={audio.src} controls autoPlay className="mt-4 w-full" onError={() => void audio.onError()}>
+            Your browser can't play this recording.
+          </audio>
+        )}
+        {audio.error && <p role="alert" className="mt-2 text-danger">{audio.error}</p>}
+      </header>
+
+      {s.kind === 'working' && (
+        <p role="status" className="rounded-2xl border border-border bg-card p-4 text-body">
+          {isSlow(live, now)
+            ? 'This is taking longer than usual. It will finish on its own, or show an error if it can’t.'
+            : `${s.label}${live.progress && live.progress.total > 1 ? ` (${live.progress.done} of ${live.progress.total} parts)` : ''}… You can leave this page; it updates on its own.`}
+        </p>
+      )}
+      {s.kind === 'failed' && (
+        <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">
+          {live.errorMessage || 'This recording couldn’t be processed.'} It didn’t use any of your minutes.
+        </p>
+      )}
+
+      {ready && load.status === 'loading' && <p role="status" className="text-muted">Loading the summary…</p>}
+      {load.status === 'error' && <p role="alert" className="text-body">{load.message}</p>}
+
+      {data?.summary && (
+        <>
+          <section aria-labelledby="sum-title">
+            <h2 id="sum-title" className="mb-2 text-xl font-bold text-heading">Summary</h2>
+            <p className="whitespace-pre-line text-body">{data.summary.gist}</p>
+          </section>
+          {data.summary.actionItems.length > 0 && (
+            <section aria-labelledby="ai-title">
+              <h2 id="ai-title" className="mb-2 text-xl font-bold text-heading">Action items</h2>
+              <ul className="list-disc pl-6 text-body">
+                {data.summary.actionItems.map((a) => (
+                  <li key={String(a.id)}>
+                    {a.text}
+                    {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {data.summary.keyDecisions.length > 0 && (
+            <section aria-labelledby="kd-title">
+              <h2 id="kd-title" className="mb-2 text-xl font-bold text-heading">Key decisions</h2>
+              <ul className="list-disc pl-6 text-body">
+                {data.summary.keyDecisions.map((d) => <li key={String(d.id)}>{d.text}</li>)}
+              </ul>
+            </section>
+          )}
+          {data.summary.chapters.length > 0 && (
+            <section aria-labelledby="ch-title">
+              <h2 id="ch-title" className="mb-2 text-xl font-bold text-heading">Chapters</h2>
+              <ol className="flex flex-col gap-2">
+                {data.summary.chapters.map((c) => (
+                  <li key={c.startMs}>
+                    <button type="button" className="text-left" onClick={() => void audio.seek(c.startMs)}>
+                      <span className="font-mono text-muted">{formatClock(c.startMs)}</span> <span className="font-semibold text-heading">{c.title}</span>
+                    </button>
+                    <p className="text-sm text-body">{c.summary}</p>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+        </>
+      )}
+
+      {data && (
+        <section aria-labelledby="tr-title">
+          <h2 id="tr-title" className="mb-2 text-xl font-bold text-heading">Transcript</h2>
+          {lines.length === 0 ? (
+            <p className="text-muted">No transcript.</p>
+          ) : (
+            <ol className="flex flex-col gap-3">
+              {lines.map((l) => (
+                <li key={l.id} className="text-body">
+                  <button type="button" className="font-mono text-sm text-muted" onClick={() => void audio.seek(l.startMs)} aria-label={`Play from ${formatClock(l.startMs)}`}>
+                    {formatClock(l.startMs)}
+                  </button>{' '}
+                  {l.speaker && <span className="font-semibold text-heading">{l.speaker}: </span>}
+                  {l.text}
+                </li>
+              ))}
+            </ol>
+          )}
+          {cursor && (
+            <button type="button" className="mt-4 rounded-lg border border-border px-3 py-2" disabled={moreBusy} onClick={() => void loadMore()}>
+              {moreBusy ? 'Loading…' : 'Show more of the transcript'}
+            </button>
+          )}
+          {data.redaction?.applied && <p className="mt-4 text-sm text-muted">Card numbers and similar identifiers are hidden in transcripts.</p>}
+        </section>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="del-title" className="w-full max-w-sm rounded-2xl border border-border bg-card p-6">
+            <h2 id="del-title" className="mb-2 text-xl font-bold text-heading">Delete this note?</h2>
+            <p className="mb-4 text-body">Its recording, transcript and summary are deleted for good.</p>
+            <div className="flex flex-col gap-2">
+              <button type="button" className="rounded-xl bg-danger px-4 py-3 font-semibold text-white" onClick={() => void remove()}>Delete note</button>
+              <button type="button" className="py-2 text-muted" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+/**
+ * The recording, from a short-lived signed URL (/v1/notes/audio-url). When it
+ * expires mid-listen the player errors; one fresh URL is fetched and playback
+ * resumes where it was.
+ */
+function useAudio(noteId: string, workspaceId: string) {
+  const { api } = useApi();
+  const ref = useRef<HTMLAudioElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const refreshed = useRef(false);
+  const pendingSeek = useRef<number | null>(null);
+
+  const fetchUrl = useCallback(async () => {
+    const { url } = await api.noteAudioUrl({ noteId, workspaceId });
+    return url;
+  }, [api, noteId, workspaceId]);
+
+  const start = useCallback(async () => {
+    if (src) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setSrc(await fetchUrl());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The recording couldn't be loaded.");
+    } finally {
+      setBusy(false);
+    }
+  }, [src, fetchUrl]);
+
+  const seek = useCallback(
+    async (ms: number) => {
+      if (!src) {
+        pendingSeek.current = ms / 1000;
+        await start();
+        return;
+      }
+      if (ref.current) {
+        ref.current.currentTime = ms / 1000;
+        void ref.current.play().catch((err) => reportCrash('audio.play', err));
+      }
+    },
+    [src, start],
+  );
+
+  // Apply a seek asked for before the player existed.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || pendingSeek.current == null) return;
+    const at = pendingSeek.current;
+    const apply = () => {
+      el.currentTime = at;
+      pendingSeek.current = null;
+    };
+    el.addEventListener('loadedmetadata', apply, { once: true });
+    return () => el.removeEventListener('loadedmetadata', apply);
+  }, [src]);
+
+  const onError = useCallback(async () => {
+    if (refreshed.current) {
+      setError("The recording couldn't be played.");
+      return;
+    }
+    refreshed.current = true;
+    const at = ref.current?.currentTime ?? 0;
+    try {
+      pendingSeek.current = at;
+      setSrc(await fetchUrl());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The recording couldn't be played.");
+    }
+  }, [fetchUrl]);
+
+  return [ref, { src, busy, error, start, seek, onError }] as const;
+}
