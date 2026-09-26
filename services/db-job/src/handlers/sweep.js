@@ -14,7 +14,9 @@
 //                        failed and refunded in one transaction (notes-repo
 //                        failStuckNote re-checks it at the UPDATE, Postgres
 //                        first), then gets a dead letter. The user sees an error
-//                        and can retry instead of an endless spinner.
+//                        and can retry instead of an endless spinner. A stuck
+//                        regeneration is failed and told, not refunded: the
+//                        recording's charge stands.
 //   3. upload sessions   expired rows are deleted (GCS expires the sessions).
 //   4. account deletions a deletion the client never finished (it crashed, or
 //                        gave up after a 500) is finished here: the same steps
@@ -206,12 +208,14 @@ async function run({
         }
         if (!r.failed) continue;
         failed += 1;
-        noteLog.error({ noteId: n.noteId, workspaceId: n.workspaceId, status: n.status, refunded: r.refunded }, 'note_failed_stuck');
+        noteLog.error({
+          noteId: n.noteId, workspaceId: n.workspaceId, status: n.status, refunded: r.refunded, regeneration: r.regeneration,
+        }, 'note_failed_stuck');
         await recordDeadLetter({
           queue: 'sweep',
           noteId: n.noteId,
           workspaceId: n.workspaceId,
-          payload: { reason: 'stuck_in_flight', status: n.status, updatedAt: n.updatedAt.toISOString() },
+          payload: { reason: 'stuck_in_flight', status: n.status, regeneration: Boolean(r.regeneration), updatedAt: n.updatedAt.toISOString() },
           error: 'stuck_in_flight',
           attempts: null,
           traceId,

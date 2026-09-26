@@ -810,8 +810,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         - ~~The api's `failNote` → `markError` after `markQueued` has debited doesn't refund~~ **fixed
           (enqueue-failure-refunds PR):** `markError` takes a `refund`, written in its transaction, and the
           kickoff's failures after the debit pass one (`refund:enqueue_failed`).
-        - The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
-          regeneration rule.
+        - ~~The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
+          regeneration rule~~ **fixed (stuck-regeneration-keeps-charge PR):** `failStuckNote` reads, on
+          the row it fails, whether a regeneration's claim holds it (`summarizing` with
+          `summary_requested_at` set) and then writes no refund; the note is still failed and its author
+          told. `markQueued` and `releaseSummaryClaim` clear the mark, so it means only "a regeneration
+          is in flight" (a re-run after a failed regeneration is refunded as usual). Tested on Postgres;
+          three mutations checked.
         - A failure can deadlock with account deletion (note row, then the ledger's foreign key on
           `users`, against `users` then the cascade); Postgres picks the failure, which retries or, on a
           last attempt, falls back as above. The note is being deleted anyway.

@@ -361,8 +361,10 @@ export async function markQueued(
              mime_type    = COALESCE(EXCLUDED.mime_type, notes.mime_type),
              summarizer_enqueued_at = NULL,
              embedder_enqueued_at = NULL,
-             -- A new run: its outcome gets its own notice (note-notices.cjs).
+             -- A new run: its outcome gets its own notice (note-notices.cjs),
+             -- and it isn't a regeneration, whatever an earlier one left set.
              run_seq = notes.run_seq + 1,
+             summary_requested_at = NULL,
              chunks_done = 0,
              chunks_total = NULL,
              duration_sec_probed = NULL,
@@ -520,6 +522,7 @@ export async function releaseSummaryClaim(input: { noteId: string; workspaceId: 
     `UPDATE notes
         SET status = 'ready',
             summary_generation = summary_generation - 1,
+            summary_requested_at = NULL,
             updated_at = NOW()
       WHERE id = $1 AND workspace_id = $2 AND status = 'summarizing'
         AND summary_generation = $3`,
@@ -1006,7 +1009,12 @@ export async function listStuckNotes(
  * finished, it became ready, the client re-queued it, it was deleted) is left
  * alone. With `refund`, the reversal is written in the same transaction, and so
  * is the "failed" notice, which is enqueued after the commit: the author is told
- * (note-notices.cjs). The mirror, and the caller's dead letter, happen only when
+ * (note-notices.cjs).
+ *
+ * A stuck REGENERATION (`summarizing` under a regeneration's claim:
+ * summary_requested_at set) is failed and told, but not refunded: the recording
+ * was transcribed and summarised once, and that charge stands, as when the
+ * summarizer's own last attempt fails one (`regeneration` in the result). The mirror, and the caller's dead letter, happen only when
  * a row matched. Postgres first; the mirror uses update(), so a deleted note's
  * doc is never re-created.
  */
@@ -1020,22 +1028,32 @@ export async function failStuckNote(
     traceId?: string | null;
   },
   log: { error: (o: any, m?: string) => void },
-): Promise<{ failed: boolean; refunded?: boolean; notice?: NoteNotice | null }> {
+): Promise<{ failed: boolean; refunded?: boolean; regeneration?: boolean; notice?: NoteNotice | null }> {
   const trace = input.traceId || randomUUID();
-  const { failed, refunded, notice } = await withTx(async (client) => {
-    const { rowCount } = await client.query(
-      `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
-        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
-          AND status = ANY($4::text[])
-          AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
+  const { failed, refunded, regeneration, notice } = await withTx(async (client) => {
+    // `p` reads, locked, what the UPDATE replaces: whether this is a
+    // regeneration is decided on the row it fails.
+    const { rows: [row] } = await client.query(
+      `WITH p AS (
+         SELECT id, (status = 'summarizing' AND summary_requested_at IS NOT NULL) AS regeneration
+           FROM notes WHERE id = $1 AND workspace_id = $2 FOR NO KEY UPDATE
+       )
+       UPDATE notes n SET status = 'error', error_message = $3, updated_at = NOW()
+         FROM p
+        WHERE n.id = p.id AND n.deleted_at IS NULL
+          AND n.status = ANY($4::text[])
+          AND n.updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')
+        RETURNING p.regeneration`,
       [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
     );
-    if (!rowCount) return { failed: false, refunded: false, notice: null };
-    const r = input.refund ? await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund }) : { applied: false };
+    if (!row) return { failed: false, refunded: false, regeneration: false, notice: null };
+    const r = input.refund && !row.regeneration
+      ? await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund })
+      : { applied: false };
     const written = await recordNotice(client, {
       noteId: input.noteId, workspaceId: input.workspaceId, kind: 'note_failed', traceId: trace,
     });
-    return { failed: true, refunded: r.applied, notice: written };
+    return { failed: true, refunded: r.applied, regeneration: Boolean(row.regeneration), notice: written };
   }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
   if (!failed) return { failed: false };
   await tellAuthor(notice ?? null, trace, log);
@@ -1048,5 +1066,5 @@ export async function failStuckNote(
     // note) or briefly unavailable. The next read path reconciles from Postgres.
     log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'stuck_note_mirror_failed');
   }
-  return { failed: true, refunded, notice };
+  return { failed: true, refunded, regeneration, notice };
 }
