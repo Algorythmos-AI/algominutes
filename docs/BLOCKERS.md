@@ -34,6 +34,9 @@ deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both).
       server moved in #170, the iOS app in its "nothing to trip on" PR. The web's `apiUrl.ts` still names
       `api.algominutes.com`; the web isn't deployed, and it moves with its `/v1` migration.
 - [ ] **Owner:** turn on auto-renew for `algorythmos.com` (expires 2026-12-06); add the Zoho aliases.
+- [ ] Staging's **Browser** API key (auto-created by Firebase) allows the referrers `localhost` and
+      `https://algominutes.com/*`. Set it to the real site before any web deploy. Referrers can be
+      spoofed by non-browser callers, so this is hygiene, not access control.
 - ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
   `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
   `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).

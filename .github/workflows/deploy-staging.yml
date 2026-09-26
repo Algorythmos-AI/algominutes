@@ -24,7 +24,8 @@ name: deploy-staging
 # - Gated: does nothing until the repo variable DEPLOY_STAGING == 'true'
 #   (set it after the staging `terraform apply`; see
 #   docs/runbooks/resume-staging-and-deploy.md). Required repo variables:
-#   GCP_PROJECT_ID, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA.
+#   GCP_PROJECT_ID, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA. Required secret:
+#   STAGING_FIREBASE_API_KEY (the authenticated smoke signs up a test user).
 # - Prod deploys are added with the prod environment (plan PR-35).
 on:
   push:
@@ -37,6 +38,7 @@ on:
       - 'package-lock.json'
       - '.github/workflows/deploy-staging.yml'
       - 'scripts/smoke-staging.sh'
+      - 'scripts/smoke-auth.mjs'
   workflow_dispatch:
     inputs:
       services:
@@ -279,6 +281,21 @@ jobs:
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
         run: bash scripts/smoke-staging.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # A real user, end to end, then deleted (scripts/smoke-auth.mjs): sign-up,
+      # config, entitlement, a two-chunk upload against live GCS, search through
+      # Vertex as run-api, account deletion. A missing role fails the deploy here.
+      - name: Authenticated smoke
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY }}
+        run: |
+          set -euo pipefail
+          API_URL=$(gcloud run services describe api --region "$REGION" --project "$PROJECT" --format='value(status.url)')
+          export API_URL
+          node scripts/smoke-auth.mjs
       - name: Resume the sweeper
         # Terraform creates the db-sweep Scheduler job paused (scheduler.tf):
         # until a real image is out, every tick would run the placeholder and

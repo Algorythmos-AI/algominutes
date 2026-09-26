@@ -144,6 +144,15 @@ gh variable set GCP_DEPLOYER_SA  --body "$(terraform output -raw deployer_servic
 gh variable set DEPLOY_STAGING   --body true
 ```
 
+And one **secret**, the key the authenticated smoke signs up its test user with: the staging iOS
+app's Firebase API key, from the git-ignored `GoogleService-Info.plist` (run from the repo root).
+Firebase API keys identify the project rather than grant access, but a secret keeps it out of logs:
+
+```bash
+/usr/libexec/PlistBuddy -c 'Print :API_KEY' apps/ios/AlgoMinutes/Resources/GoogleService-Info.plist \
+  | gh secret set STAGING_FIREBASE_API_KEY
+```
+
 The deploy jobs run in the `staging` GitHub Environment, and the WIF provider
 rejects tokens from any other ref or environment. Apply the repo settings once,
 so the environment's branch policy exists before the first deploy
@@ -153,8 +162,9 @@ so the environment's branch policy exists before the first deploy
 bash scripts/github-settings.sh --apply
 ```
 
-Then run the first full deploy by hand (every service still has the
-placeholder image). It runs build → migrate → rollout → smoke:
+Anonymous sign-in must be on before this (below; it is on for staging since 2026-09-26): the
+deploy's authenticated smoke signs up an anonymous test user. Then run the first full deploy by
+hand (every service still has the placeholder image). It runs build → migrate → rollout → smoke:
 
 ```bash
 gh workflow run deploy-staging.yml -f services=all
@@ -178,8 +188,17 @@ The workflow's `smoke` job runs `scripts/smoke-staging.sh`. It must pass. It
 checks that every `*_URL` env is a URL the target service really serves, that
 `api` (`/v1/health`) and `billing` (`/health`) answer 200 without auth, that
 their readiness probes (`/v1/health/ready`, `/health/ready`) reach Postgres, and
-that every worker answers 403 without auth. After that, each merge to `integration` (the staging branch)
-that touches a service redeploys only the services it affects.
+that every worker answers 403 without auth.
+
+Then `scripts/smoke-auth.mjs` uses the services as a real user would, and must pass too. It signs up
+an anonymous test user (Anonymous sign-in must be on), reads `/v1/config` and `/v1/entitlement`,
+uploads 257 KiB in two chunks through a live GCS resumable session (checking the api's status probe
+between them, and that an early `/complete` is refused), searches (Vertex, as `run-api`), then deletes
+the account and checks the user is gone. It prints the test user's uid and the log query for it.
+The sweeper is resumed only after both smokes pass.
+
+After that, each merge to `integration` (the staging branch) that touches a service redeploys only
+the services it affects.
 
 > **TLS ordering.** The instance is `ssl_mode = ENCRYPTED_ONLY` and services get
 > `PGSSLMODE=require`. Only images built from `integration` at or after the
