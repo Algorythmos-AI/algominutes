@@ -3,6 +3,7 @@ import { Link, useBlocker, useNavigate } from 'react-router';
 import { maxRecordingSecondsForPlan, type PlanId } from '@algominutes/contracts';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
+import { canCaptureCalls, captureCall, CaptureError, type Capture, type CaptureEnv } from '../../lib/recorder/callCapture';
 import { extensionFor, leftOver, pickMimeType, RecordingGoneError, startRecording, type ActiveRecording, type Locks } from '../../lib/recorder/recorder';
 import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
 import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
@@ -23,6 +24,9 @@ export interface RecorderEnv {
   sleep?: (ms: number) => Promise<void>;
   /** Web Locks (undefined: the browser's; null: none, as in a browser without them). */
   locks?: Locks | null;
+  /** Recording a call in another tab (W7): the browser's share, where it can share a tab's audio. */
+  capture?: CaptureEnv;
+  canCaptureCalls?: () => boolean;
 }
 
 type Phase =
@@ -72,6 +76,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const notice = useNotice();
   const [phase, setPhase] = useState<Phase>({ kind: 'consent' });
   const [agreed, setAgreed] = useState(false);
+  const [source, setSource] = useState<'mic' | 'call'>('mic');
+  const [callAgreed, setCallAgreed] = useState(false);
+  const [callsOn, setCallsOn] = useState(false);
+  const capture = useRef<Capture | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [capSeconds, setCapSeconds] = useState(() => maxRecordingSecondsForPlan());
   const active = useRef<ActiveRecording | null>(null);
@@ -91,6 +99,8 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       const rec = active.current;
       active.current = null;
       rec?.stop().catch((err: unknown) => reportCrash('record.unmountStop', err));
+      capture.current?.stop();
+      capture.current = null;
     },
     [],
   );
@@ -98,6 +108,17 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   useWakeLock(recording);
   // Leaving the page inside the app while recording would leave the microphone on with no Stop: ask first.
   const blocker = useBlocker(recording);
+
+  // Calls in another tab: where the browser can share a tab's audio, and while the api's switch is on
+  // (/v1/config broadcastCapture, the same kill switch as iOS's broadcast capture).
+  const callsPossible = Boolean(env.capture) && (env.canCaptureCalls ?? canCaptureCalls)();
+  useEffect(() => {
+    if (!callsPossible) return;
+    api.appConfig().then(
+      (c) => setCallsOn(c.broadcastCapture),
+      (err: unknown) => reportCrash('record.appConfig', err),
+    );
+  }, [api, callsPossible]);
 
   // The plan's per-recording cap (the default until the plan is known).
   useEffect(() => {
@@ -178,6 +199,8 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     active.current = null;
     try {
       await rec.stop();
+      capture.current?.stop();
+      capture.current = null;
       const meta = await env.store.get(rec.id);
       if (!meta) throw new RecordingGoneError();
       await upload(meta);
@@ -188,6 +211,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
         reportCrash('record.stop', err);
         setPhase({ kind: 'failed', message: 'The recording couldn’t be saved. If it’s listed above, upload it from there.' });
       }
+    } finally {
+      // The shared tab and the mixer end with the recording, however it ended.
+      capture.current?.stop();
+      capture.current = null;
     }
   }, [env.store, upload]);
   // The callbacks a running recording holds call the current stop, never the one from when it started.
@@ -211,11 +238,27 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     }
     setPhase({ kind: 'starting' });
     let stream: MediaStream;
-    try {
-      stream = await env.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    } catch (err) {
-      setPhase({ kind: (err as { name?: string })?.name === 'NotAllowedError' ? 'denied' : 'unsupported' });
-      return;
+    if (source === 'call' && env.capture) {
+      try {
+        capture.current = await captureCall(env.capture);
+        stream = capture.current.stream;
+        // The browser's own "Stop sharing" ends the recording and saves it.
+        capture.current.onEnded(() => void stopRef.current());
+      } catch (err) {
+        if (err instanceof CaptureError && err.kind === 'cancelled') {
+          setPhase({ kind: 'consent' });
+          return;
+        }
+        setPhase({ kind: 'failed', message: err instanceof CaptureError ? err.message : 'The call couldn’t be recorded.' });
+        return;
+      }
+    } else {
+      try {
+        stream = await env.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      } catch (err) {
+        setPhase({ kind: (err as { name?: string })?.name === 'NotAllowedError' ? 'denied' : 'unsupported' });
+        return;
+      }
     }
     // Keep what's recorded even when storage runs short (best effort; the browser may say no).
     void navigator.storage?.persist?.().catch((err: unknown) => reportCrash('record.persist', err));
@@ -228,6 +271,8 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
         mimeType,
         Recorder: env.Recorder,
         locks: env.locks,
+        // A call's mix never ends by itself: watch what it's mixed from (the shared tab's audio, the microphone).
+        watch: capture.current?.sources,
         onStoreError: (err) => {
           if (!(err instanceof RecordingGoneError)) reportCrash('record.store', err);
           void stopRef.current();
@@ -241,8 +286,12 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       });
       setNow(Date.now());
       setPhase({ kind: 'recording', startedAt: Date.now() });
+      // "Stop sharing" pressed while the recording was starting: nothing was listening yet.
+      if (capture.current?.ended) void stopRef.current();
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop());
+      capture.current?.stop();
+      capture.current = null;
       reportCrash('record.start', err);
       setPhase({ kind: 'failed', message: 'Recording couldn’t start. Reload the page and try again.' });
     }
@@ -262,14 +311,42 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
           <p className="text-body">
             AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded, then transcribed and summarised by Google Cloud's speech and AI services, and kept in your account until you delete it.
           </p>
+          {callsOn && (
+            <fieldset className="mt-4">
+              <legend className="mb-1 text-body">Record</legend>
+              <label className="flex gap-2 text-body">
+                <input type="radio" name="source" checked={source === 'mic'} onChange={() => setSource('mic')} />
+                This device’s microphone
+              </label>
+              <label className="flex gap-2 text-body">
+                <input type="radio" name="source" checked={source === 'call'} onChange={() => setSource('call')} />
+                A call in another tab, with my microphone
+              </label>
+            </fieldset>
+          )}
           <label className="mt-4 flex gap-2 text-body">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
             I have permission from anyone whose voice may be captured. If others are present, I'll let them know the meeting is being recorded.
           </label>
-          <button type="button" disabled={!agreed} onClick={() => void start()} className="mt-4 rounded-xl bg-accent px-5 py-3 font-semibold text-white disabled:opacity-50">
-            {agreed ? 'Start recording' : 'Tick the box to start'}
-          </button>
-          <p className="mt-3 text-sm text-muted">Your browser will ask to use the microphone.</p>
+          {source === 'call' && (
+            <label className="mt-2 flex gap-2 text-body">
+              <input type="checkbox" checked={callAgreed} onChange={(e) => setCallAgreed(e.target.checked)} />
+              Everyone on the call has agreed to be recorded.
+            </label>
+          )}
+          {(() => {
+            const ready = agreed && (source === 'mic' || callAgreed);
+            return (
+              <button type="button" disabled={!ready} onClick={() => void start()} className="mt-4 rounded-xl bg-accent px-5 py-3 font-semibold text-white disabled:opacity-50">
+                {ready ? (source === 'call' ? 'Choose the call’s tab' : 'Start recording') : 'Tick the box to start'}
+              </button>
+            );
+          })()}
+          <p className="mt-3 text-sm text-muted">
+            {source === 'call'
+              ? 'Your browser asks which tab to share: pick the call’s tab and tick “Also share tab audio”. Then it asks for the microphone, so your own voice is included.'
+              : 'Your browser will ask to use the microphone.'}
+          </p>
         </div>
       )}
 
