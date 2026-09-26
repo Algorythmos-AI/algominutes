@@ -105,6 +105,13 @@ targets:
           set -euo pipefail
           GSI="${SRCROOT}/AlgoMinutes/Resources/GoogleService-Info.plist"
           PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          # The built Info.plist is this phase's declared input (below), so the
+          # build system runs it after that file is written. Without the input the
+          # two raced, and PlistBuddy created a stray Info.plist and failed.
+          if [ ! -f "$PLIST" ]; then
+            echo "error: the built Info.plist isn't there yet ($PLIST): this phase must run after it's processed"
+            exit 1
+          fi
           if [ ! -f "$GSI" ]; then
             if [ "${CONFIGURATION}" != "Debug" ]; then
               echo "error: ${CONFIGURATION} needs AlgoMinutes/Resources/GoogleService-Info.plist (git-ignored; see docs/runbooks)"
@@ -114,6 +121,8 @@ targets:
           fi
           REVERSED=$(/usr/libexec/PlistBuddy -c "Print :REVERSED_CLIENT_ID" "$GSI")
           /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${REVERSED}" "$PLIST"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         basedOnDependencyAnalysis: false
       # Crashlytics needs the dSYM of every build that reaches a device outside
       # development (Staging and Release). This phase covers archives made on a
