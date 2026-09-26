@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // @ts-expect-error: a plain .mjs script, no types
-import { appEnabled, compose } from '../scripts/build-site.mjs';
+import { appEnabled, checkAppEnv, compose } from '../scripts/build-site.mjs';
 
 // scripts/build-site.mjs decides whether the public build carries the web app.
 // Getting it wrong either leaks the unfinished app to the public or serves two
@@ -48,5 +48,23 @@ describe('compose', () => {
     fs.mkdirSync(path.join(site, 'app'));
     expect(() => compose(site, web)).toThrow(/already exists/);
     expect(fs.existsSync(path.join(site, 'app.html'))).toBe(true);
+  });
+});
+
+describe('the web build\'s backends', () => {
+  const STAGING = {
+    VITE_API_ORIGIN: 'https://api-627101926311.australia-southeast1.run.app',
+    VITE_BILLING_ORIGIN: 'https://billing-627101926311.australia-southeast1.run.app',
+  };
+
+  it('staging\'s api and billing are both allowed by the app\'s CSP', () => {
+    expect(checkAppEnv(STAGING)).toEqual([]);
+  });
+
+  it('refuses a build whose origins are missing, or that the CSP would block', () => {
+    expect(checkAppEnv({})).toEqual(['VITE_API_ORIGIN is not set', 'VITE_BILLING_ORIGIN is not set']);
+    expect(checkAppEnv({ ...STAGING, VITE_API_ORIGIN: 'https://api.elsewhere.test' })).toEqual([
+      "VITE_API_ORIGIN (https://api.elsewhere.test) is not in /app's connect-src in apps/site/vercel.json",
+    ]);
   });
 });
