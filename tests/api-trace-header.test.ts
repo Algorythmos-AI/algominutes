@@ -55,7 +55,8 @@ describe('the api answers with the traceId, readable cross-origin', () => {
   it("echoes the client's id, and exposes the header to the site", async () => {
     const res = await call({ Origin: 'https://algominutes.algorythmos.com', 'X-Trace-Id': 'web-trace-1' });
     expect(res.headers.get('x-trace-id')).toBe('web-trace-1');
-    expect(res.headers.get('access-control-expose-headers')).toMatch(/X-Trace-Id/i);
+    const exposed = (res.headers.get('access-control-expose-headers') ?? '').split(',').map((h) => h.trim().toLowerCase());
+    expect(exposed).toEqual(expect.arrayContaining(['x-trace-id', 'retry-after', 'content-disposition']));
   });
 
   it('names a fresh id when the client sent none', async () => {
