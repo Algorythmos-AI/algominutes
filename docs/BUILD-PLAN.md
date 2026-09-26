@@ -1,4 +1,4 @@
-# Claude Code — build **AlgoMinutes**
+# AlgoMinutes — build plan
 
 A general-purpose AI meeting recorder: **native iOS**, **native Android**, phones and tablets, plus a
 **React web app**. Published by **Algorythmos Pty Ltd**, built on the platform in `wasssup-meeting`.
@@ -49,7 +49,7 @@ The wordmark is **AlgoMinutes** — bicapitalised, one word, no space, no hyphen
 | **Bundle ID / applicationId** | **lowercase** | `com.algorythmos.algominutes` |
 | **Android package path** | **lowercase** | `com/algorythmos/algominutes/` |
 | **GitHub repo, npm packages, services, DB, buckets, queues** | **lowercase** | `algominutes`, `algominutes-transcoder` |
-| Domain | lowercase | `algominutes.com`, `api.algominutes.com` |
+| Domain | lowercase | `algominutes.algorythmos.com` (the site); the api keeps its `run.app` URLs through external beta (DECISIONS, 2026-09-26) |
 
 **Never put capitals in a bundle identifier, an Android package path, a repo name or an npm name.**
 `Algominutes` or `algoMinutes` in any user-visible string is a bug.
@@ -58,7 +58,7 @@ The wordmark is **AlgoMinutes** — bicapitalised, one word, no space, no hyphen
 
 | Surface | Stack | Role |
 |---|---|---|
-| **iOS** — iPhone + iPad | Native SwiftUI | Capture + review |
+| **iOS** — iPhone (iPad is A6.8, after 1.0) | Native SwiftUI | Capture + review |
 | **Android** — phone + tablet | Native Kotlin + Jetpack Compose | Capture + review |
 | **Web** | React 19 + Vite + Tailwind | Review, manage, pay. **Does not capture** |
 
@@ -351,7 +351,7 @@ Crashlytics script paths follow · `xcodegen generate`, clean build
 
 **Web / services** — `package.json` names → `algominutes`, `@algominutes/api` etc, real versions ·
 `index.html` title, `metadata.json`, `public/` manifest and icons · env var prefixes ·
-`ALLOWED_ORIGINS` and CORS → `algominutes.com`, `api.algominutes.com` · database name, buckets, queues,
+`ALLOWED_ORIGINS` and CORS → `https://algominutes.algorythmos.com` · database name, buckets, queues,
 cookie names, service names, analytics IDs
 
 ## A6 — Generalise the product
@@ -443,7 +443,7 @@ and a marketing page with store badges.
 ## A9 — Revenue layer *(nothing here exists in the source)*
 
 **A9.1 Plans and entitlements · P0.** `plans`, `subscriptions`, `usage_ledger` via migration. **Free**
-120 min/month · **Pro** ~A$19–29/mo, ~1,500 min · **Team** per-seat (**P2**). Config-driven limits.
+120 min/month · **Pro** A$14.99/mo or A$149.90/yr (DECISIONS A9.3), ~1,500 min · **Team** per-seat (**P2**). Config-driven limits.
 Entitlement checked **server-side** on every metered action; never trust the client.
 
 **A9.2 Metering · P0.** Meter minutes at ingest, **before transcode is queued** — rejecting over-quota
@@ -458,11 +458,11 @@ tier grows word of mouth and costs compute forever. Model both, recommend one, i
 
 **A9.4 Payments — dual rail, one entitlement · P0**, in `services/billing`.
 
-| Rail | Surface | Cut | Net on A$29 |
+| Rail | Surface | Cut | Net on A$14.99 |
 |---|---|---|---|
-| StoreKit 2 | iOS | 30%, **15% under Apple's Small Business Program** | ~A$24.65 |
-| Play Billing | Android | 30%, **15% on the first $1M** | ~A$24.65 |
-| Stripe | Web | ~2.9% + fixed fee | ~A$28.00 |
+| StoreKit 2 | iOS | 30%, **15% under Apple's Small Business Program** | ~A$12.74 |
+| Play Billing | Android | 30%, **15% on the first $1M** | ~A$12.74 |
+| Stripe | Web | ~2.9% + fixed fee | ~A$14.25 |
 
 **Enrol in both small-business programmes before the first sale** — the highest-leverage commercial
 action in this build. **One entitlement source of truth in Postgres**, keyed to the user, not the rail:
@@ -484,7 +484,8 @@ trial start, purchase, cancellation. Without the quota-hit → paywall-viewed fu
 this.
 
 **Before pricing is fixed · P0:** report a measured blended cost per minute across STT, Gemini and
-storage. A 1,500-minute tier at A$29 only works if that number is well under one cent.
+storage. A 1,500-minute tier at A$14.99 (about A$12.74 net after the 15% store cut) breaks even at
+about 0.85¢ a minute, so the blended cost must be well under that.
 
 ## A10 — Launch blockers
 
@@ -527,7 +528,8 @@ written statement of what is kept and where, and a local-storage purge policy af
 
 **Pipelines, path-filtered.** Per-service Cloud Run deploy on tag. iOS: build, sign, TestFlight
 (fastlane or Xcode Cloud). Android: build, sign, Play internal track. Web: static deploy. Secrets from
-CI, never the repo. Staging deploys on merge to `main`; production on tag.
+CI, never the repo. Staging deploys on every merge to `integration`; production deploys on a promotion
+PR `integration` → `main` (CLAUDE.md §4.7).
 
 **Versioning.** One scheme across all surfaces with a documented marketing-version → build-number
 mapping. `CURRENT_PROJECT_VERSION` is currently `14` — reset deliberately and record why. Since updates

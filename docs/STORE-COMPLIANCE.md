@@ -205,20 +205,22 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 
 ### 6.1 In-app deletion (iOS + Android + web)
 
-- Authenticated endpoint: **`services/api` `delete-account.cjs`** (`handleDeleteAccount`),
-  POST/DELETE, self-authenticating via `verifyIdToken`. Steps:
-  1. Find owned workspaces (Postgres `workspace_members` where `role = 'owner'`).
-  2. For each note in those workspaces, delete the Firestore doc at
-     `workspaces/{wsId}/notes/{noteId}` — which **fires the `onNoteDeleted` cascade**.
-  3. Remove the user from `workspace_members` (Postgres).
-  4. Delete the Postgres `users` row.
-  5. Delete the **Firebase Auth** user (last, so the token can't re-trigger anything).
-  - Idempotent: safe to re-run after a partial failure.
-- **`onNoteDeleted` cascade** (`functions/index.js`, Firestore trigger):
-  - **Cloud Storage:** best-effort delete of audio + scan images + intermediate FLAC
-    chunks under the note's prefix, with explicit logging (no silent catch).
-  - **Postgres:** `DELETE FROM notes` → `ON DELETE CASCADE` removes `transcript_lines`,
-    `embeddings`, `summaries`, `action_items`, `key_decisions`, `audio_chunks`.
+- Authenticated endpoint: **`services/api` `routes/delete-account.js`** (`POST|DELETE
+  /v1/account/delete`), self-authenticating via `verifyIdToken`. Postgres first, Auth last:
+  1. **Postgres, in one transaction:** a purge is queued for every note the account owns,
+     then the `users` row goes and `ON DELETE CASCADE` removes the rest (transcripts,
+     embeddings, summaries, action items, decisions, chunks). A tombstone
+     (`account_deletions`) records the owned workspaces. If this fails, nothing else
+     happens and the client retries.
+  2. **The purges:** each note's Firestore doc and audio.
+  3. **The account's own Firestore docs** (workspaces and their subcollections, analytics,
+     rate-limit counter), then any leftover uploads under its storage prefixes.
+  4. **The Firebase Auth user**, last; then the tombstone is marked complete.
+  - 200 only when everything is gone. Any failure in 2–4 answers 500 with Auth intact, so
+    the client retries; if it never does, the sweeper finishes from the tombstone. Every
+    step is idempotent.
+  - **Sign in with Apple:** the iOS app revokes the user's Apple token before deleting
+    (App Store 5.1.1(v); `AppleTokenRevocationTests`).
 - **Local device audio** is already purged after confirmed upload; on account deletion any
   remaining pending recordings are removed by `RecordingStore` (see DATA-RETENTION §5).
 - **Guest mode:** anonymous Firebase identities can delete the same way (uid-scoped);
@@ -226,13 +228,13 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 
 ### 6.2 Web-accessible deletion request page (Play requirement)
 
-- **URL:** `TODO(brand)` final domain — e.g. `https://algominutes.app/delete-account`
+- **URL:** `https://algominutes.algorythmos.com/delete-account` (the site, `apps/site`)
   (must be publicly reachable without installing the app; submit this exact URL in Play
   Console "Data deletion").
 - **What it does:** explains what deletion removes (recordings, transcripts, summaries,
   account) and the propagation window; offers (a) a **"Sign in and delete now"** button
   that calls the same `delete-account` endpoint, and (b) a fallback **email request**
-  (`TODO(brand)`: e.g. `privacy@algominutes.app`) for users who cannot sign in. State the
+  (`privacy@algorythmos.com`) for users who cannot sign in. State the
   backup-propagation window from `docs/DATA-RETENTION.md` (e.g. deleted within 30 days
   including backups).
 - `TODO(legal):` Confirm the page's stated retention/propagation window and that
@@ -243,7 +245,10 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 ## 7. Age ratings (deliberate recommendation)
 
 ### Apple
-- **Recommend: 4+**, *with* the honest content declarations. AlgoMinutes has no
+- Apple's age ratings are now **4+, 9+, 13+, 16+ and 18+** (the questionnaire changed in 2025).
+  **Provisional: 13+** (plan decision D8), matching the recording-consent posture and the Terms'
+  minimum age; `TODO(legal)` confirms it.
+- *Earlier recommendation, kept for its reasoning:* **4+**, *with* the honest content declarations. AlgoMinutes has no
   objectionable content of its own. However, it is a **UGC / recording** app: user-created
   recordings and AI-generated summaries are unmoderated user content.
 - `TODO(legal):` Confirm whether the App Store's UGC expectations (moderation, reporting,
@@ -286,7 +291,7 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 | Terms of Service + Privacy Policy drafting/review (§8) | `TODO(legal)` — **blocking** |
 | UGC/moderation applicability + final age rating (§7) | `TODO(legal)` — blocking rating submission |
 | MediaProjection justification vs current Play policy (§5) | `TODO(legal)` |
-| Add OtherUserContent / DeviceID / CrashData to `.xcprivacy` (§4.1) | Eng — blocking iOS submission |
+| ~~Add OtherUserContent / DeviceID / CrashData to `.xcprivacy` (§4.1)~~ | ✅ Declared in `PrivacyInfo.xcprivacy` |
 | DiskSpace API-reason verification (§4.1) | Eng |
-| Final deletion-page domain + support email (§6.2) | `TODO(brand)` — blocking Play submission |
+| ~~Final deletion-page domain + support email (§6.2)~~ | ✅ Decided 2026-09-26; the page ships with `apps/site` |
 | Confirm retention wording parity across plist/policy/page (§4.2, §6.2) | `TODO(legal)` |

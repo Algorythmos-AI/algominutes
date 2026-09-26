@@ -35,7 +35,8 @@ terraform apply tfplan     # prod: deletion_protection ON, Firestore location PE
 - **Web:** create a **prod** env file (e.g. `apps/web/.env.production` or the CI env for the prod deploy) —
   NOT the same `.env` staging uses. Populate the same 8 `VITE_*` names (see `apps/web/.env.example`) with
   the **prod** Web app's `firebase apps:sdkconfig web <APP_ID>` values. Set `VITE_API_BASE_URL` to the prod
-  API host (`https://api.algominutes.com/v1`) once the api service is deployed (A11).
+  API's `run.app` URL plus `/v1` once the api service is deployed (the api keeps its `run.app` URL
+  through external beta: DECISIONS, 2026-09-26).
 - Verify git-ignore before finishing: `git check-ignore -v apps/web/.env.production apps/android/app/google-services.json`.
 
 ## 4. Same checks as staging

@@ -48,13 +48,21 @@ node ../../../../scripts/check-tfplan-env.mjs /tmp/plan.json
 
 A plan is named after the commit it was made from (`reviewed-<sha>.tfplan`,
 git-ignored). A saved plan is self-contained: applying it applies *that* commit's
-config, whatever is checked out. So delete a plan once a newer one replaces it.
+config, whatever is checked out. So delete a plan once a newer one replaces it, and
+keep only one in the folder.
+
+A plan stays current while nothing Terraform reads has changed since its commit: everything
+under `infra/terraform` except its READMEs, and `firebase/firestore.rules`.
+Merges of app code or docs don't touch it, so `integration` moving on is fine.
 
 **Apply** (the owner), in the same sitting as the first deploy (§3):
 
 ```bash
 git fetch origin && git switch --detach origin/integration
-ls reviewed-*.tfplan; git rev-parse --short HEAD    # the plan's name must carry this sha
+ls reviewed-*.tfplan                         # one plan; its name carries its commit
+# Must print "plan is current". If it prints nothing, Terraform changed since: re-plan.
+git -C ../../../.. diff --quiet <sha> HEAD -- infra/terraform ':!infra/terraform/*.md' \
+  firebase/firestore.rules && echo "plan is current"
 terraform apply reviewed-<sha>.tfplan
 ```
 
@@ -79,7 +87,7 @@ Expected in the plan: `google_vpc_access_connector` **created** (deleted at
 pause); `google_sql_database_instance … activation_policy = "ALWAYS"`; the
 `google_cloud_run_v2_service` ×7, `google_cloud_run_v2_job.db_job`, the WIF
 pool/provider, the `gha-deployer` SA, and `google_billing_budget.env` all **created**.
-The plan of 2026-09-26 (`reviewed-361188d.tfplan`) is **93 to add, 9 to change, 0 to destroy**.
+The plan of 2026-09-26 is **93 to add, 9 to change, 0 to destroy**.
 The 9 changes are the five queues, the database's `activation_policy`, and three buckets'
 retention rules.
 

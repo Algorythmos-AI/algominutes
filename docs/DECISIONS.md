@@ -3,6 +3,35 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## TestFlight launch: domain, site, api URLs, analytics and paywall (2026-09-26)
+
+- **Domain: `algorythmos.com`.** The company owns it (Cloudflare DNS, Zoho mail, renews 2026-12-06).
+  `algominutes.com` isn't registered (Verisign: no match), and a URL baked into a shipped app, or an
+  origin that receives ID tokens, must be one we control. The public site is
+  `https://algominutes.algorythmos.com` (`/privacy`, `/terms`, `/support`, `/delete-account`); mail is
+  `support@` and `privacy@algorythmos.com`. Code reads the site from `PUBLIC_SITE_URL`
+  (`@algominutes/ai/site-url.cjs`), never a literal.
+- **The api keeps its Cloud Run `run.app` URLs through external beta.** Cloud Run domain mapping isn't
+  offered in australia-southeast1, and a global load balancer for a custom api domain costs about
+  US$18 a month. A custom api domain is settled in the App Store 1.0 plan, because the build that ships
+  there keeps its URL for good. Until prod's origins exist, a Release build is made to fail rather
+  than fall back to a guessed URL.
+- **Site host: Vercel.** Operating cost: Vercel's Hobby plan is for non-commercial use only, so a
+  company's product site belongs on **Pro, US$20 per member per month** (one member). The owner
+  confirms the plan when connecting the repo. The fallback is Cloudflare Pages ($0, on the DNS we
+  already run). The web app itself stays undeployed: it still calls the legacy `/api/*`.
+- **Analytics is declared, not denied.** The app sends product events to `/v1/events` (our own
+  table, no third-party SDK). They're linked to the account and never used for tracking or
+  advertising. The privacy manifest declares Product Interaction for Analytics, and the store copy
+  says "No ads. No tracking." It no longer says "no analytics".
+- **Paywall off for internal TestFlight** (`PAYWALL_ENABLED=NO`), with every billing surface hidden,
+  because the App Store products don't exist yet. Testers get minutes through the `entitlement_grants`
+  allowlist (tester uids never in git). For external beta it turns on only after sandbox purchase,
+  restore and renewal are proven on prod; until then the 7-day reverse trial plus a beta floor.
+- **iPhone only for the first releases** (`TARGETED_DEVICE_FAMILY` 1). iPad is A6.8, after 1.0, so the
+  listing carries no iPad screenshots and makes no iPad claim.
+- **YouTube import removed from iOS** (App Review 5.2.3: downloading a third party's media).
+
 ## Public services skip the invoker check instead of granting allUsers (2026-09-26, #169)
 
 - **Context.** api and billing are called without a Google identity: the app sends a Firebase ID

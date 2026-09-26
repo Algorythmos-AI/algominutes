@@ -43,12 +43,11 @@ separate entity. All AlgoMinutes assets, contracts and billing belong to the **P
 | Wordmark (all user-facing text) | **AlgoMinutes** |
 | iOS bundle ID | `com.algorythmos.algominutes` |
 | iOS broadcast extension | `com.algorythmos.algominutes.BroadcastExtension` |
-| iOS broadcast setup UI | `com.algorythmos.algominutes.BroadcastExtensionSetupUI` |
 | **App Group** ⚠️ | `group.com.algorythmos.algominutes` |
 | Android applicationId / package | `com.algorythmos.algominutes` |
 | Android package path | `com/algorythmos/algominutes/` |
-| Web domain | `algominutes.com` |
-| API domain | `api.algominutes.com` |
+| Public site | `algominutes.algorythmos.com` (privacy, terms, support, account deletion) |
+| API | the Cloud Run `run.app` URLs through external beta (DECISIONS, 2026-09-26) |
 | GCP region (all services, both envs) | `australia-southeast1` (Sydney) |
 
 **Casing rule:** `AlgoMinutes` in prose and display names. **lowercase** in every identifier —
@@ -236,7 +235,7 @@ project: `google-services.json`, `GoogleService-Info.plist`, web config.
 
 ⚠️ **Apple enrolment is the long pole.** It gates the Team ID, which gates the Apple half of A4, the
 iOS release, and App Store Connect. **Apply for the Small Business Program before the first sale** —
-worth roughly A$4.35 per subscriber per month at A$29.
+worth roughly A$2.25 per subscriber per month at A$14.99.
 
 ---
 
@@ -247,8 +246,7 @@ worth roughly A$4.35 per subscriber per month at A$29.
 | `algorythmos.com` | **Cloudflare** (DNS) | Primary — company site, GCP org identity |
 | `algorythmos.com.au` | Cloudflare | Secondary |
 | `algorythmos.fr` | Cloudflare | Secondary |
-| `algominutes.com` | `TODO — confirm registrar` | Product web app |
-| `algominutes.com.au` | `TODO — confirm registered` | Product, AU |
+| `algominutes.com`, `algominutes.com.au` | **Not registered** (checked 2026-09-26) | Nothing may point at them: the product lives under `algorythmos.com` |
 
 **Email: Zoho Mail** for all three `algorythmos` domains. MX, SPF, DKIM and DMARC configured and
 verified. Confirmed working — Google Cloud invitations to `gcp-admin@algorythmos.com` were delivered
