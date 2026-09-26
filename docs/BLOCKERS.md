@@ -1340,7 +1340,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - the sweeper's Scheduler job starts paused, and the deploy resumes it after the smoke;
     - `BROADCAST_CAPTURE` and an optional `ADMIN_UIDS` reach the api;
     - `prove-staging.sh` runs the suite at `PG_POOL_MAX=1`.
-- [x] **Re-planned:** the one `reviewed-<sha>.tfplan` in `infra/terraform/envs/staging` (93 add, 9 change,
+- [x] **Re-planned:** the one `reviewed-<sha>.tfplan` in `infra/terraform/envs/staging` (97 add, 9 change,
   0 destroy; re-made whenever Terraform changes). `check-tfplan-env.mjs` passes on it (9 services and jobs):
   - `invoker_iam_disabled` is set on api and billing only;
   - `ALLOWED_ORIGINS` is the public site;
