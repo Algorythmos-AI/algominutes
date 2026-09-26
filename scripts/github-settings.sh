@@ -33,7 +33,8 @@ APPLY=0
 
 # Exactly the check names the workflows report (verify with `gh pr checks <n>`).
 REQUIRED_CHECKS=(
-  "test" "integration" "web-build" "firestore-rules"       # ci
+  "test" "integration" "web-build" "site-build"            # ci
+  "firestore-rules"                                        # ci
   "ios-test"                                               # ios (skipped unless iOS changed)
   "analyze (swift)"                                        # codeql-swift (likewise)
   "check"                                                  # invariants

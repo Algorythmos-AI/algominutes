@@ -8,9 +8,9 @@ import Foundation
 /// A version bump requires re-acceptance (see `AppEnvironment.recordTermsAcceptanceIfNeeded`).
 enum ComplianceContract {
     /// Bump when the Terms document changes. Mirrors `TERMS_VERSION`.
-    static let termsVersion = "2026-08-16"
+    static let termsVersion = "2026-09-26"
     /// Bump when the Privacy Policy changes. Mirrors `PRIVACY_VERSION`.
-    static let privacyVersion = "2026-08-16"
+    static let privacyVersion = "2026-09-26"
 
     /// User-selectable note-retention windows, in days. Mirrors
     /// `RETENTION_OPTIONS_DAYS`. `nil` (a separate option in the UI) means
