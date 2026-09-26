@@ -116,6 +116,7 @@ struct BootstrapSplash: View {
 
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(DeepLinkRouter.self) private var deepLinkRouter
     @State private var selectedTab = 0
 
     init() {
@@ -150,5 +151,8 @@ struct MainTabView: View {
                 .tag(2)
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
+        // A tapped push (or an algominutes://note link) opens its note on Home,
+        // whichever tab the user was on: HomeView does the navigation.
+        .onChange(of: deepLinkRouter.arrivals) { selectedTab = 0 }
     }
 }
