@@ -1,0 +1,17 @@
+# What testers should try in the next build: plain text, shown at the top of
+# TestFlight's What to Test. Lines starting with # are left out. Update it in
+# the PR that goes into the build; keep it short. The recent changes and the
+# commit are added automatically (ci_scripts/what-to-test.sh).
+Thanks for testing AlgoMinutes. First, open the app (you start as a guest, no
+sign-up), go to Settings, copy your User ID and send it to whoever invited
+you. Recording minutes are switched on by hand in this beta.
+
+Then please try:
+1. Record a meeting of a minute or two, stop, and wait for the note. You can
+   leave the app; a notification says when the note is ready.
+2. Open the note: read the summary, the action items and the transcript.
+3. Search for a word you said, and ask the note a question in chat.
+4. Settings, then Create account, to keep your notes with Apple or Google.
+
+This is a test environment: record only people who agreed, and nothing
+confidential.
