@@ -192,6 +192,16 @@ describe('the Firebase auth proxy', () => {
     }
   });
 
+  it("the app's share viewer leaks its token nowhere: no Referer, no cache, no index", () => {
+    for (const p of ['/app/s/tok', '/app/s']) {
+      const h = headersFor(config, p);
+      expect(h['Referrer-Policy'], p).toBe('no-referrer');
+      expect(h['Cache-Control'], p).toBe('no-store');
+      expect(h['X-Robots-Tag'], p).toMatch(/noindex/);
+    }
+    expect(headersFor(config, '/app/settings')['Referrer-Policy']).not.toBe('no-referrer');
+  });
+
   it('the app lets its sign-in popups talk back; the public pages stay same-origin', () => {
     expect(headersFor(config, '/app')['Cross-Origin-Opener-Policy']).toBe('same-origin-allow-popups');
     expect(headersFor(config, '/app/notes/1')['Cross-Origin-Opener-Policy']).toBe('same-origin-allow-popups');

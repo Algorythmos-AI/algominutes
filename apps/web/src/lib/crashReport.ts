@@ -28,6 +28,15 @@ function endpoint(): string | null {
   }
 }
 
+/**
+ * The page path as a report may carry it: a share link's token is the
+ * credential to that note, so `/s/<token>` is sent as `/s/:token` (the server
+ * only ever stores and logs its hash).
+ */
+export function reportablePath(pathname: string): string {
+  return pathname.replace(/(^|\/)s\/[^/]+/, '$1s/:token');
+}
+
 export function reportCrash(kind: string, error: unknown, extra?: { componentStack?: string; source?: string }): void {
   // A crash loop must not turn into a request loop.
   if (sent >= MAX_PER_SESSION) return;
@@ -43,7 +52,7 @@ export function reportCrash(kind: string, error: unknown, extra?: { componentSta
     message: truncate(err?.message ?? error, 500),
     // Enough to identify the frame; not enough to be a payload.
     stack: truncate(err?.stack, 2000),
-    url: truncate(typeof location !== 'undefined' ? location.pathname : '', 200),
+    url: truncate(typeof location !== 'undefined' ? reportablePath(location.pathname) : '', 200),
     userAgent: truncate(typeof navigator !== 'undefined' ? navigator.userAgent : '', 300),
     ...(extra?.componentStack ? { componentStack: truncate(extra.componentStack, 2000) } : {}),
     ...(extra?.source ? { source: truncate(extra.source, 200) } : {}),
