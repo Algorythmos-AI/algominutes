@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
 import * as repo from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, noticeKinds } from './helpers';
 
 // A poll task that decides a chunk can't be transcribed (its speech job
 // errored, or the poll budget ran out) fails the chunk and its note in one
@@ -99,7 +99,8 @@ describe('a Google chunk poll that fails its chunk', () => {
     expect(await noteStatus()).toBe('error');
     expect(mirrored.map((m) => m.status)).toEqual(['error']);
     expect(r.hooks).toHaveLength(1);
-    expect(r.hooks[0]).toMatchObject({ deadLetterOnly: false, notify: true, payload: { reason: 'stt_operation_errored', chunkId: c1 } });
+    expect(r.hooks[0]).toMatchObject({ deadLetterOnly: false, payload: { reason: 'stt_operation_errored', chunkId: c1 } });
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it("a second chunk failing the same note: its chunk is marked, no second notice, and the first failure's message stays", async () => {
@@ -109,7 +110,8 @@ describe('a Google chunk poll that fails its chunk', () => {
     await second.done;
     expect(await chunkStatus(c2)).toBe('error');
     expect(await noteStatus()).toBe('error');
-    expect(second.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
+    expect(second.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']); // the first chunk's, and no second
     expect((await pool.query(`SELECT error_message FROM notes WHERE id = 'n1'`)).rows[0].error_message)
       .toBe('Transcription failed for part of this recording.');
     expect(mirrored.map((m) => m.errorMessage)).toEqual([
@@ -144,7 +146,9 @@ describe('a Google chunk poll that fails its chunk', () => {
     const retry = run(c1);
     await retry.done;
     expect(mirrored.map((m) => m.status)).toEqual(['error']);
-    expect(retry.hooks.map((h) => [h.deadLetterOnly, h.notify, h.payload.reason])).toEqual([[false, false, 'chunk_already_failed']]);
+    expect(retry.hooks.map((h) => [h.deadLetterOnly, h.payload.reason])).toEqual([[false, 'chunk_already_failed']]);
+    // The notice was written by the commit that died; the retry adds none.
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('two chunks failing at the same moment: one new failure between them', async () => {
@@ -174,7 +178,8 @@ describe('a Google chunk poll that fails its chunk', () => {
       blocker.release();
     }
     await Promise.all([a!.done, b!.done]);
-    expect([...a.hooks, ...b.hooks].map((h) => h.notify).sort()).toEqual([false, true]);
+    // One notice between them: the second read the first's 'error'.
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
     expect([...a.hooks, ...b.hooks].map((h) => h.deadLetterOnly)).toEqual([false, false]);
     expect([await chunkStatus(c1), await chunkStatus(c2)]).toEqual(['error', 'error']);
   });
@@ -252,7 +257,8 @@ describe('a Google chunk poll that fails its chunk', () => {
     expect(await chunkStatus(c1)).toBe('error');
     expect(await noteStatus()).toBe('error');
     expect(r.hooks).toHaveLength(1);
-    expect(r.hooks[0]).toMatchObject({ deadLetterOnly: false, notify: true, payload: { reason: 'stt_poll_exhausted', polls: MAX_STT_POLLS } });
+    expect(r.hooks[0]).toMatchObject({ deadLetterOnly: false, payload: { reason: 'stt_poll_exhausted', polls: MAX_STT_POLLS } });
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('a note that is ready anyway: left ready, its chunk untouched, the dead letter only', async () => {
@@ -293,7 +299,8 @@ describe('a Google chunk poll that fails its chunk', () => {
       await retry.done;
       expect(await chunkStatus(c1)).toBe('error');
       expect(await noteStatus()).toBe('error');
-      expect(retry.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, true]]);
+      expect(retry.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+      expect(await noticeKinds('n1')).toEqual(['note_failed']);
     });
   }
 });
@@ -309,12 +316,14 @@ describe('a whole-file (AssemblyAI) poll that fails its chunk', () => {
     await first.done;
     expect(await chunkStatus(c1)).toBe('error');
     expect(await noteStatus()).toBe('error');
-    expect(first.hooks.map((h) => [h.notify, h.payload.reason])).toEqual([[true, 'stt_operation_errored']]);
+    expect(first.hooks.map((h) => h.payload.reason)).toEqual(['stt_operation_errored']);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
 
     const second = run(c2);
     await second.done;
     expect(await chunkStatus(c2)).toBe('error');
-    expect(second.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
+    expect(second.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('the poll budget ran out: chunk and note fail together, as stt_poll_exhausted', async () => {
@@ -323,12 +332,14 @@ describe('a whole-file (AssemblyAI) poll that fails its chunk', () => {
     await first.done;
     expect(await chunkStatus(c1)).toBe('error');
     expect(await noteStatus()).toBe('error');
-    expect(first.hooks.map((h) => [h.notify, h.payload.reason])).toEqual([[true, 'stt_poll_exhausted']]);
+    expect(first.hooks.map((h) => h.payload.reason)).toEqual(['stt_poll_exhausted']);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
 
     const second = run(c2, { poll: MAX_STT_POLLS });
     await second.done;
     expect(await chunkStatus(c2)).toBe('error');
-    expect(second.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
+    expect(second.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('Postgres misses the chunk write: the note is left in progress for the retry', async () => {
@@ -338,7 +349,8 @@ describe('a whole-file (AssemblyAI) poll that fails its chunk', () => {
     expect(await noteStatus()).toBe('transcribing');
     const retry = run(c1);
     await retry.done;
-    expect(retry.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, true]]);
+    expect(retry.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 });
 

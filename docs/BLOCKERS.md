@@ -1010,7 +1010,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 - ~~**A crash after the commit loses the refund**~~ **fixed (refund-in-failure-tx PR):** the
                   refund commits with the failure on every path. What a crash after the commit still loses
                   outside the poll terminals (the kickoff's YouTube and unreadable-length failures, the
-                  spend cap, each worker's last attempt) is the dead letter and the notice.
+                  spend cap, each worker's last attempt) is the dead letter. (~~and the notice~~: the
+                  notices outbox, below.)
                 - ~~**A failed regeneration refunds the whole recording**~~ **fixed
                   (regeneration-failure-keeps-charge PR):** the summarizer's last attempt refunds only a
                   pipeline summary's failure; a regeneration's (its task carries `summaryGeneration`) is
@@ -1023,8 +1024,16 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 - When Postgres errors, the mirror writes the caller's message while Postgres keeps the
                   first; mirror repair compares status only, so they don't converge.
                 - A re-drive's dead letter says `chunk_already_failed`, not the original reason.
-                - A crash between the commit and the notice loses the push (the in-app status is right).
-                  A deterministic notify task name would let every terminal path enqueue it.
+                - ~~A crash between the commit and the notice loses the push~~ **fixed (notices-outbox PR,
+                  migration 022):** the transaction that makes a note ready or failed writes its notice
+                  (`note_notices`, one per note, run, summary generation and kind), and enqueues it after the
+                  commit as a task named after the notice. The notifier claims the notice before sending and
+                  marks it sent, so a replayed or duplicated task sends nothing; the sweep re-enqueues a
+                  notice still unsent after 5 minutes (under its recording's traceId) and gives up after a
+                  day, logged `notice_abandoned`. Tested on Postgres (`note-notices.test.ts`: a crash after
+                  the commit, a duplicate and a concurrent delivery, a failed send, a deleted note, a re-run,
+                  a regeneration); 13 mutations checked. Found on the way and fixed with it: the fast path
+                  (every recording under 10 minutes) never sent a "ready" push at all.
                 - A re-driven poll records its dead letter again (the dedupe item below).
                 - ~~A poll from a run that was just re-queued can fail the new run~~ and ~~a second poll
                   chain can turn a `done` chunk into `error`~~ **fixed (poll-failure-locks-chunk-first
@@ -1038,9 +1047,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   drops the chunk, job and reason~~ **fixed (poll-last-attempt-keeps-chunk PR):** its chunk
                   fails with the note (a well-formed id only), and the dead letter keeps the chunk, job and
                   poll count.
-                - The summarizer's "No speech was found" failure has no notice or dead letter (its refund
-                  is fixed by the refund-in-failure-tx PR), and the sweep's `refund:stuck` path never
-                  notifies.
+                - ~~The summarizer's "No speech was found" failure has no notice, and the sweep's
+                  `refund:stuck` path never notifies~~ **fixed (notices-outbox PR):** both write their
+                  "failed" notice with the failure (`markNoteFailed`, `failStuckNote`). No dead letter for
+                  "no speech", on purpose: nothing was lost, the recording had no words, and the notice
+                  tells the user so.
             - ~~The web watchdog (`App.tsx`) still writes `error` straight to Firestore from the browser
               while Postgres may be in flight~~ **fixed (web-watchdog-reports-slow PR):** as on iOS
               (#124), a note the server owns is reported slow ("Taking longer than usual"), never
@@ -1215,7 +1226,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       (metering-per-run PR)**, with the refund keys.
     - ~~The workers' last-attempt path runs the refund and notice even when `markNoteFailed` matched
       nothing~~ **fixed (final-attempt-hooks PR).**
-    - The dead-letter insert and the notify task aren't deduplicated.
+    - The dead-letter insert isn't deduplicated. (~~The notify task~~ is, by the notices outbox: one
+      notice per outcome, one task per notice, and the notifier sends each once.)
 
 ## Embedder: batches and retries (plan rev 8, PR-14, 2026-09-25)
 

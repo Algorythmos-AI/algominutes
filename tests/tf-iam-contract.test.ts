@@ -15,6 +15,10 @@ const saOf: Record<string, string> = Object.fromEntries(
   Object.entries(entries(mapBody(cloudRun, 'service_config'))).map(([svc, cfg]) => [svc, /sa\s*=\s*"([\w-]+)"/.exec(cfg)![1]]),
 );
 saOf['db-job'] = /resource "google_cloud_run_v2_job" "db_job"[\s\S]*?service_account\s*=\s*google_service_account\.runtime\["([\w-]+)"\]/.exec(cloudRun)![1];
+// The sweep runs the db-job image under its own account (scheduler.tf), so the
+// db-job code must be allowed under that account too.
+const scheduler = stripComments(read(`${MODULE}/scheduler.tf`));
+saOf['db-sweep'] = /resource "google_cloud_run_v2_job" "db_sweep"[\s\S]*?service_account\s*=\s*google_service_account\.runtime\["([\w-]+)"\]/.exec(scheduler)![1];
 
 /** runtime service account → project roles, from sa_project_roles. */
 const rolesOf: Record<string, string[]> = Object.fromEntries(
@@ -32,16 +36,21 @@ const actAsJobs = JSON.parse(
 const uses = {
   vertex: /aiplatform\.googleapis\.com|gemini-call|embeddings-repo|ai\/embeddings|@google-cloud\/vertexai|@google-cloud\/aiplatform/,
   speech: /speech\.googleapis\.com|@google-cloud\/speech/,
-  tasks: /cloud-tasks\.cjs|@google-cloud\/tasks/,
+  // The repo functions that finish a note enqueue its notice (note-notices.cjs),
+  // so calling one is enqueuing too.
+  tasks: /cloud-tasks\.cjs|@google-cloud\/tasks|notify\.cjs|markNoteFailed|markSummaryReady|persistFastPathResult|failStuckNote/,
   signing: /getSignedUrl\(/,
 };
 
 const services = Object.keys(saOf);
-const code = Object.fromEntries(services.map((s) => [s, srcText(`services/${s}/src`)]));
+// db-sweep runs only the sweep handler (JOB_NAME=sweep), not db-job's others (vertex-smoke).
+const code = Object.fromEntries(
+  services.map((s) => [s, s === 'db-sweep' ? read('services/db-job/src/handlers/sweep.js') : srcText(`services/${s}/src`)]),
+);
 
 describe('every service can do what its code does', () => {
   it('reads a runtime account and its roles for every service', () => {
-    expect(services.sort()).toEqual(['api', 'billing', 'db-job', 'embedder', 'extractor', 'notifier', 'summarizer', 'transcoder']);
+    expect(services.sort()).toEqual(['api', 'billing', 'db-job', 'db-sweep', 'embedder', 'extractor', 'notifier', 'summarizer', 'transcoder']);
     for (const s of services) expect(rolesOf[saOf[s]], `${s} (${saOf[s]}) has no sa_project_roles entry`).toBeDefined();
   });
 

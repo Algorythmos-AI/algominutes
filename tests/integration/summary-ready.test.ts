@@ -52,7 +52,7 @@ const input = (over: Record<string, unknown> = {}) => ({
 describe('markSummaryReady (summarizer final write)', () => {
   it('writes the summary, marks ready, clears the edit/regenerate flags, then mirrors', async () => {
     const { fs, writes } = fsStub();
-    expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: true });
+    expect(await markSummaryReady(fs, input(), quietLog)).toEqual({ written: true, notice: expect.objectContaining({ kind: 'note_ready', noteId: 'note-a', uid: 'alice' }) });
     const { rows } = await pool.query(
       `SELECT status, summary_manually_edited_at, summary_requested_at FROM notes WHERE id = 'note-a'`,
     );
@@ -132,7 +132,7 @@ describe('markSummaryReady (summarizer final write)', () => {
     expect(await markSummaryReady(fs, input({ expectedGeneration: 0 }), quietLog)).toEqual({ written: false, reason: 'superseded' });
     await expectUntouched(writes);
     // ...and the run that owns generation 1 still lands.
-    expect(await markSummaryReady(fs, input({ expectedGeneration: 1 }), quietLog)).toEqual({ written: true });
+    expect(await markSummaryReady(fs, input({ expectedGeneration: 1 }), quietLog)).toEqual({ written: true, notice: expect.objectContaining({ kind: 'note_ready', noteId: 'note-a', uid: 'alice' }) });
   });
 
   // Deleted (POST /v1/notes/delete) between this write's commit and its

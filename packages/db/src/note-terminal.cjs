@@ -1,6 +1,12 @@
 'use strict';
 
+const { randomUUID } = require('node:crypto');
 const { reverseNoteUsage } = require('./ledger-reversal.cjs');
+
+// Loaded when first needed, so a caller can inject its own (tests).
+function defaultEnqueueNotice(args) {
+  return require('@algominutes/ai/notify.cjs').enqueueNotice(args);
+}
 
 /**
  * Terminal failure state for a note — written to BOTH stores.
@@ -66,12 +72,17 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  * - `superseded`: with `chunkId`, the chunk was gone or done, so nothing was
  *   done: the run this verdict belonged to is over. `exists` is false then,
  *   so a caller's tail treats it as gone.
+ * - `notice`: the "failed" notice this write recorded (note-notices.cjs), for a
+ *   new failure only. It's written in the failure's own statement, and its
+ *   notify task is enqueued after the commit (`enqueueNotice`), so no caller
+ *   can forget to tell the author and a crash in between can't lose it (the
+ *   sweep re-enqueues a notice left unsent). `traceId` is the recording's.
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null, traceId = null, enqueueNotice = defaultEnqueueNotice }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false };
+    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false, notice: null };
   }
 
   let pgOk = false;
@@ -82,6 +93,10 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let refunded = false;
   let minutesReversed = 0;
   let superseded = false;
+  let notice = null;
+  // The recording's traceId, into the notice row and its task. Minted only if
+  // a caller had none, before the write, so the row and the task agree.
+  const trace = traceId || randomUUID();
   try {
     const client = await pool.connect();
     try {
@@ -90,7 +105,8 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       // UPDATE replaces, locked, so of two failures at once the second reads
       // the first's 'error'. With `chunkId`, the chunk's error is written in
       // the same statement, and only if the note's was: a poll's retry finds
-      // both or neither, and a note this doesn't fail keeps its chunk.
+      // both or neither, and a note this doesn't fail keeps its chunk. A new
+      // failure's notice is written by the same statement.
       const failNote = () => client.query(
         `WITH p AS (
            SELECT id, status AS prev_status FROM notes
@@ -103,12 +119,20 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
              FROM p
             WHERE n.id = p.id AND n.status <> 'ready'
               AND ($4::text[] IS NULL OR n.status = ANY($4::text[]))
-            RETURNING n.id, p.prev_status, n.error_message
+            RETURNING n.id, p.prev_status, n.error_message, n.workspace_id, n.author_uid, n.run_seq, n.summary_generation
          ), chunk AS (
            UPDATE audio_chunks c SET status = 'error' FROM upd WHERE c.id = $5 AND c.note_id = upd.id
+         ), notice AS (
+           INSERT INTO note_notices (note_id, workspace_id, uid, run_seq, generation, kind, trace_id)
+             SELECT id, workspace_id, author_uid, run_seq, summary_generation, 'note_failed', $6 FROM upd
+              WHERE prev_status IS DISTINCT FROM 'error'
+           ON CONFLICT (note_id, run_seq, generation, kind) DO NOTHING
+           RETURNING id, uid
          )
-         SELECT prev_status, error_message FROM upd`,
-        [noteId, message, workspaceId, onlyIfStatus, chunkId],
+         SELECT prev_status, error_message, (SELECT id FROM notice) AS notice_id,
+                (SELECT uid FROM notice) AS notice_uid
+           FROM upd`,
+        [noteId, message, workspaceId, onlyIfStatus, chunkId, trace],
       );
       let rows = [];
       if (!refund && !chunkId) {
@@ -161,6 +185,9 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       pgOk = rows.length > 0;
       prevStatus = pgOk ? rows[0].prev_status : null;
       if (pgOk && rows[0].error_message) storedMessage = rows[0].error_message;
+      if (pgOk && rows[0].notice_id != null) {
+        notice = { id: String(rows[0].notice_id), noteId, workspaceId, uid: rows[0].notice_uid, kind: 'note_failed' };
+      }
       exists = pgOk;
       if (superseded) {
         log.info({ noteId, workspaceId, chunkId }, `${name}_superseded`);
@@ -181,6 +208,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
     }
   } catch (err) {
     pgErrored = true;
+    notice = null;
     log.error({ err, noteId, workspaceId }, `${name}_pg_failed`);
     if (retryOnPgError) throw err;
   }
@@ -234,7 +262,15 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   if (refund && pgOk) {
     log.info({ noteId, workspaceId, applied: refunded, minutesReversed, reason: refund.reason }, 'usage_refunded');
   }
-  return { failed, marked: pgOk, pgErrored, exists, refunded, superseded };
+  if (notice) {
+    if (!traceId) {
+      log.warn({ traceId: trace, userId: notice.uid, noteId, workspaceId, noticeId: notice.id }, `${name}_notice_without_trace`);
+    }
+    // After the commit and the mirror. Never throws; one left unsent is the
+    // sweep's to re-enqueue.
+    await enqueueNotice({ notice, traceId: trace, log });
+  }
+  return { failed, marked: pgOk, pgErrored, exists, refunded, superseded, notice };
 }
 
 module.exports = { markNoteFailed, isFinalAttempt };

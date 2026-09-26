@@ -63,7 +63,7 @@ function fmtTime(ms) {
  * record the failure must not mask the original error. The one exception is
  * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
     firestore: firestore(),
@@ -71,6 +71,7 @@ async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgErro
     event: 'summarizer_mark_failed',
     retryOnPgError,
     refund,
+    traceId,
   });
 }
 
@@ -125,9 +126,11 @@ async function handle(payload, deps) {
     // Refunded with the failure: the recording gave the user nothing. Not a
     // regeneration's (its task carries summaryGeneration): that charge stands.
     const regeneration = summaryGeneration !== undefined && summaryGeneration !== null;
+    // The "failed" notice is written with the failure, so the author hears.
     await markNoteFailed({
       noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
       refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
+      traceId,
     });
     return;
   }
@@ -239,6 +242,7 @@ async function handle(payload, deps) {
     transcriptPreview: redacted.slice(0, 200),
     transcriptTruncated: redacted.length > 200,
     expectedGeneration: Number(noteRow.summary_generation),
+    traceId,
   }, log);
   if (!result.written) {
     // Nothing was written anywhere, and there's nobody to notify: the note was
@@ -250,15 +254,10 @@ async function handle(payload, deps) {
     return;
   }
 
-  log.info({ noteId, model, lines: lines.length }, 'summarizer_complete');
-
-  // A7.3: the summarizer is the last pipeline stage — the note is now `ready`.
-  // Notify the author (best-effort; a failed notify never rolls back the summary
-  // that just landed). uid is read from the note's author_uid via the same pool.
-  // Idempotency: a replayed task is already gated upstream (generation/ordering
-  // guard + empty-transcript check), so reaching here means this run produced
-  // the ready state; a duplicate push is cheap and harmless.
-  await terminalHooks.onReady({ pool: pool(), noteId, workspaceId, traceId, log });
+  // A7.3: the note is `ready`, and markSummaryReady wrote its "ready" notice in
+  // the same transaction and enqueued it (note-notices.cjs): once per summary,
+  // so a replay of this task tells nobody twice.
+  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null }, 'summarizer_complete');
 }
 
 module.exports = { handle, markNoteFailed, pool };

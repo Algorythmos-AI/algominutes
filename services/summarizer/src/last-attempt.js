@@ -5,8 +5,8 @@ const { summaryRefund } = require('./terminal-hooks');
 // The queue's last attempt at a summary that kept throwing: fail the note
 // (Postgres first), then dead-letter the job, refund the note's minutes and
 // tell its author. The refund runs for any note Postgres has failed, in the
-// failure's own transaction (net-guarded); the notice only for a new failure,
-// so the author is told once.
+// failure's own transaction (net-guarded); the "failed" notice is written by
+// that same write, for a new failure only, so the author is told once.
 // A note that is ready anyway (the attempt threw after markSummaryReady
 // committed) gets the dead letter alone, as does one Postgres couldn't be
 // asked about. A note that is gone gets nothing.
@@ -24,6 +24,7 @@ async function onLastAttempt({ body, headers, err, markNoteFailed, terminalHooks
     message: 'We could not write a summary for this recording.',
     log,
     refund: regeneration ? null : summaryRefund(noteId),
+    traceId,
   });
   const deadLetterOnly = !marked;
   if (deadLetterOnly && !(exists || pgErrored)) {
@@ -44,7 +45,6 @@ async function onLastAttempt({ body, headers, err, markNoteFailed, terminalHooks
     payload: { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration },
     log,
     deadLetterOnly,
-    notify: failed,
   });
   return { failed };
 }

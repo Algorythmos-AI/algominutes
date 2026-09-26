@@ -50,6 +50,8 @@ async function enqueueTask({
   // Optional deterministic task id: a second create with the same id (a replay,
   // or a duplicate chain) is dropped by Cloud Tasks, and treated here as done.
   taskId,
+  // Called when that happens, for a caller that reports it differently.
+  onExisting,
   client = getClient(),
 }) {
   if (!projectId || !location || !queue || !targetUrl || !oidcServiceAccount) {
@@ -94,6 +96,7 @@ async function enqueueTask({
     // the last hour or so. It is the same work, so the duplicate is dropped.
     if (task.name && (err?.code === 6 || /ALREADY_EXISTS/.test(String(err?.message)))) {
       if (log) log.info({ kind: payload && payload.kind, name: task.name, queue, traceId }, 'task_already_exists');
+      if (typeof onExisting === 'function') onExisting();
       return task.name;
     }
     throw err;

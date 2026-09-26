@@ -84,6 +84,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     })),
     summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
     model,
+    traceId: deps && deps.traceId,
   }, log);
 
   // Postgres now holds the result and 'ready'. A retry of this task would find

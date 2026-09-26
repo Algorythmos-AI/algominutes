@@ -17,7 +17,7 @@ async function spendGate(body, { db, mirror, log, traceId, terminalHooks, noteTe
     markFailed: () => noteTerminal.markNoteFailed({
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: spendGuard.SPEND_CAP_MESSAGE, log, event: 'spend_cap_note_failed',
-      retryOnPgError: true, onlyIfStatus: ['queued'],
+      retryOnPgError: true, onlyIfStatus: ['queued'], traceId,
       // Written with the failure; labelled so it reads as the cap's.
       refund: transcodeRefund(noteId, 'refund:spend_cap'),
     }),

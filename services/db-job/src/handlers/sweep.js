@@ -35,6 +35,13 @@
 //   9. mirror_repair     a note Postgres finished 10-40 minutes ago whose doc
 //                        disagrees (a mirror write lost after its commit) is
 //                        brought in line (packages/db mirror-repair.ts).
+//  10. notices           a "ready" or "failed" notice still unsent after
+//                        NOTICE_RETRY_AFTER_S (a crash between its commit and
+//                        the enqueue, or a notify task out of attempts) is
+//                        enqueued again under its recording's traceId; the task
+//                        name drops it if the first task is still live. After
+//                        NOTICE_MAX_AGE_H it's given up and logged. Notices done
+//                        with for TOMBSTONE_DAYS are pruned.
 
 'use strict';
 
@@ -42,6 +49,7 @@
 // their own (see run's `repo` / `noteTerminal`), so it's required lazily.
 const loadRepo = () => require('@algominutes/db');
 const loadNoteTerminal = () => require('@algominutes/db/note-terminal.cjs');
+const loadNotify = () => require('@algominutes/ai/notify.cjs');
 
 const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000; // notes-repo IN_FLIGHT_STALE_MS (asserted equal in tests)
 const PURGE_GRACE_MS = 5 * 60 * 1000; // the api runs a new purge inline; leave it that long
@@ -53,6 +61,8 @@ const USAGE_EVENTS_DAYS = 90;
 const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
 const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
 const MIRROR_REPAIR_LIMIT = 200;
+const NOTICE_RETRY_AFTER_S = 5 * 60; // the writer's own enqueue goes first
+const NOTICE_MAX_AGE_H = 24; // a push about yesterday's recording helps nobody
 const LOCK_KEY = 'algominutes:sweep';
 
 function firebaseDeps(env) {
@@ -75,7 +85,7 @@ async function openLockClient() {
 
 async function run({
   log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal(),
-  connectLockClient = null,
+  connectLockClient = null, notify = loadNotify(),
 }) {
   const deps = injected || firebaseDeps(env);
   const {
@@ -83,6 +93,7 @@ async function run({
     recordDeadLetter, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
+    listUnsentNotices, abandonStaleNotices, pruneOldNotices,
   } = repo;
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
@@ -182,8 +193,10 @@ async function run({
             workspaceId: n.workspaceId,
             olderThanMs: STUCK_NOTE_MS,
             message: 'Processing took too long and was stopped. Please try again.',
-            // Written in the failure's transaction, under the note's row lock.
+            // Written in the failure's transaction, under the note's row lock,
+            // with the "failed" notice (enqueued after the commit).
             refund: { reason: 'refund:stuck', idempotencyKey: `${n.noteId}:refund:stuck` },
+            traceId,
           }, noteLog);
         } catch (err) {
           // One note's failure (its refund included) mustn't stop the batch;
@@ -234,6 +247,30 @@ async function run({
       return repaired;
     });
 
+    await step('notices', async () => {
+      let enqueued = 0;
+      let failedEnqueues = 0;
+      const unsent = await listUnsentNotices({ minAgeSeconds: NOTICE_RETRY_AFTER_S, maxAgeHours: NOTICE_MAX_AGE_H, limit: 200 });
+      for (const n of unsent) {
+        // Under the recording's traceId, so the retry traces back to it, and
+        // with this run's, so the run's own lines find it too.
+        const noticeLog = n.traceId ? log.child({ traceId: n.traceId, sweepTraceId: traceId }) : log;
+        const outcome = await notify.enqueueNotice({ notice: n, traceId: n.traceId || traceId, log: noticeLog });
+        if (outcome === 'enqueued') enqueued += 1;
+        else if (outcome === 'failed') failedEnqueues += 1;
+      }
+      const abandoned = await abandonStaleNotices({ maxAgeHours: NOTICE_MAX_AGE_H });
+      for (const n of abandoned) {
+        log.error({
+          noticeId: n.id, noteId: n.noteId, workspaceId: n.workspaceId, userId: n.uid, kind: n.kind,
+          ...(n.traceId ? { traceId: n.traceId } : {}),
+        }, 'notice_abandoned');
+      }
+      const pruned = await pruneOldNotices({ olderThanDays: TOMBSTONE_DAYS });
+      if (failedEnqueues) throw new Error(`${failedEnqueues} notice enqueue(s) failed`);
+      return { enqueued, abandoned: abandoned.length, pruned };
+    });
+
     await step('upload_sessions', () => deleteExpiredUploadSessions(now));
 
     await step('account_deletions', async () => {
@@ -268,4 +305,4 @@ async function run({
   }
 }
 
-module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS };
+module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS, NOTICE_RETRY_AFTER_S, NOTICE_MAX_AGE_H };

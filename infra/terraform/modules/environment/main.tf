@@ -476,12 +476,14 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
-      "roles/aiplatform.user", # vertex-smoke (deploy preflight), eval-recall
+      "roles/aiplatform.user",     # vertex-smoke (deploy preflight), eval-recall
+      "roles/cloudtasks.enqueuer", # the sweep's notices step, when run by hand as db-job
     ])
     "run-sweep" = concat(local.common_roles, [
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
+      "roles/cloudtasks.enqueuer", # re-enqueues notices left unsent (note_notices)
       # + a custom role for firebaseauth.users.delete, and objectAdmin on the
       # recordings bucket only (scheduler.tf)
     ])
