@@ -8,6 +8,10 @@ export function recorderEnv(): RecorderEnv {
   env ??= {
     store: new RecordingStore(),
     getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
+    capture: {
+      getDisplayMedia: (c) => navigator.mediaDevices.getDisplayMedia(c),
+      getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
+    },
   };
   return env;
 }

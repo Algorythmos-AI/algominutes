@@ -15,6 +15,7 @@ import { RecordPage, type RecorderEnv } from './RecordPage';
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   cleanup();
   localStorage.clear();
 });
@@ -22,7 +23,7 @@ afterEach(() => {
 const SESSION = { uploadId: 'u1', sessionUri: 'https://storage.googleapis.com/s', storagePath: 'recordings/workspace_u1/x.webm', chunkSize: 8388608, expiresAt: '2026-10-03T00:00:00Z' };
 const ENT = { state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 1, remainingMinutes: 59, overQuota: false };
 
-function setup(over: Partial<RecorderEnv> = {}, routes: Record<string, () => Response> = {}) {
+function setup(over: Partial<RecorderEnv> = {}, config = { broadcastCapture: false }, routes: Record<string, () => Response> = {}) {
   const store = new RecordingStore(new IDBFactory());
   const mic = fakeStream();
   const { stream, stopped } = mic;
@@ -33,6 +34,7 @@ function setup(over: Partial<RecorderEnv> = {}, routes: Record<string, () => Res
     const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
     if (routes[path]) return routes[path]();
     if (path === '/v1/entitlement') return json(ENT);
+    if (path === '/v1/config') return json(config);
     if (path === '/v1/uploads') return json(SESSION);
     if (path === '/v1/uploads/u1/complete') return json({ uploadId: 'u1', storagePath: SESSION.storagePath, complete: true });
     if (path === '/v1/process') return json({ success: true, noteId: 'n', jobId: 'j', status: 'queued' }, 202);
@@ -151,6 +153,76 @@ describe('recording in the browser', () => {
     await waitFor(() => expect(screen.queryByText('A recording wasn’t uploaded')).toBeNull());
     expect(await store.list('u1')).toEqual([]);
   });
+
+  describe('a call in another tab', () => {
+    const track = () => Object.assign(new EventTarget(), { kind: 'audio', stop: vi.fn() });
+    const captureEnv = () => {
+      const tab = track();
+      const mixed = { getTracks: () => [track()] } as unknown as MediaStream;
+      class Ctx { createMediaStreamDestination() { return { stream: mixed }; } createMediaStreamSource() { return { connect() {} }; } async close() {} }
+      vi.stubGlobal('MediaStream', class { constructor(readonly tracks: unknown[]) {} });
+      return {
+        tab,
+        capture: {
+          getDisplayMedia: vi.fn(async () => ({ getTracks: () => [tab], getAudioTracks: () => [tab] }) as unknown as MediaStream),
+          getUserMedia: vi.fn(async () => { const m = track(); return { getTracks: () => [m], getAudioTracks: () => [m] } as unknown as MediaStream; }),
+          AudioContext: Ctx as unknown as typeof AudioContext,
+        },
+      };
+    };
+
+    it('is offered only where the browser can and the switch is on', async () => {
+      const { capture } = captureEnv();
+      setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: false });
+      await screen.findByRole('checkbox');
+      expect(screen.queryByLabelText('A call in another tab, with my microphone')).toBeNull();
+      cleanup();
+      setup({ capture, canCaptureCalls: () => false }, { broadcastCapture: true });
+      await screen.findByRole('checkbox');
+      expect(screen.queryByLabelText('A call in another tab, with my microphone')).toBeNull();
+    });
+
+    it("needs everyone's agreement too, records the call with the microphone, and the browser's Stop sharing saves it", async () => {
+      const { capture, tab } = captureEnv();
+      setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: true });
+      fireEvent.click(await screen.findByLabelText('A call in another tab, with my microphone'));
+      fireEvent.click(screen.getByLabelText(/I have permission from anyone/));
+      expect((screen.getByRole('button', { name: 'Tick the box to start' }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(screen.getByLabelText('Everyone on the call has agreed to be recorded.'));
+      fireEvent.click(screen.getByRole('button', { name: 'Choose the call’s tab' }));
+      expect(await screen.findByText('● RECORDING')).toBeTruthy();
+      expect(capture.getDisplayMedia).toHaveBeenCalledTimes(1);
+      FakeRecorder.last!.emit('call audio');
+      tab.dispatchEvent(new Event('ended'));
+      expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    });
+
+    it('Stop sharing pressed while the recording starts still ends and saves it', async () => {
+      const { capture, tab } = captureEnv();
+      const { store } = setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: true });
+      const create = store.create.bind(store);
+      store.create = async (m) => {
+        tab.dispatchEvent(new Event('ended'));
+        return create(m);
+      };
+      fireEvent.click(await screen.findByLabelText('A call in another tab, with my microphone'));
+      fireEvent.click(screen.getByLabelText(/I have permission from anyone/));
+      fireEvent.click(screen.getByLabelText('Everyone on the call has agreed to be recorded.'));
+      fireEvent.click(screen.getByRole('button', { name: 'Choose the call’s tab' }));
+      expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    });
+
+    it('a share without the tab’s sound says how to share it', async () => {
+      const { capture } = captureEnv();
+      capture.getDisplayMedia.mockResolvedValueOnce({ getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream);
+      setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: true });
+      fireEvent.click(await screen.findByLabelText('A call in another tab, with my microphone'));
+      fireEvent.click(screen.getByLabelText(/I have permission from anyone/));
+      fireEvent.click(screen.getByLabelText('Everyone on the call has agreed to be recorded.'));
+      fireEvent.click(screen.getByRole('button', { name: 'Choose the call’s tab' }));
+      expect((await screen.findByRole('alert')).textContent).toMatch(/Also share tab audio/);
+    });
+  });
 });
 
 const begin = async () => {
@@ -208,7 +280,7 @@ describe('recording, when things go wrong', () => {
 
   it("a kickoff that fails after the upload is retried on the same note, never uploaded again", async () => {
     let refuse = true;
-    const { store, calls, writer } = setup({}, { '/v1/process': () => (refuse ? new Response('{"error":"internal"}', { status: 500 }) : new Response(JSON.stringify({ success: true, noteId: 'n', jobId: 'j', status: 'queued' }), { status: 202 })) });
+    const { store, calls, writer } = setup({}, undefined, { '/v1/process': () => (refuse ? new Response('{"error":"internal"}', { status: 500 }) : new Response(JSON.stringify({ success: true, noteId: 'n', jobId: 'j', status: 'queued' }), { status: 202 })) });
     await begin();
     fireEvent.click(screen.getByRole('button', { name: 'Stop and save' }));
     expect((await screen.findByRole('alert')).textContent).toMatch(/still saved in this browser/);
