@@ -145,4 +145,8 @@ describe.runIf(APP)('the web app at /app (staging shape)', () => {
     }
     expect(html).not.toMatch(/<style|\sstyle=|<script(?![^>]*\ssrc=)/i);
   });
+
+  it("asks for its manifest with cookies, so staging's Vercel Authentication lets it through", () => {
+    expect(html).toMatch(/<link rel="manifest" href="\/app\/manifest\.webmanifest" crossorigin="use-credentials"/);
+  });
 });
