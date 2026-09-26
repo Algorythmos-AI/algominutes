@@ -53,6 +53,8 @@ export function buildCorsMiddleware() {
     // Authorization + Content-Type as before, plus the new required client
     // version header and a trace header so preflight does not strip them.
     allowedHeaders: ['Authorization', 'Content-Type', 'X-AlgoMinutes-Client', 'X-Trace-Id'],
+    // The web app reads each answer's traceId (trace.js) to quote it on a failure.
+    exposedHeaders: ['X-Trace-Id'],
     maxAge: 3600,
     credentials: false,
   });
