@@ -3,6 +3,31 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The web app is rebuilt on a clean shell at /app, not split in place (2026-09-26, plan W1)
+
+- **Context.** `apps/web` was a Capacitor-era app in one 2,865-line `App.tsx`. It calls seven `/api/*` routes
+  the api no longer serves, never sends `X-AlgoMinutes-Client`, writes Firestore directly, had no router, no
+  tests and no React types (JSX was untyped). It was never deployed, and nothing in it works against today's
+  backend.
+- **Decision.** W1 deletes `App.tsx` and the four `pages/*` (the public site serves Privacy, Terms and
+  deletion now). It mounts a small, typed shell: React Router 8 (`basename: '/app'`), a layout, and
+  placeholder routes. Each feature is then rebuilt against `/v1` with tests (plan W2–W11), porting what's
+  worth keeping from `components/` and `lib/`, and deleting each legacy file as its feature lands. Git
+  history keeps the old app.
+- **Guard rails.**
+  - New code is lint-clean, with errors; legacy code is capped at today's 46 warnings, which can only
+    go down.
+  - `@types/react` is on, so JSX is typed.
+  - `apps/web` has vitest (jsdom) in CI.
+- **Hosting.**
+  - Vite `base: '/app/'`. `scripts/build-site.mjs` composes the build into the site's `dist/app` only
+    when `APP_ENABLED=true` (Vercel Preview, i.e. staging); Production keeps the "coming soon"
+    placeholder until the launch.
+  - `/app` has its own CSP (still `'self'`-only in W1; W2 and W3 add the api, billing and Firebase
+    origins, each deliberately).
+  - The CSP is enforced from the start rather than Report-Only: there's no report endpoint, and the
+    browser tests fail on any violation.
+
 ## The public site: apps/site, Astro on Vercel, one origin (2026-09-26)
 
 - **What.** `apps/site`, a static Astro site with no client JavaScript, at `algominutes.algorythmos.com`:

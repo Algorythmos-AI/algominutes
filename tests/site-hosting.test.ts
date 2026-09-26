@@ -39,6 +39,28 @@ describe('security headers', () => {
     expect(policy).not.toMatch(/unsafe-inline|unsafe-eval|\*/);
   });
 
+  it('every path gets exactly one CSP and one Permissions-Policy: the strict one, or the app\'s under /app', () => {
+    const setters = (p: string, key: string) =>
+      config.headers.filter((r: { source: string; headers: { key: string }[] }) => sourceRegex(r.source).test(p) && r.headers.some((h) => h.key === key));
+    for (const p of ['/', '/privacy', '/application', '/apps', '/s/abc', '/billing', '/app', '/app/', '/app/notes/1', '/app/assets/x.js']) {
+      expect(setters(p, 'Content-Security-Policy'), p).toHaveLength(1);
+      expect(setters(p, 'Permissions-Policy'), p).toHaveLength(1);
+    }
+    for (const p of ['/application', '/apps', '/privacy']) expect(csp(p), p).toBe(csp('/'));
+    for (const p of ['/app', '/app/notes/1']) expect(csp(p), p).not.toBe(csp('/'));
+  });
+
+  it("the app's CSP: self-hosted script only, no inline or eval, no framing", () => {
+    const policy = csp('/app/notes/1');
+    const directives = Object.fromEntries(policy.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+    expect(directives['script-src']).toEqual(["'self'"]);
+    expect(directives['style-src']).toEqual(["'self'"]);
+    expect(directives['object-src']).toEqual(["'none'"]);
+    expect(directives['frame-ancestors']).toEqual(["'none'"]);
+    expect(directives['base-uri']).toEqual(["'self'"]);
+    expect(policy).not.toMatch(/unsafe-inline|unsafe-eval|\*/);
+  });
+
   it('share links are never indexed, cached, or leaked in a Referer', () => {
     for (const p of ['/s', '/s/abc', '/s/a/b']) {
       const h = headersFor(config, p);
@@ -59,6 +81,8 @@ describe('security headers', () => {
 
   it('hashed assets are cached for a year; pages are not', () => {
     expect(headersFor(config, '/_astro/Base.abc.css')['Cache-Control']).toMatch(/max-age=31536000, immutable/);
+    expect(headersFor(config, '/app/assets/index-abc.js')['Cache-Control']).toMatch(/max-age=31536000, immutable/);
+    expect(headersFor(config, '/app')['Cache-Control']).toBeUndefined();
     expect(headersFor(config, '/privacy')['Cache-Control']).toBeUndefined();
   });
 });
@@ -102,6 +126,11 @@ describe('path resolution (cleanUrls, rewrites, 404)', () => {
     expect(served('/s/a/b')).toBe('200 s.html');
     expect(served('/app/notes/1')).toBe('200 app.html');
     expect(served('/app')).toBe('200 app.html');
+  });
+
+  it("a missing hashed asset is a 404, never the app's HTML (which the year-long asset cache would then keep)", () => {
+    expect(served('/app/assets/index-oldhash.js')).toBe('404 404.html');
+    expect(served('/app/assetsx')).toBe('200 app.html');
   });
 
   it('anything else is the 404 page, with a 404', () => {

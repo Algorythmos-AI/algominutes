@@ -10,7 +10,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "validate": "html-validate \"dist/**/*.html\""
+    "validate": "html-validate \"dist/**/*.html\"",
+    "build:vercel": "node ../../scripts/build-site.mjs"
   },
   "dependencies": {
     "@algominutes/contracts": "*",
