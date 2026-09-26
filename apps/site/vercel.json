@@ -6,8 +6,8 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/s/:token*", "destination": "/s.html" },
-    { "source": "/app/:path*", "destination": "/app.html" }
+    { "source": "/s/:token*", "destination": "/s" },
+    { "source": "/app/:path*", "destination": "/app" }
   ],
   "headers": [
     {

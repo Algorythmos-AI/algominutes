@@ -52,7 +52,7 @@ describe('security headers', () => {
     for (const p of ['/app', '/app/notes/1', '/billing', '/billing/success', '/billing/cancel']) {
       expect(headersFor(config, p)['X-Robots-Tag'], p).toBe('noindex, nofollow');
     }
-    for (const p of ['/', '/privacy', '/terms', '/support', '/delete-account', '/sitemap', '/apple-touch-icon.png', '/security']) {
+    for (const p of ['/', '/privacy', '/terms', '/support', '/delete-account', '/sitemap.xml', '/robots.txt', '/.well-known/security.txt', '/apple-touch-icon.png']) {
       expect(headersFor(config, p)['X-Robots-Tag'], p).toBeUndefined();
     }
   });
@@ -86,6 +86,15 @@ describe('path resolution (cleanUrls, rewrites, 404)', () => {
     expect(served('/privacy.html')).toBe('→ /privacy');
     expect(served('/index.html')).toBe('→ /');
     expect(served('/privacy/')).toBe('→ /privacy');
+    expect(served('/index')).toBe('→ /');
+    expect(served('/billing/success.html')).toBe('→ /billing/success');
+  });
+
+  it('a rewrite to a .html path is refused: with cleanUrls, Vercel serves s.html only at /s', () => {
+    const broken = { ...config, rewrites: [{ source: '/s/:token*', destination: '/s.html' }] };
+    expect(() => resolve(broken, dist, '/s/tok')).toThrow(/use \/s$/);
+    const missing = { ...config, rewrites: [{ source: '/s/:token*', destination: '/share' }] };
+    expect(() => resolve(missing, dist, '/s/tok')).toThrow(/doesn't serve/);
   });
 
   it('every share link and every /app path reaches its placeholder', () => {

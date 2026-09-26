@@ -56,43 +56,60 @@ export function headersFor(config, pathname) {
 }
 
 /**
- * What Vercel does with `pathname`: { redirect } or { file, status }.
- * Filesystem first (with cleanUrls), then rewrites, then the 404 page.
+ * The deployed filesystem: request path → file. With cleanUrls, Vercel serves
+ * `x.html` only at `/x` (and `index.html` at `/`), so `/x.html` is not a path
+ * a rewrite can reach (vercel/vercel builder-orchestration writeStaticFile).
  */
-export function resolve(config, dist, pathname) {
-  const exists = (p) => {
-    const full = path.join(dist, p);
-    return full.startsWith(dist) && fs.existsSync(full) && fs.statSync(full).isFile() ? full : null;
-  };
-  if (config.cleanUrls && pathname.endsWith('.html')) {
-    const clean = pathname.replace(/(\/index)?\.html$/, '') || '/';
-    return { redirect: clean };
+export function servedPaths(config, dist) {
+  const out = new Map();
+  for (const rel of fs.readdirSync(dist, { recursive: true })) {
+    const file = path.join(dist, rel);
+    if (!fs.statSync(file).isFile()) continue;
+    let route = `/${String(rel).split(path.sep).join('/')}`;
+    if (config.cleanUrls && route.endsWith('.html')) route = route.slice(0, -5).replace(/(^|\/)index$/, '') || '/';
+    out.set(route, file);
+  }
+  return out;
+}
+
+/**
+ * What Vercel does with `pathname`: { redirect } or { file, status }. The order
+ * is @vercel/routing-utils': the cleanUrls and trailingSlash redirects (which
+ * end routing, so they carry none of the custom headers), then the filesystem,
+ * then rewrites, then the 404 page.
+ */
+export function resolve(config, dist, pathname, served = servedPaths(config, dist)) {
+  if (config.cleanUrls) {
+    const index = /^\/(?:(.+)\/)?index(?:\.html)?\/?$/.exec(pathname);
+    if (index) return { redirect: `/${index[1] ?? ''}` };
+    const html = /^\/(.*)\.html\/?$/.exec(pathname);
+    if (html) return { redirect: `/${html[1]}` };
   }
   if (config.trailingSlash === false && pathname.length > 1 && pathname.endsWith('/')) {
     return { redirect: pathname.replace(/\/+$/, '') };
   }
-  const direct = pathname === '/' ? exists('index.html') : exists(pathname) || (config.cleanUrls && exists(`${pathname}.html`));
-  if (direct) return { file: direct, status: 200 };
+  if (served.has(pathname)) return { file: served.get(pathname), status: 200 };
   for (const rule of config.rewrites || []) {
-    if (sourceRegex(rule.source).test(pathname)) {
-      const file = exists(rule.destination);
-      if (!file) throw new Error(`serve-site: rewrite ${rule.source} → ${rule.destination}, which isn't in dist`);
-      return { file, status: 200 };
+    if (!sourceRegex(rule.source).test(pathname)) continue;
+    if (config.cleanUrls && rule.destination.endsWith('.html')) {
+      throw new Error(`serve-site: rewrite ${rule.source} → ${rule.destination}: with cleanUrls on, Vercel serves no .html path; use ${rule.destination.slice(0, -5)}`);
     }
+    if (!served.has(rule.destination)) throw new Error(`serve-site: rewrite ${rule.source} → ${rule.destination}, which the deployment doesn't serve`);
+    return { file: served.get(rule.destination), status: 200 };
   }
-  return { file: exists('404.html'), status: 404 };
+  return { file: served.get(config.cleanUrls ? '/404' : '/404.html') ?? null, status: 404 };
 }
 
 export function createServer({ config = loadConfig(), dist = path.join(SITE, config.outputDirectory || 'dist') } = {}) {
   return http.createServer((req, res) => {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    const headers = headersFor(config, pathname);
     const r = resolve(config, dist, pathname);
     if (r.redirect) {
-      res.writeHead(308, { ...headers, Location: r.redirect });
+      res.writeHead(308, { Location: r.redirect });
       res.end();
       return;
     }
+    const headers = headersFor(config, pathname);
     if (!r.file) {
       res.writeHead(404, { ...headers, 'Content-Type': 'text/plain' });
       res.end('not found');

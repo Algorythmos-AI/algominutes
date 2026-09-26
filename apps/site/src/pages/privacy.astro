@@ -40,7 +40,8 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
     <h3>Your recordings and notes</h3>
     <p>
       The audio you record or import, and what AlgoMinutes makes from it: transcripts, summaries, action items,
-      decisions, chapters, speaker names you add, the search index, and the questions you ask about your notes.
+      decisions, chapters, speaker names you add, and the search index. The questions you ask about your notes are
+      processed to answer them, and aren't saved to your account.
       Text you scan from a document or photo is used to create a note the same way. Your recordings contain the
       voices of the people you record; see <a href="#others">People you record</a>.
     </p>
@@ -60,8 +61,8 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
     </p>
     <h3>Subscriptions</h3>
     <p>
-      When subscriptions go on sale, your plan and its status. Apple handles payment in the App Store; we never
-      receive your card details. Nothing is sold during the beta.
+      When subscriptions go on sale, your plan and its status. Apple handles payment in the App Store, and Stripe on
+      the web; we never receive your card details. Nothing is sold during the beta.
     </p>
 
     <h2 id="use">How we use it</h2>
@@ -80,8 +81,9 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
     <h2 id="ai">AI processing</h2>
     <p>
       AlgoMinutes uses Google Cloud's speech and AI models to transcribe and summarise your recordings. Card numbers and
-      similar identifiers are removed from transcript text before it goes to an AI model. The models process your
-      content only to produce your results. We don't use your content to train AI models, and our providers' terms
+      similar identifiers are removed from transcripts before they're stored, and from transcript text before it's sent
+      to an AI model to summarise, search or answer a question. Audio is sent as recorded: for a short recording, the
+      model transcribes the audio itself. The models process your content only to produce your results. We don't use your content to train AI models, and our providers' terms
       don't allow them to use it to train theirs. AI output can be wrong: check anything important against the
       recording.
     </p>

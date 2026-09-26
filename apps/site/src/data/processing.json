@@ -48,7 +48,7 @@
       "id": "vertex-ai",
       "service": "Vertex AI: Gemini models and text embeddings (Google Cloud)",
       "purpose": "Writing summaries, action items and decisions; transcribing short recordings; answering questions about your notes; building the search index.",
-      "data": "Your transcripts, and the audio of short recordings. Card numbers and similar identifiers are removed from transcript text before it's sent.",
+      "data": "Your transcripts, and the audio of short recordings. Card numbers and similar identifiers are removed from transcript text before it's sent; audio is sent as recorded.",
       "region": "australia-southeast1",
       "where": "Sydney, Australia"
     },
@@ -87,10 +87,18 @@
     {
       "id": "apple-app-store",
       "service": "Apple App Store",
-      "purpose": "Handling subscriptions, when they go on sale (they aren't sold during the beta).",
+      "purpose": "Handling subscriptions bought in the app, when they go on sale (nothing is sold during the beta).",
       "data": "Your subscription status. Apple handles payment; we never see your card.",
       "region": "global",
       "where": "Apple's infrastructure"
+    },
+    {
+      "id": "stripe",
+      "service": "Stripe",
+      "purpose": "Handling subscriptions bought on the web, when they go on sale (nothing is sold during the beta).",
+      "data": "Your account ID and plan, and the email address and card you give Stripe at checkout. Stripe takes the payment; we never see your card.",
+      "region": "global",
+      "where": "Stripe's infrastructure, which may be outside Australia"
     }
   ]
 }

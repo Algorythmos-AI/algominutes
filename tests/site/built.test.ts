@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // @ts-expect-error: a plain .mjs script, no types
 import { loadConfig, resolve } from '../../scripts/serve-site.mjs';
-import { PUBLIC_PAGES, DISALLOWED } from '../../apps/site/src/lib/public-pages';
+import { PUBLIC_PAGES } from '../../apps/site/src/lib/public-pages';
 
 // The built site (apps/site/dist), resolved as Vercel serves it
 // (scripts/serve-site.mjs): every page the apps, server and stores link to
@@ -99,9 +99,9 @@ describe('robots.txt, sitemap.xml, security.txt', () => {
     expect(locs).toEqual(PUBLIC_PAGES.map((p) => `${SITE}${p}`));
   });
 
-  it('robots.txt keeps the app, share links and billing out, and points at the sitemap', () => {
+  it('robots.txt disallows nothing (so crawlers see the noindex), and points at the sitemap', () => {
     const robots = read('robots.txt');
-    for (const p of DISALLOWED) expect(robots).toContain(`Disallow: ${p}`);
+    expect(robots).not.toMatch(/^Disallow:/m);
     expect(robots).toContain(`Sitemap: ${SITE}/sitemap.xml`);
   });
 

@@ -33,11 +33,12 @@ const subject = encodeURIComponent('Delete my AlgoMinutes account');
     <h2 id="what">What's deleted</h2>
     <ul>
       <li>Every recording, transcript, summary, action item, decision and chapter.</li>
-      <li>Your search index and chat history.</li>
+      <li>Your search index.</li>
       <li>Your account, settings, product events, support messages and device push tokens.</li>
     </ul>
     <p>
       Everything is deleted from our live systems at once, and from our backups within {facts.backupWindowDays} days.
+      Server logs that mention your account's ID expire within {facts.logRetentionDays} days.
       We keep a record that the account was deleted (its IDs, with no content) for 30 days, so it can't be recreated
       by mistake, and payment records for as long as tax law requires once subscriptions are sold.
     </p>

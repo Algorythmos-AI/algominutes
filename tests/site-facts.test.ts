@@ -33,7 +33,8 @@ describe('where data is processed', () => {
   });
 
   it('Vertex AI (Gemini, embeddings) is called in that region', () => {
-    expect(cloudRun).toMatch(/AIPLATFORM_LOCATION\s*=\s*var\.region/);
+    // One assignment, to the region: a per-service override merged later would move Gemini.
+    expect([...cloudRun.matchAll(/AIPLATFORM_LOCATION\s*=\s*([^\s,}]+)/g)].map((m) => m[1])).toEqual(['var.region']);
     expect(byId['vertex-ai'].region).toBe(regionDefault);
   });
 
@@ -63,6 +64,12 @@ describe('where data is processed', () => {
     expect(Number(/retained_backups\s*=\s*(\d+)/.exec(main)![1])).toBeLessThanOrEqual(processing.backupWindowDays);
     expect(variables).toMatch(/noncurrent_version_retention_days <= 30/);
     expect(read('docs/DATA-RETENTION.md')).toMatch(/within 30 days of deletion/);
+  });
+
+  it('Stripe is disclosed while billing takes web payments through it', () => {
+    const usesStripe = /require\(['"]stripe['"]\)|from ['"]stripe['"]/.test(fs.readdirSync('services/billing/src', { recursive: true })
+      .filter((f) => /\.(c?js|ts)$/.test(String(f))).map((f) => read(`services/billing/src/${f}`)).join('\n'));
+    expect('stripe' in byId).toBe(usesStripe);
   });
 
   it('Crashlytics is disclosed exactly when the app links it', () => {
