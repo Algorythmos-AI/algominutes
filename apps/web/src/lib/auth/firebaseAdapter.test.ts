@@ -13,6 +13,9 @@ const m = vi.hoisted(() => ({
   onIdTokenChanged: vi.fn(),
   signOut: vi.fn(),
   credentialFromError: vi.fn(),
+  credentialFromResult: vi.fn(),
+  reauthenticateWithPopup: vi.fn(),
+  revokeAccessToken: vi.fn(),
 }));
 
 vi.mock('firebase/auth', () => {
@@ -23,8 +26,9 @@ vi.mock('firebase/auth', () => {
     constructor(public providerId: string) {}
     addScope() {}
     static credentialFromError = m.credentialFromError;
+    static credentialFromResult = m.credentialFromResult;
   }
-  const fns = Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'credentialFromError'));
+  const fns = Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'credentialFromError' && k !== 'credentialFromResult'));
   return { ...fns, GoogleAuthProvider, OAuthProvider };
 });
 vi.mock('../../firebase', () => ({ firebase: () => ({ auth: {} }) }));
@@ -88,11 +92,23 @@ describe('firebaseAdapter', () => {
   it('follows the ID token, so a guest who links an account stops being a guest at once', () => {
     const cb = vi.fn();
     m.onIdTokenChanged.mockImplementation((_a, listener: (u: unknown) => void) => {
-      listener({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null });
+      listener({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null, providerData: [{ providerId: 'google.com' }] });
       return () => {};
     });
     firebaseAdapter({} as never).onChange(cb);
     expect(m.onIdTokenChanged).toHaveBeenCalledTimes(1);
-    expect(cb).toHaveBeenCalledWith({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null });
+    expect(cb).toHaveBeenCalledWith({ uid: 'g', isAnonymous: false, email: 'e@x.test', displayName: null, providers: ['google.com'] });
+  });
+
+  it("before deleting, revokes the app's Apple token after signing in with Apple again (App Store 5.1.1(v))", async () => {
+    const auth = { currentUser: { uid: 'u' } };
+    m.reauthenticateWithPopup.mockResolvedValueOnce({ r: 1 });
+    m.credentialFromResult.mockReturnValueOnce({ accessToken: 'apple-token' });
+    expect(await firebaseAdapter(auth as never).revokeApple()).toBe(true);
+    expect(m.reauthenticateWithPopup.mock.calls[0][1]).toMatchObject({ providerId: 'apple.com' });
+    expect(m.revokeAccessToken).toHaveBeenCalledWith(auth, 'apple-token');
+
+    m.reauthenticateWithPopup.mockRejectedValueOnce(err('auth/popup-closed-by-user'));
+    expect(await firebaseAdapter(auth as never).revokeApple()).toBe(false);
   });
 });

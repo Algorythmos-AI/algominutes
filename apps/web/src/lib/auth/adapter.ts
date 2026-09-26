@@ -8,6 +8,8 @@ export interface AuthUser {
   isAnonymous: boolean;
   email: string | null;
   displayName: string | null;
+  /** Sign-in providers linked to the account ('apple.com', 'google.com'); empty for a guest. */
+  providers?: string[];
 }
 
 /** A guest's link attempt. `conflict`: that Apple or Google account is already a separate AlgoMinutes account. */
@@ -25,6 +27,12 @@ export interface AuthAdapter {
   linkGuest(provider: Provider): Promise<LinkResult>;
   signOut(): Promise<void>;
   idToken(forceRefresh: boolean): Promise<string | null>;
+  /**
+   * Before deleting an account linked to Apple: sign in with Apple again and
+   * revoke the app's Apple token (App Store 5.1.1(v)), as iOS does. Resolves
+   * false when the user closed the Apple window.
+   */
+  revokeApple(): Promise<boolean>;
 }
 
 /** Firebase auth error codes that mean "a popup can't work here; use a redirect". */

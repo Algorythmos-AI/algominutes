@@ -73,3 +73,23 @@ export function signInErrorMessage(err: unknown, provider: 'apple' | 'google' | 
       return `${label} sign-in didn't complete. Please try again.`;
   }
 }
+
+/**
+ * Why confirming with Apple before deleting the account failed, as a sentence,
+ * or null for anything else (the caller's generic message). The popup is the
+ * only way: a redirect would leave the page mid-delete.
+ */
+export function revokeAppleErrorMessage(err: unknown): string | null {
+  switch (codeOf(err)) {
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Apple window. Allow pop-ups for this site, then try again.';
+    case 'auth/operation-not-supported-in-this-environment':
+      return 'This browser can’t open the Apple window. Try another browser, or delete your account in the iOS app.';
+    case 'auth/user-mismatch':
+      return 'That Apple ID isn’t the one this account uses. Try again with the Apple ID you signed up with.';
+    case 'auth/network-request-failed':
+      return 'Confirming with Apple failed because of a network problem. Check your connection and try again.';
+    default:
+      return null;
+  }
+}
