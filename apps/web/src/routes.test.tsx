@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
-import { BASENAME, routes } from './routes';
+import { cleanup, screen } from '@testing-library/react';
+import { fakeAuth, PERMANENT } from './test/fakeAuth';
+import { renderApp } from './test/renderApp';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
-const at = (path: string) => {
-  const router = createMemoryRouter(routes, { basename: BASENAME, initialEntries: [path] });
-  render(<RouterProvider router={router} />);
-  return router;
-};
+const at = (path: string) => renderApp(path, fakeAuth(PERMANENT).adapter);
 
 describe('routes under /app', () => {
   it.each([

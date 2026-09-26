@@ -39,6 +39,47 @@ install at the monorepo root (npm workspaces), production branch `main`.
 4. **A new processor, region or provider:** change `processing.json` in the same PR as the code.
    `site-facts` fails when the code and the policy disagree.
 
+## The web app at /app (staging now, Production at the launch)
+
+`scripts/build-site.mjs` builds the web app into the site only when `APP_ENABLED=true`. It refuses to build it
+without every value below, or when `vercel.json` would block them: the api and billing origins must be in `/app`'s
+`connect-src`, and a `/__/auth` rewrite must lead to the project's `firebaseapp.com`.
+
+Vercel → algominutes-site → Settings → Environment Variables, **Preview**, each scoped to the **`integration`
+branch** only (so PR previews keep the placeholder and never build the app):
+
+| Variable | Staging value |
+|---|---|
+| `APP_ENABLED` | `true` |
+| `VITE_API_ORIGIN` | `https://api-627101926311.australia-southeast1.run.app` |
+| `VITE_BILLING_ORIGIN` | `https://billing-627101926311.australia-southeast1.run.app` |
+| `VITE_FIREBASE_PROJECT_ID` | `algominutes-staging` |
+| `VITE_FIREBASE_APP_ID` | `1:627101926311:web:3b656d832081e12b19ac82` ("AlgoMinutes Web") |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | `627101926311` |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `staging.algominutes.algorythmos.com` (where `/__/auth` is proxied) |
+| `VITE_FIREBASE_API_KEY` | **owner:** the "AlgoMinutes Web" app's key (Firebase → Project settings → Your apps) |
+
+Production gets none of these until the launch (plan Phase 3), so it keeps the "coming soon" page.
+
+**Sign-in on the site's own origin.** `/__/auth/*` and `/__/firebase/*` on `staging.algominutes.algorythmos.com`
+are proxied to `algominutes-staging.firebaseapp.com`, so the Firebase popup and iframe are same-origin. Those
+paths keep Firebase's own headers: no site CSP, no `X-Frame-Options`, no COOP. `/app` sends
+`Cross-Origin-Opener-Policy: same-origin-allow-popups` so the Google and Apple popups can report back.
+
+**Owner, once, in the consoles** (security settings, so they're yours):
+
+1. Firebase → Authentication → Settings → **Authorized domains**: add `staging.algominutes.algorythmos.com`
+   (and `algominutes.algorythmos.com` at the launch).
+2. Google Cloud → APIs & Services → Credentials → the **OAuth 2.0 Web client** Firebase created: add
+   `https://staging.algominutes.algorythmos.com/__/auth/handler` to **Authorized redirect URIs** and
+   `https://staging.algominutes.algorythmos.com` to **Authorized JavaScript origins**.
+3. Apple Developer → Identifiers → Services ID `com.algorythmos.algominutes.signin` → Sign in with Apple →
+   Configure: add the domain `staging.algominutes.algorythmos.com` and the return URL
+   `https://staging.algominutes.algorythmos.com/__/auth/handler`.
+4. Google Cloud → Credentials → the **Browser key**: set its website restrictions to
+   `https://staging.algominutes.algorythmos.com/*` and `https://algominutes.algorythmos.com/*` (it allows
+   `algominutes.com`, which we don't own, today).
+
 ## DNS (Cloudflare, zone `algorythmos.com`)
 
 Two records, both **DNS only** (grey cloud), like the zone's other Vercel records. Vercel issues the certificates.

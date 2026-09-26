@@ -79,11 +79,12 @@ describe.each(PAGES)('%s', (route) => {
 });
 
 describe.runIf(APP)('the web app in the browser (staging shape)', () => {
+  // Signed out, every page of the app leads to sign-in (the signed-in pages are tested in apps/web).
   it.each([
-    ['/app', 'Your notes'],
-    ['/app/search', 'Search'],
-    ['/app/settings', 'Settings'],
-    ['/app/no-such-page', 'Page not found'],
+    ['/app', 'Sign in to AlgoMinutes'],
+    ['/app/search', 'Sign in to AlgoMinutes'],
+    ['/app/settings', 'Sign in to AlgoMinutes'],
+    ['/app/no-such-page', 'Sign in to AlgoMinutes'],
   ])('%s renders %s, straight from the address bar, with nothing refused by the CSP', async (route, heading) => {
     const page = await browser.newPage();
     const problems: string[] = [];

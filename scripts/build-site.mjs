@@ -50,6 +50,24 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
     }
     if (!connect.includes(origin)) problems.push(`${name} (${origin}) is not in /app's connect-src in apps/site/vercel.json`);
   }
+  // Firebase (src/firebase.ts): the app signs in on its own host, through the
+  // /__/auth proxy, so the proxy must lead to this build's project.
+  for (const name of ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID', 'VITE_FIREBASE_MESSAGING_SENDER_ID']) {
+    if (!String(env[name] ?? '').trim()) problems.push(`${name} is not set`);
+  }
+  // The auth domain is the environment's own site host, where vercel.json proxies /__/auth/* to the
+  // project (src/firebase.ts). That rewrite must exist, for that host and that project.
+  const project = String(env.VITE_FIREBASE_PROJECT_ID ?? '').trim();
+  const authDomain = String(env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim();
+  if (!authDomain) problems.push('VITE_FIREBASE_AUTH_DOMAIN is not set');
+  else if (project && authDomain !== `${project}.firebaseapp.com`) {
+    const proxied = (config.rewrites || []).some(
+      (r) => r.source === '/__/auth/:path*'
+        && r.destination === `https://${project}.firebaseapp.com/__/auth/:path*`
+        && (r.has || []).some((c) => c.type === 'host' && c.value === authDomain),
+    );
+    if (!proxied) problems.push(`no /__/auth rewrite in apps/site/vercel.json proxies ${authDomain} to ${project}.firebaseapp.com`);
+  }
   return problems;
 }
 
