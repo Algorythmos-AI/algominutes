@@ -50,6 +50,16 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
     }
     if (!connect.includes(origin)) problems.push(`${name} (${origin}) is not in /app's connect-src in apps/site/vercel.json`);
   }
+  // Firebase (src/firebase.ts): the app signs in on its own host, through the
+  // /__/auth proxy, so the proxy must lead to this build's project.
+  for (const name of ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID', 'VITE_FIREBASE_MESSAGING_SENDER_ID']) {
+    if (!String(env[name] ?? '').trim()) problems.push(`${name} is not set`);
+  }
+  const project = String(env.VITE_FIREBASE_PROJECT_ID ?? '').trim();
+  const authTargets = (config.rewrites || []).filter((r) => r.source === '/__/auth/:path*').map((r) => r.destination);
+  if (project && !authTargets.includes(`https://${project}.firebaseapp.com/__/auth/:path*`)) {
+    problems.push(`no /__/auth rewrite in apps/site/vercel.json leads to ${project}.firebaseapp.com`);
+  }
   return problems;
 }
 

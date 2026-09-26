@@ -50,10 +50,10 @@ describe('security headers', () => {
     for (const p of ['/app', '/app/notes/1']) expect(csp(p), p).not.toBe(csp('/'));
   });
 
-  it("the app's CSP: self-hosted script only, no inline or eval, no framing", () => {
+  it("the app's CSP: its own script and Firebase Auth's loader only, no inline or eval, no framing", () => {
     const policy = csp('/app/notes/1');
     const directives = Object.fromEntries(policy.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
-    expect(directives['script-src']).toEqual(["'self'"]);
+    expect(directives['script-src']).toEqual(["'self'", 'https://apis.google.com']);
     expect(directives['style-src']).toEqual(["'self'"]);
     expect(directives['object-src']).toEqual(["'none'"]);
     expect(directives['frame-ancestors']).toEqual(["'none'"]);
@@ -163,5 +163,47 @@ describe('the site in Terraform', () => {
     const origins = (e: string) => /^\s*allowed_origins\s*=\s*"([^"]+)"/m.exec(env(e))![1].split(',');
     expect(origins('staging')).toEqual(['https://algominutes.algorythmos.com', 'https://staging.algominutes.algorythmos.com']);
     expect(origins('prod')).toEqual(['https://algominutes.algorythmos.com']);
+  });
+});
+
+// Firebase sign-in on the site's own origin (plan W3): /__/auth and /__/firebase
+// are proxied to the environment's firebaseapp.com, by host, and keep
+// Firebase's own headers: our CSP, X-Frame-Options and COOP would break the
+// auth handler page and the iframe the app frames it in.
+describe('the Firebase auth proxy', () => {
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'site-auth-'));
+  fs.writeFileSync(path.join(dist, '404.html'), '404');
+  const STAGING = 'staging.algominutes.algorythmos.com';
+
+  it("proxies staging's /__/auth and /__/firebase to algominutes-staging.firebaseapp.com", () => {
+    expect(resolve(config, dist, '/__/auth/handler', undefined, STAGING)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/auth/handler' });
+    expect(resolve(config, dist, '/__/auth/iframe', undefined, `${STAGING}:443`)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/auth/iframe' });
+    expect(resolve(config, dist, '/__/firebase/init.json', undefined, STAGING)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/firebase/init.json' });
+  });
+
+  it('proxies nothing on the public host (the app is off there until the prod launch)', () => {
+    expect(resolve(config, dist, '/__/auth/handler', undefined, 'algominutes.algorythmos.com').status).toBe(404);
+  });
+
+  it("adds none of the site's framing, CSP or COOP headers to Firebase's pages", () => {
+    for (const p of ['/__/auth/handler', '/__/auth/iframe', '/__/firebase/init.json']) {
+      const h = headersFor(config, p);
+      for (const key of ['Content-Security-Policy', 'X-Frame-Options', 'Cross-Origin-Opener-Policy', 'Permissions-Policy']) expect(h[key], `${p} ${key}`).toBeUndefined();
+    }
+  });
+
+  it('the app lets its sign-in popups talk back; the public pages stay same-origin', () => {
+    expect(headersFor(config, '/app')['Cross-Origin-Opener-Policy']).toBe('same-origin-allow-popups');
+    expect(headersFor(config, '/app/notes/1')['Cross-Origin-Opener-Policy']).toBe('same-origin-allow-popups');
+    expect(headersFor(config, '/privacy')['Cross-Origin-Opener-Policy']).toBe('same-origin');
+    expect(headersFor(config, '/privacy')['X-Frame-Options']).toBe('DENY');
+  });
+
+  it("the app's CSP allows Firebase Auth's script and endpoints, and frames only itself", () => {
+    const policy = csp('/app');
+    expect(policy).toMatch(/script-src 'self' https:\/\/apis\.google\.com;/);
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/identitytoolkit\.googleapis\.com/);
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/securetoken\.googleapis\.com/);
+    expect(policy).toMatch(/frame-src 'self';/);
   });
 });

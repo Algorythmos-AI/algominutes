@@ -1,4 +1,9 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router';
+import { useApi } from './ApiContext';
+import { AccountControls } from './auth/AccountControls';
+import { useAuth } from './auth/AuthContext';
+import { recordTermsAcceptanceIfNeeded } from './auth/terms';
 import { SITE_URL } from './site';
 
 const nav = [
@@ -9,6 +14,11 @@ const nav = [
 
 /** Every signed-in page: the header, the main navigation and the footer links to the site. */
 export function Shell() {
+  const { api, updateRequired } = useApi();
+  const { user } = useAuth();
+  useEffect(() => {
+    void recordTermsAcceptanceIfNeeded(api, user);
+  }, [api, user]);
   return (
     <div className="flex min-h-screen flex-col">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-card focus:px-3 focus:py-2">
@@ -37,8 +47,14 @@ export function Shell() {
               ))}
             </ul>
           </nav>
+          <AccountControls />
         </div>
       </header>
+      {updateRequired && (
+        <div role="alert" className="bg-warning/15 px-4 py-3 text-center text-heading">
+          A newer version of AlgoMinutes is available. <button type="button" className="font-semibold underline" onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      )}
       <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
         <Outlet />
       </main>

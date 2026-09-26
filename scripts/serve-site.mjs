@@ -78,7 +78,22 @@ export function servedPaths(config, dist) {
  * end routing, so they carry none of the custom headers), then the filesystem,
  * then rewrites, then the 404 page.
  */
-export function resolve(config, dist, pathname, served = servedPaths(config, dist)) {
+/** Whether a rule's `has` conditions hold. Only `host` is emulated; anything else fails loudly. */
+function hasMatches(rule, host) {
+  for (const cond of rule.has || []) {
+    if (cond.type !== 'host') throw new Error(`serve-site: "has" type "${cond.type}" isn't emulated; add it here first`);
+    if (String(host || '').split(':')[0] !== cond.value) return false;
+  }
+  return true;
+}
+
+/** A rewrite destination with the source's named parameters filled in (/__/auth/:path* → …/__/auth/handler). */
+function fillDestination(rule, pathname) {
+  const m = sourceRegex(rule.source).exec(pathname);
+  return rule.destination.replace(/:(\w+)\*?/g, (whole, name) => (m?.groups?.[name] ?? whole));
+}
+
+export function resolve(config, dist, pathname, served = servedPaths(config, dist), host = '') {
   if (config.cleanUrls) {
     const index = /^\/(?:(.+)\/)?index(?:\.html)?\/?$/.exec(pathname);
     if (index) return { redirect: `/${index[1] ?? ''}` };
@@ -90,7 +105,9 @@ export function resolve(config, dist, pathname, served = servedPaths(config, dis
   }
   if (served.has(pathname)) return { file: served.get(pathname), status: 200 };
   for (const rule of config.rewrites || []) {
-    if (!sourceRegex(rule.source).test(pathname)) continue;
+    if (!sourceRegex(rule.source).test(pathname) || !hasMatches(rule, host)) continue;
+    // An external rewrite: Vercel proxies it. Reported, not fetched, here.
+    if (/^https?:\/\//.test(rule.destination)) return { external: fillDestination(rule, pathname) };
     if (config.cleanUrls && rule.destination.endsWith('.html')) {
       throw new Error(`serve-site: rewrite ${rule.source} → ${rule.destination}: with cleanUrls on, Vercel serves no .html path; use ${rule.destination.slice(0, -5)}`);
     }
@@ -103,7 +120,12 @@ export function resolve(config, dist, pathname, served = servedPaths(config, dis
 export function createServer({ config = loadConfig(), dist = path.join(SITE, config.outputDirectory || 'dist') } = {}) {
   return http.createServer((req, res) => {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    const r = resolve(config, dist, pathname);
+    const r = resolve(config, dist, pathname, undefined, req.headers.host);
+    if (r.external) {
+      res.writeHead(502, { 'Content-Type': 'text/plain', 'X-Serve-Site-External': r.external });
+      res.end(`serve-site: Vercel would proxy this to ${r.external}`);
+      return;
+    }
     if (r.redirect) {
       res.writeHead(308, { Location: r.redirect });
       res.end();

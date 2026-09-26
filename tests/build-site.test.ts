@@ -55,6 +55,10 @@ describe('the web build\'s backends', () => {
   const STAGING = {
     VITE_API_ORIGIN: 'https://api-627101926311.australia-southeast1.run.app',
     VITE_BILLING_ORIGIN: 'https://billing-627101926311.australia-southeast1.run.app',
+    VITE_FIREBASE_API_KEY: 'public-web-key',
+    VITE_FIREBASE_PROJECT_ID: 'algominutes-staging',
+    VITE_FIREBASE_APP_ID: '1:627101926311:web:abc',
+    VITE_FIREBASE_MESSAGING_SENDER_ID: '627101926311',
   };
 
   it('staging\'s api and billing are both allowed by the app\'s CSP', () => {
@@ -62,7 +66,17 @@ describe('the web build\'s backends', () => {
   });
 
   it('refuses a build whose origins are missing, or that the CSP would block', () => {
-    expect(checkAppEnv({})).toEqual(['VITE_API_ORIGIN is not set', 'VITE_BILLING_ORIGIN is not set']);
+    expect(checkAppEnv({})).toEqual([
+      'VITE_API_ORIGIN is not set',
+      'VITE_BILLING_ORIGIN is not set',
+      'VITE_FIREBASE_API_KEY is not set',
+      'VITE_FIREBASE_PROJECT_ID is not set',
+      'VITE_FIREBASE_APP_ID is not set',
+      'VITE_FIREBASE_MESSAGING_SENDER_ID is not set',
+    ]);
+    expect(checkAppEnv({ ...STAGING, VITE_FIREBASE_PROJECT_ID: 'algominutes-prod' })).toEqual([
+      'no /__/auth rewrite in apps/site/vercel.json leads to algominutes-prod.firebaseapp.com',
+    ]);
     expect(checkAppEnv({ ...STAGING, VITE_API_ORIGIN: 'https://api.elsewhere.test' })).toEqual([
       "VITE_API_ORIGIN (https://api.elsewhere.test) is not in /app's connect-src in apps/site/vercel.json",
     ]);
