@@ -108,12 +108,17 @@ prod). Required before this service can transact (each is a `TODO(A11)` in code)
   Stripe (`getStripe` / `constructStripeEvent` / checkout / portal / subscription
   retrieve), Apple (`verifyAndDecodeJws`), Google (`verifyPlaySubscription` +
   Play Console SA linkage), and all store product / price ids + redirect URLs.
-- **`TODO(A4-apple)`** — full StoreKit 2 / ASSN V2 JWS verification: parse the
-  `x5c` chain, verify the ES256 signature, and validate the chain up to
-  **Apple Root CA - G3** before trusting a decoded payload. Requires the iOS
-  Firebase app + Apple root certs (not available in this environment). Today
-  `src/lib/apple.js` **decodes** the JWS; it does not yet cryptographically
-  verify it.
+- **Apple JWS verification (done, PR-32):** `src/lib/apple.js verifyAppleJws` checks every StoreKit 2
+  transaction and App Store Server Notification offline, as Apple's App Store Server Library does:
+  - ES256 only;
+  - the `x5c` chain up to **Apple Root CA - G3**, pinned in `src/lib/certs/AppleRootCA-G3.cer` (Apple’s DER file) and checked against
+    Apple's published SHA-256 fingerprint at load (a missing or changed file fails closed, 503);
+  - Apple's marker extensions on the leaf and intermediate;
+  - validity at `signedDate`;
+  - the leaf's signature.
+
+  The bundle id must be `com.algorythmos.algominutes`. Anything else is a 400, and grants nothing. Revocation (OCSP)
+  isn't checked, and neither is a live App Store Server API lookup (`TODO(A11)`).
 
 ## Operating cost (BUILD-PLAN §3.3)
 

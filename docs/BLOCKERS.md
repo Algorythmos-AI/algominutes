@@ -740,8 +740,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   subscriber). It now **fails closed with 503**. Only `APPLE_JWS_TRUST_UNVERIFIED=true` restores decode-only,
   for local dev and tests, and never on Cloud Run (`K_SERVICE`). The Google Play rail was already safe: it
   re-verifies every token server-side against the Play API.
-  - [ ] **PR-32 (before any Apple billing):** verify the x5c chain to Apple Root CA - G3, the ES256
-    signature, and the bundle id / environment. The paywall stays hidden behind its flag until then.
+  - [x] **PR-32 (2026-09-27):** `verifyAppleJws` verifies each JWS to Apple Root CA - G3 (pinned, checked against
+    Apple's published fingerprint). It checks the ES256 signature, Apple's marker extensions, validity at
+    `signedDate`, and the bundle id. Anything else is a 400. The paywall stays behind its flag; OCSP and a live App
+    Store Server API lookup remain `TODO(A11)`. Both environments are accepted (App Review buys in the sandbox against
+    the production server).
 - [x] **CodeQL backlog triaged** (only #63 remains, owned by PR-32):
   - ~~`js/polynomial-redos` in `redaction.cjs` (#22)~~ and ~~`js/incomplete-multi-character-sanitization`
     in the YouTube extractor (#24)~~: **fixed** (CodeQL closed both on 2026-09-24). Only **#63**
