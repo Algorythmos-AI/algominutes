@@ -99,11 +99,54 @@ jobs:
           echo "services=$out" >> "$GITHUB_OUTPUT"
           echo "Deploying: $out"
 
+  # Nothing deploys a commit whose CI hasn't passed. A push to integration
+  # starts this workflow and CI at the same time, so wait for CI's runs on this
+  # exact commit (ci: tests, integration, web build, rules; invariants: the
+  # repo's gates) and stop if either fails. A manual run is held the same way.
+  ci-gate:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for wf in ci.yml invariants.yml; do
+            ok=0
+            for _ in $(seq 1 90); do
+              run=$(gh run list -R "$REPO" --workflow "$wf" --commit "$SHA" --event push \
+                      --json status,conclusion,url --jq '.[0] // empty')
+              if [ -n "$run" ] && [ "$(jq -r .status <<<"$run")" = "completed" ]; then
+                conclusion=$(jq -r .conclusion <<<"$run")
+                if [ "$conclusion" = "success" ]; then
+                  echo "$wf passed on $SHA: $(jq -r .url <<<"$run")"
+                  ok=1
+                  break
+                fi
+                echo "::error::$wf concluded '$conclusion' on $SHA ($(jq -r .url <<<"$run")): not deploying"
+                exit 1
+              fi
+              sleep 30
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::$wf didn't finish on $SHA within 45 minutes: not deploying"
+              exit 1
+            fi
+          done
+
   build:
     # `image (<svc>)`, not `build (<svc>)`: docker-build.yml already reports
     # `build (<svc>)` checks, and check names should be unambiguous.
     name: image (${{ matrix.service }})
-    needs: changes
+    needs: [changes, ci-gate]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     environment: staging
