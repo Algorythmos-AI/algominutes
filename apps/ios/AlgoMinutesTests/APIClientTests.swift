@@ -163,7 +163,7 @@ final class APIClientTests: XCTestCase {
         assertRequest("POST", "/v1/notes/regenerate-summary")
         XCTAssertEqual(generation, 3)
 
-        respond(#"{"url":"https://algominutes.com/s/x","shareId":"s-1","expiresAt":null}"#)
+        respond(#"{"url":"https://algominutes.algorythmos.com/s/x","shareId":"s-1","expiresAt":null}"#)
         let link = try await api.createShareLink(noteId: "n1", workspaceId: "workspace_u")
         assertRequest("POST", "/v1/shares/create")
         XCTAssertEqual(link.shareId, "s-1")

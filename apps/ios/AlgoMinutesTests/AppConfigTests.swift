@@ -21,6 +21,9 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.baseURL(forKey: "k", info: ["k": "https://b.run.app"]).host, "b.run.app")
         XCTAssertEqual(AppConfig.baseURL(forKey: "k", info: ["k": "not a url"]), AppConfig.fallbackBaseURL)
         XCTAssertEqual(AppConfig.baseURL(forKey: "k", info: [:]), AppConfig.fallbackBaseURL)
+        // The fallback never resolves (RFC 6761), so a misconfigured build can't
+        // send ID tokens to a host someone else could own.
+        XCTAssertTrue(AppConfig.fallbackBaseURL.host?.hasSuffix(".invalid") == true)
     }
 
     /// Tests run the Debug configuration, which talks to staging.
@@ -58,5 +61,14 @@ final class AppConfigTests: XCTestCase {
         let schemes = types.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
         XCTAssertTrue(schemes.contains("algominutes"))
         XCTAssertFalse(schemes.contains { $0.contains("909388484461") })
+    }
+
+    /// Share links open on the public site, which has no viewer yet.
+    func testShareLinksAreOffUntilTheSiteCanShowThem() {
+        XCTAssertFalse(AppConfig.shareLinksEnabled)
+        XCTAssertTrue(AppConfig.flag("k", info: ["k": " yes "]))
+        XCTAssertFalse(AppConfig.flag("k", info: ["k": "NO"]))
+        XCTAssertFalse(AppConfig.flag("k", info: ["k": "$(SHARE_LINKS_ENABLED)"]))
+        XCTAssertFalse(AppConfig.flag("k", info: nil))
     }
 }

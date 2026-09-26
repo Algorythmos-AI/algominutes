@@ -1,8 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Audio-file import + YouTube URL import — parity with `ImportPanel.tsx` and
-/// `YouTubeImport.tsx` (unified to the dark theme; see DEVIATIONS.md).
+/// Audio-file import (parity with `ImportPanel.tsx`, unified to the dark theme;
+/// see DEVIATIONS.md). The web's YouTube import isn't offered on iOS: importing
+/// another service's videos is an App Review risk (guideline 5.2.3). Notes made
+/// from YouTube on the web still show here.
 struct ImportSheet: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -13,15 +15,6 @@ struct ImportSheet: View {
     @State private var warnMessage: String?
     @State private var isUploading = false
     @State private var uploadPercent = 0
-
-    // YouTube
-    @State private var youtubeURL = ""
-    @State private var rightsChecked = false
-    @State private var isQueuing = false
-
-    private static let allowedYouTubeHosts: Set<String> = [
-        "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
-    ]
 
     var body: some View {
         ScrollView {
@@ -36,7 +29,7 @@ struct ImportSheet: View {
                         Label("Audio file", systemImage: "waveform")
                             .font(Typography.heading(16, weight: .bold))
                             .foregroundStyle(Theme.heading)
-                        Text("MP3, M4A, WAV and more — up to 500 MB. Keep the app open while large files upload.")
+                        Text("MP3, M4A, WAV and more, up to 500 MB.")
                             .font(Typography.body(13))
                             .foregroundStyle(Theme.muted)
                         if isUploading {
@@ -50,37 +43,6 @@ struct ImportSheet: View {
                             Button("Choose audio file") { showFilePicker = true }
                                 .buttonStyle(PrimaryButtonStyle())
                         }
-                    }
-                }
-
-                // MARK: YouTube
-                AlgoMinutesCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("YouTube link", systemImage: "play.rectangle.fill")
-                            .font(Typography.heading(16, weight: .bold))
-                            .foregroundStyle(Theme.heading)
-                        TextField("https://www.youtube.com/watch?v=…", text: $youtubeURL)
-                            .textFieldStyle(.plain)
-                            .font(Typography.body(14))
-                            .foregroundStyle(Theme.body)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Theme.card)
-                                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.borderSoft))
-                            )
-                        ConsentCheckbox(
-                            isChecked: $rightsChecked,
-                            text: "I have the rights to import this video for personal use, and I'll comply with YouTube's terms of service."
-                        )
-                        Button(isQueuing ? "Queuing…" : "Import") {
-                            Task { await importYouTube() }
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(isQueuing)
                     }
                 }
 
@@ -163,52 +125,5 @@ struct ImportSheet: View {
 
     private static func mimeType(forExtension ext: String) -> String {
         UTType(filenameExtension: ext)?.preferredMIMEType ?? "audio/mpeg"
-    }
-
-    // MARK: - YouTube import (parity with YouTubeImport)
-
-    private func importYouTube() async {
-        errorMessage = nil
-        let raw = youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: raw),
-              let host = url.host?.lowercased(),
-              Self.allowedYouTubeHosts.contains(host) else {
-            errorMessage = "Paste a youtube.com or youtu.be URL."
-            return
-        }
-        guard rightsChecked else {
-            errorMessage = "Confirm you have rights to import this content."
-            return
-        }
-        guard let wsId = env.auth.workspaceId else { return }
-
-        isQueuing = true
-        defer { isQueuing = false }
-
-        let noteId: String
-        do {
-            noteId = try env.notes.createNote(fields: [
-                "title": "YouTube import",
-                "status": NoteStatus.queued.rawValue,
-                "type": NoteType.youtube.rawValue,
-                "sourceUrl": raw,
-            ])
-        } catch {
-            errorMessage = "Could not queue this URL. Please try again."
-            return
-        }
-
-        do {
-            try await env.api.processAudio(.init(
-                noteId: noteId,
-                workspaceId: wsId,
-                type: .youtube,
-                sourceUrl: raw
-            ))
-            onDone(noteId)
-        } catch {
-            env.notes.markNoteError(id: noteId, message: "Could not queue this URL. Please try again.")
-            errorMessage = "Could not queue this URL. Please try again."
-        }
     }
 }

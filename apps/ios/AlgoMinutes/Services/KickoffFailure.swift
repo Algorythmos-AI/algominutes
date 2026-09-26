@@ -19,8 +19,35 @@ enum KickoffFailure {
     case failed(message: String)
 
     /// Shown on a note that couldn't process because the user is out of quota
-    /// (A9.4). The paywall carries the actual upgrade path.
+    /// (A9.4), when there's a paywall: it carries the actual upgrade path.
     static let quotaMessage = "You've used up your included minutes. Upgrade to Pro to keep processing."
+
+    /// The quota message for this build. Without a paywall (PAYWALL_ENABLED=NO:
+    /// no products on sale), "Upgrade to Pro" would be a dead end, so it says
+    /// what's true instead: when the minutes come back, or where to ask.
+    static func quotaMessage(_ entitlement: EntitlementResponse?, paywallEnabled: Bool, locale: Locale = .current) -> String {
+        if paywallEnabled { return quotaMessage }
+        guard let e = entitlement, let included = e.includedMinutes, included > 0 else {
+            return "Processing isn't included on your account right now. You can reach us from Settings › Help & Support."
+        }
+        let minutes = Int(included.rounded()).formatted(.number.locale(locale))
+        if let reset = nextPeriodStart(e.billingPeriod) {
+            let day = reset.formatted(Date.FormatStyle(locale: locale, timeZone: TimeZone(identifier: "UTC")!).day().month(.wide))
+            return "You've used this month's \(minutes) included minutes. They reset on \(day)."
+        }
+        return "You've used this month's \(minutes) included minutes. They reset at the start of next month."
+    }
+
+    /// The first instant of the month after a "YYYY-MM" billing period, in UTC
+    /// (the server meters by calendar month in UTC).
+    static func nextPeriodStart(_ billingPeriod: String) -> Date? {
+        let parts = billingPeriod.split(separator: "-")
+        guard parts.count == 2, let year = Int(parts[0]), let month = Int(parts[1]), (1...12).contains(month) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let start = calendar.date(from: DateComponents(year: year, month: month, day: 1)) else { return nil }
+        return calendar.date(byAdding: .month, value: 1, to: start)
+    }
     static let updateMessage = "Please update AlgoMinutes, then try again."
     static let notFoundMessage = "We couldn't find this recording's audio. Please try again."
 
@@ -42,7 +69,7 @@ enum KickoffFailure {
     /// For the user (an alert or a blocked retry).
     var message: String {
         switch self {
-        case .quota: return Self.quotaMessage
+        case .quota(let entitlement): return Self.quotaMessage(entitlement, paywallEnabled: AppConfig.paywallEnabled)
         case .updateRequired: return Self.updateMessage
         case .refused(let message), .failed(let message): return message
         }

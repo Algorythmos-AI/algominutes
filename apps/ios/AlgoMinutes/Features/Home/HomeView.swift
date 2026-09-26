@@ -16,7 +16,7 @@ enum CaptureAction: String, Identifiable, CaseIterable {
     var subtitle: String {
         switch self {
         case .recording: return "Record and generate a smart summary"
-        case .importFiles: return "Import a file and summarize its contents"
+        case .importFiles: return "Import an audio file and summarize it"
         case .scanText: return "Extract text from images and documents"
         }
     }
@@ -24,8 +24,8 @@ enum CaptureAction: String, Identifiable, CaseIterable {
     var chips: [String] {
         switch self {
         case .recording: return ["Meetings", "Lectures", "Interviews"]
-        case .importFiles: return ["PDF", "Audio", "YouTube"]
-        case .scanText: return ["Camera", "Images", "TXT"]
+        case .importFiles: return ["MP3", "M4A", "WAV"]
+        case .scanText: return ["Camera", "PDF", "Images"]
         }
     }
 
