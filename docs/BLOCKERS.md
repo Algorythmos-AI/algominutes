@@ -1392,13 +1392,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
       api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
-- [ ] **Verify before the web recorder ships: WebM on the Gemini fast path.** Chromium and Firefox record
-      WebM/Opus. `services/transcoder/src/fast-path.js` sends the original bytes to Gemini with
-      `resolveGeminiAudioMime`, which labels WebM `audio/ogg` (`packages/ai/src/intelligence.cjs`); Gemini's listed
-      audio formats don't include WebM. Long recordings go through ffmpeg and Speech-to-Text, which read WebM. Check with a
-      one-minute browser recording on staging; if Gemini refuses it, remux on the fast path
-      (`ffmpeg -i in.webm -c:a copy out.ogg`, no re-encode) before the call. A transcoder PR, after auditing
-      `gemini-call.cjs`'s other caller.
+- [x] **WebM on the Gemini fast path: verified 2026-09-27.** Chromium and Firefox record WebM/Opus, and
+      `resolveGeminiAudioMime` (`packages/ai/src/intelligence.cjs`) labels it `audio/ogg` for the fast path
+      (`services/transcoder/src/fast-path.js`, which sends the original bytes). A synthetic WebM/Opus speech clip
+      (`say` + `ffmpeg -c:a libopus`) sent that way to Vertex in `australia-southeast1` came back word for word from
+      both `gemini-3.5-flash` and `gemini-2.5-flash`. Long recordings go through ffmpeg and Speech-to-Text, which
+      read WebM. A real browser recording on staging is still part of the web e2e.
 - [ ] **A recording left in a browser stays on its disk after sign-out.** It's only shown to its own account
       (`RecordingStore.list` filters by uid), but the audio remains in IndexedDB until uploaded or discarded. On a
       shared computer, offer to upload or delete it at sign-out.
