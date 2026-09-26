@@ -84,7 +84,7 @@ describe('summary regeneration claim (notes-repo)', () => {
       summary: { gist: 'A', actionItems: [], keyDecisions: [] },
       transcriptPreview: [], transcriptTruncated: false,
     }, quietLog);
-    expect(landed).toEqual({ written: true });
+    expect(landed).toEqual({ written: true, notice: expect.objectContaining({ kind: 'note_ready', noteId: 'note-a' }) });
     expect(await note('note-a')).toMatchObject({ status: 'ready', summary_generation: 4 });
   });
 

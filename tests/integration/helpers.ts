@@ -58,3 +58,9 @@ export async function count(sql: string, params: unknown[] = []): Promise<number
 
 /** A silent logger for code under test that requires one. */
 export const quietLog = { info: () => {}, warn: () => {}, error: () => {} };
+
+/** The kinds of the notices written for a note, oldest first (note_notices, the outbox). */
+export async function noticeKinds(noteId: string): Promise<string[]> {
+  const { rows } = await pool.query<{ kind: string }>('SELECT kind FROM note_notices WHERE note_id = $1 ORDER BY id', [noteId]);
+  return rows.map((r) => r.kind);
+}

@@ -9,6 +9,7 @@
  * the Firestore mirror runs — making the layer safe to deploy before
  * the Cloud SQL instance exists.
  */
+import { randomUUID } from 'node:crypto';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
@@ -33,6 +34,34 @@ const { ownedStoragePath } = noteStorage as {
 // so the edit SQL lives in one place. Imported as a default (CJS) — see
 // server.ts for the same pattern.
 import noteEditShared from '@algominutes/db/note-edit.cjs';
+import noteNoticesShared from '@algominutes/db/note-notices.cjs';
+import notifyShared from '@algominutes/ai/notify.cjs';
+
+/** A "ready" or "failed" notice (note-notices.cjs, migration 022). */
+export interface NoteNotice {
+  id: string;
+  noteId: string;
+  workspaceId: string;
+  uid: string;
+  kind: 'note_ready' | 'note_failed';
+  traceId: string | null;
+}
+type Queryable = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
+const { recordNotice } = noteNoticesShared as {
+  recordNotice: (
+    queryable: Queryable,
+    input: { noteId: string; workspaceId: string; kind: NoteNotice['kind']; traceId?: string | null },
+  ) => Promise<NoteNotice | null>;
+};
+const { enqueueNotice } = notifyShared as {
+  enqueueNotice: (args: { notice: NoteNotice; traceId: string; log: any }) => Promise<'enqueued' | 'skipped' | 'failed'>;
+};
+
+/** Enqueue a notice written by a commit that just happened (never throws). */
+async function tellAuthor(notice: NoteNotice | null, traceId: string, log: any): Promise<void> {
+  if (!notice) return;
+  await enqueueNotice({ notice, traceId, log });
+}
 const { writeNoteEditWithinTx } = noteEditShared as {
   writeNoteEditWithinTx: (
     client: import('pg').PoolClient,
@@ -332,6 +361,8 @@ export async function markQueued(
              mime_type    = COALESCE(EXCLUDED.mime_type, notes.mime_type),
              summarizer_enqueued_at = NULL,
              embedder_enqueued_at = NULL,
+             -- A new run: its outcome gets its own notice (note-notices.cjs).
+             run_seq = notes.run_seq + 1,
              chunks_done = 0,
              chunks_total = NULL,
              duration_sec_probed = NULL,
@@ -536,10 +567,13 @@ export interface MarkSummaryReadyInput {
    * during the run bumps it, and the older run must not overwrite the newer one.
    */
   expectedGeneration: number;
+  /** The recording's, for the "ready" notice's task. */
+  traceId?: string | null;
 }
 
 export type MarkSummaryReadyResult =
-  | { written: true }
+  /** notice: the "ready" notice this write recorded (none on a replay of the same outcome). */
+  | { written: true; notice?: NoteNotice | null }
   /** not_found: deleted or not in this workspace. superseded: a newer generation owns the note. */
   | { written: false; reason: 'not_found' | 'superseded' };
 
@@ -555,12 +589,19 @@ export type MarkSummaryReadyResult =
  * this run read it. Mirroring anyway would resurrect a phantom document, or put
  * a stale summary over a newer one. Idempotent on replay: everything is upserted
  * or replaced.
+ *
+ * The "ready" notice is written in the same transaction and enqueued right
+ * after the commit, before the mirror, so a mirror failure can't hold back the
+ * push (note-notices.cjs). A replay of the same summary writes no second one.
  */
 export async function markSummaryReady(
   firestore: Firestore,
   input: MarkSummaryReadyInput,
   log: { error: (o: any, m?: string) => void },
 ): Promise<MarkSummaryReadyResult> {
+  // The recording's traceId for the notice row and its task (minted only if
+  // the caller had none, before the write, so both agree).
+  const trace = input.traceId || randomUUID();
   const outcome = await withTx(
     async (client): Promise<MarkSummaryReadyResult> => {
       const note = await client.query(
@@ -600,11 +641,15 @@ export async function markSummaryReady(
       for (const text of input.summary.keyDecisions || []) {
         await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
       }
-      return { written: true };
+      const notice = await recordNotice(client, {
+        noteId: input.noteId, workspaceId: input.workspaceId, kind: 'note_ready', traceId: trace,
+      });
+      return { written: true, notice };
     },
     { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
   );
   if (!outcome.written) return outcome;
+  await tellAuthor(outcome.notice ?? null, trace, log);
 
   // update(), never set(): if the note was deleted between the commit above
   // and here, set({ merge: true }) would re-create its doc (with the summary
@@ -636,7 +681,7 @@ export async function markSummaryReady(
     }
     throw err;
   }
-  return { written: true };
+  return { written: true, notice: outcome.notice ?? null };
 }
 
 /**
@@ -959,10 +1004,11 @@ export async function listStuckNotes(
  * repeats the selection condition (in flight, unchanged for olderThanMs, same
  * workspace, not deleted), so a note that moved on since the listing (a chunk
  * finished, it became ready, the client re-queued it, it was deleted) is left
- * alone. With `refund`, the reversal is written in the same transaction. The
- * mirror, and the caller's dead letter, happen only when a row matched.
- * Postgres first; the mirror uses update(), so a deleted note's doc is never
- * re-created.
+ * alone. With `refund`, the reversal is written in the same transaction, and so
+ * is the "failed" notice, which is enqueued after the commit: the author is told
+ * (note-notices.cjs). The mirror, and the caller's dead letter, happen only when
+ * a row matched. Postgres first; the mirror uses update(), so a deleted note's
+ * doc is never re-created.
  */
 export async function failStuckNote(
   firestore: Firestore,
@@ -970,10 +1016,13 @@ export async function failStuckNote(
     noteId: string; workspaceId: string; olderThanMs: number; message: string;
     /** Written in the failure's transaction (ledger-reversal.cjs), under its row lock. */
     refund?: { reason: string; idempotencyKey: string };
+    /** The sweep run's, for the "failed" notice's task. */
+    traceId?: string | null;
   },
   log: { error: (o: any, m?: string) => void },
-): Promise<{ failed: boolean; refunded?: boolean }> {
-  const { failed, refunded } = await withTx(async (client) => {
+): Promise<{ failed: boolean; refunded?: boolean; notice?: NoteNotice | null }> {
+  const trace = input.traceId || randomUUID();
+  const { failed, refunded, notice } = await withTx(async (client) => {
     const { rowCount } = await client.query(
       `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
         WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
@@ -981,11 +1030,15 @@ export async function failStuckNote(
           AND updated_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')`,
       [input.noteId, input.workspaceId, input.message, IN_FLIGHT_STATUSES as unknown as string[], input.olderThanMs],
     );
-    if (!rowCount) return { failed: false, refunded: false };
+    if (!rowCount) return { failed: false, refunded: false, notice: null };
     const r = input.refund ? await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund }) : { applied: false };
-    return { failed: true, refunded: r.applied };
+    const written = await recordNotice(client, {
+      noteId: input.noteId, workspaceId: input.workspaceId, kind: 'note_failed', traceId: trace,
+    });
+    return { failed: true, refunded: r.applied, notice: written };
   }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
   if (!failed) return { failed: false };
+  await tellAuthor(notice ?? null, trace, log);
   try {
     await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({
       status: 'error', errorMessage: input.message, updatedAt: ISO_NOW(),
@@ -995,5 +1048,5 @@ export async function failStuckNote(
     // note) or briefly unavailable. The next read path reconciles from Postgres.
     log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'stuck_note_mirror_failed');
   }
-  return { failed: true, refunded };
+  return { failed: true, refunded, notice };
 }

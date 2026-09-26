@@ -36,7 +36,7 @@ function fakes({ probe }: { probe: () => Promise<any> }) {
 describe('markNoteFailed, when its UPDATE matched nothing', () => {
   it('a failed existence probe mirrors nothing and reports the note as possibly there', async () => {
     const f = fakes({ probe: async () => { throw new Error('connection reset'); } });
-    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: true, refunded: false, superseded: false });
+    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: true, refunded: false, superseded: false, notice: null });
     expect(f.updates).toEqual([]);
     expect(f.logs).toContainEqual(['error', 'ev_exists_probe_failed']);
     expect(f.logs.map(([, m]) => m)).not.toContain('note_failed');
@@ -44,13 +44,13 @@ describe('markNoteFailed, when its UPDATE matched nothing', () => {
 
   it('a note that is not there: exists false, nothing mirrored', async () => {
     const f = fakes({ probe: async () => ({ rows: [], rowCount: 0 }) });
-    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false });
+    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false, notice: null });
     expect(f.updates).toEqual([]);
   });
 
   it('a note that is there (ready): exists true, nothing mirrored', async () => {
     const f = fakes({ probe: async () => ({ rows: [{}], rowCount: 1 }) });
-    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: true, refunded: false, superseded: false });
+    expect(await markNoteFailed(f.args)).toEqual({ failed: false, marked: false, pgErrored: false, exists: true, refunded: false, superseded: false, notice: null });
     expect(f.updates).toEqual([]);
   });
 });

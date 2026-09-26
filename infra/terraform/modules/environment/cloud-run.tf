@@ -264,8 +264,9 @@ resource "google_cloud_run_v2_job" "db_job" {
 # ---------------------------------------------------------------------------
 # Task-invocation IAM
 # run-jobs is the OIDC identity Cloud Tasks carries; it needs run.invoker on
-# each service. The enqueuing services (api, transcoder, summarizer) must be
-# able to mint a token AS run-jobs -> actAs (serviceAccountUser) on it.
+# each service. The enqueuing services (api, transcoder, summarizer) and the
+# sweep (its notices step, as db-sweep or a hand-run db-job) must be able to
+# mint a token AS run-jobs -> actAs (serviceAccountUser) on it.
 # ---------------------------------------------------------------------------
 resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
   for_each = google_cloud_run_v2_service.services
@@ -278,7 +279,7 @@ resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
 }
 
 resource "google_service_account_iam_member" "act_as_jobs" {
-  for_each = toset(["run-api", "run-transcoder", "run-summarizer"])
+  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep"])
 
   service_account_id = google_service_account.runtime["run-jobs"].name
   role               = "roles/iam.serviceAccountUser"

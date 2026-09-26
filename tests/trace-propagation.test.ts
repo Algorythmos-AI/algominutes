@@ -127,35 +127,74 @@ describe("the transcoder's tasks client", () => {
   });
 });
 
-describe('the notify hooks', () => {
-  const original = cloudTasks.enqueueTask;
+describe('the notice enqueue (@algominutes/ai/notify.cjs)', () => {
   const env = { NOTIFIER_URL: 'https://notifier.example', TASKS_PROJECT: 'p', JOBS_SA_EMAIL: 'jobs@p.iam.gserviceaccount.com' };
   const saved: Record<string, string | undefined> = {};
   afterEach(() => {
-    cloudTasks.enqueueTask = original;
     for (const k of Object.keys(env)) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
   });
 
-  for (const svc of ['transcoder', 'summarizer']) {
-    it(`${svc}: carries the traceId, and logs with the user and workspace`, async () => {
-      for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
-      const calls: any[] = [];
-      cloudTasks.enqueueTask = async (args: any) => { calls.push(args); return 'task'; };
-      const children: any[] = [];
-      const lines: any[] = [];
-      const log = {
-        child(fields: any) { children.push(fields); return { ...log, info: (o: any, m: string) => lines.push({ ...fields, ...o, m }) }; },
-        info() {}, warn() {}, error() {},
-      };
-      const { enqueueNotify } = require(`../services/${svc}/src/terminal-hooks.js`);
-      await enqueueNotify({ type: 'note_ready', noteId: 'n1', workspaceId: 'w1', uid: 'u1', traceId: 'trace-4', log });
-      expect(calls[0].traceId).toBe('trace-4');
-      expect(lines).toContainEqual(expect.objectContaining({ m: 'notify_enqueued', userId: 'u1', workspaceId: 'w1', noteId: 'n1' }));
+  it("carries the recording's traceId, and logs with the user, workspace and note", async () => {
+    for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
+    const calls: any[] = [];
+    const lines: any[] = [];
+    const log = {
+      child(fields: any) { return { ...log, info: (o: any, m: string) => lines.push({ ...fields, ...o, m }) }; },
+      info() {}, warn() {}, error() {},
+    };
+    const { enqueueNotice, noticeTaskId } = require('@algominutes/ai/notify.cjs');
+    const notice = { id: '42', noteId: 'n1', workspaceId: 'w1', uid: 'u1', kind: 'note_ready' };
+    const outcome = await enqueueNotice({ notice, traceId: 'trace-4', log, enqueueTask: async (args: any) => { calls.push(args); return 'task'; } });
+    expect(outcome).toBe('enqueued');
+    expect(calls[0].traceId).toBe('trace-4');
+    expect(calls[0].payload).toEqual({ type: 'note_ready', noteId: 'n1', workspaceId: 'w1', uid: 'u1', noticeId: '42' });
+    // One task per notice, whoever enqueues it: led by a hash, not the sequence.
+    expect(calls[0].taskId).toBe(noticeTaskId('42'));
+    expect(noticeTaskId('42')).toMatch(/^[0-9a-f]{12}-notice-42$/);
+    expect(noticeTaskId('43').slice(0, 12)).not.toBe(noticeTaskId('42').slice(0, 12));
+    expect(lines).toContainEqual(expect.objectContaining({ m: 'notify_enqueued', traceId: 'trace-4', userId: 'u1', workspaceId: 'w1', noteId: 'n1', noticeId: '42' }));
+  });
+
+  it('a task of that name already there is reported as already queued, not enqueued', async () => {
+    for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
+    const lines: string[] = [];
+    const log = { child() { return log; }, info: (_o: any, m: string) => void lines.push(m), warn() {}, error() {} };
+    const { enqueueNotice } = require('@algominutes/ai/notify.cjs');
+    const outcome = await enqueueNotice({
+      notice: { id: '7', noteId: 'n', workspaceId: 'w', uid: 'u', kind: 'note_ready' }, traceId: 't', log,
+      enqueueTask: async (a: any) => { a.onExisting(); return 'tasks/x'; },
     });
-  }
+    expect(outcome).toBe('already_queued');
+    expect(lines).toEqual(['notify_already_queued']);
+  });
+
+  it('a logger with no child() still gets every field on the line', async () => {
+    for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
+    const errors: any[] = [];
+    const log = { error: (o: any, m: string) => void errors.push({ ...o, m }) };
+    const { enqueueNotice } = require('@algominutes/ai/notify.cjs');
+    await enqueueNotice({
+      notice: { id: '8', noteId: 'n', workspaceId: 'w', uid: 'u', kind: 'note_failed' }, traceId: 't-8', log,
+      enqueueTask: async () => { throw new Error('down'); },
+    });
+    expect(errors).toEqual([expect.objectContaining({ m: 'notify_enqueue_failed', traceId: 't-8', userId: 'u', workspaceId: 'w', noteId: 'n', noticeId: '8' })]);
+  });
+
+  it('never throws: a failed enqueue is logged and reported', async () => {
+    for (const [k, v] of Object.entries(env)) { saved[k] = process.env[k]; process.env[k] = v; }
+    const errors: string[] = [];
+    const log = { child() { return log; }, info() {}, warn() {}, error: (_o: any, m: string) => void errors.push(m) };
+    const { enqueueNotice } = require('@algominutes/ai/notify.cjs');
+    const outcome = await enqueueNotice({
+      notice: { id: '1', noteId: 'n', workspaceId: 'w', uid: 'u', kind: 'note_failed' }, traceId: 't', log,
+      enqueueTask: async () => { throw new Error('tasks down'); },
+    });
+    expect(outcome).toBe('failed');
+    expect(errors).toEqual(['notify_enqueue_failed']);
+  });
 });
 
 // Every enqueueTask({...}) call in server code must pass a traceId property.
@@ -198,7 +237,8 @@ describe('every enqueueTask call site passes traceId', () => {
         visit(sf);
       }
     }
-    expect(sites.length).toBeGreaterThanOrEqual(7);
+    // api, transcoder, summarizer and embedder queues, plus the notices (notify.cjs).
+    expect(sites.length).toBeGreaterThanOrEqual(6);
     expect(missing).toEqual([]);
   });
 });

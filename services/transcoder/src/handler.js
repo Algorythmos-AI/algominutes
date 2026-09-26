@@ -143,6 +143,7 @@ async function handleKickoff(payload, deps) {
           // saw the note as still in flight and refused a retry for 3 h.
           const outcome = await noteTerminal.markNoteFailed({
             refund: transcodeRefund(noteId),
+            traceId: deps.traceId,
             pool: db.pool(),
             firestore: mirror.db(),
             noteId,
@@ -181,6 +182,7 @@ async function handleKickoff(payload, deps) {
       log.error({ err, noteId, workspaceId }, 'duration_unreadable');
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(),
         firestore: mirror.db(),
         noteId,
@@ -298,6 +300,7 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_failed');
       await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
       });
@@ -354,7 +357,7 @@ async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;
   // Gone, or a verdict whose run is over (superseded: exists is false too).
   if (!outcome.marked && !outcome.exists) return;
-  await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked, notify: outcome.failed });
+  await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked });
 }
 
 function payloadJobId() {
@@ -395,6 +398,7 @@ async function handleSttPoll(payload, deps) {
     log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for part of this recording.',
       log, event: 'stt_poll_chunk_failed', retryOnPgError: true, chunkId, onlyIfStatus: ['error'],
@@ -437,6 +441,7 @@ async function handleSttPoll(payload, deps) {
       // tells the author only if this is what failed the note.
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(),
         firestore: mirror.db(),
         noteId, workspaceId,
@@ -472,6 +477,7 @@ async function handleSttPoll(payload, deps) {
     // One statement for the chunk and the note, as for stt_poll_exhausted above.
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(),
       firestore: mirror.db(),
       noteId, workspaceId,
@@ -683,6 +689,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
     plog.warn({}, 'chunk_already_failed');
     await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
     });
@@ -759,6 +766,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
       // One statement for the chunk and the note, as in handleSttPoll.
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
         log, event: 'stt_poll_exhausted', retryOnPgError: true, chunkId,
@@ -784,6 +792,7 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     // One statement for the chunk and the note, as in handleSttPoll.
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
       log, event: 'stt_operation_errored', retryOnPgError: true, chunkId,

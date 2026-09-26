@@ -11,6 +11,7 @@
     "./notes-repo": "./src/notes-repo.ts",
     "./note-speakers-repo": "./src/note-speakers-repo.ts",
     "./push-tokens-repo": "./src/push-tokens-repo.ts",
+    "./notices-repo": "./src/notices-repo.ts",
     "./migrator": "./src/migrator.ts",
     "./*": "./src/*"
   },

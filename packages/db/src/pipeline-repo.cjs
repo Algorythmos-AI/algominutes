@@ -14,6 +14,8 @@
 // path redacts at its call site before persistFastPathResult).
 
 const _redaction = require('@algominutes/ai/redaction.cjs');
+const { randomUUID } = require('node:crypto');
+const { recordNotice } = require('./note-notices.cjs');
 
 // The shared structured logger, for a caller that passed none: a catch that
 // logs must not turn its failure into a TypeError on `log.error`.
@@ -326,9 +328,10 @@ async function getChunkRow(client, chunkId) {
 
 /**
  * The fast path's whole result, in one transaction: 'ready', the (already
- * redacted) transcript lines, the summary, action items and key decisions.
- * `lines` are `{ startMs, text }`. Throws after a rollback; a failed rollback
- * is logged (never swallowed).
+ * redacted) transcript lines, the summary, action items and key decisions, and
+ * the "ready" notice (note-notices.cjs), enqueued after the commit: a short
+ * recording's author is told too. `lines` are `{ startMs, text }`. Throws after
+ * a rollback; a failed rollback is logged (never swallowed). Returns the notice.
  */
 // A kickoff delivered twice (or a stalled attempt waking after its retry
 // finished) must not overwrite the finished note: that would lose the user's
@@ -336,8 +339,14 @@ async function getChunkRow(client, chunkId) {
 // summaries. The second commit throws NOTE_MOVED_ON, which handle() acknowledges.
 const FAST_PATH_IN_PROGRESS = ['queued', 'chunking', 'transcribing'];
 
-async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary, model }, log) {
+async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary, model, traceId = null }, log, {
+  enqueueNotice = (args) => require('@algominutes/ai/notify.cjs').enqueueNotice(args),
+} = {}) {
   const client = await pool.connect();
+  let notice = null;
+  // The recording's traceId for the notice row and its task (minted before the
+  // write only if the caller had none, so both agree).
+  const trace = traceId || randomUUID();
   try {
     await client.query('BEGIN');
     await upsertNoteStatus(client, { noteId, workspaceId, status: 'ready', onlyIfStatus: FAST_PATH_IN_PROGRESS });
@@ -366,6 +375,7 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
     for (const dec of summary.keyDecisions || []) {
       await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
     }
+    notice = await recordNotice(client, { noteId, workspaceId, kind: 'note_ready', traceId: trace });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch((rollbackErr) => logOr(log).error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
@@ -373,6 +383,8 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
   } finally {
     client.release();
   }
+  if (notice) await enqueueNotice({ notice, traceId: trace, log: logOr(log) });
+  return notice;
 }
 
 module.exports = {

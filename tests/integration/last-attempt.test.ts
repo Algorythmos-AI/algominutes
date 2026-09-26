@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
 import * as repo from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, noticeKinds } from './helpers';
 
 // The queue's last attempt at a task that kept throwing fails the note, then
 // dead-letters the job, refunds and tells the author. The refund runs for any
@@ -76,7 +76,9 @@ describe('the transcoder, last attempt', () => {
     expect(await status()).toBe('error');
     expect(mirrored.map((m) => m.status)).toEqual(['error']);
     expect(t.hooks).toHaveLength(1);
-    expect(t.hooks[0]).toMatchObject({ noteId: 'n1', workspaceId: 'ws', attempts: 5, deadLetterOnly: false, notify: true, payload: { kind: 'kickoff', storagePath: 'recordings/ws/n1.aac' } });
+    expect(t.hooks[0]).toMatchObject({ noteId: 'n1', workspaceId: 'ws', attempts: 5, deadLetterOnly: false, payload: { kind: 'kickoff', storagePath: 'recordings/ws/n1.aac' } });
+    // The author is told: one "failed" notice, written with the failure.
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('a note that is ready anyway: left ready; the dead letter records the lost work, with no refund or notice', async () => {
@@ -87,13 +89,15 @@ describe('the transcoder, last attempt', () => {
     expect(mirrored).toEqual([]);
     expect(t.hooks.map((h) => h.deadLetterOnly)).toEqual([true]);
     expect(warns).toContain('transcoder_last_attempt_dead_letter_only');
+    expect(await noticeKinds('n1')).toEqual([]);
   });
 
   it("a note already failed (another chunk's last attempt got there first): the refund (a no-op if made), no second notice; its message kept", async () => {
     await pool.query(`UPDATE notes SET status = 'error', error_message = 'The first failure.' WHERE id = 'n1'`);
     const t = transcoder();
     expect(await t.run(kickoff)).toEqual({ failed: false });
-    expect(t.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
+    expect(t.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual([]);
     expect((await pool.query(`SELECT error_message FROM notes WHERE id = 'n1'`)).rows[0].error_message).toBe('The first failure.');
     expect(mirrored.map((m) => m.errorMessage)).toEqual(['The first failure.']);
   });
@@ -157,21 +161,24 @@ describe('the summarizer, last attempt', () => {
     const s = summarizerRun();
     expect(await s.run({ noteId: 'n1', workspaceId: 'ws' })).toEqual({ failed: true });
     expect(await status()).toBe('error');
-    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, true]]);
+    expect(s.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('a note already failed: the refund (a no-op if made), no second notice', async () => {
     await pool.query(`UPDATE notes SET status = 'error' WHERE id = 'n1'`);
     const s = summarizerRun();
     expect(await s.run({ noteId: 'n1', workspaceId: 'ws' })).toEqual({ failed: false });
-    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, false]]);
+    expect(s.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual([]);
   });
 
   it("a regeneration's failure: failed and told, but not refunded (the recording's charge stands)", async () => {
     await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 2 WHERE id = 'n1'`);
     const s = summarizerRun();
     expect(await s.run({ noteId: 'n1', workspaceId: 'ws', summaryGeneration: 2 })).toEqual({ failed: true });
-    expect(s.hooks.map((h) => [h.deadLetterOnly, h.notify])).toEqual([[false, true]]);
+    expect(s.hooks.map((h) => h.deadLetterOnly)).toEqual([false]);
+    expect(await noticeKinds('n1')).toEqual(['note_failed']);
   });
 
   it('on the ledger, through the real hooks: a pipeline summary failure is refunded, a regeneration failure is not', async () => {
