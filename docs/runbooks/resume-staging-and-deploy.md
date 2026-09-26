@@ -87,7 +87,8 @@ Expected in the plan: `google_vpc_access_connector` **created** (deleted at
 pause); `google_sql_database_instance … activation_policy = "ALWAYS"`; the
 `google_cloud_run_v2_service` ×7, `google_cloud_run_v2_job.db_job`, the WIF
 pool/provider, the `gha-deployer` SA, and `google_billing_budget.env` all **created**.
-The plan of 2026-09-26 is **93 to add, 9 to change, 0 to destroy**.
+The plan of 2026-09-26 is **97 to add, 9 to change, 0 to destroy** (the 4 added by #180: the sweep's
+Cloud Tasks role and its act-as on `run-jobs`, for `run-sweep` and `run-db-job`).
 The 9 changes are the five queues, the database's `activation_policy`, and three buckets'
 retention rules.
 

@@ -59,6 +59,8 @@ describe('summary regeneration claim (notes-repo)', () => {
     expect(await note('note-b')).toMatchObject({ status: 'summarizing', summary_generation: 4 });
     await releaseSummaryClaim({ noteId: 'note-a', workspaceId: 'ws-a', generation: 4 });
     expect(await note('note-a')).toMatchObject({ status: 'ready', summary_generation: 3 });
+    // No regeneration is in flight any more (the sweep keys its refund rule on this).
+    expect((await pool.query(`SELECT summary_requested_at FROM notes WHERE id = 'note-a'`)).rows[0].summary_requested_at).toBeNull();
   });
 
   it('release is a no-op for a generation it did not mint (a later claim owns the note)', async () => {

@@ -810,8 +810,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
         - ~~The api's `failNote` → `markError` after `markQueued` has debited doesn't refund~~ **fixed
           (enqueue-failure-refunds PR):** `markError` takes a `refund`, written in its transaction, and the
           kickoff's failures after the debit pass one (`refund:enqueue_failed`).
-        - The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
-          regeneration rule.
+        - ~~The sweep refunds a stuck regeneration (`summarizing`) with `refund:stuck`, against the
+          regeneration rule~~ **fixed (stuck-regeneration-keeps-charge PR):** `failStuckNote` reads, on
+          the row it fails, whether a regeneration's claim holds it (`summarizing` with
+          `summary_requested_at` set) and then writes no refund; the note is still failed and its author
+          told. `markQueued` and `releaseSummaryClaim` clear the mark, so it means only "a regeneration
+          is in flight" (a re-run after a failed regeneration is refunded as usual). Tested on Postgres;
+          three mutations checked.
         - A failure can deadlock with account deletion (note row, then the ledger's foreign key on
           `users`, against `users` then the cascade); Postgres picks the failure, which retries or, on a
           last attempt, falls back as above. The note is being deleted anyway.
@@ -1335,7 +1340,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - the sweeper's Scheduler job starts paused, and the deploy resumes it after the smoke;
     - `BROADCAST_CAPTURE` and an optional `ADMIN_UIDS` reach the api;
     - `prove-staging.sh` runs the suite at `PG_POOL_MAX=1`.
-- [x] **Re-planned:** the one `reviewed-<sha>.tfplan` in `infra/terraform/envs/staging` (93 add, 9 change,
+- [x] **Re-planned:** the one `reviewed-<sha>.tfplan` in `infra/terraform/envs/staging` (97 add, 9 change,
   0 destroy; re-made whenever Terraform changes). `check-tfplan-env.mjs` passes on it (9 services and jobs):
   - `invoker_iam_disabled` is set on api and billing only;
   - `ALLOWED_ORIGINS` is the public site;

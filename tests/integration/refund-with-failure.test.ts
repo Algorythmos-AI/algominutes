@@ -155,9 +155,28 @@ describe("the sweep's failStuckNote with a refund", () => {
   });
 
   it('fails and refunds together; a worker failing it after refunds nothing more', async () => {
-    expect(await stuck()).toEqual({ failed: true, refunded: true, notice: expect.objectContaining({ kind: 'note_failed', noteId: 'n1' }) });
+    expect(await stuck()).toEqual({ failed: true, refunded: true, regeneration: false, notice: expect.objectContaining({ kind: 'note_failed', noteId: 'n1' }) });
     expect(await ledger()).toEqual(['debit 30', 'reversal -30 refund:stuck']);
     expect(await fail()).toMatchObject({ marked: true, refunded: false });
+    expect(await ledger()).toEqual(['debit 30', 'reversal -30 refund:stuck']);
+  });
+
+  it("a stuck regeneration is failed and told, but the recording's charge stands", async () => {
+    // The regeneration's claim (claimSummaryRegeneration) marks the note.
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = 2, summary_requested_at = NOW() - INTERVAL '4 hours' WHERE id = 'n1'`);
+    await pool.query(`UPDATE notes SET updated_at = NOW() - INTERVAL '4 hours' WHERE id = 'n1'`);
+    expect(await stuck()).toMatchObject({ failed: true, refunded: false, regeneration: true, notice: expect.objectContaining({ kind: 'note_failed' }) });
+    expect(await status()).toBe('error');
+    expect(await ledger()).toEqual(['debit 30']);
+  });
+
+  it("a pipeline summary stuck after an earlier regeneration failed is still refunded: a re-queue clears the mark", async () => {
+    await pool.query(`UPDATE notes SET status = 'error', summary_requested_at = NOW() - INTERVAL '1 day' WHERE id = 'n1'`);
+    const docs = { doc: () => ({ update: async () => {} }) } as never;
+    await repo.markQueued(docs, { noteId: 'n1', workspaceId: 'ws', authorUid: 'u', sourceType: 'recording' }, log);
+    expect((await pool.query(`SELECT summary_requested_at FROM notes WHERE id = 'n1'`)).rows[0].summary_requested_at).toBeNull();
+    await pool.query(`UPDATE notes SET status = 'summarizing', updated_at = NOW() - INTERVAL '4 hours' WHERE id = 'n1'`);
+    expect(await stuck()).toMatchObject({ failed: true, refunded: true, regeneration: false });
     expect(await ledger()).toEqual(['debit 30', 'reversal -30 refund:stuck']);
   });
 
