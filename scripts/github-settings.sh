@@ -16,12 +16,14 @@
 #     (infra/terraform/modules/environment/cloud-run.tf), so a deploy token
 #     needs both GitHub's gate and Google's.
 #   - Branch protection on integration and main: PR-only (no direct pushes),
-#     no force-push or deletion, conversations resolved, and the ALWAYS-RUN
-#     checks required. Path-filtered checks (ios, codeql-swift) are never
-#     required: they would leave unrelated PRs pending forever. main also
-#     requires promotion-guard's `guard`. No approving review is required
-#     (a solo owner cannot approve their own PR); admins are included, so
-#     nobody bypasses the checks by accident.
+#     no force-push or deletion, conversations resolved, and every check
+#     required. Every workflow runs on every PR, so each check reports: ios and
+#     codeql-swift skip their macOS job (a skipped job satisfies a required
+#     check) when the iOS app didn't change. Strict: a PR must be up to date
+#     with its base, so two PRs that pass apart can't merge into a broken
+#     pair. main also requires promotion-guard's `guard`. No approving review
+#     is required (a solo owner cannot approve their own PR); admins are
+#     included, so nobody bypasses the checks by accident.
 #   - Dependabot security updates on (alerts are already on).
 set -euo pipefail
 
@@ -31,7 +33,9 @@ APPLY=0
 
 # Exactly the check names the workflows report (verify with `gh pr checks <n>`).
 REQUIRED_CHECKS=(
-  "test" "integration"                                     # ci
+  "test" "integration" "web-build" "firestore-rules"       # ci
+  "ios-test"                                               # ios (skipped unless iOS changed)
+  "analyze (swift)"                                        # codeql-swift (likewise)
   "check"                                                  # invariants
   "gitleaks"                                               # gitleaks
   "validate (staging)" "validate (prod)"                   # terraform
@@ -62,7 +66,7 @@ protection() { # branch extra-check...
   local checks
   checks=$(printf '%s\n' "${REQUIRED_CHECKS[@]}" "$@" | jq -R '{context: .}' | jq -s .)
   jq -n --argjson checks "$checks" '{
-    required_status_checks: { strict: false, checks: $checks },
+    required_status_checks: { strict: true, checks: $checks },
     enforce_admins: true,
     required_pull_request_reviews: { required_approving_review_count: 0, dismiss_stale_reviews: false },
     restrictions: null,

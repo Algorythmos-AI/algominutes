@@ -2,14 +2,13 @@ name: codeql-swift
 
 # CodeQL for the native iOS app. Swift is a compiled language: CodeQL traces a
 # real build, so this needs macOS + Xcode (free for a public repo) and several
-# minutes. It runs on iOS changes, on pushes, and weekly, not on every PR, and
-# it is not a required check (path-filtered checks can't be; plan rev 7 #4).
+# minutes. The workflow runs on every PR and push so its check always reports
+# and can be required; the analysis itself runs only when the iOS app changed
+# (the `changes` job), and weekly.
 on:
   pull_request:
-    paths: ['apps/ios/**', '.github/workflows/codeql-swift.yml']
   push:
     branches: [integration, main]
-    paths: ['apps/ios/**', '.github/workflows/codeql-swift.yml']
   schedule:
     - cron: '41 17 * * 0' # weekly (Mon 03:41 Sydney)
 
@@ -17,8 +16,45 @@ permissions:
   contents: read
 
 jobs:
+  # Decides whether the iOS app changed. The workflow itself runs on every PR,
+  # so its check always reports and can be required; the macOS job below is
+  # skipped (a skipped job satisfies a required check) when nothing iOS changed,
+  # because macOS minutes bill ~10x.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.diff.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$BEFORE" ;;
+            *) echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0 ;;   # schedule, manual: always
+          esac
+          # A new branch or a force-push has no usable "before": check everything.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --name-only "$base" "$GITHUB_SHA" | grep -qE '^(apps/ios/|\.github/workflows/codeql-swift\.yml$)'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "iOS changed: $(grep -o 'ios=.*' "$GITHUB_OUTPUT" | tail -1)"
+
   analyze:
     name: analyze (swift)
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -27,11 +63,12 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v7
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
+      - name: Generate Xcode project (pinned XcodeGen)
         working-directory: apps/ios
-        run: xcodegen generate
+        run: |
+          set -euo pipefail
+          XCODEGEN=$(sh scripts/install-xcodegen.sh)
+          "$XCODEGEN" generate
       - uses: github/codeql-action/init@v3
         with:
           languages: swift
