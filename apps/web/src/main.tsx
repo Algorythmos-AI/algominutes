@@ -4,7 +4,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router';
 import { ApiProvider } from './app/ApiContext';
 import { NoticeProvider } from './app/Notice';
 import { NotesProvider } from './app/notes/NotesContext';
-import { firestore } from './firebase';
+import { firebase, firestore } from './firebase';
 import { createNoteDoc, ensureWorkspace, markNoteFailed } from './lib/notes/noteCache';
 import { firestoreNotesFeed } from './lib/notes/notesFeed';
 import { AuthProvider } from './app/auth/AuthContext';
@@ -13,13 +13,17 @@ import { originsFromEnv } from './lib/api/config';
 import { firebaseAdapter } from './lib/auth/firebaseAdapter';
 import { BASENAME, routes } from './routes';
 import { installGlobalCrashHandlers } from './lib/crashReport';
+import { firebaseMessaging, withPushSignOut } from './lib/push/messaging';
+import { PushProvider } from './app/push/PushContext';
 import './index.css';
 
 // Before anything renders, so a crash during the first paint is still caught.
 installGlobalCrashHandlers();
 
 const router = createBrowserRouter(routes, { basename: BASENAME });
-const adapter = firebaseAdapter();
+// Push is on only when the build has a VAPID key; sign-out then forgets this browser's token first.
+const messaging = firebaseMessaging(import.meta.env.VITE_FIREBASE_VAPID_KEY, () => firebase().app);
+const adapter = withPushSignOut(firebaseAdapter(), messaging);
 const origins = originsFromEnv();
 const feed = firestoreNotesFeed(firestore);
 const bootstrap = async (uid: string) => ensureWorkspace(await firestore(), uid);
@@ -35,7 +39,9 @@ createRoot(document.getElementById('root')!).render(
         <ApiProvider origins={origins}>
           <NotesProvider feed={feed} bootstrap={bootstrap} writer={writer}>
             <NoticeProvider>
-              <RouterProvider router={router} />
+              <PushProvider messaging={messaging}>
+                <RouterProvider router={router} />
+              </PushProvider>
             </NoticeProvider>
           </NotesProvider>
         </ApiProvider>

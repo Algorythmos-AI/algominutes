@@ -219,4 +219,31 @@ describe('the Firebase auth proxy', () => {
     expect(policy).toMatch(/connect-src [^;]*https:\/\/securetoken\.googleapis\.com/);
     expect(policy).toMatch(/frame-src 'self';/);
   });
+
+  it("the app's CSP allows web push: FCM's token registration and Firebase Installations", () => {
+    const policy = csp('/app');
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/fcmregistrations\.googleapis\.com/);
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/firebaseinstallations\.googleapis\.com/);
+    // The service worker is under /app, so it gets the app's policy (its fetches are held to it), not the public one.
+    expect(csp('/app/sw.js')).toBe(policy);
+  });
+});
+
+describe('the app shape: the service worker is served as itself', () => {
+  let dist: string;
+  beforeAll(() => {
+    dist = fs.mkdtempSync(path.join(os.tmpdir(), 'site-app-'));
+    for (const f of ['index.html', '404.html', 'app/index.html', 'app/sw.js']) {
+      fs.mkdirSync(path.dirname(path.join(dist, f)), { recursive: true });
+      fs.writeFileSync(path.join(dist, f), f);
+    }
+  });
+  afterAll(() => fs.rmSync(dist, { recursive: true, force: true }));
+
+  it('/app/sw.js is the worker, not the app page a rewrite would give (a worker must be JavaScript)', () => {
+    const sw = resolve(config, dist, '/app/sw.js');
+    expect(sw.status).toBe(200);
+    expect(path.relative(dist, sw.file)).toBe('app/sw.js');
+    expect(path.relative(dist, resolve(config, dist, '/app/notes/abc').file)).toBe('app/index.html');
+  });
 });
