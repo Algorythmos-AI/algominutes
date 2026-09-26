@@ -19,6 +19,7 @@ import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import noteStorageModule from '@algominutes/ai/note-storage.cjs';
 import { CreateUploadSessionRequest } from '@algominutes/contracts/schemas';
+import { buildAllowedOriginSet } from '../middleware/cors.js';
 import {
   createUploadSession,
   getUploadSession,
@@ -70,6 +71,17 @@ function extFromFileName(fileName) {
   if (dot < 0 || dot === fileName.length - 1) return '';
   const ext = fileName.slice(dot + 1).toLowerCase();
   return /^[a-z0-9]{1,8}$/.test(ext) ? ext : '';
+}
+
+/**
+ * The browser origin a resumable session is bound to, or undefined. GCS
+ * answers a session's PUTs cross-origin only from the Origin it was created
+ * with (and only if the bucket's CORS allows it), so the web app's uploads
+ * name the site here. The native apps send no Origin and get none. Only an
+ * https origin the api's CORS already admits is passed on.
+ */
+export function sessionOrigin(origin, allowed = buildAllowedOriginSet()) {
+  return typeof origin === 'string' && origin.startsWith('https://') && allowed.has(origin) ? origin : undefined;
 }
 
 export async function createUploadSessionRoute(req, res) {
@@ -124,8 +136,10 @@ export async function createUploadSessionRoute(req, res) {
     const file = bucket.file(storagePath);
     // createResumableUpload returns [uri]; the client uploads chunks to it.
     // TODO(A11): verify against live GCS.
+    const origin = sessionOrigin(req.headers?.origin);
     [sessionUri] = await file.createResumableUpload({
       metadata: { contentType },
+      ...(origin ? { origin } : {}),
     });
   } catch (err) {
     log.error({ err, storagePath }, 'create_resumable_upload_failed');

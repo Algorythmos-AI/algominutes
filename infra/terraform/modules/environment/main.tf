@@ -318,7 +318,25 @@ resource "google_storage_bucket" "buckets" {
     }
   }
 
+  # The web app uploads a recording straight to its resumable session (the api
+  # creates it with the site as its origin, routes/uploads.js). GCS allows
+  # that cross-origin PUT only for origins listed here: the api's https CORS
+  # origins, on the recordings bucket only.
+  dynamic "cors" {
+    for_each = (each.value == "recordings" && length(local.browser_upload_origins) > 0) ? [1] : []
+    content {
+      origin          = local.browser_upload_origins
+      method          = ["PUT"]
+      response_header = ["Content-Type", "Content-Range", "Range", "X-Goog-Resumable"]
+      max_age_seconds = 3600
+    }
+  }
+
   depends_on = [google_project_service.apis]
+}
+
+locals {
+  browser_upload_origins = [for o in split(",", var.allowed_origins) : trimspace(o) if startswith(trimspace(o), "https://")]
 }
 
 # ---------------------------------------------------------------------------
