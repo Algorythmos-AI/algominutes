@@ -57,11 +57,12 @@ afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 /** A JWS signed by `leafName`'s key, carrying the chain `chain` (x5c). */
 function jws(payload: unknown, { leafName = 'leaf', chain = ['leaf', 'int', 'root'], alg = 'ES256' } = {}) {
   const head = b64u({ alg, x5c: chain.map((n) => der(`${n}.pem`)) });
-  const body = b64u(payload);
+  // Signed now, as Apple stamps it: after the certificates were made (a payload may set its own).
+  const body = b64u({ signedDate: Date.now(), ...(payload as object) });
   const sig = sign('sha256', Buffer.from(`${head}.${body}`), { key: fs.readFileSync(path.join(dir, `${leafName}.key`)), dsaEncoding: 'ieee-p1363' }).toString('base64url');
   return `${head}.${body}.${sig}`;
 }
-const PURCHASE = { originalTransactionId: '2000000123456789', productId: 'pro_monthly', expiresDate: Date.parse('2099-01-01'), bundleId: 'com.algorythmos.algominutes', signedDate: Date.now() };
+const PURCHASE = { originalTransactionId: '2000000123456789', productId: 'pro_monthly', expiresDate: Date.parse('2099-01-01'), bundleId: 'com.algorythmos.algominutes' };
 const refused = (fn: () => unknown) => {
   try {
     fn();
