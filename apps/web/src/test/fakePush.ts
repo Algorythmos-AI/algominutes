@@ -13,6 +13,7 @@ export function fakePush(initial: PushPermission = 'default', answer: Notificati
     }),
     token: vi.fn(async () => 'fcm-token-1'),
     deleteToken: vi.fn(async () => {}),
+    onOpenNote: vi.fn(() => () => {}),
     onForeground: vi.fn((cb) => {
       listener = cb;
       return () => {

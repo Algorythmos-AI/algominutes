@@ -24,6 +24,8 @@ const router = createBrowserRouter(routes, { basename: BASENAME });
 // Push is on only when the build has a VAPID key; sign-out then forgets this browser's token first.
 const messaging = firebaseMessaging(import.meta.env.VITE_FIREBASE_VAPID_KEY, () => firebase().app);
 const adapter = withPushSignOut(firebaseAdapter(), messaging);
+// A tapped notification's note opens through the router, so a recording page's "You're recording" guard applies.
+messaging?.onOpenNote((noteId) => void router.navigate(noteId ? `/notes/${encodeURIComponent(noteId)}` : '/'));
 const origins = originsFromEnv();
 const feed = firestoreNotesFeed(firestore);
 const bootstrap = async (uid: string) => ensureWorkspace(await firestore(), uid);
