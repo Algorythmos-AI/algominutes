@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'apps/site');
-const KNOWN_KEYS = new Set(['$schema', 'framework', 'buildCommand', 'outputDirectory', 'cleanUrls', 'trailingSlash', 'rewrites', 'headers']);
+// installCommand and buildCommand shape only the build, not what's served.
+const KNOWN_KEYS = new Set(['$schema', 'framework', 'installCommand', 'buildCommand', 'outputDirectory', 'cleanUrls', 'trailingSlash', 'rewrites', 'headers']);
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
