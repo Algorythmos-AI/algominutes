@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // @ts-expect-error: plain ESM modules, no type declarations
-import { APPLE_ROOT_G3_SHA256, appleRootCA, verifyAndDecodeJws, verifyAppleJws, verifyStoreKitPurchase, unverifiedAppleJwsAllowed } from '../services/billing/src/lib/apple.js';
+import { APPLE_ROOT_G3_SHA256, appleRootCA, verifyAndDecodeJws, verifyAppleJws, verifyAppleNotification, verifyStoreKitPurchase, unverifiedAppleJwsAllowed } from '../services/billing/src/lib/apple.js';
 // @ts-expect-error: plain ESM module, no type declarations
 import { appleWebhookRoute } from '../services/billing/src/webhooks/apple.js';
 
@@ -110,6 +110,18 @@ describe('an Apple-signed JWS', () => {
     expect(refused(() => verifyAppleJws(jws({ ...PURCHASE, signedDate: Date.parse('2200-01-01') }), { root })).message).toMatch(/not valid/);
     for (const alg of ['none', 'HS256', 'RS256']) expect(refused(() => verifyAppleJws(jws(PURCHASE, { alg }), { root })).message, alg).toMatch(/ES256/);
     expect(refused(() => verifyAppleJws('a.b', { root })).status).toBe(400);
+  });
+
+  it('a notification is verified whole: itself, the transaction inside it, and both for our app', () => {
+    const ours = { bundleId: 'com.algorythmos.algominutes' };
+    const note = (data: unknown) => jws({ notificationType: 'DID_RENEW', data });
+    expect(verifyAppleNotification(note({ ...ours, signedTransactionInfo: jws(PURCHASE) }), { root }).tx).toMatchObject({ originalTransactionId: '2000000123456789' });
+    expect(refused(() => verifyAppleNotification(note(ours), { root })).message).toMatch(/no transaction info/);
+    expect(refused(() => verifyAppleNotification(note({ bundleId: 'com.example.other', signedTransactionInfo: jws(PURCHASE) }), { root })).message).toMatch(/bundle id/);
+    expect(refused(() => verifyAppleNotification(note({ ...ours, signedTransactionInfo: jws({ ...PURCHASE, bundleId: 'com.example.other' }) }), { root })).message).toMatch(/bundle id/);
+    const forgedTx = `${b64u({ alg: 'ES256', x5c: ['x'] })}.${b64u(PURCHASE)}.sig`;
+    expect(refused(() => verifyAppleNotification(note({ ...ours, signedTransactionInfo: forgedTx }), { root })).status).toBe(400);
+    expect(refused(() => verifyAppleNotification(undefined, { root })).status).toBe(400);
   });
 
   it("a genuine purchase for another app grants nothing", () => {
