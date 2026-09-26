@@ -67,9 +67,8 @@ superset that keeps the native (Capacitor/Ionic) clients working:
 `capacitor://localhost`, `ionic://localhost`. Requests with no `Origin`
 (server-to-server, native WebViews, curl) are allowed, as before.
 
-> Production origins (`https://algominutes.com`, `https://api.algominutes.com`)
-> are supplied at deploy time via `ALLOWED_ORIGINS`; only the localhost dev
-> origins are baked in.
+> The deployed origin (`https://algominutes.algorythmos.com`) is supplied by
+> Terraform via `ALLOWED_ORIGINS`; only the localhost dev origins are baked in.
 
 ## Client-version gate
 

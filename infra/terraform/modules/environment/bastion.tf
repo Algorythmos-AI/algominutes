@@ -2,7 +2,7 @@
 # Optional in-VPC proof VM ("bastion"). Off by default (var.enable_bastion).
 #
 # Cloud SQL has a private IP only, and Cloud Run jobs are one-shot. This small
-# VM is where an operator (or Claude, via IAP SSH) proves the environment from
+# VM is where an operator (via IAP SSH) proves the environment from
 # INSIDE the VPC: TLS-only Postgres, schema at head, the integration suite
 # against Cloud SQL itself, and the Vertex models in-region. See
 # docs/runbooks/staging-proof.md and scripts/prove-staging.sh.

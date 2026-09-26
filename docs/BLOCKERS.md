@@ -28,13 +28,19 @@ deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both).
       migrations are expand-only. Nothing to run by hand; staging just needs your apply first.
 - [ ] **Re-scope `algominutes-prod-budget`** from the whole billing account to the prod project only
       (INFRASTRUCTURE open item #2 — still outstanding).
-- [ ] Confirm the domain registrar for `algominutes.com` / `.com.au` (INFRASTRUCTURE §6 TODO).
+- [x] **Domain decided (2026-09-26):** `algorythmos.com` (owned; Cloudflare DNS, Zoho mail). The site is
+      `algominutes.algorythmos.com`, mail is `support@` / `privacy@algorythmos.com`, and the api keeps its
+      `run.app` URLs (DECISIONS). `algominutes.com` is **not registered**, so nothing may point at it: the
+      server moved in #170, the iOS app in its "nothing to trip on" PR. The web's `apiUrl.ts` still names
+      `api.algominutes.com`; the web isn't deployed, and it moves with its `/v1` migration.
+- [ ] **Owner:** turn on auto-renew for `algorythmos.com` (expires 2026-12-06); add the Zoho aliases.
 - ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
   `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
   `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).
-- Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes
-  `https://wassup-meeting.web.app` as the prod API origin — a client reference to replace at rename time,
-  and the web currently ignores `VITE_API_BASE_URL` on local/capacitor hosts in favour of it.
+- Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes the prod API origin
+  (now `https://api.algominutes.com`, an unregistered domain), and the web ignores `VITE_API_BASE_URL` on
+  local/capacitor hosts in favour of it. The web isn't deployed; fix it with the web's `/v1` migration,
+  before any web deploy, so no ID token is ever sent to a domain we don't own.
 
 See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
@@ -149,13 +155,13 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   `@algominutes/db`, it's a small move (the service `sharedRequire` ai→db fallback already tolerates it).
 - **`main` not pushed / not protected during this run** (see §1). 
 - **A5 rename follow-ups (need Apple/infra, not code):**
-  - iOS `Info.plist` reversed-OAuth URL scheme still references the OLD client OAuth id
-    (`com.googleusercontent.apps.909388484461-…`); regenerate when the iOS Firebase app is registered
-    (`TODO(A4-apple)`). Not a `wassup` token, so it doesn't fail the grep.
-  - Backend domains `api.algominutes.com` / `algominutes.com` are wired in code but **not confirmed live**
-    (`TODO(A9-infra)`) — verify DNS/hosting when infra stands up.
-  - The **app-side** iOS entitlements has the keychain group but no `application-groups` entry; the broadcast
-    handoff needs the app added to `group.com.algorythmos.algominutes` when the extension is wired (below).
+  - ~~iOS `Info.plist` reversed-OAuth URL scheme still references the OLD client OAuth id~~ **fixed:** the
+    build writes the scheme from `GoogleService-Info.plist`'s `REVERSED_CLIENT_ID` (#174 orders it after
+    Info.plist), and `AppConfigTests` fails if `909388484461` comes back.
+  - ~~Backend domains `api.algominutes.com` / `algominutes.com`~~ **decided:** `algominutes.com` is
+    unregistered; see "Domain decided" in §2.
+  - ~~The **app-side** iOS entitlements has no `application-groups` entry~~ **done (#125):** both targets
+    carry `group.com.algorythmos.algominutes`, registered on both App IDs 2026-09-26.
   - Minor: the web "Sign in with Google" mark is a single indigo tint, not Google's official multicolour
     branding — revisit for store/brand compliance (pre-existing, not introduced by the rename).
 - **A9.3/A6.3 are now DECIDED** (reverse trial + guest mode) and the billing rails are built. Remaining
@@ -198,7 +204,8 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
      quota resets on the calendar month (UTC). A trial crossing a month boundary gets a fresh monthly
      bucket — bounded and low-risk, noted for awareness.
 - **A9.4 blended cost-per-minute not measured** — gates pricing (needs A11 deployed pipeline). The
-  1,500-min Pro tier at A$29 requires COGS well under 1¢/min. See PERFORMANCE-BUDGET.md.
+  1,500-min Pro tier at A$14.99 (~A$12.74 net) breaks even at ~0.85¢/min, so COGS must be well under that.
+  See PERFORMANCE-BUDGET.md.
 - ~~**A7.2 background upload is gated OFF by default**~~ **done (#101):** every recording uploads through
   `/v1/uploads` on a background URLSession (the Firebase `putFile` path and its flag are gone). Still to
   prove on staging: the GCS resumable session against live GCS, and a device upload after the app is killed.
@@ -254,7 +261,7 @@ where testable so the fix PR proves itself:
 - [x] **Also fixed:** `markNoteFailed` mirrored Firestore `'error'` even when Postgres matched no row
       (note already `ready`, or another workspace → phantom doc). Now mirrors only when Postgres marked it
       failed or the Postgres write itself errored. Tested.
-- [ ] **Pre-existing, found by the auditors (queued):**
+- [x] **Pre-existing, found by the auditors (all fixed):**
       - [x] **Fixed (process-queue tenant-boundary PR):** `process-intelligence.js` set note status
         directly in Firestore at **six** sites (185, 197, 268, 272, 289, 317; the audit had listed four).
         It also carried its own Postgres writer with **no workspace guard**: a caller could reset another
@@ -771,6 +778,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     A retry isn't charged again (the key is idempotent), but a user who gives up has paid for nothing.
     The sweeper refunds only in-flight notes. Refund on these paths, or enqueue through an outbox written
     with the debit.
+
+    **Fixed by #166 for all three (checked 2026-09-26):** each path goes through `failNote`, whose
+    `markError` carries the refund (`refund:enqueue_failed`, net-guarded) in its transaction. A failed
+    mirror write throws out of `markQueued` after its commit and reaches `failNote` too
+    (`process-intelligence.js`, the `mark_queued_failed`, `kickoff_misconfig` and `enqueue` events).
+    - [ ] Only the enqueue failure has a Postgres test (`process-kickoff.test.ts`). Tests for the mirror
+      failure and the misconfigured kickoff land with the metering PR (plan S2-PR6c).
   - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
     free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
     the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
@@ -1306,8 +1320,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     - the sweeper's Scheduler job starts paused, and the deploy resumes it after the smoke;
     - `BROADCAST_CAPTURE` and an optional `ADMIN_UIDS` reach the api;
     - `prove-staging.sh` runs the suite at `PG_POOL_MAX=1`.
-- [x] **Re-planned:** `reviewed-361188d.tfplan` (93 add, 9 change, 0 destroy). `check-tfplan-env.mjs`
-  passes on it (9 services and jobs):
+- [x] **Re-planned:** the one `reviewed-<sha>.tfplan` in `infra/terraform/envs/staging` (93 add, 9 change,
+  0 destroy; re-made whenever Terraform changes). `check-tfplan-env.mjs` passes on it (9 services and jobs):
   - `invoker_iam_disabled` is set on api and billing only;
   - `ALLOWED_ORIGINS` is the public site;
   - `run-api` holds `roles/aiplatform.user`;
@@ -1316,17 +1330,18 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - there are no `allUsers` members.
 
   The superseded `reviewed-2026-09-25d.tfplan` is deleted.
-- [ ] **Yours, before the apply:** check at the organization that `run.managed.requireInvokerIam` isn't
-  enforced (runbook §1). Then apply `reviewed-361188d.tfplan` and run the first deploy in the same
-  sitting (§3).
+- [x] **Checked 2026-09-26:** `run.managed.requireInvokerIam` is not enforced at the organization, so
+  `invoker_iam_disabled` is allowed (runbook §1).
+- [ ] **Yours:** apply that plan (the runbook's "plan is current" check first) and run the first deploy in
+  the same sitting (§3), by 2026-10-10.
 - [ ] **Yours, after your first sign-in:** re-plan with `TF_VAR_admin_uids` (runbook §5), so the
   dead-letter view answers you.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
-- [ ] **The iOS app and the web app call the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
-  `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so **neither client works
-  against the deployed backend yet.**
+- [ ] **The web app still calls the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
+  `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so the web doesn't work
+  against the deployed backend (it isn't deployed). **The iOS app moved in full** (A–E below).
   - **iOS (plan PR-17), in five PRs** (scoped 2026-09-25; every api call also lacked the required
     `X-AlgoMinutes-Client` header, so each would get a 400):
     - [x] **A, build config (ios-staging-config PR):** Debug, Staging and Release configurations, each
@@ -1475,7 +1490,7 @@ identifier … Stop and ask. Never invent one"). Provide each and A4 can proceed
 |---|---|---|---|
 | 1 | **Apple Developer Team ID** (Algorythmos') | iOS signing (`project.yml`) | Replaces client `HX9DZ34625`. |
 | 2 | **iOS provisioning profile name(s)** (app + broadcast extension) | iOS signing | Replaces `"Wassup App Store"`. |
-| 3 | **iOS bundle IDs** — app + broadcast extension + setup-UI | iOS | Default assumed for A5: `com.algorythmos.algominutes` (+`.BroadcastExtension`, +`.BroadcastExtensionSetupUI`). Confirm. |
+| 3 | **iOS bundle IDs** — app + broadcast extension | iOS | ✅ `com.algorythmos.algominutes` + `.BroadcastExtension`, registered 2026-09-26 (the setup-UI target was deleted in #172). |
 | 4 | **App Group identifier** | iOS capture handoff | Default assumed: `group.com.algorythmos.algominutes`. Confirm (retrofits break silently). |
 | 5 | **GCP/Firebase project IDs** — staging + production | all services, Firebase | Two projects. Replaces client `wassup-meeting`. |
 | 6 | **GCP project numbers / messaging sender IDs** (per env) | FCM, OAuth | Regenerated with the projects. |
@@ -1483,6 +1498,6 @@ identifier … Stop and ask. Never invent one"). Provide each and A4 can proceed
 | 8 | **Android `applicationId` + package** | Android | Default assumed for A5: `com.algorythmos.algominutes`. Confirm. |
 | 9 | **Android upload keystore** (fresh) + Play App Signing enrolment | Android signing | Never reuse client keystore; store upload key safely. |
 | 10 | **Cloud Run / Cloud Tasks / Postgres / bucket names** (per env) | services | Stand up fresh per environment. |
-| 11 | **Domain(s)** | web, API, CORS | Assumed `algominutes.com`, `api.algominutes.com`. Confirm. |
+| 11 | **Domain(s)** | web, API, CORS | ✅ Site `algominutes.algorythmos.com`; api on `run.app` (DECISIONS, 2026-09-26). |
 | 12 | **GCP billing budget + daily spend cap figures** (§4.6) | cost circuit breaker | Needed before first load test. |
 | 13 | **Stripe / App Store Connect / Play Console accounts** | billing (A9) | Enrol both small-business programmes before first sale. |
