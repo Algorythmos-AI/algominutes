@@ -27,6 +27,7 @@ export function fakeAuth(initial: AuthUser | null = null) {
     }),
     signOut: vi.fn(async () => set(null)),
     idToken: vi.fn(async () => (user ? `token-for-${user.uid}` : null)),
+    revokeApple: vi.fn(async () => true),
   } satisfies AuthAdapter;
   return { adapter, set, get user() { return user; } };
 }
