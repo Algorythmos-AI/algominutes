@@ -195,9 +195,10 @@ final class AuthService: NSObject {
     /// data migration, no trial restart.
     ///
     /// If the Google account is already a separate Firebase user, linking is
-    /// impossible; we sign into that existing account instead (the anonymous
-    /// scratch data is left behind — the alternative would be silently merging
-    /// two identities, which we must not do).
+    /// impossible. Signing into that account instead would leave the guest's
+    /// notes behind (merging two identities is not something to do silently),
+    /// so the user is asked first: `pendingExistingAccount` is set, and the UI
+    /// offers `switchToExistingAccount()` or `keepGuestAccount()`.
     func linkWithGoogle() async {
         guard !isSigningIn else { return }
         isSigningIn = true
@@ -219,10 +220,10 @@ final class AuthService: NSObject {
             do {
                 try await current.link(with: credential) // preserves uid
             } catch let error as NSError where error.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
-                // That Google account is a different Firebase user already. Fall
-                // back to signing into it; the anonymous uid is abandoned.
-                let existing = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
-                try await Auth.auth().signIn(with: existing)
+                // That Google account is a different Firebase user already.
+                // Switching to it would leave this guest's notes behind, so ask
+                // first (switchToExistingAccount / keepGuestAccount).
+                pendingExistingAccount = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
             }
         } catch is CancellationError {
         } catch let error as NSError where error.code == GIDSignInError.canceled.rawValue {
@@ -260,8 +261,8 @@ final class AuthService: NSObject {
                     do {
                         try await current.link(with: credential) // preserves uid
                     } catch let error as NSError where error.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
-                        let existing = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
-                        try await Auth.auth().signIn(with: existing)
+                        // As for Google: ask before leaving the guest's notes behind.
+                        pendingExistingAccount = error.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential ?? credential
                     }
                 } else {
                     try await Auth.auth().signIn(with: credential)
@@ -270,6 +271,35 @@ final class AuthService: NSObject {
                 authError = "Couldn't link your account. Please try again."
             }
         }
+    }
+
+    // MARK: - An account that already exists
+
+    /// A guest tried to link an Apple or Google account that is already a
+    /// separate AlgoMinutes account. Holding its credential until the user says
+    /// whether to switch to it.
+    private(set) var pendingExistingAccount: AuthCredential?
+
+    var needsExistingAccountConfirmation: Bool { pendingExistingAccount != nil }
+
+    /// Sign into the existing account. The guest's notes stay with the guest.
+    func switchToExistingAccount() async {
+        guard let credential = pendingExistingAccount, !isSigningIn else { return }
+        pendingExistingAccount = nil
+        isSigningIn = true
+        defer { isSigningIn = false }
+        do {
+            try await Auth.auth().signIn(with: credential)
+            AppLog.info("auth_switched_to_existing_account")
+        } catch {
+            AppLog.error("auth_switch_to_existing_failed: \(error.localizedDescription)")
+            authError = "Couldn't sign in to that account. Please try again."
+        }
+    }
+
+    /// Stay the guest; nothing changes.
+    func keepGuestAccount() {
+        pendingExistingAccount = nil
     }
 
     // MARK: - Session

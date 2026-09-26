@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 /// Parity with the Settings tab in `src/App.tsx`.
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var showDeleteSheet = false
     @State private var confirmingSignOut = false
+    @State private var copiedUserID = false
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
@@ -68,9 +70,11 @@ struct SettingsView: View {
 
                     AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
-                            infoRow(label: "Account", value: env.auth.user?.email ?? "—")
-                            Divider().overlay(Theme.borderSoft)
-                            infoRow(label: "Workspace ID", value: env.auth.workspaceId ?? "—")
+                            infoRow(label: "Account", value: env.auth.isAnonymous ? "Guest (not backed up)" : (env.auth.user?.email ?? "Signed in"))
+                            if let uid = env.auth.user?.uid {
+                                Divider().overlay(Theme.borderSoft)
+                                copyRow(label: "User ID", value: uid)
+                            }
                         }
                     }
 
@@ -100,12 +104,24 @@ struct SettingsView: View {
                         AdminCostsCard()
                     }
 
+                    // A guest's notes live only under this guest: offer to keep
+                    // them (create an account in place) before anything else.
+                    if env.auth.isAnonymous {
+                        Button {
+                            env.billing.isAccountPromptPresented = true
+                        } label: {
+                            Label("Create account", systemImage: "person.crop.circle.badge.plus")
+                                .font(Typography.label(15))
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    }
+
                     Button {
-                        // Signing out wipes on-device recordings for privacy on
-                        // a shared device. Ask first when that would destroy a
-                        // recording the user has not got back yet — losing a
-                        // recording to a routine sign-out is not recoverable.
-                        if env.pendingRecordingsAtRisk > 0 {
+                        // A guest's sign-out can't be undone: its notes can't be
+                        // reached again. Always ask. Otherwise ask only when it
+                        // would destroy a recording not yet uploaded (sign-out
+                        // wipes on-device recordings on a shared device).
+                        if env.auth.isAnonymous || env.pendingRecordingsAtRisk > 0 {
                             confirmingSignOut = true
                         } else {
                             env.signOut()
@@ -140,16 +156,17 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .confirmationDialog(
-            "Sign out and delete unsent recordings?",
+            env.auth.isAnonymous ? "Sign out of the guest account?" : "Sign out and delete unsent recordings?",
             isPresented: $confirmingSignOut,
             titleVisibility: .visible
         ) {
             Button("Sign out and delete", role: .destructive) { env.signOut() }
+            if env.auth.isAnonymous {
+                Button("Create account instead") { env.billing.isAccountPromptPresented = true }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(env.pendingRecordingsAtRisk == 1
-                 ? "One recording hasn't finished uploading. Signing out removes it from this device and it can't be recovered."
-                 : "\(env.pendingRecordingsAtRisk) recordings haven't finished uploading. Signing out removes them from this device and they can't be recovered.")
+            Text(Self.signOutWarning(isGuest: env.auth.isAnonymous, pendingRecordings: env.pendingRecordingsAtRisk))
         }
         .sheet(isPresented: $showDeleteSheet) {
                 DeleteAccountSheet()
@@ -232,6 +249,21 @@ struct SettingsView: View {
         }
     }
 
+    /// What signing out will lose. A guest's notes aren't backed up to an
+    /// account, so they can't be reached again after it.
+    static func signOutWarning(isGuest: Bool, pendingRecordings: Int) -> String {
+        var parts: [String] = []
+        if isGuest {
+            parts.append("You're using AlgoMinutes as a guest. Signing out can't be undone: your notes won't be reachable again. Create an account to keep them.")
+        }
+        if pendingRecordings == 1 {
+            parts.append("One recording hasn't finished uploading. Signing out removes it from this device and it can't be recovered.")
+        } else if pendingRecordings > 1 {
+            parts.append("\(pendingRecordings) recordings haven't finished uploading. Signing out removes them from this device and they can't be recovered.")
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
     /// "340 of 1,500 minutes used this month", from the server's metering
     /// (the same numbers the quota enforces). Nil when unknown or unmetered.
     static func minutesLine(_ entitlement: EntitlementResponse?) -> String? {
@@ -289,6 +321,41 @@ struct SettingsView: View {
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.body)
         }
+    }
+
+    /// A value the user may need to send us (the User ID, for tester minutes or
+    /// support): shown in full, and copied with a tap.
+    private func copyRow(label: String, value: String) -> some View {
+        Button {
+            UIPasteboard.general.string = value
+            copiedUserID = true
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                copiedUserID = false
+            }
+        } label: {
+            HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label.uppercased())
+                        .font(Typography.label(10))
+                        .kerning(1.2)
+                        .foregroundStyle(Theme.muted)
+                    Text(value)
+                        .font(Typography.body(13).monospaced())
+                        .foregroundStyle(Theme.body)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Label(copiedUserID ? "Copied" : "Copy", systemImage: copiedUserID ? "checkmark" : "doc.on.doc")
+                    .font(Typography.label(13))
+                    .foregroundStyle(Theme.body)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label): \(value)")
+        .accessibilityHint("Copies it, to send to AlgoMinutes support")
     }
 
     private func linkRow(label: String, icon: String? = nil) -> some View {
