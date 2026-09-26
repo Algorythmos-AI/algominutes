@@ -10,7 +10,7 @@
 import type { FirebaseApp } from 'firebase/app';
 import type { AuthAdapter } from '../auth/adapter';
 import { reportCrash } from '../crashReport';
-import { noteIdOf } from './noteLink';
+import { workerMessage } from './noteLink';
 
 export type PushPermission = NotificationPermission | 'unsupported';
 
@@ -29,8 +29,47 @@ export interface PushMessaging {
   token(): Promise<string>;
   /** Forgets this browser's token, so nothing more is delivered to it. A no-op if it never had one. */
   deleteToken(): Promise<void>;
-  /** A push that arrives while the app is in front (FCM shows nothing then). */
+  /** A push that arrives while one of the app's windows is in view (the worker shows no notification then). */
   onForeground(cb: (m: ForegroundMessage) => void): () => void;
+  /** A notification was tapped and this window was picked to open its note (null: the notes list). */
+  onOpenNote(cb: (noteId: string | null) => void): () => void;
+}
+
+/**
+ * Resolves once the registration has an active worker. getToken subscribes to
+ * push at once, and a worker still installing makes that fail (Firebase waits
+ * only for its own default worker). Not navigator.serviceWorker.ready: that's
+ * for the page's own scope, and /app itself is outside /app/.
+ */
+export function activated(reg: ServiceWorkerRegistration, timeoutMs = 30_000): Promise<void> {
+  if (reg.active) return Promise.resolve();
+  const sw = reg.installing ?? reg.waiting;
+  if (!sw) return Promise.reject(new Error('push: the service worker has nothing installing'));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('push: the service worker did not activate')), timeoutMs);
+    const check = () => {
+      if (sw.state === 'activated') {
+        clearTimeout(timer);
+        resolve();
+      } else if (sw.state === 'redundant') {
+        clearTimeout(timer);
+        reject(new Error('push: the service worker was replaced before it activated'));
+      }
+    };
+    sw.addEventListener('statechange', check);
+    check();
+  });
+}
+
+/** The worker's messages to this window, parsed; returns the unsubscribe. */
+function onWorker(cb: (m: NonNullable<ReturnType<typeof workerMessage>>) => void): () => void {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return () => {};
+  const listener = (e: MessageEvent) => {
+    const m = workerMessage(e.data);
+    if (m) cb(m);
+  };
+  navigator.serviceWorker.addEventListener('message', listener);
+  return () => navigator.serviceWorker.removeEventListener('message', listener);
 }
 
 export function firebaseMessaging(vapidKey: string | undefined, app: () => FirebaseApp, base = import.meta.env.BASE_URL): PushMessaging | null {
@@ -55,6 +94,7 @@ export function firebaseMessaging(vapidKey: string | undefined, app: () => Fireb
     token: async () => {
       const l = await need();
       const reg = await navigator.serviceWorker.register(`${base}sw.js`, { scope: base });
+      await activated(reg);
       return bind(l, reg);
     },
     deleteToken: async () => {
@@ -67,22 +107,8 @@ export function firebaseMessaging(vapidKey: string | undefined, app: () => Fireb
       await bind(l, reg);
       await l.mod.deleteToken(l.messaging);
     },
-    onForeground: (cb) => {
-      let off: (() => void) | null = null;
-      let stopped = false;
-      load()
-        .then((l) => {
-          if (!l || stopped) return;
-          off = l.mod.onMessage(l.messaging, (p) =>
-            cb({ noteId: noteIdOf(p.data), title: p.notification?.title ?? null, body: p.notification?.body ?? null }),
-          );
-        })
-        .catch((err) => reportCrash('push.onForeground', err));
-      return () => {
-        stopped = true;
-        off?.();
-      };
-    },
+    onForeground: (cb) => onWorker((m) => m.type === 'algominutes:push' && cb({ noteId: m.noteId, title: m.title, body: m.body })),
+    onOpenNote: (cb) => onWorker((m) => m.type === 'algominutes:open-note' && cb(m.noteId)),
   };
 }
 

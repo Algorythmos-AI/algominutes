@@ -84,11 +84,13 @@ paths keep Firebase's own headers: no site CSP, no `X-Frame-Options`, no COOP. `
    (all three are enabled on the project).
 
 **Web push.** The app's service worker is `/app/sw.js` (scope `/app/`), built by `apps/web/vite.sw.config.ts` and
-checked for by `scripts/build-site.mjs`. It caches nothing. A tapped notification opens `notes/<id>` relative to
-the worker's own scope, so staging opens staging, whatever deep link the notifier sent (iOS's
-`algominutes://note/<id>`). The browser is only asked after a click, on a card shown once the user has a note, or
-from Settings; sign-out deletes the browser's FCM token first. To check: turn notifications on, upload a short
-file, switch to another tab, and wait for "ready"; tapping it opens the note.
+checked for by `scripts/build-site.mjs`. It caches nothing. It shows the notifier's notifications itself: when one of
+the app's own windows is in view it sends that window a notice instead (public-site pages don't count, unlike in
+Firebase's worker). A tap asks the app's window in front to open `notes/<id>` through its router (so a recording
+page's "You're recording" guard applies), or opens a new window at the worker's scope, so staging opens staging
+whatever deep link the notifier sent (iOS's `algominutes://note/<id>`). The browser is only asked after a click, on a
+card shown once the user has a note, or from Settings; sign-out deletes the browser's FCM token first. To check: turn
+notifications on, upload a short file, switch to another tab, and wait for "ready"; tapping it opens the note.
 
 ## DNS (Cloudflare, zone `algorythmos.com`)
 
