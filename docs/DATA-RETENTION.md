@@ -33,9 +33,12 @@ options (product-configurable, plan-aware):
 - **Auto-delete original audio after transcription** — keep transcript + summary, drop the
   source audio early (privacy-forward option).
 - **Scope:** a workspace-level default plus per-note override.
-- `TODO(A11):` The scheduled job that enforces auto-delete (a Cloud Scheduler → worker that
-  selects notes past their retention age and deletes the Firestore doc to fire the
-  `onNoteDeleted` cascade). Ships as infra; the *policy* is here, the *enforcer* is A11.
+- **Enforced** by the `db-sweep` job (Cloud Scheduler, every 15 min; `services/db-job/src/handlers/sweep.js`,
+  step `retention`). It selects notes older than their author's `users.retention_days`, deletes each through
+  notes-repo `deleteNote` (the manual-delete path: Postgres first, then the Firestore mirror, then the
+  audio purge, retried by the sweep until it succeeds), and logs `note_deleted_retention`. Today the setting
+  is per user (`POST /v1/account/retention`); the workspace default and per-note override are not built.
+  "Auto-delete original audio after transcription" is not built either.
 - `TODO(legal):` Whether any minimum or maximum retention is legally mandated (e.g. if the
   consent-log in CONSENT §4.3 becomes required, it may have its own retention rule).
 
@@ -45,18 +48,24 @@ options (product-configurable, plan-aware):
 
 | Data | Store | Kept for | Deleted by |
 |---|---|---|---|
-| **Original audio** | Cloud Storage (GCS), note-prefixed | Until note/account delete or user-set retention; local device copy purged after confirmed upload (§5) | `onNoteDeleted` Storage cleanup |
-| **Intermediate FLAC chunks** | Cloud Storage (processing scratch) | Transient — through processing; backstopped by the delete cascade | `onNoteDeleted` (prefix sweep) |
+| **Original audio** | Cloud Storage (GCS), note-prefixed | Until note/account delete or user-set retention; local device copy purged after confirmed upload (§5) | `POST /v1/notes/delete` → a `storage_purges` row in the delete's transaction, purged right away and retried until it succeeds |
+| **Intermediate FLAC chunks** | Cloud Storage (processing scratch) | Transient — through processing; backstopped by the delete cascade | the transcoder, then the note's `storage_purges` row (`transcoder/{noteId}/`) |
 | **Transcript lines** | Postgres `transcript_lines` (+ Firestore cache) | With the note | `DELETE FROM notes` → `ON DELETE CASCADE` |
 | **Summaries / action items / key decisions** | Postgres `summaries`, `action_items`, `key_decisions` | With the note | `ON DELETE CASCADE` |
 | **Embeddings** | Postgres `embeddings` | With the note | `ON DELETE CASCADE` |
 | **Audio chunk metadata** | Postgres `audio_chunks` | With the note | `ON DELETE CASCADE` |
-| **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | delete-account / manual / retention job |
-| **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `delete-account` endpoint |
+| **Note record** | Postgres `notes` (+ Firestore `workspaces/{ws}/notes/{id}`) | Until deleted | `POST /v1/notes/delete` (notes-repo `deleteNote`: Postgres first, then the Firestore mirror) / delete-account / retention job |
+| **Account: email + uid** | Firebase Auth + Postgres `users` | Until account deletion | `POST /v1/account/delete`: Postgres first (the `users` cascade), then open upload sessions cancelled, each note's doc + audio (`storage_purges`), the account's workspace docs (with subcollections) + storage, and Auth last. 200 only when all of it is gone; idempotent, so a retry finishes it |
+| **Deleted-account tombstone** | Postgres `account_deletions` (uid, its workspace ids; no content) | Kept so a still-valid token can't re-create the account, and a retry (or the sweeper) can finish | The sweeper (`db-job` `sweep`, every 15 min) prunes completed rows after 30 days |
+| **Tester grant** | Postgres `entitlement_grants` (uid, plan, minutes, reason, dates) | Until it expires or is revoked | Goes with the account (`ON DELETE CASCADE`) |
+| **Deleted-note tombstone** | Postgres `deleted_notes` (note id, workspace id; no content. A personal workspace id embeds the uid, as `account_deletions` keeps) | Kept so a stale client can't upload into a deleted note, or re-queue it, after its purge finished | The sweeper prunes rows after 30 days |
+| **Push notices** | Postgres `note_notices` (note id, workspace id, the author's uid, kind, when sent; no content) | Until sent, so a lost push is retried (a day at most), then 30 days | Deleted with the note (a cascade); the sweeper prunes rows 30 days after they were sent or given up |
+| **Paid-work records** | Postgres `usage_events` (event, audio seconds, model, time; uid/workspace/note ids, nulled when those are deleted) | 90 days: the spend cap reads 24 hours, the rest is cost attribution | The sweeper prunes rows after 90 days |
 | **Workspace membership** | Postgres `workspace_members` | Until account deletion / removal | `delete-account` endpoint |
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |
 | **Billing/subscription state** | Stripe / App Store / Play + Postgres | Per payment-processor + tax/record-keeping law | see below |
 | **Server logs** (traceId, uid, noteId, workspaceId, error events) | Cloud Logging | **Log retention window** — recommend **30 days** operational, then purge | Logging retention config |
+| **Error Reporting** (error groups, from error-level server logs) | Cloud Error Reporting | Google keeps error events 30 days | Automatic. The group's title is the error's first line. Error messages can carry short fragments of model output (the fast path's JSON parse error quotes about 10 characters; queued in BLOCKERS) |
 | **Backups** | Postgres automated backups / PITR; Storage object versioning if enabled | **Backup retention window** — see §4 | lifecycle expiry |
 
 - `TODO(legal):` Billing/tax records may have a **legally required minimum** retention
@@ -87,14 +96,19 @@ Mechanics:
   deleted **immediately** on the user action (§3 / §5).
 - **Backups** are not edited in place; instead, backup retention is **capped at the window**
   so any backup still containing the deleted item ages out within 30 days and is destroyed.
-- `TODO(A11):` **Infra config** to make the promise true and testable:
-  - Postgres automated-backup / PITR retention set to **≤ 30 days** (Cloud SQL backup +
-    transaction-log retention).
-  - Cloud Storage bucket **lifecycle rule** (and, if object versioning is enabled, a
-    noncurrent-version expiry) set to **≤ 30 days** so soft-deleted/older versions expire.
-  - Cloud Logging retention set to the §3 log window (recommend 30 days).
-  - A documented verification (query/log) proving no backup older than the window is
-    retained. Per CLAUDE.md, closure needs evidence, not a config screenshot.
+- **Infra config** that makes the promise true (Terraform, `infra/terraform/modules/environment`):
+  - Cloud SQL: 7 retained daily backups (`backup_retention_settings`), and 7 days of PITR transaction logs
+    where PITR is on (prod);
+  - the recordings bucket: noncurrent (deleted or overwritten) object versions expire after 7 days
+    (`noncurrent_version_retention_days`, validated 1–30). The api deletes every generation on a note or
+    account deletion anyway;
+  - Cloud Logging: the `_Default` bucket keeps 30 days (`google_logging_project_bucket_config`).
+  - Verification after apply:
+    ```bash
+    gcloud sql instances describe algominutes-<env>-pg --format='value(settings.backupConfiguration.backupRetentionSettings.retainedBackups,settings.backupConfiguration.transactionLogRetentionDays)'
+    gcloud logging buckets describe _Default --location=global --format='value(retentionDays)'
+    gcloud storage buckets describe gs://algominutes-<env>-recordings --format='value(lifecycle_config)'
+    ```
 
 ---
 
@@ -142,10 +156,10 @@ Reference: iOS `apps/ios/AlgoMinutes/Services/RecordingStore.swift`.
 
 | Item | Type |
 |---|---|
-| Backup/PITR retention ≤ 30 days (Cloud SQL) (§4) | `TODO(A11)` — **blocking the promise** |
-| Storage lifecycle/version expiry ≤ 30 days (§4) | `TODO(A11)` — blocking the promise |
-| Cloud Logging retention config (§3, §4) | `TODO(A11)` |
-| Auto-delete enforcer job for user-set retention (§2) | `TODO(A11)` |
+| Backup/PITR retention ≤ 30 days (Cloud SQL) (§4) | Done: 7 backups, 7 days PITR (Terraform), pending apply |
+| Storage lifecycle/version expiry ≤ 30 days (§4) | Done: noncurrent versions expire after 7 days (Terraform), pending apply |
+| Cloud Logging retention config (§3, §4) | Done: `_Default` bucket 30 days (Terraform), pending apply |
+| Auto-delete enforcer job for user-set retention (§2) | Done: `db-sweep` step `retention` (§2) |
 | Verification evidence that no backup outlives the window (§4) | `TODO(A11)` |
 | Billing/tax minimum-retention obligation (§3) | `TODO(legal)` |
 | Legally mandated min/max retention, incl. consent log (§2) | `TODO(legal)` |

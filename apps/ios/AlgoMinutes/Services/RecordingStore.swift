@@ -27,6 +27,27 @@ enum RecordingState: String, Codable, Equatable, Sendable {
 ///   2. `associate(...)`          — note doc created → sidecar written (durable link)
 ///   3a. upload confirmed         → `remove(...)` deletes audio + sidecar
 ///   3b. upload fails / app killed → audio + sidecar remain; recovered on next launch
+/// The recorder's file format: AAC in an ADTS stream (`.aac`).
+///
+/// ADTS is a sequence of self-contained frames with nothing written at the
+/// end, so a recording the app never got to stop (a crash, a jetsam kill, the
+/// phone dying) stays decodable up to its last whole frame. An `.m4a` needs its
+/// `moov` atom, written only by `stop()`; without it the file is unreadable and
+/// the whole meeting is lost. (Measured on a file cut at 60%: ADTS decoded all
+/// 72.0 s in ffmpeg, AVAudioFile and AVAsset; the same audio as .m4a opened in
+/// none of them.) Recordings from older builds are still `.m4a`.
+enum RecordingFormat {
+    static let ext = "aac"
+    static let mimeType = "audio/aac"
+
+    static func mimeType(forExt ext: String) -> String {
+        ext.lowercased() == "aac" ? "audio/aac" : "audio/mp4"
+    }
+
+    /// The extensions a recording on disk may have (current, then older builds').
+    static let recordedExts: Set<String> = ["aac", "m4a"]
+}
+
 @MainActor
 final class RecordingStore {
     struct PendingRecording: Codable, Equatable, Identifiable {
@@ -49,6 +70,10 @@ final class RecordingStore {
         var uploadedBytes: Int64?
         /// Last upload/processing failure, shown on the pending-recordings badge.
         var lastError: String?
+        /// The resumable session this recording's upload is using (POST /v1/uploads):
+        /// a retry continues it from the server's byte count instead of starting over.
+        var uploadId: String?
+        var uploadSessionUri: String?
 
         var id: String { recordingId }
         var isAssociated: Bool { noteId != nil }
@@ -95,7 +120,7 @@ final class RecordingStore {
 
     /// Allocates a fresh audio-file URL for a new recording. The file is created
     /// by the recorder; the sidecar is written later by `associate`.
-    func makeRecordingURL(ext: String = "m4a") -> URL {
+    func makeRecordingURL(ext: String = RecordingFormat.ext) -> URL {
         directory.appendingPathComponent("recording_\(UUID().uuidString).\(ext)")
     }
 
@@ -139,6 +164,15 @@ final class RecordingStore {
         remove(fileName: fileURL.lastPathComponent)
     }
 
+    /// Removes the recording still waiting on this device for a note, if any
+    /// (the note was deleted). Returns whether there was one.
+    @discardableResult
+    func removeRecording(forNoteId noteId: String) -> Bool {
+        guard let pending = pendingRecording(forNoteId: noteId) else { return false }
+        remove(fileName: pending.fileName)
+        return true
+    }
+
     // MARK: - Upload state (A7.1 / A7.2)
 
     /// Read the sidecar for a specific file, if one exists. Callers mutate the
@@ -166,6 +200,14 @@ final class RecordingStore {
         write(recording)
     }
 
+    /// Remember (or, with nils, forget) the upload session a recording is using.
+    func setUploadSession(fileName: String, uploadId: String?, sessionUri: String?) {
+        guard var recording = readSidecar(forFileName: fileName) else { return }
+        recording.uploadId = uploadId
+        recording.uploadSessionUri = sessionUri
+        write(recording)
+    }
+
     // MARK: - Queries
 
     func pendingRecording(forNoteId noteId: String) -> PendingRecording? {
@@ -180,7 +222,7 @@ final class RecordingStore {
             at: directory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
         )) ?? []
         let audioFiles = contents.filter {
-            $0.pathExtension == "m4a" && $0.lastPathComponent.hasPrefix("recording_")
+            RecordingFormat.recordedExts.contains($0.pathExtension.lowercased()) && $0.lastPathComponent.hasPrefix("recording_")
         }
         return audioFiles.compactMap { url -> PendingRecording? in
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -192,8 +234,8 @@ final class RecordingStore {
             return PendingRecording(
                 recordingId: recordingId(fromFileName: url.lastPathComponent),
                 fileName: url.lastPathComponent,
-                mimeType: "audio/mp4",
-                ext: "m4a",
+                mimeType: RecordingFormat.mimeType(forExt: url.pathExtension),
+                ext: url.pathExtension.lowercased(),
                 durationSeconds: nil,
                 noteId: nil,
                 createdAt: modified
@@ -243,5 +285,7 @@ extension RecordingStore.PendingRecording {
         state = try c.decodeIfPresent(RecordingState.self, forKey: .state) ?? .recorded
         uploadedBytes = try c.decodeIfPresent(Int64.self, forKey: .uploadedBytes)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        uploadId = try c.decodeIfPresent(String.self, forKey: .uploadId)
+        uploadSessionUri = try c.decodeIfPresent(String.self, forKey: .uploadSessionUri)
     }
 }

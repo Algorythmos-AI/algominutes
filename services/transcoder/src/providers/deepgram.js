@@ -119,7 +119,8 @@ function mapResponse(json) {
 
 async function safeText(res) {
   try { return (await res.text()).slice(0, 300); }
-  catch { return ''; }
+  // The reason travels in the error text this feeds (no logger in scope).
+  catch (err) { return `<body unreadable: ${err.message}>`; }
 }
 
 module.exports = { NAME, MODE, transcribeInline, mapResponse, buildQuery };

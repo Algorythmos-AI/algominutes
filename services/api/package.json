@@ -17,11 +17,10 @@
     "@algominutes/ai": "*",
     "@algominutes/contracts": "*",
     "@algominutes/db": "*",
-    "@google/genai": "^1.29.0",
     "cors": "^2.8.6",
     "docx": "^9.7.1",
     "express": "^4.21.2",
-    "firebase-admin": "^13.8.0",
+    "firebase-admin": "^14.4.0",
     "google-auth-library": "^9.15.0",
     "helmet": "^8.1.0",
     "tsx": "^4.21.0"

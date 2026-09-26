@@ -24,7 +24,7 @@
 //    so the caller pairs this with an IP-keyed limiter and maxInstances.
 
 const { withQueryTimeout, pool } = require('@algominutes/ai/pg-query.cjs');
-const shareLinks = require('@algominutes/ai/share-links.cjs');
+const shareLinks = require('@algominutes/db/share-links.cjs');
 const redaction = require('@algominutes/ai/redaction.cjs');
 
 const TIMEOUT_MS = 10000;
@@ -211,13 +211,16 @@ async function fetchShareView({ noteId, scope, log }) {
       values: [noteId, MAX_LINES + 1], log, op: 'share_lines',
     });
     const truncated = lines.rows.length > MAX_LINES;
+    const shown = lines.rows.slice(0, MAX_LINES);
+    // Line by line, carrying a private key that spans lines (redactLines).
+    const { texts: scrubbed } = redaction.redactLines(shown.map((r) => String(r.text || '')));
     out.transcript = {
-      lines: lines.rows.slice(0, MAX_LINES).map((r, i) => ({
+      lines: shown.map((r, i) => ({
         id: i,
         speakerTag: r.speaker_tag,
         speakerName: r.speaker_name,
         startMs: r.start_ms,
-        text: redaction.redactPII(String(r.text || '')).text,
+        text: scrubbed[i],
       })),
       truncated,
     };

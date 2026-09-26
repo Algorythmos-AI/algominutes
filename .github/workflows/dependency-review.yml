@@ -1,0 +1,20 @@
+name: dependency-review
+
+# Blocks a PR that ADDS a dependency (or version) with a known high/critical
+# advisory. Only the change is judged, so pre-existing alerts (tracked by
+# Dependabot) don't block unrelated PRs. Runs on every PR, so it can be a
+# required check.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high

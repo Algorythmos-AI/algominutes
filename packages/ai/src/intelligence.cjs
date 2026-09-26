@@ -6,7 +6,9 @@ const MAX_AUDIO_BYTES = 500 * 1024 * 1024;
 const RATE_LIMIT_PER_HOUR = 20;
 const MAX_BYTES_PER_HOUR = 1024 * 1024 * 1024;
 const RETRY_DEADLINE_MS = 240_000;
-const MODEL_LADDER = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+// Model ids live in models.cjs (lifecycle + region facts); this re-export keeps
+// existing importers working.
+const MODEL_LADDER = require('./models.cjs').LADDER;
 
 function resolveGeminiAudioMime(hint, storagePath) {
   const raw = (hint || '').toLowerCase();
@@ -87,8 +89,10 @@ function parseGeminiJson(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(`INVALID_JSON: ${err.message}`);
+  } catch (_err) {
+    // Not err.message: Node quotes the model's output there, and this error
+    // reaches logs and the dead letter (summary-output.cjs does the same).
+    throw new Error(`INVALID_JSON: unparseable model output (${cleaned.length} chars)`);
   }
   if (!validateSummaryShape(parsed)) {
     throw new Error('Model returned unexpected schema');
@@ -187,7 +191,7 @@ function salvageGeminiJson(rawText) {
           },
           partial: true,
         };
-      } catch { /* fall through */ }
+      } catch { /* silent-catch-ok: salvage failed; the original parse error is rethrown below */ }
     }
     throw firstErr;
   }
@@ -207,8 +211,10 @@ function parseSummaryJson(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(`INVALID_JSON: ${err.message}`);
+  } catch (_err) {
+    // Not err.message: Node quotes the model's output there, and this error
+    // reaches logs and the dead letter (summary-output.cjs does the same).
+    throw new Error(`INVALID_JSON: unparseable model output (${cleaned.length} chars)`);
   }
   if (!validateSummaryOnlyShape(parsed)) {
     throw new Error('Model returned unexpected schema');
@@ -258,6 +264,7 @@ async function enforceUsageBudget(db, uid, bytes) {
       err.code = 429;
       throw err;
     }
+    // firestore-write-ok: the per-uid rate-limit counter (rateLimits/{uid}), not a note
     tx.set(limitRef, {
       count: count + 1,
       bytes: usedBytes + addBytes,

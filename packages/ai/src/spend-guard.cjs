@@ -12,10 +12,10 @@
 //   1. env DAILY_SPEND_CAP_AUD (set at deploy — A11), else
 //   2. per-env default below (staging A$20, prod A$200 — INFRASTRUCTURE §4.4).
 //
-// Spend source: a pluggable reader returning today's accumulated cost in AUD.
-// Until the usage_ledger + per-minute COGS wiring lands (A9), the default reader
-// returns 0 — the breaker is present and wired but inert. Wire it in A9 via
-// setDailySpendReader(). See TODO(A9) below.
+// Spend source: a pluggable reader returning the last 24 hours' cost in AUD.
+// The transcoder installs @algominutes/db spend-repo.cjs (audio minutes sent to
+// paid work, from usage_events, x a blended cost per minute); the default below
+// returns 0, so a process that installs none is uncapped.
 
 const DEFAULT_CAPS_AUD = { production: 200, prod: 200, staging: 20, development: 5, test: 1e9 };
 
@@ -42,11 +42,11 @@ class SpendCapExceededError extends Error {
   }
 }
 
-// TODO(A9): replace with a reader over usage_ledger / the billing export —
-// async () => number (today's spend in AUD, project-scoped, cached ~1 min).
+// async () => number: the last 24 hours' spend in AUD. The workers install the
+// ledger reader at startup (setDailySpendReader).
 let _spendReader = async () => 0;
 
-/** Inject the real daily-spend reader (A9). */
+/** Install the spend reader (the workers' index.js). */
 function setDailySpendReader(fn) {
   if (typeof fn !== 'function') throw new TypeError('spend reader must be a function');
   _spendReader = fn;
@@ -84,8 +84,65 @@ async function assertUnderDailyCap({ log } = {}) {
   return { ok: true, spent, cap };
 }
 
+/**
+ * A worker's gate before paid work. At the cap, the note it was about to pay for
+ * is failed (Postgres first, through `markFailed`), refunded and its author told
+ * (`onCapped`, the worker's terminal hooks), and the task is acknowledged. It
+ * used to be acknowledged alone, which left the note in progress until the
+ * stuck-note sweep. Returns the response to send, or null to carry on.
+ *
+ * `markFailed` resolves `{ failed }`: whether it moved the note to 'error'. Only
+ * that transition runs the hooks and stops the task. A note it didn't fail (work
+ * already started on it, it moved on, it's in another workspace, or a replay
+ * after this gate already failed it) carries on to the worker, which resumes or
+ * acknowledges it as it would anyway, and nobody is refunded or told twice.
+ *
+ * `markFailed` throws if Postgres misses the write: the answer is then 500, so
+ * the task retries and checks again. On the queue's last attempt that drops the
+ * task with the note still queued in both stores, for the stuck-note sweep to
+ * fail and refund; guessing at the mirror without Postgres would be worse.
+ */
+async function haltAtSpendCap({ log, noteId, workspaceId, markFailed, onCapped }) {
+  try {
+    await assertUnderDailyCap({ log });
+    return null;
+  } catch (err) {
+    if (!err || err.code !== 'SPEND_CAP_EXCEEDED') {
+      log.error({ err, noteId, workspaceId }, 'spend_guard_failed');
+      return { status: 500, body: { error: 'spend_guard_failed' } };
+    }
+    if (!noteId || !workspaceId) {
+      log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
+      return { status: 200, body: { ok: false, reason: 'spend_cap' } };
+    }
+    let failed;
+    try {
+      ({ failed } = await markFailed());
+    } catch (markErr) {
+      log.error({ err: markErr, noteId, workspaceId }, 'spend_cap_note_write_failed');
+      return { status: 500, body: { error: 'note_write_failed' } };
+    }
+    if (!failed) {
+      log.warn({ noteId, workspaceId }, 'spend_cap_tripped_note_carries_on');
+      return null;
+    }
+    log.error({ err, noteId, workspaceId }, 'spend_cap_tripped_pipeline_halted');
+    try {
+      await onCapped(err);
+    } catch (hookErr) {
+      log.error({ err: hookErr, noteId, workspaceId }, 'spend_cap_hooks_failed');
+    }
+    return { status: 200, body: { ok: false, reason: 'spend_cap' } };
+  }
+}
+
+/** What the author sees on a note stopped by the cap. */
+const SPEND_CAP_MESSAGE = "We've reached today's processing limit. Please try again tomorrow.";
+
 module.exports = {
   assertUnderDailyCap,
+  haltAtSpendCap,
+  SPEND_CAP_MESSAGE,
   setDailySpendReader,
   dailyCapAUD,
   SpendCapExceededError,

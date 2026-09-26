@@ -99,12 +99,15 @@ struct LoginView: View {
             .padding(.top, 24)
             .padding(.bottom, 36)
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
     }
 }
 
+/// The public site's pages (the site is apps/site; the api and billing build
+/// their links on the same origin, PUBLIC_SITE_URL).
 enum LegalLinks {
-    static let privacy = URL(string: "https://algominutes.com/privacy")!
-    static let terms = URL(string: "https://algominutes.com/terms")!
-    static let webApp = URL(string: "https://algominutes.com")!
+    static let site = URL(string: "https://algominutes.algorythmos.com")!
+    static let privacy = site.appendingPathComponent("privacy")
+    static let terms = site.appendingPathComponent("terms")
+    static let support = site.appendingPathComponent("support")
 }

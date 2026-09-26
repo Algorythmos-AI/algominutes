@@ -1,0 +1,341 @@
+/* The site's layout. Colours are custom properties from /brand.css (packages/tokens). */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.18em;
+}
+
+a:focus-visible,
+summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--heading);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 1.4rem;
+  margin: 2.5rem 0 0.75rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+  margin: 1.75rem 0 0.5rem;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.skip {
+  position: absolute;
+  left: -999px;
+  top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--card);
+  color: var(--heading);
+  z-index: 10;
+}
+
+.skip:focus {
+  left: 0.5rem;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+.prose {
+  max-width: 44rem;
+}
+
+/* Header */
+.site-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 4rem;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--heading);
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-decoration: none;
+}
+
+.brand img {
+  width: 2rem;
+  height: 2rem;
+}
+
+.site-nav ul {
+  display: flex;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.site-nav a {
+  display: inline-block;
+  padding: 0.6rem 0.7rem;
+  color: var(--body);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+}
+
+.site-nav a:hover,
+.site-nav a[aria-current='page'] {
+  color: var(--heading);
+  background: var(--card);
+}
+
+main {
+  padding: 2.5rem 0 4rem;
+}
+
+/* Legal notice banner */
+.notice {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin: 1rem 0 2rem;
+  font-size: 0.95rem;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0 0 1rem;
+}
+
+/* Home */
+.hero {
+  padding: 2rem 0 1rem;
+  text-align: center;
+}
+
+.hero img {
+  width: 5.5rem;
+  height: 5.5rem;
+}
+
+.hero h1 {
+  margin-top: 1.25rem;
+}
+
+.lede {
+  font-size: 1.2rem;
+  max-width: 38rem;
+  margin: 0 auto 1.5rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.7rem 1.2rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--mark-start), var(--mark-end));
+  color: var(--on-mark);
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 1.5rem 0 0;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+}
+
+.card h3 {
+  margin-top: 0;
+}
+
+.card p {
+  margin: 0;
+}
+
+.steps {
+  counter-reset: step;
+  list-style: none;
+  padding: 0;
+}
+
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 2.75rem;
+  margin: 0 0 1rem;
+}
+
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: var(--on-mark);
+  background: linear-gradient(135deg, var(--mark-start), var(--mark-end));
+}
+
+/* Tables (the processors list) */
+.table-scroll {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 38rem;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--heading);
+}
+
+/* On a phone each row is a card, labelled from data-label. */
+@media (max-width: 40rem) {
+  table,
+  tbody,
+  tr,
+  th,
+  td {
+    display: block;
+    min-width: 0;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    margin: 0 0 0.75rem;
+    padding: 0.25rem 0;
+  }
+
+  th,
+  td {
+    border: 0;
+    padding: 0.35rem 0.9rem;
+  }
+
+  td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+}
+
+/* FAQ */
+details {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--heading);
+  font-weight: 600;
+  padding: 0.75rem 0;
+}
+
+/* Footer */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.site-footer ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.site-footer a {
+  color: var(--body);
+  display: inline-block;
+  padding: 0.35rem 0;
+}
+
+.site-footer p {
+  margin: 0.25rem 0;
+}

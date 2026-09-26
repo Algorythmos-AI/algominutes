@@ -6,6 +6,7 @@
 // Run service so the kickoff Function can stay thin.
 
 const fs = require('node:fs');
+const { isNoteGone } = require('./note-gone');
 
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
@@ -20,11 +21,12 @@ const redaction = loadShared('redaction.cjs');
 const geminiCall = loadShared('gemini-call.cjs');
 const embeddings = loadShared('embeddings.cjs');
 
-async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps }) {
-  const { db, mirror, tasks, env } = deps;
+async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork }) {
+  const { db, mirror, tasks } = deps;
 
-  const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  // No API key: the ladder calls Vertex AI with the service's identity (ADC),
+  // in AIPLATFORM_LOCATION. A GEMINI_API_KEY gate here used to fail every clip
+  // of 10 minutes or less, since nothing sets one.
 
   const buf = fs.readFileSync(inputLocal);
   const resolvedMime = intelligence.resolveGeminiAudioMime(mimeType, inputLocal);
@@ -37,7 +39,7 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   // call. Without responseSchema + maxOutputTokens=16384, chatty content
   // truncates mid-JSON and parseGeminiJson throws. PR-C closure.
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
-    apiKey, parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
+    parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: intelligence.FAST_PATH_RESPONSE_SCHEMA,
@@ -45,6 +47,11 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
     },
   });
   if (!rawText) throw error || new Error('gemini_failed_no_text');
+  // What the daily spend cap counts: an answer came back, so the clip was billed
+  // (usable or not). A 429/5xx outage returns none and isn't counted; retries of
+  // it would otherwise trip the cap with nothing spent (handler.js recordPaidWork).
+  if (recordPaidWork) await recordPaidWork('gemini_call', durationSec, 'fast-path');
+  else log.warn({ noteId, workspaceId }, 'paid_work_unmetered');
 
   // Use salvage parser: if Gemini still truncates despite the schema
   // (rare with maxOutputTokens=16384), recover whatever objects were
@@ -67,56 +74,41 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
 
-  // Persist to Postgres.
-  const client = await db.pool().connect();
-  try {
-    await client.query('BEGIN');
-    await db.upsertNoteStatus(client, { noteId, status: 'ready' });
-    await db.deleteTranscriptLinesForNote(client, noteId);
-    for (let i = 0; i < redacted.length; i++) {
-      const l = redacted[i];
-      const startMs = intelligence.MODEL_LADDER && embeddings.timeStrToMs(l.time);
-      await client.query(
-        `INSERT INTO transcript_lines (note_id, speaker_tag, start_ms, end_ms, text, confidence)
-           VALUES ($1, NULL, $2, $2, $3, NULL)`,
-        [noteId, startMs || 0, `${l.speaker || 'Speaker'}: ${l.text || ''}`],
-      );
-    }
-    await client.query(
-      `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-         VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (note_id) DO UPDATE
-         SET gist = EXCLUDED.gist, long_summary = EXCLUDED.long_summary,
-             topics = EXCLUDED.topics, model = EXCLUDED.model,
-             generated_at = NOW()`,
-      [noteId, parsed.gist || '', null, JSON.stringify(parsed.actionItems || []), model || null],
-    );
-    await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of parsed.actionItems || []) {
-      await client.query(`INSERT INTO action_items (note_id, text) VALUES ($1, $2)`, [noteId, item]);
-    }
-    await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of parsed.keyDecisions || []) {
-      await client.query(`INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)`, [noteId, dec]);
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => log.error({ rollbackErr, noteId }, 'fast_path_rollback_failed'));
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  await mirror.mirrorReady({
-    workspaceId,
+  // Persist to Postgres: one transaction in the repo layer (pipeline-repo.cjs).
+  await db.persistFastPathResult(db.pool(), {
     noteId,
-    summary: {
-      gist: parsed.gist || '',
-      actionItems: parsed.actionItems || [],
-      keyDecisions: parsed.keyDecisions || [],
-    },
-    transcriptPreview: redacted,
-  });
+    workspaceId,
+    lines: redacted.map((l) => ({
+      startMs: embeddings.timeStrToMs(l.time),
+      text: `${l.speaker || 'Speaker'}: ${l.text || ''}`,
+    })),
+    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions },
+    model,
+    traceId: deps && deps.traceId,
+  }, log);
+
+  // Postgres now holds the result and 'ready'. A retry of this task would find
+  // the note finished and acknowledge it without coming back here, so a failed
+  // mirror is logged, not thrown: throwing would only skip the embedder below.
+  // The doc stays behind Postgres (BLOCKERS: a sweep step that re-mirrors
+  // finished notes). A doc that's gone still throws, for handle() to judge.
+  try {
+    await mirror.mirrorReady({
+      workspaceId,
+      noteId,
+      summary: {
+        gist: parsed.gist || '',
+        actionItems: parsed.actionItems || [],
+        keyDecisions: parsed.keyDecisions || [],
+        // A short recording has none; an earlier run's must not linger.
+        chapters: [],
+      },
+      transcriptPreview: redacted,
+    });
+  } catch (err) {
+    if (isNoteGone(err)) throw err;
+    log.error({ err, noteId, workspaceId }, 'fast_path_ready_mirror_failed');
+  }
 
   // Best-effort embedder enqueue (claim is exactly-once).
   const c2 = await db.pool().connect();

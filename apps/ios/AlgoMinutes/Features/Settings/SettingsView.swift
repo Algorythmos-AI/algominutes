@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 /// Parity with the Settings tab in `src/App.tsx`.
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var showDeleteSheet = false
     @State private var confirmingSignOut = false
+    @State private var copiedUserID = false
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
@@ -37,17 +39,9 @@ struct SettingsView: View {
 
                     subscriptionCard
 
-                    OwllCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Link(destination: LegalLinks.webApp) {
-                                linkRow(label: "Web version", icon: "macbook")
-                            }
-                        }
-                    }
-
                     // A7.2 (P1): Wi-Fi-only uploads. The uploader reads this via
                     // UploadPreferences.wifiOnly at session creation.
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 6) {
                             Toggle(isOn: $wifiOnlyUploads) {
                                 Text("Upload on Wi-Fi only")
@@ -66,7 +60,7 @@ struct SettingsView: View {
                     RetentionSettingsCard()
 
                     // A10 #4: static FAQ + contact support.
-                    OwllCard {
+                    AlgoMinutesCard {
                         NavigationLink {
                             HelpSupportView()
                         } label: {
@@ -74,15 +68,17 @@ struct SettingsView: View {
                         }
                     }
 
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
-                            infoRow(label: "Account", value: env.auth.user?.email ?? "—")
-                            Divider().overlay(Theme.borderSoft)
-                            infoRow(label: "Workspace ID", value: env.auth.workspaceId ?? "—")
+                            infoRow(label: "Account", value: env.auth.isAnonymous ? "Guest (not backed up)" : (env.auth.user?.email ?? "Signed in"))
+                            if let uid = env.auth.user?.uid {
+                                Divider().overlay(Theme.borderSoft)
+                                copyRow(label: "User ID", value: uid)
+                            }
                         }
                     }
 
-                    OwllCard {
+                    AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Link(destination: LegalLinks.privacy) {
                                 linkRow(label: "Privacy Policy")
@@ -108,12 +104,24 @@ struct SettingsView: View {
                         AdminCostsCard()
                     }
 
+                    // A guest's notes live only under this guest: offer to keep
+                    // them (create an account in place) before anything else.
+                    if env.auth.isAnonymous {
+                        Button {
+                            env.billing.isAccountPromptPresented = true
+                        } label: {
+                            Label("Create account", systemImage: "person.crop.circle.badge.plus")
+                                .font(Typography.label(15))
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    }
+
                     Button {
-                        // Signing out wipes on-device recordings for privacy on
-                        // a shared device. Ask first when that would destroy a
-                        // recording the user has not got back yet — losing a
-                        // recording to a routine sign-out is not recoverable.
-                        if env.pendingRecordingsAtRisk > 0 {
+                        // A guest's sign-out can't be undone: its notes can't be
+                        // reached again. Always ask. Otherwise ask only when it
+                        // would destroy a recording not yet uploaded (sign-out
+                        // wipes on-device recordings on a shared device).
+                        if env.auth.isAnonymous || env.pendingRecordingsAtRisk > 0 {
                             confirmingSignOut = true
                         } else {
                             env.signOut()
@@ -144,20 +152,21 @@ struct SettingsView: View {
                 }
                 .padding(20)
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .confirmationDialog(
-            "Sign out and delete unsent recordings?",
+            env.auth.isAnonymous ? "Sign out of the guest account?" : "Sign out and delete unsent recordings?",
             isPresented: $confirmingSignOut,
             titleVisibility: .visible
         ) {
             Button("Sign out and delete", role: .destructive) { env.signOut() }
+            if env.auth.isAnonymous {
+                Button("Create account instead") { env.billing.isAccountPromptPresented = true }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(env.pendingRecordingsAtRisk == 1
-                 ? "One recording hasn't finished uploading. Signing out removes it from this device and it can't be recovered."
-                 : "\(env.pendingRecordingsAtRisk) recordings haven't finished uploading. Signing out removes them from this device and they can't be recovered.")
+            Text(Self.signOutWarning(isGuest: env.auth.isAnonymous, pendingRecordings: env.pendingRecordingsAtRisk))
         }
         .sheet(isPresented: $showDeleteSheet) {
                 DeleteAccountSheet()
@@ -166,10 +175,10 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Usage (Owll-style meters, real numbers only)
+    // MARK: - Usage (meters, real numbers only)
 
     private var usageCard: some View {
-        OwllCard(style: .raised) {
+        AlgoMinutesCard(style: .raised) {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 Text("THIS MONTH")
                     .font(Typography.eyebrow())
@@ -184,12 +193,16 @@ struct SettingsView: View {
         }
     }
 
-    /// Subscription status + entry points. The Restore button lives here (and on
-    /// the paywall) so it is always reachable, including for a guest who has not
-    /// created a permanent account — an App Review requirement.
+    /// Subscription status + entry points. With the paywall on, the Restore
+    /// button lives here (and on the paywall) so it is always reachable,
+    /// including for a guest who has not created a permanent account: an App
+    /// Review requirement. With the paywall off (PAYWALL_ENABLED=NO: no products
+    /// on sale yet), nothing here offers a purchase, a restore or a
+    /// subscription to manage. The card shows the plan and the server's
+    /// minutes instead.
     @ViewBuilder
     private var subscriptionCard: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -202,7 +215,7 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.heading)
                     }
                     Spacer()
-                    if env.billing.entitlement?.state != .active {
+                    if env.billing.entitlement?.state != .active, AppConfig.paywallEnabled {
                         Button("Go Pro") { env.billing.presentPaywall(.manual) }
                             .font(Typography.label(14))
                             .foregroundStyle(Theme.onInverse)
@@ -211,22 +224,52 @@ struct SettingsView: View {
                             .background(Capsule().fill(Theme.inverse))
                     }
                 }
-                Divider().overlay(Theme.borderSoft)
-                Button("Restore Purchases") {
-                    Task { await env.billing.store.restore(); await env.billing.refresh() }
+                if let usage = Self.minutesLine(env.billing.entitlement) {
+                    Text(usage)
+                        .font(Typography.body(13))
+                        .foregroundStyle(Theme.muted)
                 }
-                .font(Typography.body(15))
-                .foregroundStyle(Theme.body)
-                if env.billing.entitlement?.state == .active {
+                if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
-                    Button("Manage Subscription") {
-                        Task { await env.billing.store.showManageSubscriptions() }
+                    Button("Restore Purchases") {
+                        Task { await env.billing.store.restore(); await env.billing.refresh() }
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
+                    if env.billing.entitlement?.state == .active {
+                        Divider().overlay(Theme.borderSoft)
+                        Button("Manage Subscription") {
+                            Task { await env.billing.store.showManageSubscriptions() }
+                        }
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                    }
                 }
             }
         }
+    }
+
+    /// What signing out will lose. A guest's notes aren't backed up to an
+    /// account, so they can't be reached again after it.
+    static func signOutWarning(isGuest: Bool, pendingRecordings: Int) -> String {
+        var parts: [String] = []
+        if isGuest {
+            parts.append("You're using AlgoMinutes as a guest. Signing out can't be undone: your notes won't be reachable again. Create an account to keep them.")
+        }
+        if pendingRecordings == 1 {
+            parts.append("One recording hasn't finished uploading. Signing out removes it from this device and it can't be recovered.")
+        } else if pendingRecordings > 1 {
+            parts.append("\(pendingRecordings) recordings haven't finished uploading. Signing out removes them from this device and they can't be recovered.")
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// "340 of 1,500 minutes used this month", from the server's metering
+    /// (the same numbers the quota enforces). Nil when unknown or unmetered.
+    static func minutesLine(_ entitlement: EntitlementResponse?) -> String? {
+        guard let e = entitlement, let included = e.includedMinutes, included > 0 else { return nil }
+        let used = Int(e.usedMinutes.rounded(.down)), total = Int(included.rounded())
+        return "\(used.formatted()) of \(total.formatted()) minutes used this month"
     }
 
     private var planLabel: String {
@@ -280,6 +323,41 @@ struct SettingsView: View {
         }
     }
 
+    /// A value the user may need to send us (the User ID, for tester minutes or
+    /// support): shown in full, and copied with a tap.
+    private func copyRow(label: String, value: String) -> some View {
+        Button {
+            UIPasteboard.general.string = value
+            copiedUserID = true
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                copiedUserID = false
+            }
+        } label: {
+            HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label.uppercased())
+                        .font(Typography.label(10))
+                        .kerning(1.2)
+                        .foregroundStyle(Theme.muted)
+                    Text(value)
+                        .font(Typography.body(13).monospaced())
+                        .foregroundStyle(Theme.body)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Label(copiedUserID ? "Copied" : "Copy", systemImage: copiedUserID ? "checkmark" : "doc.on.doc")
+                    .font(Typography.label(13))
+                    .foregroundStyle(Theme.body)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label): \(value)")
+        .accessibilityHint("Copies it, to send to AlgoMinutes support")
+    }
+
     private func linkRow(label: String, icon: String? = nil) -> some View {
         HStack(spacing: Theme.Spacing.md) {
             if let icon {
@@ -308,6 +386,7 @@ struct DeleteAccountSheet: View {
     @State private var confirmationText = ""
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    @State private var revocation = AppleTokenRevocation()
 
     private var canDelete: Bool {
         acknowledged
@@ -390,6 +469,18 @@ struct DeleteAccountSheet: View {
         guard canDelete else { return }
         isDeleting = true
         errorMessage = nil
+        // Apple first (it requires the revocation, and a deleted account can't
+        // be asked again). A dismissed prompt stops the deletion; a failed
+        // revocation doesn't, since removing the user's data comes first.
+        do {
+            if try await revocation.revokeIfLinked() == .cancelled {
+                errorMessage = "Deleting an account that uses Sign in with Apple needs Apple's confirmation. Please try again."
+                isDeleting = false
+                return
+            }
+        } catch {
+            AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+        }
         do {
             try await env.api.deleteAccount()
             env.signOut()
@@ -420,7 +511,7 @@ struct AdminCostsCard: View {
     }
 
     var body: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Admin tools")

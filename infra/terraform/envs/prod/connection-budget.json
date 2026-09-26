@@ -1,0 +1,20 @@
+{
+  "_comment": "Postgres connection budget (docs/DECISIONS.md). Worst case = sum over services of max_instances x pools x pool_max, plus each job's connections. It must fit max_connections - reserved - operator_headroom; a Terraform precondition and tests/connection-budget.test.ts both enforce it. pool_max becomes the service's PG_POOL_MAX (a cap on every pool it opens). 'pools' is how many pools the service's code opens; the test checks it against the code.",
+  "tier": "db-custom-1-3840",
+  "max_connections": 100,
+  "reserved": 3,
+  "operator_headroom": 2,
+  "services": {
+    "api":        { "max_instances": 4, "pools": 2, "pool_max": 5 },
+    "transcoder": { "max_instances": 4, "pools": 2, "pool_max": 2 },
+    "summarizer": { "max_instances": 2, "pools": 2, "pool_max": 2 },
+    "embedder":   { "max_instances": 2, "pools": 2, "pool_max": 2 },
+    "billing":    { "max_instances": 2, "pools": 1, "pool_max": 2 },
+    "notifier":   { "max_instances": 2, "pools": 1, "pool_max": 2 },
+    "extractor":  { "max_instances": 4, "pools": 0, "pool_max": 0 }
+  },
+  "jobs": {
+    "db-job":   { "connections": 1, "pool_max": 1 },
+    "db-sweep": { "connections": 2, "pool_max": 1 }
+  }
+}

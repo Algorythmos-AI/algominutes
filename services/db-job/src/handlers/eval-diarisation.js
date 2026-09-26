@@ -40,6 +40,7 @@ const SHADOW_HYP = 'google_per_chunk';
 const GATES = { gateDerMax: 0.15, gateBoundaryMinRecall: 0.80 };
 
 function resolveDir(candidates) {
+  // silent-catch-ok: existence probe over candidate paths; a miss is expected.
   return candidates.find((p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 }
 
@@ -50,6 +51,7 @@ function loadDer() {
     path.join(__dirname, '../../../../evals/diarisation/der.cjs'), // local repo: services/db-job/src/handlers → repo root
     '/app/evals/diarisation/der.cjs',
   ];
+  // silent-catch-ok: existence probe over candidate paths; a miss is expected.
   const found = candidates.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
   if (!found) throw new Error(`evals/diarisation/der.cjs not found; checked: ${candidates.join(', ')}`);
   return require(found);
@@ -71,10 +73,17 @@ function loadFixtures() {
 function liveHypothesis(dir, fixtureId, engine) {
   if (!dir) return null;
   const p = path.join(dir, `${fixtureId}.${engine}.json`);
+  // Absent file = no override (synthetic hypothesis). A present-but-broken
+  // file must fail the eval, not silently fall back to synthetic data.
+  // Read directly (no stat-then-read), so there is no check/use race.
+  let raw;
   try {
-    if (!fs.statSync(p).isFile()) return null;
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch { return null; }
+    raw = fs.readFileSync(p, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+  return JSON.parse(raw);
 }
 
 async function run({ log, traceId, env }) {

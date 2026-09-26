@@ -5,7 +5,7 @@
 // path is actually hit on web. TODO(web A8): delete these when App.tsx's native
 // branches are removed and the web app is generalised.
 
-function nativeOnly(name: string): any {
+export function nativeOnly(name: string): any {
   return new Proxy(
     {},
     {

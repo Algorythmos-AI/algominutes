@@ -101,7 +101,8 @@ export function clientVersionMiddleware(opts = {}) {
     try {
       parsed = parseClientHeader(header);
     } catch {
-      // Belt-and-braces: parsing must never surface as a 500.
+      // silent-catch-ok: a malformed client-version header is treated as absent
+    // (the gate then applies its missing-header rule); parsing must never surface as a 500.
       parsed = null;
     }
     if (!parsed) {

@@ -40,10 +40,10 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcuserstate
-apps/ios/**/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
 Pods/
-# xcodegen output is generated from project.yml
-apps/ios/**/*.xcodeproj/
+# xcodegen output (generated from project.yml) is ignored by apps/ios/.gitignore,
+# which keeps only the committed Package.resolved. A directory rule here would
+# stop it re-including that file.
 
 # ── Android / Gradle ──
 .gradle/
@@ -63,3 +63,5 @@ tmp/
 .claude/settings.local.json
 .vscode/
 *.swp
+# Lighthouse CI reports (apps/site/lighthouserc.json)
+.lighthouseci/

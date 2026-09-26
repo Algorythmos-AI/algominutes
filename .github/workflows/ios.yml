@@ -1,27 +1,90 @@
 name: ios
 
-# iOS build + unit tests on a macOS runner. Path-filtered to apps/ios/** because
-# macOS minutes bill ~10x. Unsigned simulator build (CODE_SIGNING_ALLOWED=NO) —
+# iOS build + unit tests on a macOS runner, when the iOS app changed (the
+# `changes` job; macOS minutes bill ~10x). Unsigned simulator build (CODE_SIGNING_ALLOWED=NO) —
 # signing/archive is the release pipeline's job (PR-25). No GoogleService-Info.plist
 # is present here; the app configures Firebase with placeholder options so the
 # app-hosted unit tests run (see AlgoMinutesApp.FirebaseBootstrap).
 on:
   push:
-    branches: [main]
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+    branches: [integration, main]
   pull_request:
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  # Decides whether the iOS app changed. The workflow itself runs on every PR,
+  # so its check always reports and can be required; the macOS job below is
+  # skipped (a skipped job satisfies a required check) when nothing iOS changed,
+  # because macOS minutes bill ~10x.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.diff.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$BEFORE" ;;
+            *) echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0 ;;   # schedule, manual: always
+          esac
+          # A new branch or a force-push has no usable "before": check everything.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --name-only "$base" "$GITHUB_SHA" | grep -qE '^(apps/ios/|packages/contracts/|\.github/workflows/ios\.yml$)'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "iOS changed: $(grep -o 'ios=.*' "$GITHUB_OUTPUT" | tail -1)"
+
+  # Unique name: ci.yml also has a `test` job, and branch protection matches
+  # required checks by NAME, so a shared name would be ambiguous.
+  ios-test:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
+      - uses: actions/checkout@v7
+      # One pinned Xcode, so a new runner image can't change the toolchain (or
+      # rewrite Package.resolved) under a PR. Xcode Cloud's workflows pin the
+      # same version (docs/runbooks/xcode-cloud.md).
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          XCODE=/Applications/Xcode_26.3.app
+          if [ ! -d "$XCODE" ]; then
+            echo "error: $XCODE is not on this runner image; installed:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - name: Generate the Xcode project (pinned XcodeGen)
         working-directory: apps/ios
-        run: xcodegen generate
+        run: |
+          set -euo pipefail
+          XCODEGEN=$(sh scripts/install-xcodegen.sh)
+          "$XCODEGEN" generate
+      # Xcode Cloud builds only from the committed Package.resolved. Resolving
+      # must leave it unchanged, or project.yml and the lock disagree.
+      - name: Resolve packages; the committed Package.resolved must not change
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies -project AlgoMinutes.xcodeproj -scheme AlgoMinutes
+          git diff --exit-code -- AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
       - name: Build & test (unsigned, iPhone simulator)
         working-directory: apps/ios
         run: |
@@ -32,5 +95,51 @@ jobs:
           xcodebuild test \
             -scheme AlgoMinutes \
             -destination "platform=iOS Simulator,name=${DEVICE}" \
+            -disableAutomaticPackageResolution \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO
+      # The Staging configuration is what TestFlight builds use, and its build
+      # scripts only run outside Debug: the Google Sign-In URL scheme comes
+      # from GoogleService-Info.plist, and a missing plist fails the build.
+      # Build it unsigned with a fake plist, then check the built app got the
+      # plist's reversed client id as its URL scheme.
+      - name: Staging build (unsigned) writes the Google Sign-In URL scheme
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          GSI=AlgoMinutes/Resources/GoogleService-Info.plist
+          FAKE=com.googleusercontent.apps.000000000000-ciplaceholder
+          cat > "$GSI" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CLIENT_ID</key><string>000000000000-ciplaceholder.apps.googleusercontent.com</string>
+            <key>REVERSED_CLIENT_ID</key><string>${FAKE}</string>
+            <key>BUNDLE_ID</key><string>com.algorythmos.algominutes</string>
+            <key>PROJECT_ID</key><string>ci-placeholder</string>
+            <key>GOOGLE_APP_ID</key><string>1:000000000000:ios:0000000000000000</string>
+            <key>GCM_SENDER_ID</key><string>000000000000</string>
+            <key>API_KEY</key><string>ci-placeholder</string>
+          </dict></plist>
+          PLIST
+          xcodebuild build \
+            -scheme AlgoMinutes-Staging \
+            -configuration Staging \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/staging \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO \
+            ALGOMINUTES_SKIP_DSYM_UPLOAD=YES
+          APP=build/staging/Build/Products/Staging-iphonesimulator/AlgoMinutes.app
+          SCHEME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$APP/Info.plist")
+          echo "Built URL scheme: $SCHEME"
+          if [ "$SCHEME" != "$FAKE" ]; then
+            echo "error: the Staging build's Google Sign-In URL scheme is '$SCHEME', not the plist's REVERSED_CLIENT_ID"
+            exit 1
+          fi
+          # The broadcast extension is embedded, and the unused setup-UI one is gone.
+          test -d "$APP/PlugIns/BroadcastExtension.appex"
+          if [ -d "$APP/PlugIns/BroadcastExtensionSetupUI.appex" ]; then
+            echo "error: BroadcastExtensionSetupUI is embedded again"
+            exit 1
+          fi

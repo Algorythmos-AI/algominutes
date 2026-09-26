@@ -1,0 +1,30 @@
+name: promotion-guard
+
+# Branch model: feature branches -> `integration` (default, staging) -> `main`
+# (production). `main` only ever receives a promotion PR from `integration`, so
+# production is always exactly a state that has already run on staging. This
+# check fails any PR into `main` whose head is not `integration`; make it a
+# required status check on `main` so the rule is enforced, not advisory.
+on:
+  pull_request:
+    branches: [main]
+
+# Reads only the event payload: no token scopes at all.
+permissions: {}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only integration may merge into main
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REF" = "integration" ] && [ "$HEAD_REPO" = "$BASE_REPO" ]; then
+            echo "ok: promotion from integration"
+          else
+            echo "::error::PRs into main must come from this repo's 'integration' branch (got '$HEAD_REPO:$HEAD_REF'). Target 'integration' instead."
+            exit 1
+          fi

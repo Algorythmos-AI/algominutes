@@ -116,7 +116,9 @@ logger.error({ err, traceId, userId, noteId }, 'process_intelligence_failed');
 4. **Reason about DB state from the database, not from logs alone.** Open psql when in doubt.
 5. **Commit the plan before writing code.** Doc changes and code changes are separate concerns.
 6. **Verify with a query or a log line, not a deploy.** A Cloud Run revision number is not evidence.
-7. **One PR, one concern.** Conventional commits. `main` protected, CI green to merge.
+7. **One PR, one concern.** Conventional commits. Branch model: feature branch → PR into **`integration`**
+   (default branch = staging) → promotion PR **`integration` → `main`** (= production). `main` accepts only
+   promotion PRs from `integration` (`promotion-guard` check); CI green to merge either.
 8. **No suppression filters on monitoring.** Known issues stay visible until fixed.
 
 ## 5. Sub-agents (`.claude/agents/`)

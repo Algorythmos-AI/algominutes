@@ -19,9 +19,12 @@ final class NotesRepository {
     private var wsId: String?
 
     /// Once-per-session guards (parity with the web refs).
-    private var stuckCheckRan = Set<String>()
     private var retitleAttempted = Set<String>()
     private var retryInFlight = Set<String>()
+    /// The last snapshot, and the notes a delete is in flight for: hidden at
+    /// once, shown again if the server refuses the delete.
+    private var snapshotNotes: [Note] = []
+    private var deletingIds = Set<String>()
 
     /// A7.3: previous per-note status, to detect a completion transition and post
     /// the local-notification fallback exactly once. Empty until the first
@@ -30,6 +33,9 @@ final class NotesRepository {
     private var receivedFirstSnapshot = false
 
     static let maxRetryAttempts = 3
+
+    /// A retry refused for quota (402): AppEnvironment opens the paywall.
+    var onQuotaExceeded: (@MainActor (EntitlementResponse?) -> Void)?
 
     init(api: APIClient) {
         self.api = api
@@ -62,9 +68,11 @@ final class NotesRepository {
         notes = []
         uid = nil
         wsId = nil
-        stuckCheckRan.removeAll()
+        slowNoteIds.removeAll()
         retitleAttempted.removeAll()
         retryInFlight.removeAll()
+        snapshotNotes = []
+        deletingIds.removeAll()
         lastStatusById.removeAll()
         receivedFirstSnapshot = false
         resubscribeAttempts = 0
@@ -88,7 +96,8 @@ final class NotesRepository {
                     self.resubscribeAttempts = 0
                     let parsed = snapshot.documents.compactMap { Note(id: $0.documentID, data: $0.data()) }
                     self.notifyCompletedTransitions(newNotes: parsed)
-                    self.notes = parsed.sorted { $0.createdAt > $1.createdAt }
+                    self.snapshotNotes = parsed.sorted { $0.createdAt > $1.createdAt }
+                    self.notes = Self.visible(self.snapshotNotes, hiding: self.deletingIds)
                     self.autoRetitleReadyNotes()
                 }
             }
@@ -179,13 +188,26 @@ final class NotesRepository {
         }
     }
 
-    /// Deleting the doc triggers the backend `onNoteDeleted` cascade.
-    func deleteNote(id: String) {
-        guard let collection = notesCollection() else { return }
-        collection.document(id).delete { error in
-            if let error {
-                AppLog.error("note_delete_failed: \(error.localizedDescription)")
-            }
+    static func visible(_ notes: [Note], hiding ids: Set<String>) -> [Note] {
+        ids.isEmpty ? notes : notes.filter { !ids.contains($0.id) }
+    }
+
+    /// Deletes through POST /v1/notes/delete: Postgres first, then this doc,
+    /// then the audio. The Firestore rules refuse a client delete, and a doc
+    /// deleted alone used to leave the note searchable and its audio stored.
+    /// The note disappears at once; if the server refuses, it comes back and
+    /// this throws so the caller can say so.
+    func deleteNote(id: String) async throws {
+        guard let wsId else { throw APIError.notSignedIn }
+        deletingIds.insert(id)
+        notes = Self.visible(snapshotNotes, hiding: deletingIds)
+        do {
+            try await api.deleteNote(noteId: id, workspaceId: wsId)
+        } catch {
+            AppLog.error("note_delete_failed: \(error.localizedDescription)")
+            deletingIds.remove(id)
+            notes = Self.visible(snapshotNotes, hiding: deletingIds)
+            throw error
         }
     }
 
@@ -210,7 +232,8 @@ final class NotesRepository {
             noteId: note.id,
             workspaceId: wsId,
             type: note.type,
-            retryAttempt: nextAttempt
+            retryAttempt: nextAttempt,
+            durationSec: note.duration
         )
         if note.type == .youtube {
             guard let sourceUrl = note.sourceUrl, !sourceUrl.isEmpty else {
@@ -229,10 +252,6 @@ final class NotesRepository {
         retryInFlight.insert(note.id)
         defer { retryInFlight.remove(note.id) }
 
-        // Re-arm the watchdog: this note is moving back in-progress and must be
-        // eligible to be flipped again if it gets stuck a second time.
-        resetStuckGuard(noteId: note.id)
-
         updateNote(id: note.id, fields: [
             "status": NoteStatus.queued.rawValue,
             "errorMessage": NSNull(),
@@ -243,13 +262,23 @@ final class NotesRepository {
             try await api.processAudio(request)
             return .queued
         } catch {
-            AppLog.error("retry_kickoff_failed: \(error.localizedDescription)")
-            markNoteError(id: note.id, message: "Could not queue this retry. Please try again.")
-            return .blocked(message: "Could not queue this retry. Please try again.")
+            let failure = KickoffFailure(error, fallback: "Could not queue this retry. Please try again.")
+            AppLog.error("retry_kickoff_failed noteId=\(note.id): \(error.localizedDescription)")
+            if let noteError = failure.noteError { markNoteError(id: note.id, message: noteError) }
+            if case .quota(let entitlement) = failure { onQuotaExceeded?(entitlement) }
+            return .blocked(message: failure.message)
         }
     }
 
-    // MARK: - Stuck-note watchdog (parity with App.tsx)
+    // MARK: - Slow-note watchdog
+
+    /// Notes past their StuckBudgets budget. Local only: the app shows "taking
+    /// longer than usual" and changes nothing. It used to flip such a note to
+    /// `error` in Firestore alone, 90 s into `queued`, while Postgres still had
+    /// it in flight: the server refuses a re-queue for 3 h and fails a stuck
+    /// note itself at 3.5 h (the db-job sweep, Postgres first), so a retry got
+    /// "already in flight" and the note flipped again 90 s later.
+    private(set) var slowNoteIds = Set<String>()
 
     private func startWatchdog() {
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: StuckBudgets.checkInterval, repeats: true) { [weak self] _ in
@@ -260,51 +289,11 @@ final class NotesRepository {
     }
 
     func runWatchdogPass(now: Date = Date()) {
-        for note in notes where StuckBudgets.isStuck(note: note, now: now) {
-            guard !stuckCheckRan.contains(note.id) else { continue }
-            stuckCheckRan.insert(note.id)
-            flipStuckToError(note: note)
-        }
+        slowNoteIds = Self.slowNoteIds(in: notes, now: now)
     }
 
-    /// Re-arms the once-per-session stuck guard for a note that is being
-    /// retried. Without this, a note the watchdog already flipped to error once
-    /// stays in `stuckCheckRan` forever, so if the retry gets stuck again the
-    /// watchdog can never flip it back — the note spins indefinitely.
-    func resetStuckGuard(noteId: String) {
-        stuckCheckRan.remove(noteId)
-    }
-
-    /// Transaction: only flip when the status is unchanged server-side.
-    private func flipStuckToError(note: Note) {
-        guard let collection = notesCollection() else { return }
-        let ref = collection.document(note.id)
-        let expectedStatus = note.status.rawValue
-        db.runTransaction({ transaction, errorPointer -> Any? in
-            let snapshot: DocumentSnapshot
-            do {
-                snapshot = try transaction.getDocument(ref)
-            } catch let error as NSError {
-                errorPointer?.pointee = error
-                return nil
-            }
-            guard let status = snapshot.data()?["status"] as? String, status == expectedStatus else {
-                return nil // backend already progressed — bail
-            }
-            transaction.updateData([
-                "status": NoteStatus.error.rawValue,
-                "errorMessage": "Processing took too long. Please try again.",
-                "diagnosticCode": "CLIENT_TIMEOUT",
-                "updatedAt": Note.isoNow(),
-            ], forDocument: ref)
-            return nil
-        }) { _, error in
-            if let error {
-                AppLog.error("watchdog_flip_failed: \(error.localizedDescription)")
-            } else {
-                AppLog.info("watchdog_flipped_stuck_to_error noteId=\(note.id)")
-            }
-        }
+    nonisolated static func slowNoteIds(in notes: [Note], now: Date) -> Set<String> {
+        Set(notes.filter { StuckBudgets.isStuck(note: $0, now: now) }.map(\.id))
     }
 
     // MARK: - Auto-retitle (parity with App.tsx)
@@ -314,16 +303,15 @@ final class NotesRepository {
             guard !retitleAttempted.contains(note.id) else { continue }
             guard let title = TitleDeriver.derive(fromGist: note.summary?.gist) else { continue }
             retitleAttempted.insert(note.id)
-            guard let collection = notesCollection() else { return }
-            collection.document(note.id).updateData([
-                "title": title,
-                "updatedAt": Note.isoNow(),
-            ]) { [weak self] error in
-                if let error {
+            guard let wsId else { return }
+            // Through /v1/notes/update (Postgres first, then the mirror), so search,
+            // chat and the transcript read see the new title too.
+            Task { [weak self, api] in
+                do {
+                    try await api.updateNote(noteId: note.id, workspaceId: wsId, title: title)
+                } catch {
                     AppLog.error("retitle_failed: \(error.localizedDescription)")
-                    Task { @MainActor in
-                        self?.retitleAttempted.remove(note.id) // allow retry, parity with web
-                    }
+                    self?.retitleAttempted.remove(note.id) // allow retry, parity with web
                 }
             }
         }

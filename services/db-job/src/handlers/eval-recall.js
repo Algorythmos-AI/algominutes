@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { GoogleAuth } = require('google-auth-library');
 
-const EMBED_MODEL = 'text-embedding-004';
+const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 const EMBED_DIM = 768;
 
 function vectorToSqlText(values) {
@@ -51,7 +51,8 @@ async function embedQuery(text, project, location) {
     }),
   });
   if (!resp.ok) {
-    const errBody = await resp.text().catch(() => '');
+    // No logger here: the reason travels in the thrown error, which job_failed logs.
+    const errBody = await resp.text().catch((err) => `<body unreadable: ${err.message}>`);
     throw new Error(`vertex_embed_failed: ${resp.status} ${errBody.slice(0, 200)}`);
   }
   const data = await resp.json();
@@ -77,6 +78,7 @@ async function run({ log, traceId, env }) {
     path.join(__dirname, '../../../evals/queries.jsonl'),
     '/app/evals/queries.jsonl',
   ];
+  // silent-catch-ok: existence probe over candidate paths; none found throws just below.
   const queriesPath = candidates.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } });
   if (!queriesPath) throw new Error(`evals/queries.jsonl not found; checked: ${candidates.join(', ')}`);
   log.info({ traceId, queriesPath }, 'eval_recall_loading_queries');
@@ -125,10 +127,11 @@ async function run({ log, traceId, env }) {
             FROM embeddings e
             JOIN notes n ON n.id = e.note_id
            WHERE e.workspace_id = $2
+             AND e.model = $4 -- vectors from different models don't compare
              AND n.deleted_at IS NULL
            ORDER BY e.embedding <=> $1::vector
            LIMIT $3`;
-        const r = await pool.query(sql, [vectorToSqlText(vec), wsId, K_MAX]);
+        const r = await pool.query(sql, [vectorToSqlText(vec), wsId, K_MAX, EMBED_MODEL]);
         topK = r.rows;
       } catch (err) {
         log.error({ traceId, queryId: q.id, err: { message: err?.message } }, 'eval_query_failed');

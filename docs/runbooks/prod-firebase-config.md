@@ -2,7 +2,7 @@
 
 Staging (`algominutes-staging`) is provisioned and its Firebase configs are wired. Production is the **same
 steps against `algominutes-prod`** — with **separate config values that must never reuse staging's**. Run
-from a shell authed as `gcp-admin@algorythmos.com`.
+from a shell authed as `algorythmos.france@gmail.com` (primary working account).
 
 > ⚠️ **Never copy staging's config into prod.** Different project → different `apiKey`, `appId`,
 > `messagingSenderId` (= prod project number `758033737651`), `authDomain`, `storageBucket`,
@@ -20,9 +20,13 @@ terraform apply tfplan     # prod: deletion_protection ON, Firestore location PE
 
 ## 2. Firebase (console / CLI) — prod project
 - Enable Firebase on `algominutes-prod` (**Blaze** plan).
-- Enable **Google** sign-in (support email `gcp-admin@algorythmos.com`); add **Apple** once the Team ID exists.
-- Register the **Web** and **Android** apps (bundle/appId `com.algorythmos.algominutes`). Register **iOS**
-  only after the Apple Team ID lands (`TODO(A4-apple)`).
+- Enable the sign-in providers the app uses: **Anonymous** (every new user starts as a guest),
+  **Google** (support email `gcp-admin@algorythmos.com`), and **Apple** (Services ID, Key ID, `.p8`;
+  account deletion revokes Apple tokens through it).
+- Register the **iOS** app (bundle id `com.algorythmos.algominutes`, Team ID `NY9MS8GSBK`), and
+  the **Web** and **Android** apps. Upload an APNs auth key (`.p8`) for push.
+- The iOS `GoogleService-Info.plist` is prod's own (never staging's). It reaches Xcode Cloud's
+  Release workflow as that workflow's `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`).
 
 ## 3. Wire the configs — prod values only
 - **Android:** download a fresh `google-services.json` → `apps/android/app/google-services.json`
@@ -31,7 +35,8 @@ terraform apply tfplan     # prod: deletion_protection ON, Firestore location PE
 - **Web:** create a **prod** env file (e.g. `apps/web/.env.production` or the CI env for the prod deploy) —
   NOT the same `.env` staging uses. Populate the same 8 `VITE_*` names (see `apps/web/.env.example`) with
   the **prod** Web app's `firebase apps:sdkconfig web <APP_ID>` values. Set `VITE_API_BASE_URL` to the prod
-  API host (`https://api.algominutes.com/v1`) once the api service is deployed (A11).
+  API's `run.app` URL plus `/v1` once the api service is deployed (the api keeps its `run.app` URL
+  through external beta: DECISIONS, 2026-09-26).
 - Verify git-ignore before finishing: `git check-ignore -v apps/web/.env.production apps/android/app/google-services.json`.
 
 ## 4. Same checks as staging

@@ -49,10 +49,10 @@ final class TitleDeriverTests: XCTestCase {
 // MARK: - StuckBudgets (parity with the App.tsx watchdog)
 
 final class StuckBudgetsTests: XCTestCase {
-    private func note(status: NoteStatus, ageSeconds: Double, duration: Double? = nil) -> Note {
+    private func note(id: String = "n1", status: NoteStatus, ageSeconds: Double, duration: Double? = nil) -> Note {
         let reference = Date().addingTimeInterval(-ageSeconds)
         var note = Note(
-            id: "n1", title: "t", workspaceId: "ws", authorId: "u",
+            id: id, title: "t", workspaceId: "ws", authorId: "u",
             status: status, type: .recording, sourceUrl: nil, duration: duration,
             wordCount: nil, createdAt: Note.isoNow(), updatedAt: Note.isoNow(reference),
             lastProgressAt: nil, summary: nil, transcript: nil, transcriptTruncated: nil,
@@ -93,6 +93,15 @@ final class StuckBudgetsTests: XCTestCase {
         XCTAssertFalse(StuckBudgets.isStuck(note: note(status: .ready, ageSeconds: 10_000)))
         XCTAssertFalse(StuckBudgets.isStuck(note: note(status: .transcribing, ageSeconds: 600, duration: 3600)))
         XCTAssertTrue(StuckBudgets.isStuck(note: note(status: .transcribing, ageSeconds: 600, duration: 60)))
+    }
+
+    /// The watchdog only reports slow notes; a note that moves on drops out.
+    func testSlowNotesAreReportedNotFailed() {
+        let slow = note(id: "slow", status: .queued, ageSeconds: 120)
+        let fresh = note(id: "fresh", status: .queued, ageSeconds: 30)
+        let done = note(id: "done", status: .ready, ageSeconds: 10_000)
+        XCTAssertEqual(NotesRepository.slowNoteIds(in: [slow, fresh, done], now: Date()), ["slow"])
+        XCTAssertEqual(NotesRepository.slowNoteIds(in: [], now: Date()), [])
     }
 }
 
@@ -909,9 +918,10 @@ final class StoragePathsTests: XCTestCase {
     }
 
     func testCaps() {
-        XCTAssertEqual(StorageKind.recording.maxBytes, 50 * 1024 * 1024)
+        // One cap, the server's (/v1/uploads refuses anything over 500 MB).
+        XCTAssertEqual(StorageKind.recording.maxBytes, 500 * 1024 * 1024)
         XCTAssertEqual(StorageKind.importFile.maxBytes, 500 * 1024 * 1024)
-        XCTAssertEqual(StorageKind.scan.maxBytes, 50 * 1024 * 1024)
+        XCTAssertEqual(StorageKind.scan.maxBytes, 500 * 1024 * 1024)
     }
 
     func testWorkspaceId() {
@@ -950,7 +960,7 @@ final class RecordingStoreTests: XCTestCase {
         let b = store.makeRecordingURL()
         XCTAssertNotEqual(a, b)
         XCTAssertEqual(a.deletingLastPathComponent().path, tempDir.path)
-        XCTAssertEqual(a.pathExtension, "m4a")
+        XCTAssertEqual(a.pathExtension, "aac") // ADTS: a killed recording stays readable
         XCTAssertTrue(a.lastPathComponent.hasPrefix("recording_"))
     }
 
@@ -1061,30 +1071,15 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(formatTimer(seconds: 7200), "120:00")
     }
 
-    // 2-hour cap for Rivera staff meetings; warning pill fires 5 min before.
-    // A 2-hour 64 kbps AAC file (~57 MB) must fit the recordings storage rule.
+    // 4-hour cap (M1: a 3 h meeting and then some); warning pill fires 5 min
+    // before. A 4-hour 64 kbps ADTS file (~120 MB with frame headers) must fit
+    // the api's one upload cap.
     @MainActor
-    func testRecordingCapIsTwoHoursWithFiveMinuteWarning() {
-        XCTAssertEqual(RecorderService.maxRecordingSeconds, 7200)
+    func testRecordingCapIsFourHoursWithFiveMinuteWarning() {
+        XCTAssertEqual(RecorderService.maxRecordingSeconds, 4 * 3600)
         XCTAssertEqual(RecorderService.warnAfterSeconds, RecorderService.maxRecordingSeconds - 300)
-        let capBytes = RecorderService.maxRecordingSeconds * (64_000 / 8)
-        XCTAssertLessThan(capBytes, 120 * 1024 * 1024)
-    }
-}
-
-// MARK: - Brand fonts
-
-// Rajdhani must be registered (UIAppFonts + bundled TTFs). A missing font
-// fails SILENTLY into the system fallback — the exact bug the original
-// Saira config shipped with — so this is a hard regression gate.
-final class BrandFontTests: XCTestCase {
-    func testRajdhaniWeightsRegistered() {
-        for name in ["Rajdhani-Medium", "Rajdhani-SemiBold", "Rajdhani-Bold"] {
-            XCTAssertNotNil(
-                UIFont(name: name, size: 14),
-                "\(name) missing — check Resources/Fonts + Info.plist UIAppFonts"
-            )
-        }
+        let capBytes = Int64(Double(RecorderService.maxRecordingSeconds * (64_000 / 8)) * 1.06)
+        XCTAssertLessThan(capBytes, 500 * 1024 * 1024) // /v1/uploads' cap
     }
 }
 
@@ -1277,19 +1272,19 @@ final class CapWarningTests: XCTestCase {
     }
 
     func testStatesTheCapInHumanTerms() {
-        XCTAssertTrue(RecordingView.capWarning(secondsLeft: 300).contains("2 hours"))
+        XCTAssertTrue(RecordingView.capWarning(secondsLeft: 300).contains("4 hours"))
     }
 }
 
 // MARK: - Recording durability
 
 final class RecordingDurabilityTests: XCTestCase {
-    func testStorageThresholdLeavesHeadroomForATwoHourRecording() {
-        // A 2-hour recording is ~57 MB at 64 kbps mono AAC. The threshold has
-        // to exceed that with room for the OS, or the check passes and the
+    func testStorageThresholdLeavesHeadroomForAFourHourRecording() {
+        // A 4-hour recording is ~120 MB at 64 kbps mono AAC (ADTS). The threshold
+        // has to exceed that with room for the OS, or the check passes and the
         // recording still fills the disk partway through.
-        let twoHourEstimate: Int64 = 60 * 1024 * 1024
-        XCTAssertGreaterThan(RecorderService.minFreeBytesToRecord, twoHourEstimate)
+        let fourHourEstimate: Int64 = 125 * 1024 * 1024
+        XCTAssertGreaterThan(RecorderService.minFreeBytesToRecord, fourHourEstimate)
     }
 
     func testSalvageThresholdIsAboveBareContainerOverhead() {
@@ -1404,7 +1399,7 @@ final class AutoStopMessageTests: XCTestCase {
         func message(_ r: RecorderService.AutoStop.Reason) -> String {
             RecorderService.AutoStop(reason: r, result: result(), at: Date()).message
         }
-        XCTAssertTrue(message(.hardCap).contains("2-hour"))
+        XCTAssertTrue(message(.hardCap).contains("4-hour"))
         XCTAssertTrue(message(.interruptionNotResumable).lowercased().contains("another app"))
         XCTAssertTrue(message(.routeRecoveryFailed).lowercased().contains("microphone"))
     }

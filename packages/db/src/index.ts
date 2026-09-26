@@ -3,13 +3,20 @@
 // repo layer, never bypass it (BUILD-PLAN §3.3). Ported from the original app lib/.
 export * from './db.js';
 export * from './notes-repo.js';
-export * from './search-repo.js';
-export * from './embeddings.js';
 export * from './usage-repo.js';
 export * from './entitlements.js';
 export * from './dead-letter-repo.js';
 export * from './push-tokens-repo.js';
+export * from './notices-repo.js';
 export * from './subscriptions-repo.js';
 export * from './analytics-repo.js';
 export * from './compliance-repo.js';
 export * from './note-speakers-repo.js';
+export * from './upload-sessions-repo.js';
+export * from './storage-purges-repo.js';
+export * from './account-repo.js';
+export * from './entitlement-grants-repo.js';
+export * from './mirror-repair.js';
+// Only the prune: the tombstone's write and check are correct only inside a
+// transaction holding the note lock, so the repo calls them itself.
+export { pruneDeletedNotes } from './deleted-notes-repo.js';

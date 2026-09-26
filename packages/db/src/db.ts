@@ -11,6 +11,17 @@
  *   WRITE_POSTGRES                — 'true' to enable dual-write paths
  */
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
+import loggerModule from '@algominutes/ai/logger.cjs';
+import pgConfigModule from '@algominutes/ai/pg-config.cjs';
+
+// Structured logger (CLAUDE.md §1 Logging) — never console.*.
+const log = (loggerModule as { logger: { error: (o: unknown, m?: string) => void } }).logger;
+
+// The single connection config shared by every pool (TLS policy lives there).
+const { buildPgConfig, attachPoolErrorLogger } = pgConfigModule as {
+  buildPgConfig: (opts?: { max?: number }) => PoolConfig;
+  attachPoolErrorLogger: (pool: Pool, logger: typeof log, fields?: Record<string, unknown>) => Pool;
+};
 
 let pool: Pool | null = null;
 
@@ -18,35 +29,20 @@ export function isPostgresEnabled(): boolean {
   return String(process.env.WRITE_POSTGRES || '').toLowerCase() === 'true';
 }
 
-function buildConfig(): PoolConfig {
-  if (process.env.DATABASE_URL) {
-    return { connectionString: process.env.DATABASE_URL, max: 8, idleTimeoutMillis: 30_000 };
-  }
-  return {
-    host: process.env.PGHOST,
-    port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-    database: process.env.PGDATABASE || 'algominutes',
-    user: process.env.PGUSER || 'app',
-    password: process.env.PGPASSWORD,
-    max: 8,
-    idleTimeoutMillis: 30_000,
-  };
-}
-
 export function getPool(): Pool {
   if (!pool) {
-    pool = new Pool(buildConfig());
-    pool.on('error', (err) => {
-      // Don't crash the process on a stale idle client; pg-pool reconnects.
-      // eslint-disable-next-line no-console
-      console.error(JSON.stringify({ severity: 'ERROR', msg: 'pg_pool_error', err: { message: err.message } }));
-    });
+    pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 8 })), log, { pool: 'repo' });
   }
   return pool;
 }
 
 /** Run `fn` in a transaction; auto-rollback on throw. */
-export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withTx<T>(
+  fn: (client: PoolClient) => Promise<T>,
+  // Optional: the caller's request logger + correlation fields, so a rollback
+  // failure carries traceId/noteId/workspaceId (CLAUDE.md §1 Logging).
+  opts: { log?: { error: (o: any, m?: string) => void }; fields?: Record<string, unknown> } = {},
+): Promise<T> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
@@ -54,7 +50,9 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise
     await client.query('COMMIT');
     return out;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    await client
+      .query('ROLLBACK')
+      .catch((rollbackErr) => (opts.log ?? log).error({ err: rollbackErr, ...opts.fields }, 'pg_rollback_failed'));
     throw err;
   } finally {
     client.release();

@@ -1,0 +1,53 @@
+name: site-smoke
+
+# scripts/smoke-site.mjs against the deployed public site: after each Vercel
+# deployment (its GitHub deployment status), and daily against production, so
+# the store listings' Privacy, Support and deletion URLs, and security.txt's
+# expiry, are watched even when nothing deploys. docs/runbooks/site.md.
+on:
+  deployment_status:
+  schedule:
+    - cron: '17 21 * * *' # 07:17 in Sydney
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Origin to check
+        default: https://algominutes.algorythmos.com
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Smoke the site
+        env:
+          EVENT: ${{ github.event_name }}
+          ENVIRONMENT: ${{ github.event.deployment_status.environment }}
+          DEPLOYMENT_URL: ${{ github.event.deployment_status.environment_url }}
+          INPUT_URL: ${{ inputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          case "$EVENT" in
+            workflow_dispatch) url="$INPUT_URL" ;;
+            schedule) url="https://algominutes.algorythmos.com" ;;
+            deployment_status)
+              if [ "$ENVIRONMENT" = "Production" ]; then
+                # The custom domain, not the deployment URL: it's what the stores link to.
+                url="https://algominutes.algorythmos.com"
+              elif [ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]; then
+                url="$DEPLOYMENT_URL"
+              else
+                echo "::notice::Preview deployment $DEPLOYMENT_URL is behind Vercel Authentication and VERCEL_AUTOMATION_BYPASS_SECRET isn't set; skipped."
+                exit 0
+              fi
+              ;;
+          esac
+          case "$url" in https://*) ;; *) echo "::error::not an https origin: $url"; exit 1 ;; esac
+          node scripts/smoke-site.mjs "$url"

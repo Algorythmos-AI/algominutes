@@ -80,9 +80,11 @@ export type EntitlementState = 'trialing' | 'active' | 'expired' | 'free_floor';
 
 
 // ── A10 compliance constants ─────────────────────────────────────────────────
-// Bump when the documents change; a bump requires re-acceptance (terms_acceptance).
-export const TERMS_VERSION = '2026-08-16';
-export const PRIVACY_VERSION = '2026-08-16';
+// Bump when the documents change (apps/site renders them; tests/site-facts.test.ts
+// checks the iOS mirror, ComplianceContract.swift, matches). A bump records a new
+// acceptance (terms_acceptance) on each client's next launch.
+export const TERMS_VERSION = '2026-09-26';
+export const PRIVACY_VERSION = '2026-09-26';
 
 // Default note retention when the user hasn't set one (A10 #5). See docs/DATA-RETENTION.md.
 // null = keep until the user deletes (with the soft-delete + 30-day backup window).

@@ -38,6 +38,18 @@ export const NoteType = z
   .openapi('NoteType');
 
 /**
+ * A section of a long recording (the summarizer adds them past 10 minutes):
+ * where it starts in the recording, a short title, and a one-line summary.
+ */
+export const Chapter = z
+  .object({
+    startMs: z.number().int().nonnegative(),
+    title: z.string(),
+    summary: z.string(),
+  })
+  .openapi('Chapter');
+
+/**
  * The structured summary. `keyPoints` is a Firestore-only field with no
  * Postgres column (see shared/note-edit.cjs) — optional here for that reason.
  * Source: src/types.ts `Summary` and Note.swift `Summary`.
@@ -48,6 +60,8 @@ export const Summary = z
     actionItems: z.array(z.string()),
     keyDecisions: z.array(z.string()),
     keyPoints: z.array(z.string()).optional(),
+    /** Absent on older notes and short ones. */
+    chapters: z.array(Chapter).optional(),
   })
   .openapi('Summary');
 
@@ -119,6 +133,7 @@ export const Note = z
 export type NoteStatus = z.infer<typeof NoteStatus>;
 export type NoteType = z.infer<typeof NoteType>;
 export type Summary = z.infer<typeof Summary>;
+export type Chapter = z.infer<typeof Chapter>;
 export type FirestoreTranscriptLine = z.infer<typeof FirestoreTranscriptLine>;
 export type NoteProgress = z.infer<typeof NoteProgress>;
 export type Note = z.infer<typeof Note>;

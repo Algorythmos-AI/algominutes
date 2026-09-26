@@ -41,7 +41,8 @@ and p95; a release gate fails if p95 regresses past the ceiling.
 ## Cost budget (A9.4 — gates pricing, needs A11 measurement)
 
 Before pricing is fixed, report a **measured blended cost per minute** across STT + Gemini + storage.
-The 1,500-minute Pro tier at A$29 only works if this is **well under one cent per minute**
-(1500 min × A$0.01 = A$15 COGS vs ~A$24.65 net). **Not yet measured** — blocked on a deployed pipeline
+The 1,500-minute Pro tier at A$14.99 nets about A$12.74 after the 15% store cut, so it breaks even at
+**about 0.85¢ per minute** (A$12.74 / 1,500 min); the blended cost must be well under that. At a full
+cent a minute a subscriber who uses the whole tier loses money (A$15 COGS vs A$12.74 net). **Not yet measured** — blocked on a deployed pipeline
 (A11); flagged in BLOCKERS. The §4.6 daily spend circuit breaker (staging A$20 / prod A$200) is the
 backstop until the real number is known.

@@ -6,7 +6,7 @@ name: invariants
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [integration, main]
 
 permissions:
   contents: read
@@ -15,11 +15,18 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: No silent catch handlers
+      # The silent-catch gate parses code with the TypeScript compiler.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: No silent catch handlers (syntax-aware)
         run: bash scripts/check-no-silent-catch.sh
 
       - name: No public @google/generative-ai imports in services
@@ -34,5 +41,14 @@ jobs:
       - name: No direct Firestore note mutations outside the repo/mirror layer
         run: bash scripts/check-no-direct-firestore.sh
 
+      - name: No Postgres note-table writes outside the repo layer (syntax-aware)
+        run: node scripts/check-no-direct-pg-writes.mjs
+
       - name: Migration integrity (never edit a committed migration)
         run: bash scripts/check-migrations.sh
+
+      - name: New migrations are expand-only, or marked contract steps
+        run: node scripts/check-migration-expand.mjs
+
+      - name: Every workspace declares the packages it imports
+        run: node scripts/check-declared-deps.mjs

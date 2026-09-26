@@ -12,7 +12,25 @@
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
 const AWS_KEY = /\bAKIA[0-9A-Z]{16}\b/g;
 const GOOGLE_API_KEY = /\bAIza[0-9A-Za-z_\-]{35}\b/g;
-const PRIVATE_KEY_BLOCK = /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----[\s\S]+?-----END [^-]+PRIVATE KEY-----/g;
+// Private keys are found by a linear scan (redactPrivateKeys below), not one
+// regex. The old /-----BEGIN …PRIVATE KEY-----[\s\S]+?-----END [^-]+PRIVATE KEY-----/
+// missed the most common format entirely: PKCS#8 (`BEGIN PRIVATE KEY`, how GCP
+// service-account keys look), because `[^-]+` needs a type word before
+// PRIVATE. Encrypted PKCS#8 and PGP blocks were missed too. It was also
+// quadratic: each BEGIN scanned to the end of the text for an END (CodeQL
+// js/polynomial-redos; 216 KB took 0.7 s).
+const PK_BEGIN = /-----BEGIN ((?:[A-Z0-9]{1,16} ){0,3})PRIVATE KEY( BLOCK)?-----/g;
+const PK_END = /-----END ((?:[A-Z0-9]{1,16} ){0,3})PRIVATE KEY( BLOCK)?-----/g;
+const PK_END_AT = /-----END (?:[A-Z0-9]{1,16} ){0,3}PRIVATE KEY(?: BLOCK)?-----/y;
+// The body of a key with no END marker (truncated or pasted in part): a run of
+// line breaks, spaces, base64 of 16+ characters (or a shorter final line ending
+// in = padding, or a PGP checksum), and PEM/PGP header lines. Prose stops it:
+// ordinary words are shorter than 16 characters. Each token is non-empty, the
+// count is bounded, and nothing follows the group, so the engine never
+// backtracks into it (keep it that way): linear time.
+const PK_BODY = /(?:\r?\n|\r|[ \t]+|[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/]{2,15}={1,2}|=[A-Za-z0-9+/]{4}|(?:Proc-Type|DEK-Info|Comment|Version|Charset|Hash|MessageID):[^\n]{0,200}){0,4096}/y;
+const PK_TAG = '<<REDACTED:PRIVATE_KEY>>';
+const PK_MAX_BODY = 32 * 1024; // the largest real PEM key is well under this
 const JWT = /\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/g;
 const CARD_CANDIDATE = /\b(?:\d[ -]?){12,18}\d\b/g;
 
@@ -74,16 +92,114 @@ function luhnValid(digits) {
   return sum % 10 === 0;
 }
 
+/**
+ * Replace every PEM/PGP private key block with the tag, in one linear pass.
+ * A BEGIN with its matching END (same type, within PK_MAX_BODY) redacts through
+ * the END. A BEGIN without one redacts the marker and the base64 body that
+ * follows, so a truncated key still doesn't leak. Returns the text, the block
+ * count, and `open`: whether the text ENDS inside a key with no END, so a caller
+ * scrubbing line by line keeps redacting the next lines (redactLines).
+ */
+function redactPrivateKeys(text) {
+  if (typeof text !== 'string' || text.indexOf('-----BEGIN ') === -1) return { text, n: 0, open: false };
+  // Every END position per marker, found in ONE pass. Each BEGIN then advances
+  // a per-marker pointer, so the whole scan is O(n) however many key types (or
+  // made-up type words) the text contains.
+  const ends = new Map();
+  PK_END.lastIndex = 0;
+  let e;
+  while ((e = PK_END.exec(text)) !== null) {
+    const list = ends.get(e[0]);
+    if (list) list.push(e.index);
+    else ends.set(e[0], [e.index]);
+  }
+  const cursor = new Map();
+
+  let out = '';
+  let last = 0;
+  let n = 0;
+  let open = false;
+  PK_BEGIN.lastIndex = 0;
+  let m;
+  while ((m = PK_BEGIN.exec(text)) !== null) {
+    const bodyStart = PK_BEGIN.lastIndex;
+    const endMarker = `-----END ${m[1]}PRIVATE KEY${m[2] || ''}-----`;
+    const list = ends.get(endMarker) || [];
+    let i = cursor.get(endMarker) || 0;
+    while (i < list.length && list[i] < bodyStart) i += 1;
+    cursor.set(endMarker, i);
+    let stop;
+    if (i < list.length && list[i] - bodyStart <= PK_MAX_BODY) {
+      stop = list[i] + endMarker.length;
+      open = false;
+    } else {
+      PK_BODY.lastIndex = bodyStart;
+      const body = PK_BODY.exec(text);
+      stop = bodyStart + (body ? body[0].length : 0);
+      open = stop >= text.length;
+    }
+    out += text.slice(last, m.index) + '<<REDACTED:PRIVATE_KEY>>';
+    n += 1;
+    last = stop;
+    PK_BEGIN.lastIndex = stop;
+  }
+  return { text: n ? out + text.slice(last) : text, n, open };
+}
+
+/**
+ * The start of a line that continues a key opened on an earlier line: through
+ * its END marker, else through its key body. Returns the redacted line and
+ * whether the key is still open after it.
+ */
+function continueOpenKey(text) {
+  const at = text.indexOf('-----END ');
+  if (at !== -1) {
+    PK_END_AT.lastIndex = at;
+    const endM = PK_END_AT.exec(text);
+    PK_BODY.lastIndex = 0;
+    const lead = PK_BODY.exec(text);
+    // Only when everything before the END is key body (no prose in between).
+    if (endM && lead && lead[0].length >= at) {
+      return { text: '<<REDACTED:PRIVATE_KEY>>' + text.slice(at + endM[0].length), open: false };
+    }
+  }
+  PK_BODY.lastIndex = 0;
+  const body = PK_BODY.exec(text);
+  const len = body ? body[0].length : 0;
+  if (!len) return { text, open: false };
+  return { text: '<<REDACTED:PRIVATE_KEY>>' + text.slice(len), open: len >= text.length };
+}
+
 function redactPII(input) {
-  if (typeof input !== 'string' || !input) return { text: input || '', counts: {} };
+  const { text, counts } = scrub(input, false);
+  return { text, counts };
+}
+
+/**
+ * redactPII, plus whether the text ends inside an unterminated private key.
+ * `continuingKey`: the previous line ended inside one, so this line's leading
+ * key body is redacted too.
+ */
+function scrub(input, continuingKey) {
+  // A blank line inside a key (PGP and encrypted PEM put one after their
+  // headers) keeps it open.
+  if (typeof input !== 'string' || !input) return { text: input || '', counts: {}, keyOpen: !!continuingKey && input === '' };
   const counts = {};
   const inc = (key) => { counts[key] = (counts[key] || 0) + 1; };
 
+  let source = input;
+  let open = false;
+  if (continuingKey) {
+    const cont = continueOpenKey(input);
+    source = cont.text;
+    open = cont.open;
+  }
   // Order matters: most specific patterns FIRST so generic shapes don't
-  // mis-classify a Medicare or IHI as a phone. Email + private-key + JWT
-  // can run anywhere; we keep them up top by tradition.
-  let text = input
-    .replace(PRIVATE_KEY_BLOCK, () => { inc('private_key'); return '<<REDACTED:PRIVATE_KEY>>'; })
+  // mis-classify a Medicare or IHI as a phone. Private keys go first of all,
+  // so later patterns can't split a key body into pieces.
+  const keys = open ? { text: source, n: 0, open: true } : redactPrivateKeys(source);
+  if (keys.n) counts.private_key = keys.n;
+  let text = keys.text
     .replace(JWT, () => { inc('jwt'); return '<<REDACTED:JWT>>'; })
     .replace(GOOGLE_API_KEY, () => { inc('google_api_key'); return '<<REDACTED:GOOGLE_API_KEY>>'; })
     .replace(AWS_KEY, () => { inc('aws_key'); return '<<REDACTED:AWS_KEY>>'; })
@@ -114,19 +230,51 @@ function redactPII(input) {
       return match;
     });
 
-  return { text, counts };
+  return { text, counts, keyOpen: keys.open };
+}
+
+/**
+ * Redact consecutive lines of one text (a transcript, line by line), carrying
+ * an unterminated private key from one line into the next. Scrubbing each line
+ * alone would redact a key's BEGIN line but let its later base64 lines
+ * through. Returns the same number of lines, in order.
+ *
+ * A line that ALREADY ends in the private-key tag (redacted when it was
+ * stored, e.g. a key whose body continued into the next audio chunk's lines)
+ * reopens the key for the lines after it. That can over-redact a following
+ * line's leading 16+-character word, never under-redact.
+ */
+function redactLines(texts) {
+  if (!Array.isArray(texts)) return { texts: [], counts: {} };
+  const totalCounts = {};
+  let open = false;
+  const out = texts.map((t) => {
+    if (typeof t !== 'string') return t;
+    const r = scrub(t, open);
+    open = r.keyOpen || t.trimEnd().endsWith(PK_TAG);
+    for (const [k, v] of Object.entries(r.counts)) totalCounts[k] = (totalCounts[k] || 0) + v;
+    return r.text;
+  });
+  return { texts: out, counts: totalCounts };
 }
 
 function redactTranscriptLines(lines) {
   if (!Array.isArray(lines)) return { lines: [], counts: {} };
-  const totalCounts = {};
-  const out = lines.map((line) => {
-    if (!line || typeof line.text !== 'string') return line;
-    const { text, counts } = redactPII(line.text);
-    for (const [k, v] of Object.entries(counts)) totalCounts[k] = (totalCounts[k] || 0) + v;
-    return { ...line, text };
+  const { texts, counts } = redactLines(lines.map((line) => (line && typeof line.text === 'string' ? line.text : null)));
+  const out = lines.map((line, i) => {
+    let next = line && typeof line.text === 'string' ? { ...line, text: texts[i] } : line;
+    // The fast path's speaker labels are the model's, written after hearing raw
+    // audio, so one can be what someone said ("this is jane@example.com").
+    if (line && typeof line.speaker === 'string') {
+      const r = redactPII(line.speaker);
+      if (r.text !== line.speaker) {
+        next = { ...next, speaker: r.text };
+        for (const [k, v] of Object.entries(r.counts)) counts[k] = (counts[k] || 0) + v;
+      }
+    }
+    return next;
   });
-  return { lines: out, counts: totalCounts };
+  return { lines: out, counts };
 }
 
 // Redact an array of short strings (action items, key decisions, topics),
@@ -160,11 +308,22 @@ function redactSummaryOutput(summary) {
   if (Array.isArray(out.keyDecisions)) out.keyDecisions = redactStringList(out.keyDecisions, counts);
   if (Array.isArray(out.keyPoints)) out.keyPoints = redactStringList(out.keyPoints, counts);
   if (Array.isArray(out.topics)) out.topics = redactStringList(out.topics, counts);
+  if (Array.isArray(out.chapters)) {
+    out.chapters = out.chapters.map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const next = { ...c };
+      if (typeof next.title === 'string') { const r = redactPII(next.title); next.title = r.text; inc(r.counts); }
+      if (typeof next.summary === 'string') { const r = redactPII(next.summary); next.summary = r.text; inc(r.counts); }
+      return next;
+    });
+  }
   return { summary: out, counts };
 }
 
 module.exports = {
   redactPII,
+  redactLines,
+  redactPrivateKeys,
   redactTranscriptLines,
   redactStringList,
   redactSummaryOutput,

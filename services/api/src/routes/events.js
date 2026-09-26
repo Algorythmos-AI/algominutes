@@ -1,12 +1,13 @@
 import { trackEvent } from '@algominutes/db';
+import { TrackEventRequest } from '@algominutes/contracts/schemas';
 
 // POST /v1/events — A9.6 conversion-funnel tracking. Best-effort: a failed track
 // must never break the user flow, so we log and still 202. Keep props PII-free.
 export async function trackEventRoute(req, res) {
-  const { event, props, occurredAt } = req.body || {};
-  if (!event || typeof event !== 'string') {
-    return res.status(400).json({ error: 'event_required' });
-  }
+  // The published contract: a known funnel event and flat, primitive props.
+  const parsed = TrackEventRequest.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: 'invalid_event' });
+  const { event, props, occurredAt } = parsed.data;
   try {
     await trackEvent({ uid: req.uid, event, props: props ?? null, occurredAt: occurredAt ?? null });
   } catch (err) {

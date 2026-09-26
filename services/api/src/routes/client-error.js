@@ -24,10 +24,18 @@ export function clientErrorRoute(req, res) {
   for (const [field, cap] of Object.entries(CLIENT_ERROR_FIELD_CAPS)) {
     const value = body[field];
     if (typeof value === 'string' && value.length > 0) {
-      report[field] = value.slice(0, cap);
-    } else if (typeof value === 'number' && Number.isFinite(value)) {
-      report[field] = value;
+      // Control characters flattened (line breaks become ' | ', so a stack
+      // stays readable): an anonymous caller must not shape the log's layout.
+      // The logger writes JSON, so this is defence in depth.
+      const flat = value.slice(0, cap).replace(/\r?\n|\r/g, ' | ').replace(/[\u0000-\u001f\u007f]/g, ' ');
+      // A no-op by now, but it is the one shape CodeQL's js/log-injection
+      // treats as a sanitiser: a global replace of "\n" with "" (its
+      // StringReplaceSanitizer). Without it the alert stays open.
+      report[field] = flat.replace(/\n/g, '');
     }
+    // Anything else (numbers included) is dropped: every capped field is a
+    // string, and a raw request value must never reach the log unsanitised.
+    // (The web beacon's one numeric field, `line`, isn't in the caps.)
   }
 
   // A stable event name so a log-based metric can count it. Logged as an

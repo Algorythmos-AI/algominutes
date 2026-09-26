@@ -80,16 +80,67 @@ variable "task_max_attempts" {
 
 # --- Cloud Run ---------------------------------------------------------------
 
-variable "cloud_run_max_instances" {
-  description = "Upper bound on Cloud Run instances per service — a cost guard so a runaway loop can't scale without limit."
-  type        = number
-  default     = 4
+variable "connection_budget" {
+  description = "Postgres connection budget, from envs/<env>/connection-budget.json: per service its max instances (also a cost guard), pool count and PG_POOL_MAX, plus each job's connections. The worst case must fit the tier (precondition on the Cloud SQL instance)."
+  type = object({
+    tier              = string
+    max_connections   = number
+    reserved          = number
+    operator_headroom = number
+    services = map(object({
+      max_instances = number
+      pools         = number
+      pool_max      = number
+    }))
+    jobs = map(object({
+      connections = number
+      pool_max    = number
+    }))
+  })
 }
 
 variable "allowed_origins" {
-  description = "Comma-separated CORS allowlist for services/api (ALLOWED_ORIGINS). Set per env in tfvars once the web origin is confirmed; empty falls back to the api's baked-in localhost/capacitor allowlist."
+  description = "Comma-separated CORS allowlist for services/api (ALLOWED_ORIGINS), added to the api's baked-in localhost/capacitor list. Required: the api refuses to boot on a blank value (services/api/src/env-spec.cjs)."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.allowed_origins) != ""
+    error_message = "allowed_origins must name at least one origin: the api exits at boot on a blank ALLOWED_ORIGINS."
+  }
+}
+
+variable "site_uptime_host" {
+  description = "Host of the public site to watch with uptime checks (monitoring.tf), or \"\" for none. Exactly one environment watches it: staging until prod exists, then prod."
   type        = string
   default     = ""
+}
+
+variable "public_site_url" {
+  description = "Origin of the public site (privacy, terms, support, share links, billing return pages), without a trailing slash. The api and billing read it as PUBLIC_SITE_URL."
+  type        = string
+  default     = "https://algominutes.algorythmos.com"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.public_site_url))
+    error_message = "public_site_url must be an https origin with no path or trailing slash."
+  }
+}
+
+variable "broadcast_capture" {
+  description = "Server-side kill switch for iOS broadcast capture, served by GET /v1/config. \"off\" hides the feature in the app without a build."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.broadcast_capture)
+    error_message = "broadcast_capture must be \"on\" or \"off\"."
+  }
+}
+
+variable "admin_uids" {
+  description = "Firebase uids allowed on the api's operator routes (/v1/admin/*, ADMIN_UIDS). Passed at plan time as TF_VAR_admin_uids, never committed. Empty leaves ADMIN_UIDS unset, so every admin route answers 403."
+  type        = list(string)
+  default     = []
 }
 
 variable "enable_nat" {
@@ -167,4 +218,112 @@ variable "connector_cidr" {
   description = "Dedicated /28 for the Serverless VPC Access connector. Must NOT overlap subnet_cidr."
   type        = string
   default     = "10.8.1.0/28"
+}
+
+# ---------------------------------------------------------------------------
+# Budget + alerts (budget.tf)
+# ---------------------------------------------------------------------------
+variable "billing_account" {
+  description = "Billing account ID the project bills to (XXXXXX-XXXXXX-XXXXXX). Required: every environment gets a budget. Not committed; pass TF_VAR_billing_account (runbook)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$", var.billing_account))
+    error_message = "billing_account must look like XXXXXX-XXXXXX-XXXXXX (see the runbook: derive it with gcloud billing projects describe)."
+  }
+}
+
+variable "alert_emails" {
+  description = "Email addresses the alert policies notify (alerting.tf). Passed at plan time (TF_VAR_alert_emails), never committed. Empty: incidents open in the console but nobody is emailed."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for e in var.alert_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
+    error_message = "alert_emails must be email addresses."
+  }
+}
+
+variable "monthly_budget" {
+  description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
+  type        = number
+
+  validation {
+    condition     = var.monthly_budget > 0 && floor(var.monthly_budget) == var.monthly_budget
+    error_message = "monthly_budget must be a positive whole number (the budget amount is whole currency units)."
+  }
+}
+
+variable "budget_alert_thresholds" {
+  description = "Fractions of monthly_budget (actual spend) that trigger an alert. A 100% forecast alert is always added."
+  type        = list(number)
+  default     = [0.5, 0.9, 1.0]
+}
+
+variable "budget_notification_channels" {
+  description = "Extra Cloud Monitoring notification channel IDs for budget alerts (billing admins are always emailed)."
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
+# Keyless deploy (WIF) scope — which GitHub workflow runs may impersonate
+# gha-deployer. The repo is public: a repository-only condition lets ANY
+# workflow on ANY branch (or PR ref) of it mint a deploy token.
+# ---------------------------------------------------------------------------
+variable "wif_allowed_refs" {
+  description = "Git refs whose workflow runs may deploy this environment (staging: refs/heads/integration, prod: refs/heads/main)."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.wif_allowed_refs) > 0 && alltrue([for r in var.wif_allowed_refs : can(regex("^refs/heads/[A-Za-z0-9._/-]+$", r))])
+    error_message = "wif_allowed_refs must be one or more refs/heads/<branch> refs (no wildcards)."
+  }
+}
+
+variable "wif_github_environment" {
+  description = "GitHub Environment the deploy jobs run in (its protection rules gate the token). staging | production."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]+$", var.wif_github_environment))
+    error_message = "wif_github_environment must be a plain GitHub Environment name."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# In-VPC proof VM (bastion.tf)
+# ---------------------------------------------------------------------------
+variable "enable_bastion" {
+  description = "Create the small in-VPC proof VM (IAP SSH only). For proving an environment from inside its VPC; turn off when done."
+  type        = bool
+  default     = false
+}
+
+variable "bastion_machine_type" {
+  description = "Machine type for the proof VM. e2-small (2 vCPU burst, 2 GB) fits npm ci + the integration suite."
+  type        = string
+  default     = "e2-small"
+}
+
+variable "noncurrent_version_retention_days" {
+  description = "Days a noncurrent (deleted or overwritten) object version is kept before the bucket lifecycle deletes it. The app already deletes every generation on note/account deletion; this is the backstop. Must stay well inside docs/DATA-RETENTION.md's 30-day deletion window."
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.noncurrent_version_retention_days >= 1 && var.noncurrent_version_retention_days <= 30
+    error_message = "noncurrent_version_retention_days must be 1-30 (the deletion window is 30 days)."
+  }
+}
+
+variable "enable_sweeper" {
+  description = "Create the db-sweep Cloud Run Job and the Cloud Scheduler job that runs it (scheduler.tf). The Scheduler job is created paused, and the deploy resumes it once a real image has rolled out and passed the smoke."
+  type        = bool
+  default     = true
+}
+
+variable "sweep_schedule" {
+  description = "Cron schedule (UTC) for the db-sweep job."
+  type        = string
+  default     = "*/15 * * * *"
 }

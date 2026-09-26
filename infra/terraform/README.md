@@ -30,7 +30,7 @@ infra/terraform/
 ## Prerequisites
 
 - Terraform >= 1.9.
-- A shell authenticated as **`gcp-admin@algorythmos.com`** with Owner on the
+- A shell authenticated as **`algorythmos.france@gmail.com`** (primary working account) with Owner on the
   target project:
   `gcloud auth application-default login`
 - Both projects already exist and are billing-linked (see
@@ -122,8 +122,9 @@ identical — staging is the same architecture at the smallest viable tier.
   config). These must be **regenerated per environment, never copied** from the
   source project. Auth providers (Google + Apple sign-in) are enabled in the
   Firebase console.
-- **Domain mapping** — mapping `api.algominutes.com` (and the web domain) to
-  Cloud Run happens in A11 alongside service deploy.
+- **Domain mapping** — none. Cloud Run domain mapping isn't offered in
+  australia-southeast1, so the api keeps its `run.app` URL through external beta
+  (DECISIONS, 2026-09-26); the site is `algominutes.algorythmos.com`.
 - **Cloud Run services themselves** — built + deployed per service in A11
   (wire the VPC connector output as the egress connector, mount the DB-password
   secret, attach the matching `run-*` service account).

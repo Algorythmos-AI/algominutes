@@ -15,6 +15,10 @@ terraform {
     google = {
       source  = "hashicorp/google"
       version = "~> 6.0"
+      # google.billing: user_project_override, for the APIs that need a quota
+      # project on user credentials: Budgets (budget.tf), Firebase Rules
+      # (firebase-rules.tf).
+      configuration_aliases = [google.billing]
     }
     google-beta = {
       source  = "hashicorp/google-beta"
@@ -43,6 +47,7 @@ locals {
     "aiplatform.googleapis.com",           # Vertex AI (Gemini)
     "speech.googleapis.com",               # Speech-to-Text v2
     "firestore.googleapis.com",            # Firestore
+    "firebaserules.googleapis.com",        # Firestore security rules (firebase-rules.tf)
     "firebase.googleapis.com",             # Firebase management
     "identitytoolkit.googleapis.com",      # Firebase Auth
     "fcm.googleapis.com",                  # Firebase Cloud Messaging (push)
@@ -50,6 +55,7 @@ locals {
     "cloudbuild.googleapis.com",           # Cloud Build (A11 image builds)
     "iam.googleapis.com",                  # IAM
     "iamcredentials.googleapis.com",       # IAM credentials / workload identity
+    "sts.googleapis.com",                  # Security Token Service: the deploy workflow's keyless (WIF) sign-in
     "serviceusage.googleapis.com",         # Service Usage
     "servicenetworking.googleapis.com",    # Private Services Access (Cloud SQL private IP)
     "vpcaccess.googleapis.com",            # Serverless VPC Access connector
@@ -58,6 +64,8 @@ locals {
     "logging.googleapis.com",              # Cloud Logging
     "monitoring.googleapis.com",           # Cloud Monitoring
     "cloudresourcemanager.googleapis.com", # Resource Manager (IAM bindings)
+    "billingbudgets.googleapis.com",       # Budgets + alerts (budget.tf)
+    "iap.googleapis.com",                  # IAP TCP forwarding (SSH to the proof VM, bastion.tf)
   ]
 }
 
@@ -145,6 +153,19 @@ resource "google_sql_database_instance" "pg" {
     google_project_service.apis,
   ]
 
+  lifecycle {
+    # The services can never open more connections than the tier allows
+    # (connection-budget.json; docs/DECISIONS.md).
+    precondition {
+      condition     = var.connection_budget.tier == var.db_tier
+      error_message = "connection-budget.json is for tier ${var.connection_budget.tier}, but db_tier is ${var.db_tier}."
+    }
+    precondition {
+      condition     = local.connection_worst_case <= var.connection_budget.max_connections - var.connection_budget.reserved - var.connection_budget.operator_headroom
+      error_message = "Connection budget exceeded: the services' worst case (${local.connection_worst_case}) is over the tier's usable connections."
+    }
+  }
+
   settings {
     tier = var.db_tier
     # Google now defaults new Postgres instances to ENTERPRISE_PLUS, which
@@ -166,6 +187,12 @@ resource "google_sql_database_instance" "pg" {
     ip_configuration {
       ipv4_enabled    = false # NO public IP
       private_network = google_compute_network.vpc.id
+      # Refuse unencrypted connections at the server. Every pool connects with
+      # TLS (packages/ai/src/pg-config.cjs + PGSSLMODE=require in cloud-run.tf),
+      # so this makes the policy enforced rather than assumed — the old
+      # "pg_hba.conf rejects connection ... no encryption" outage (Bug 16) was
+      # the server enforcing this while one client did not.
+      ssl_mode = "ENCRYPTED_ONLY"
     }
 
     backup_configuration {
@@ -173,6 +200,13 @@ resource "google_sql_database_instance" "pg" {
       point_in_time_recovery_enabled = var.db_point_in_time_recovery
       start_time                     = "16:00" # 02:00–03:00 Sydney, off-peak
       transaction_log_retention_days = var.db_point_in_time_recovery ? 7 : null
+      # Backups age out inside the 30-day deletion window (docs/DATA-RETENTION.md
+      # §4): 7 daily backups, and 7 days of PITR logs above. Stated here so a
+      # console change or a provider default can't drift past the promise.
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
     }
   }
 }
@@ -233,6 +267,13 @@ resource "google_secret_manager_secret_version" "db_password" {
 # ---------------------------------------------------------------------------
 locals {
   bucket_suffixes = ["recordings", "imports", "scans"]
+
+  # Worst-case Postgres connections: every service at max instances with every
+  # pool full, plus each job (connection-budget.json).
+  connection_worst_case = sum(concat(
+    [for s in values(var.connection_budget.services) : s.max_instances * s.pools * s.pool_max],
+    [for j in values(var.connection_budget.jobs) : j.connections],
+  ))
 }
 
 resource "google_storage_bucket" "buckets" {
@@ -247,6 +288,20 @@ resource "google_storage_bucket" "buckets" {
 
   versioning {
     enabled = true
+  }
+
+  # Versioning keeps a deleted object's bytes as a noncurrent version. The app
+  # deletes every generation when it deletes a note or an account
+  # (packages/ai/src/note-storage.cjs). This rule is the backstop, so no
+  # noncurrent version outlives the deletion window promised in
+  # docs/DATA-RETENTION.md (30 days).
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = var.noncurrent_version_retention_days
+    }
+    action {
+      type = "Delete"
+    }
   }
 
   # Lifecycle deletion only on the recordings bucket, only when a positive
@@ -289,7 +344,7 @@ resource "google_cloud_tasks_queue" "queues" {
   retry_config {
     # Single source of truth for the attempt budget: every service is deployed
     # with MAX_TASK_ATTEMPTS set to this SAME value so the terminal-failure/DLQ
-    # write (packages/ai/note-terminal.cjs isFinalAttempt) fires on the queue's
+    # write (packages/db/note-terminal.cjs isFinalAttempt) fires on the queue's
     # genuine last attempt — not before, not after.
     max_attempts       = var.task_max_attempts
     min_backoff        = "5s"
@@ -347,6 +402,11 @@ locals {
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
     # run.invoker on each service (resource-level, in cloud-run.tf).
     "run-jobs" = "AlgoMinutes Cloud Tasks OIDC + invoker identity"
+    # The sweep (scheduler.tf): its own runtime SA, with only what the sweep
+    # does, and the identity Cloud Scheduler uses to start it, which may run
+    # that one job and nothing else.
+    "run-sweep"     = "AlgoMinutes db-sweep (Cloud Run Job runtime SA)"
+    "run-scheduler" = "AlgoMinutes Cloud Scheduler invoker (db-sweep only)"
   }
 
   # Roles common to every service.
@@ -370,6 +430,7 @@ locals {
       "roles/secretmanager.secretAccessor",
       "roles/cloudtasks.enqueuer",
       "roles/datastore.user",
+      "roles/aiplatform.user", # /v1/search and /v1/chat embed the query and stream the answer on Vertex
     ])
     "run-transcoder" = concat(local.common_roles, [
       "roles/cloudsql.client",
@@ -417,7 +478,18 @@ locals {
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
       "roles/datastore.user",
+      "roles/aiplatform.user",     # vertex-smoke (deploy preflight), eval-recall
+      "roles/cloudtasks.enqueuer", # the sweep's notices step, when run by hand as db-job
     ])
+    "run-sweep" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor",
+      "roles/datastore.user",
+      "roles/cloudtasks.enqueuer", # re-enqueues notices left unsent (note_notices)
+      # + a custom role for firebaseauth.users.delete, and objectAdmin on the
+      # recordings bucket only (scheduler.tf)
+    ])
+    "run-scheduler" = local.common_roles
     # run-jobs is purely an invocation identity: common logging/trace roles only.
     # Its run.invoker grants are resource-level (per service, in cloud-run.tf).
     "run-jobs" = local.common_roles
@@ -465,4 +537,16 @@ resource "google_storage_bucket_iam_member" "object_admin" {
   bucket = google_storage_bucket.buckets[each.value.bucket].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime[each.value.sa].email}"
+}
+
+# Logs (traceId, uid, noteId, workspaceId; never transcript text) are kept 30
+# days, the deletion window (docs/DATA-RETENTION.md §3/§4). This is the _Default
+# bucket's own default, pinned here so it can't be raised by hand unnoticed.
+resource "google_logging_project_bucket_config" "default" {
+  project        = var.project_id
+  location       = "global"
+  bucket_id      = "_Default"
+  retention_days = 30
+
+  depends_on = [google_project_service.apis]
 }

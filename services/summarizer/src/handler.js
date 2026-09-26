@@ -14,32 +14,23 @@ function loadShared(name) {
 // The terminal-failure write started here and now lives in shared/, because the
 // transcoder needed the same thing and a second copy would have drifted.
 const sharedNoteTerminal = loadShared('note-terminal.cjs');
+const summaryOutput = loadShared('summary-output.cjs');
+
+// Past this, a recording has sections worth navigating: the summary gets
+// chapters. (The transcoder's fast path, which writes its own summary, covers
+// everything shorter.)
+const CHAPTERS_MIN_MS = 10 * 60 * 1000;
+// The final write goes through the repo layer (CLAUDE.md §1): this service
+// runs under tsx, so it imports @algominutes/db's TypeScript directly.
+const { markSummaryReady } = require('@algominutes/db');
 const terminalHooks = require('./terminal-hooks');
 
 let _pool = null;
 function pool() {
   if (_pool) return _pool;
-  // Cloud SQL pg_hba.conf rejects unencrypted connections from the VPC
-  // connector range. Same fix as services/transcoder/src/db.js:35.
-  // Without this the summarizer fails every chunked-path task with
-  // "pg_hba.conf rejects connection ... no encryption". Latent for the
-  // current corpus (we run almost everything through fast-path) but
-  // would break a long meeting discussion (>10 min).
-  const ssl = { rejectUnauthorized: false };
-  _pool = new Pool(
-    process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, ssl, max: 4, idleTimeoutMillis: 30000 }
-      : {
-          host: process.env.PGHOST,
-          port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-          database: process.env.PGDATABASE || 'postgres',
-          user: process.env.PGUSER || 'postgres',
-          password: process.env.PGPASSWORD,
-          ssl,
-          max: 4,
-          idleTimeoutMillis: 30000,
-        },
-  );
+  // Shared connection config (TLS policy + defaults): @algominutes/ai/pg-config.cjs.
+  const { buildPgConfig, attachPoolErrorLogger } = loadShared('pg-config.cjs');
+  _pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 4 })), loadShared('logger.cjs').logger, { pool: 'summarizer' });
   return _pool;
 }
 
@@ -64,32 +55,35 @@ function fmtTime(ms) {
 /**
  * Move a note to a terminal 'error' state in both Postgres and Firestore.
  *
- * The summarizer had no equivalent of the transcoder's mirrorError, so every
- * failure path returned 500 → Cloud Tasks retried → and then simply dropped
- * the task (the queue has no dead-letter sink, despite what the comments used
- * to claim), leaving the note at 'summarizing' indefinitely. There is no
- * server-side sweeper, and the client watchdog only runs while the app is
- * foregrounded, so a note stuck this way could stay stuck for days.
+ * Every failure path used to return 500 until Cloud Tasks dropped the task,
+ * leaving the note at 'summarizing'. The stuck-note sweep (db-job, 3.5 h) is
+ * the backstop now; this is the first line.
  *
  * Best-effort and never throws: it runs on the failure path, and a failure to
- * record the failure must not mask the original error.
+ * record the failure must not mask the original error. The one exception is
+ * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
     firestore: firestore(),
     noteId, workspaceId, message, log,
     event: 'summarizer_mark_failed',
+    retryOnPgError,
+    refund,
+    traceId,
   });
 }
 
 async function handle(payload, deps) {
   const { noteId, workspaceId, summaryGeneration, template } = payload || {};
   if (!noteId || !workspaceId) throw new Error('summarizer.handle: missing noteId/workspaceId');
-  const { log, env, sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
+  const { sharedIntelligence, sharedTemplates, sharedRedaction, geminiCall, traceId } = deps;
+  let log = deps.log;
 
-  const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  // No API key: the ladder (gemini-call.cjs) calls Vertex AI with the
+  // service's own identity (ADC), in AIPLATFORM_LOCATION. A GEMINI_API_KEY
+  // gate here used to fail every summary, since nothing sets one.
 
   const client = await pool().connect();
   let lines = [];
@@ -97,11 +91,21 @@ async function handle(payload, deps) {
   try {
     // Same checkout as the transcript read — the generation and template live
     // on notes and are needed before any Gemini spend.
+    // Scoped to the task's workspace (CLAUDE.md §1). A note that is gone
+    // (deleted mid-pipeline) or not in this workspace is acknowledged, not
+    // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template FROM notes WHERE id = $1`,
-      [noteId],
+      `SELECT summary_generation, summary_template, author_uid FROM notes
+        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+      [noteId, workspaceId],
     );
     noteRow = noteRes.rows[0] || null;
+    if (!noteRow) {
+      log.warn({ noteId, workspaceId }, 'summarizer_note_not_found');
+      return;
+    }
+    // Every later line carries the note's owner and workspace (CLAUDE.md §1).
+    log = log.child({ userId: noteRow.author_uid, workspaceId });
 
     const { rows } = await client.query(
       `SELECT speaker_tag AS "speakerTag", speaker_name AS "speakerName",
@@ -118,7 +122,16 @@ async function handle(payload, deps) {
     // happens whenever STT returns zero words (silence, or the proto-decode
     // fallback in stt.js). A note that will never finish must say so.
     log.warn({ noteId }, 'summarizer_no_transcript_lines');
-    await markNoteFailed({ noteId, workspaceId, message: 'No speech was found in this recording.', log });
+    // Throws if Postgres misses the write, so the task retries (note-terminal).
+    // Refunded with the failure: the recording gave the user nothing. Not a
+    // regeneration's (its task carries summaryGeneration): that charge stands.
+    const regeneration = summaryGeneration !== undefined && summaryGeneration !== null;
+    // The "failed" notice is written with the failure, so the author hears.
+    await markNoteFailed({
+      noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
+      refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
+      traceId,
+    });
     return;
   }
 
@@ -146,16 +159,30 @@ async function handle(payload, deps) {
     template || (noteRow && noteRow.summary_template) || sharedTemplates.DEFAULT_TEMPLATE_ID,
   );
 
-  const redacted = lines.map((l) => {
-    const { text } = sharedRedaction.redactPII(l.text || '');
-    const speaker = l.speakerName || (l.speakerTag ? `Speaker ${l.speakerTag}` : 'Speaker');
-    return { speaker, text, time: fmtTime(l.startMs) };
+  // Line by line, carrying a private key that spans lines (redactLines), so a
+  // key's later base64 lines are redacted along with its BEGIN line.
+  const { texts: scrubbed } = sharedRedaction.redactLines(lines.map((l) => l.text || ''));
+  // speaker_name holds the model's own label on rows the retired fast-path
+  // writer (notes-repo markReady) stored, so it can be something said aloud:
+  // scrubbed too, once per distinct name. The names users type live in
+  // note_speakers and aren't sent; if they ever are, send them through here.
+  const scrubbedNames = new Map();
+  const speakerLabel = (name) => {
+    if (!scrubbedNames.has(name)) scrubbedNames.set(name, sharedRedaction.redactPII(name).text);
+    return scrubbedNames.get(name);
+  };
+  const redacted = lines.map((l, i) => {
+    const speaker = l.speakerName ? speakerLabel(l.speakerName)
+      : (l.speakerTag ? `Speaker ${l.speakerTag}` : 'Speaker');
+    return { speaker, text: scrubbed[i], time: fmtTime(l.startMs) };
   });
 
   const transcriptStr = redacted.map((l) => `[${l.time}] ${l.speaker}: ${l.text}`).join('\n');
 
+  const lastMs = lines[lines.length - 1].endMs || lines[lines.length - 1].startMs || 0;
+  const wantChapters = lastMs >= CHAPTERS_MIN_MS;
   const parts = [
-    { text: chosen.promptBody },
+    { text: chosen.promptBody + (wantChapters ? sharedTemplates.CHAPTERS_INSTRUCTION : '') },
     { text: `\n\nTranscript:\n${transcriptStr}\n` },
   ];
 
@@ -165,24 +192,30 @@ async function handle(payload, deps) {
   // pins the shape so a degraded model can't sneak through; the
   // bumped budget gives genuinely long bullet/decision lists room.
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
-    apiKey,
     parts,
     deadlineMs: sharedIntelligence.RETRY_DEADLINE_MS,
     log,
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: chosen.responseSchema,
+      responseSchema: wantChapters ? sharedTemplates.withChapters(chosen.responseSchema) : chosen.responseSchema,
       maxOutputTokens: 16384,
     },
   });
   if (!rawText) throw error || new Error('gemini_empty');
 
-  const parsed = sharedIntelligence.parseSummaryJson(rawText);
+  // A cut-off answer keeps the fields it completed (chapters come last, so the
+  // gist, action items and decisions survive), instead of failing the note.
+  const { result: parsed, partial } = summaryOutput.salvageSummaryJson(rawText);
+  if (partial) log.warn({ noteId, workspaceId, model }, 'summary_salvaged_partial');
 
   // Defense-in-depth: the transcript is scrubbed before Gemini, but redact the
   // summary OUTPUT too before persist + mirror (the model can still echo PII).
+  // Scrub the chapters whole, THEN trim them (normalizeChapters caps lengths):
+  // trimming first can cut a card number or an email so the patterns no longer
+  // match, and the fragment would be stored.
   const outRedaction = sharedRedaction.redactSummaryOutput({
     gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions,
+    chapters: wantChapters ? parsed.chapters : [],
   });
   if (Object.keys(outRedaction.counts).length) {
     log.info({ noteId, workspaceId, redactionCounts: outRedaction.counts }, 'summary_output_redacted');
@@ -190,77 +223,41 @@ async function handle(payload, deps) {
   parsed.gist = outRedaction.summary.gist;
   parsed.actionItems = outRedaction.summary.actionItems;
   parsed.keyDecisions = outRedaction.summary.keyDecisions;
+  const safeChapters = wantChapters
+    ? summaryOutput.normalizeChapters(outRedaction.summary.chapters, { maxMs: lastMs })
+    : [];
+  if (wantChapters) {
+    log.info({ noteId, workspaceId, chapters: safeChapters.length, offered: (parsed.chapters || []).length }, 'summary_chapters');
+  }
 
-  const c2 = await pool().connect();
-  try {
-    await c2.query('BEGIN');
-    await c2.query(
-      `INSERT INTO summaries (note_id, gist, long_summary, topics, model)
-         VALUES ($1, $2, NULL, $3, $4)
-       ON CONFLICT (note_id) DO UPDATE
-         SET gist = EXCLUDED.gist, topics = EXCLUDED.topics,
-             model = EXCLUDED.model, generated_at = NOW()`,
-      [noteId, parsed.gist || '', JSON.stringify(parsed.actionItems || []), model || null],
-    );
-    await c2.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of parsed.actionItems || []) {
-      await c2.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, item]);
-    }
-    await c2.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of parsed.keyDecisions || []) {
-      await c2.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
-    }
-    // Clearing summary_manually_edited_at is what keeps the regenerate
-    // confirmation meaningful. The summary that existed a moment ago was
-    // hand-edited; the one just written is not, so the note is no longer in
-    // an edited state. Leaving the flag set makes every future rewrite
-    // re-prompt about edits that no longer exist, and a warning that always
-    // fires is one people learn to dismiss — which defeats the guard on the
-    // one occasion it matters.
-    //
-    // summary_requested_at clears with it: same statement, same reasoning.
-    // It is currently harmless only because the stale-lock takeover arm in
-    // /api/regenerate-summary is gated on status = 'summarizing'.
-    //
-    // Inside the open transaction, so the flag cannot clear unless the
-    // summary it refers to actually landed.
-    await c2.query(
-      `UPDATE notes
-          SET status = 'ready',
-              summary_manually_edited_at = NULL,
-              summary_requested_at = NULL,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [noteId],
-    );
-    await c2.query('COMMIT');
-  } catch (err) {
-    await c2.query('ROLLBACK').catch((rollbackErr) => log.error({ rollbackErr, noteId }, 'summarizer_rollback_failed'));
-    throw err;
-  } finally { c2.release(); }
-
-  // Firestore mirror.
-  await firestore().doc(`workspaces/${workspaceId}/notes/${noteId}`).set({
-    status: 'ready',
-    updatedAt: new Date().toISOString(),
-    summary: {
-      gist: parsed.gist || '',
-      actionItems: parsed.actionItems || [],
-      keyDecisions: parsed.keyDecisions || [],
-    },
-    transcript: redacted.slice(0, 200),
+  // Postgres (summary rows, 'ready', manual-edit flags cleared, all in one
+  // transaction), then the Firestore mirror: notes-repo markSummaryReady.
+  // The generation read above is re-checked at the write, because the guard
+  // before Gemini can't see a regenerate claimed during the call.
+  const result = await markSummaryReady(firestore(), {
+    noteId,
+    workspaceId,
+    summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions, chapters: safeChapters },
+    model,
+    transcriptPreview: redacted.slice(0, 200),
     transcriptTruncated: redacted.length > 200,
-  }, { merge: true });
+    expectedGeneration: Number(noteRow.summary_generation),
+    traceId,
+  }, log);
+  if (!result.written) {
+    // Nothing was written anywhere, and there's nobody to notify: the note was
+    // deleted while we summarized, or a newer run now owns its summary.
+    log.warn(
+      { noteId, workspaceId, generation: Number(noteRow.summary_generation) },
+      result.reason === 'superseded' ? 'summarizer_generation_superseded' : 'summarizer_note_gone_before_write',
+    );
+    return;
+  }
 
-  log.info({ noteId, model, lines: lines.length }, 'summarizer_complete');
-
-  // A7.3: the summarizer is the last pipeline stage — the note is now `ready`.
-  // Notify the author (best-effort; a failed notify never rolls back the summary
-  // that just landed). uid is read from the note's author_uid via the same pool.
-  // Idempotency: a replayed task is already gated upstream (generation/ordering
-  // guard + empty-transcript check), so reaching here means this run produced
-  // the ready state; a duplicate push is cheap and harmless.
-  await terminalHooks.onReady({ pool: pool(), noteId, workspaceId, traceId, log });
+  // A7.3: the note is `ready`, and markSummaryReady wrote its "ready" notice in
+  // the same transaction and enqueued it (note-notices.cjs): once per summary,
+  // so a replay of this task tells nobody twice.
+  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null }, 'summarizer_complete');
 }
 
 module.exports = { handle, markNoteFailed, pool };

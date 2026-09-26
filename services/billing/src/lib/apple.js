@@ -6,8 +6,9 @@
 // chain in the JWS header. The DURABLE id we key entitlement on is
 // `originalTransactionId`.
 //
-// ⚠️ TODO(A4-apple): FULL signature verification is not done here. A production
-// server MUST, before trusting any decoded payload:
+// ⚠️ TODO(A4-apple / PR-32): FULL signature verification is not done here, so
+// verifyAndDecodeJws REFUSES (503) outside local dev and tests. Before trusting
+// any decoded payload, a production server MUST:
 //   1. Parse the x5c chain from the JWS header.
 //   2. Verify the leaf's ES256 signature over the JWS.
 //   3. Validate the chain up to Apple Root CA - G3 (and check expiry/OCSP).
@@ -33,11 +34,31 @@ export function decodeJws(jws) {
 }
 
 /**
- * Verify + decode a JWS. Today this decodes and returns the payload; the cert
- * chain verification is the TODO(A4-apple) above. Kept as the ONE place real
- * verification will be wired so callers never decode a JWS themselves.
+ * The environment may trust a decoded-but-unverified JWS only for local
+ * development and tests: APPLE_JWS_TRUST_UNVERIFIED=true, and never on Cloud
+ * Run (K_SERVICE is set on every deployed revision), whatever the flag says.
+ */
+export function unverifiedAppleJwsAllowed(env = process.env) {
+  return env.APPLE_JWS_TRUST_UNVERIFIED === 'true' && !env.K_SERVICE;
+}
+
+/**
+ * Verify + decode a JWS. This is the ONE place real verification will be
+ * wired (plan PR-32: the x5c chain to Apple Root CA - G3 and the ES256
+ * signature), so callers never decode a JWS themselves.
+ *
+ * Until then it FAILS CLOSED with 503. Decoding without verifying let any
+ * signed-in user forge a StoreKit transaction (POST /v1/purchases/verify:
+ * free Pro with any expiry), and let anyone forge App Store notifications
+ * (renew or revoke a real subscriber). Only unverifiedAppleJwsAllowed() (local
+ * dev and tests) restores the decode-only behaviour.
  */
 export function verifyAndDecodeJws(jws) {
+  if (!unverifiedAppleJwsAllowed()) {
+    const err = new Error('apple_jws_verification_unavailable');
+    err.status = 503;
+    throw err;
+  }
   const { header, payload } = decodeJws(jws);
   // TODO(A4-apple): verify header.x5c chain to Apple Root CA - G3 + ES256 sig.
   // TODO(A11): verify against live Apple before trusting `payload`.

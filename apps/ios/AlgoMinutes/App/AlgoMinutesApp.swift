@@ -1,9 +1,10 @@
 import FirebaseCore
+import FirebaseMessaging
 import GoogleSignIn
 import SwiftUI
 import UserNotifications
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -16,6 +17,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // registration is triggered after the first recording (see
         // AppEnvironment.startRecordingCapture), never at launch.
         UNUserNotificationCenter.current().delegate = self
+        // A7.3: FirebaseMessaging turns the APNs token into the FCM token the
+        // notifier sends to, and tells us each time it changes.
+        Messaging.messaging().delegate = self
+        PushTokenRegistrar.shared.deleteDeviceToken = {
+            try await Messaging.messaging().deleteToken()
+            // A fresh token for whoever signs in next; it waits for them.
+            do {
+                let fresh = try await Messaging.messaging().token()
+                await PushTokenRegistrar.shared.tokenRefreshed(fresh)
+            } catch {
+                AppLog.error("push_token_fetch_failed: \(error.localizedDescription)")
+            }
+        }
         return true
     }
 
@@ -25,20 +39,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        let apnsHex = deviceToken.map { String(format: "%02x", $0) }.joined()
-        // TODO(A4-apple): exchange the APNs token for an FCM registration token
-        // via FirebaseMessaging once GoogleService-Info.plist is registered and
-        // the Messaging pod is added. Until then we forward the raw APNs token so
-        // the server-side registration path can be exercised end-to-end.
-        let appVersion = Bundle.main
-            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        Task {
-            do {
-                try await APIClient().registerPushToken(token: apnsHex, appVersion: appVersion)
-                AppLog.info("push_token_registered")
-            } catch {
-                AppLog.error("push_token_register_failed: \(error.localizedDescription)")
-            }
+        // FirebaseMessaging exchanges it for the FCM token, which arrives in
+        // messaging(_:didReceiveRegistrationToken:). The raw APNs token used to
+        // be registered here; FCM rejects it, so no push could arrive.
+        Messaging.messaging().apnsToken = deviceToken
+    }
+
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        Task { @MainActor in
+            await PushTokenRegistrar.shared.tokenRefreshed(fcmToken)
         }
     }
 
@@ -63,6 +72,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         Task { @MainActor in
             BackgroundUploadService.shared?.backgroundCompletionHandler = completionHandler
+            // Recreate the session so the system delivers what it queued for it.
+            BackgroundUploadService.shared?.reconnect()
         }
     }
 
@@ -137,9 +148,6 @@ struct AlgoMinutesApp: App {
 
     init() {
         FirebaseBootstrap.configureIfNeeded()
-        #if DEBUG
-        Theme.assertBrandFontsLoaded()
-        #endif
         _environment = State(initialValue: AppEnvironment())
     }
 

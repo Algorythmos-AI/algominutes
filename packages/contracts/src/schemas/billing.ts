@@ -9,6 +9,7 @@ export const BillingRail = z
   .openapi('BillingRail');
 
 export const BillingPeriod = z.enum(['monthly', 'annual']).openapi('BillingPeriod');
+export type BillingPeriod = z.infer<typeof BillingPeriod>;
 
 /** A purchasable product, shown on the paywall. Store/Stripe prices are the source
  * of truth for charging; `priceDisplay` is for UI and must be kept in sync. */
@@ -65,6 +66,16 @@ export const AnalyticsEvent = z
     'cancellation',
   ])
   .openapi('AnalyticsEvent');
+
+/**
+ * Events the SERVER records when it sees the fact happen (terms accepted,
+ * retention set, a support request, an account deleted). Kept out of
+ * AnalyticsEvent, so a client can't post them to /v1/events.
+ */
+export const ServerAnalyticsEvent = z
+  .enum(['terms_accepted', 'retention_set', 'support_requested', 'account_deleted'])
+  .openapi('ServerAnalyticsEvent');
+export type ServerAnalyticsEvent = z.infer<typeof ServerAnalyticsEvent>;
 
 export const TrackEventRequest = z
   .object({

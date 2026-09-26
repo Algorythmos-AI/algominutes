@@ -4,7 +4,7 @@ import UserNotifications
 /// Tells the user when a recording stopped without them asking it to.
 ///
 /// `UNUserNotificationCenter` appeared nowhere in this app. Every automatic
-/// stop — the 2-hour cap, an un-resumable interruption, a lost microphone, the
+/// stop — the recording cap, an un-resumable interruption, a lost microphone, the
 /// disk filling up — set a flag whose only consumer was a sheet in
 /// `RecordingView`. If the phone was in a pocket, the sheet was raised behind a
 /// locked screen and nothing was uploaded until the app was next opened. The
@@ -45,13 +45,15 @@ enum RecordingNotifier {
     }
 
     /// A7.3: kick APNs registration. The token lands in the AppDelegate's
-    /// `didRegisterForRemoteNotificationsWithDeviceToken`. Triggered here so it
-    /// happens after the first recording (alongside the permission request),
-    /// never at launch.
+    /// `didRegisterForRemoteNotificationsWithDeviceToken`, which hands it to
+    /// FirebaseMessaging for the FCM token (`PushTokenRegistrar`). Triggered
+    /// here so it happens after the first recording (alongside the permission
+    /// request), never at launch.
     ///
-    /// TODO(A4-apple): this needs GoogleService-Info.plist + the APNs
-    /// capability/entitlement to actually succeed and to exchange for an FCM
-    /// token; until then it is a harmless no-op on device.
+    /// The app is signed with the Push capability (`aps-environment`). In a
+    /// build without it (an unsigned simulator build) registration fails
+    /// harmlessly (`apns_register_failed`) and local notifications carry the
+    /// message.
     private static func registerForRemoteNotifications() {
         UIApplication.shared.registerForRemoteNotifications()
     }

@@ -29,7 +29,8 @@ code currently assumes.
   `com.algorythmos.algominutes.BroadcastExtensionSetupUI`.
 - **Default assumed:** exactly those three (currently the code still says `com.wassup.meeting*` — A5
   renames to whatever you confirm here).
-- **VALUE (app):** `com.algorythmos.algominutes`  **(extension):** `com.algorythmos.algominutes.BroadcastExtension`  **(setup UI):** `com.algorythmos.algominutes.BroadcastExtensionSetupUI`
+- **VALUE (app):** `com.algorythmos.algominutes`  **(extension):** `com.algorythmos.algominutes.BroadcastExtension`
+  (the setup-UI target was deleted in #172, so there are two ids; both registered 2026-09-26)
   (a 4th id, `com.algorythmos.algominutes.LiveActivity`, is added by PR-23 — see `docs/plans/A11-release.md`)
 
 ### 3. iOS provisioning profiles
@@ -110,7 +111,7 @@ code currently assumes.
 - **Format / defaults assumed (confirm or override):**
   - Cloud SQL Postgres instance: `algominutes-<env>-pg` · DB name `algominutes`
   - Buckets: `algominutes-<env>-recordings`, `algominutes-<env>-imports`, `algominutes-<env>-scans`
-  - Cloud Tasks: queue(s) `transcode`, `summarize`, `embed`, `extract`, `notify` in region `us-central1`
+  - Cloud Tasks: queue(s) `transcode`, `summarize`, `embed`, `extract`, `notify` in region `australia-southeast1` (Terraform)
   - Cloud Run services: `api`, `transcoder`, `summarizer`, `embedder`, `extractor`, `billing`, `notifier`
 - **VALUE (overrides, if any):** `__________`
 
@@ -122,7 +123,8 @@ code currently assumes.
 - **What:** The product + API hostnames (for CORS `ALLOWED_ORIGINS`, web hosting, API base).
 - **Where:** your registrar; point DNS at Vercel/hosting + Cloud Run per A4/A8.
 - **Format / default assumed:** `algominutes.com` (web), `api.algominutes.com` (API). Confirm you own them.
-- **VALUE (web):** `__________`  **(api):** `__________`
+- **VALUE (decided 2026-09-26):** the site is `algominutes.algorythmos.com`; the api keeps its Cloud Run
+  `run.app` URL. `algominutes.com` isn't registered (DECISIONS).
 
 ### 12. GCP budget + daily spend-cap figures (§4.6)
 - **What:** The monthly budget alert thresholds and the **hard daily spend cap** the pipeline circuit
