@@ -5,6 +5,8 @@ import {
   linkWithPopup,
   linkWithRedirect,
   onIdTokenChanged,
+  reauthenticateWithPopup,
+  revokeAccessToken,
   signInAnonymously,
   signInWithCredential,
   signInWithPopup,
@@ -26,7 +28,7 @@ function providerFor(p: Provider): AuthProvider {
 }
 
 const toUser = (u: User | null): AuthUser | null =>
-  u && { uid: u.uid, isAnonymous: u.isAnonymous, email: u.email, displayName: u.displayName };
+  u && { uid: u.uid, isAnonymous: u.isAnonymous, email: u.email, displayName: u.displayName, providers: (u.providerData ?? []).map((p) => p.providerId) };
 
 /** The real adapter, on the app's Firebase Auth. */
 export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
@@ -76,5 +78,19 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
     },
     signOut: () => signOut(auth),
     idToken: async (force) => (auth.currentUser ? auth.currentUser.getIdToken(force) : null),
+    revokeApple: async () => {
+      const user = auth.currentUser;
+      if (!user) return false;
+      try {
+        const result = await reauthenticateWithPopup(user, providerFor('apple'));
+        const token = OAuthProvider.credentialFromResult(result)?.accessToken;
+        if (!token) throw new Error('revokeApple: Apple returned no access token');
+        await revokeAccessToken(auth, token);
+        return true;
+      } catch (err) {
+        if (CANCELLED.has(codeOf(err))) return false;
+        throw err;
+      }
+    },
   };
 }

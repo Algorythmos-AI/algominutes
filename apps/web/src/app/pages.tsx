@@ -1,14 +1,5 @@
 import { Link } from 'react-router';
 
-export function SettingsPage() {
-  return (
-    <section aria-labelledby="settings-title">
-      <h1 id="settings-title" className="mb-2 text-3xl font-bold text-heading">Settings</h1>
-      <p className="text-muted">Your plan, data retention, help and your account. Coming soon.</p>
-    </section>
-  );
-}
-
 export function NotFoundPage() {
   return (
     <section aria-labelledby="nf-title">

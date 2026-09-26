@@ -18,6 +18,7 @@ interface AuthValue {
   switchAccount(go: () => Promise<void>): Promise<void>;
   signOut(): Promise<void>;
   idToken(forceRefresh: boolean): Promise<string | null>;
+  revokeApple(): Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
@@ -74,6 +75,7 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
         }
       },
       switchAccount: async (go) => void (await run('guest', go)),
+      revokeApple: () => adapter.revokeApple(),
       idToken,
     };
   }, [adapter, status, user, error, busy, idToken]);
