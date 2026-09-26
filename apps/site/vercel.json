@@ -11,7 +11,7 @@
       "destination": "/s"
     },
     {
-      "source": "/app/:path*",
+      "source": "/app/((?!assets/).*)",
       "destination": "/app"
     }
   ],

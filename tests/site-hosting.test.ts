@@ -128,6 +128,11 @@ describe('path resolution (cleanUrls, rewrites, 404)', () => {
     expect(served('/app')).toBe('200 app.html');
   });
 
+  it("a missing hashed asset is a 404, never the app's HTML (which the year-long asset cache would then keep)", () => {
+    expect(served('/app/assets/index-oldhash.js')).toBe('404 404.html');
+    expect(served('/app/assetsx')).toBe('200 app.html');
+  });
+
   it('anything else is the 404 page, with a 404', () => {
     expect(served('/nope')).toBe('404 404.html');
     expect(served('/billing/other')).toBe('404 404.html');
