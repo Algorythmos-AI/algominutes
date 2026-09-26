@@ -17,3 +17,50 @@ export async function ensureWorkspace(db: Firestore, uid: string): Promise<void>
   if (snap.exists()) return;
   await setDoc(ref, { name: 'My Workspace', ownerId: uid, members: [uid] });
 }
+
+export interface NewNote {
+  noteId: string;
+  uid: string;
+  title: string;
+  type: 'import_audio' | 'recording';
+  mimeType: string;
+  storagePath: string;
+  duration?: number;
+}
+
+/**
+ * A new note's doc, before its kickoff, as iOS writes it: status 'processing'
+ * (the client owns it until the kickoff; the server owns it after), with the
+ * storage path the api minted. The rules admit exactly these keys.
+ */
+export async function createNoteDoc(db: Firestore, n: NewNote): Promise<void> {
+  const { doc, setDoc } = await import('firebase/firestore');
+  const now = new Date().toISOString();
+  const workspaceId = workspaceIdFor(n.uid);
+  await setDoc(doc(db, 'workspaces', workspaceId, 'notes', n.noteId), {
+    title: n.title,
+    status: 'processing',
+    type: n.type,
+    mimeType: n.mimeType,
+    storagePath: n.storagePath,
+    ...(n.duration ? { duration: n.duration } : {}),
+    workspaceId,
+    authorId: n.uid,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+/**
+ * Marks the client's own note failed (its upload died, or its kickoff was
+ * refused before the server took it). The rules admit status 'error' with a
+ * message; only the server marks progress or 'ready'.
+ */
+export async function markNoteFailed(db: Firestore, uid: string, noteId: string, errorMessage: string): Promise<void> {
+  const { doc, updateDoc } = await import('firebase/firestore');
+  await updateDoc(doc(db, 'workspaces', workspaceIdFor(uid), 'notes', noteId), {
+    status: 'error',
+    errorMessage,
+    updatedAt: new Date().toISOString(),
+  });
+}

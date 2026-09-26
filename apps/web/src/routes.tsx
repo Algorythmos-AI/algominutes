@@ -3,6 +3,7 @@ import { Shell } from './app/Shell';
 import { RequireAuth } from './app/auth/RequireAuth';
 import { SignInPage } from './app/auth/SignInPage';
 import { NotFoundPage, SearchPage, SettingsPage } from './app/pages';
+import { ImportPage } from './app/notes/ImportPage';
 import { NoteDetailPage } from './app/notes/NoteDetailPage';
 import { NotesPage } from './app/notes/NotesPage';
 
@@ -18,6 +19,7 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <NotesPage /> },
       { path: 'notes/:noteId', element: <NoteDetailPage /> },
+      { path: 'import', element: <ImportPage /> },
       { path: 'search', element: <SearchPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },

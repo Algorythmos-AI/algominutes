@@ -3,7 +3,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { ApiProvider } from '../app/ApiContext';
 import { AuthProvider } from '../app/auth/AuthContext';
 import { NoticeProvider } from '../app/Notice';
-import { NotesProvider } from '../app/notes/NotesContext';
+import { NotesProvider, type NoteWriter } from '../app/notes/NotesContext';
 import type { AuthAdapter } from '../lib/auth/adapter';
 import type { NoteDoc, NotesFeed } from '../lib/notes/notesFeed';
 import { BASENAME, routes } from '../routes';
@@ -32,12 +32,13 @@ export function renderApp(
   adapter: AuthAdapter,
   fetchImpl: typeof fetch = async () => new Response('{}', { status: 200 }),
   feed: NotesFeed = fakeFeed().feed,
+  writer: NoteWriter | null = null,
 ) {
   const router = createMemoryRouter(routes, { basename: BASENAME, initialEntries: [path] });
   render(
     <AuthProvider adapter={adapter}>
       <ApiProvider origins={ORIGINS} fetchImpl={fetchImpl}>
-        <NotesProvider feed={feed}>
+        <NotesProvider feed={feed} writer={writer}>
           <NoticeProvider>
             <RouterProvider router={router} />
           </NoticeProvider>

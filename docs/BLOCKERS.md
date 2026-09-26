@@ -1382,6 +1382,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       `recordTermsAcceptanceIfNeeded` posts the new acceptance without showing the documents. The pages
       promise to announce a significant change in the app or by email, and don't claim the app asks. Before
       any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
+- [ ] **Imported audio is metered on the client's estimate.** `/v1/process` charges `ceil(durationSec/60)` from the
+      number the client sends. iOS imports send none, so they're charged 0 minutes; the web sends the length the browser
+      read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs.
 - [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
       `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
       api's allowlist (`ALLOWED_ORIGINS`) before web checkout (S3-PR10).
