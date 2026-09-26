@@ -28,3 +28,6 @@ clean-test.txt
 
 # Pinned build tools (scripts/install-xcodegen.sh)
 .tools/
+
+# TestFlight's What to Test, written per build by ci_scripts/what-to-test.sh
+TestFlight/

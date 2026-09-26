@@ -15,8 +15,11 @@ is two scripts in `apps/ios/ci_scripts/`.
 4. It resolves the Swift packages, and fails if that changes the committed `Package.resolved`. Xcode
    Cloud builds only from that file.
 
-**`ci_post_xcodebuild.sh`** runs after an archive. It uploads the archive's dSYMs to Crashlytics, with
-3 attempts, then the build fails. So every TestFlight build's crashes are symbolicated.
+**`ci_post_xcodebuild.sh`** runs after an archive. It writes TestFlight's What to Test
+(`what-to-test.sh`: the version, build and commit, `apps/ios/release-notes/what-to-test.txt`, then the
+recent app changes; it never fails the build). Then it uploads the archive's dSYMs to Crashlytics, with
+3 attempts, then the build fails. So every TestFlight build's crashes are symbolicated. Running the
+beta: `testflight-internal.md`.
 
 Package versions are exact in `project.yml`, and `Package.resolved` is committed. To upgrade one:
 change the version, run `xcodegen generate` and
@@ -72,7 +75,7 @@ These need your Apple account, so they're yours:
    build number above the highest (App Store Connect → Xcode Cloud → Settings).
 6. **Start it manually once.** A green run shows "Ready to Test" in TestFlight. The post-clone step
    prints the build number and `Firebase project: algominutes-staging`. The post-xcodebuild step prints
-   `dSYMs uploaded to Crashlytics`.
+   `What to Test: … characters` and `dSYMs uploaded to Crashlytics`.
 
 ## Later
 

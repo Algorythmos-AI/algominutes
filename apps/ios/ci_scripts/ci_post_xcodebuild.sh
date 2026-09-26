@@ -1,9 +1,12 @@
 #!/bin/sh
-# Xcode Cloud: runs after each xcodebuild action. After an archive, upload the
-# archive's dSYMs to Crashlytics, so every TestFlight build's crashes are
-# symbolicated. A failed upload fails the build: a build whose crashes can't be
-# read is not one to hand to testers. (The app target's own upload phase skips
-# Xcode Cloud, so nothing uploads twice.)
+# Xcode Cloud: runs after each xcodebuild action. After an archive:
+#
+#   1. Write TestFlight's What to Test (what-to-test.sh), which Xcode Cloud
+#      reads from TestFlight/ next to ci_scripts/. Notes never fail a build.
+#   2. Upload the archive's dSYMs to Crashlytics, so every TestFlight build's
+#      crashes are symbolicated. A failed upload fails the build: a build whose
+#      crashes can't be read is not one to hand to testers. (The app target's
+#      own upload phase skips Xcode Cloud, so nothing uploads twice.)
 set -eu
 
 if [ "${CI_XCODEBUILD_ACTION:-}" != "archive" ]; then
@@ -11,6 +14,10 @@ if [ "${CI_XCODEBUILD_ACTION:-}" != "archive" ]; then
 fi
 
 cd "${CI_PRIMARY_REPOSITORY_PATH:?not running in Xcode Cloud}/apps/ios"
+
+if ! sh ci_scripts/what-to-test.sh TestFlight/WhatToTest.en-US.txt; then
+  echo "warning: What to Test could not be written; this build uploads without notes"
+fi
 
 PLIST=AlgoMinutes/Resources/GoogleService-Info.plist
 DSYMS="${CI_ARCHIVE_PATH:?no archive path}/dSYMs"
