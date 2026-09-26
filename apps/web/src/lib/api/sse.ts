@@ -50,6 +50,12 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
     const last = dispatch();
     if (last) yield last;
   } finally {
+    // An early exit (the consumer stopped reading, or unmounted) closes the connection, not just the lock.
+    try {
+      await reader.cancel();
+    } catch {
+      // silent-catch-ok: cancelling a stream that already ended or errored has nothing to report
+    }
     reader.releaseLock();
   }
 }

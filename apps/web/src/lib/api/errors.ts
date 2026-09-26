@@ -13,6 +13,8 @@ export type ApiErrorKind =
   | 'bad_request' // any other 4xx
   | 'server' // 5xx
   | 'network' // no answer at all (offline, DNS, CORS)
+  | 'timeout' // no answer in time
+  | 'cancelled' // the caller aborted it (a Stop button, a page left)
   | 'invalid_response'; // a 2xx whose body doesn't match the contract
 
 export class ApiError extends Error {
@@ -56,6 +58,8 @@ export const MESSAGES: Record<ApiErrorKind, string> = {
   bad_request: 'Something about that request was wrong.',
   server: 'AlgoMinutes had a problem. Try again in a moment.',
   network: "Can't reach AlgoMinutes. Check your connection.",
+  timeout: 'AlgoMinutes took too long to answer. Try again.',
+  cancelled: 'Stopped.',
   invalid_response: 'AlgoMinutes sent something unexpected. Try again.',
 };
 

@@ -78,6 +78,27 @@ export interface ApiClientOptions {
 
 type Backend = 'api' | 'billing';
 
+/** A failed fetch as an ApiError: the caller's abort, our timeout, or no network. */
+function transportError(err: unknown, traceId: string): ApiError {
+  const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: unknown }).name) : '';
+  if (name === 'TimeoutError') return new ApiError('timeout', { traceId, cause: err });
+  if (name === 'AbortError') return new ApiError('cancelled', { traceId, cause: err });
+  return new ApiError('network', { traceId, cause: err });
+}
+
+/** The Firebase ID token, or an ApiError: a refresh can fail offline, or when the account was revoked. */
+async function tokenOrError(getIdToken: ApiClientOptions['getIdToken'], forceRefresh: boolean, traceId: string): Promise<string> {
+  let token: string | null;
+  try {
+    token = await getIdToken(forceRefresh);
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
+    throw new ApiError(code === 'auth/network-request-failed' ? 'network' : 'not_signed_in', { traceId, cause: err });
+  }
+  if (!token) throw new ApiError('not_signed_in', { traceId });
+  return token;
+}
+
 interface Call<S extends z.ZodType> {
   method: 'GET' | 'POST' | 'DELETE';
   path: string;
@@ -87,6 +108,8 @@ interface Call<S extends z.ZodType> {
   auth?: boolean;
   schema: S;
   timeoutMs?: number;
+  /** The caller's own abort (a Stop button). */
+  signal?: AbortSignal;
 }
 
 export type ChatEvent =
@@ -116,22 +139,20 @@ export function createApiClient(opts: ApiClientOptions) {
         'X-AlgoMinutes-Client': CLIENT_HEADER_VALUE,
         'X-Trace-Id': traceId,
       };
-      if (auth) {
-        const token = await opts.getIdToken(forceRefresh);
-        if (!token) throw new ApiError('not_signed_in', { traceId });
-        headers.Authorization = `Bearer ${token}`;
-      }
+      if (auth) headers.Authorization = `Bearer ${await tokenOrError(opts.getIdToken, forceRefresh, traceId)}`;
       if (call.body !== undefined) headers['Content-Type'] = 'application/json';
       try {
         return await doFetch(url, {
           method: call.method,
           headers,
           body: call.body === undefined ? undefined : JSON.stringify(call.body),
-          signal: AbortSignal.timeout(call.timeoutMs ?? defaultTimeout),
+          signal: call.signal
+            ? AbortSignal.any([AbortSignal.timeout(call.timeoutMs ?? defaultTimeout), call.signal])
+            : AbortSignal.timeout(call.timeoutMs ?? defaultTimeout),
           credentials: 'omit',
         });
       } catch (err) {
-        throw new ApiError('network', { traceId, cause: err });
+        throw transportError(err, traceId);
       }
     };
     let res = await attempt(false);
@@ -147,7 +168,9 @@ export function createApiClient(opts: ApiClientOptions) {
 
   async function json<S extends z.ZodType>(call: Call<S>): Promise<z.infer<S>> {
     const { res, traceId } = await send(call);
-    const body = await res.text().then(parseJson, () => undefined);
+    const body = await res.text().then(parseJson, (err: unknown) => {
+      throw transportError(err, traceId);
+    });
     const parsed = call.schema.safeParse(body);
     if (!parsed.success) throw new ApiError('invalid_response', { status: res.status, body, traceId, cause: parsed.error });
     return parsed.data;
@@ -182,7 +205,7 @@ export function createApiClient(opts: ApiClientOptions) {
       const { res } = await send({ method: 'POST', path: '/v1/export', body, timeoutMs: 60_000 }, '*/*');
       const disposition = res.headers.get('content-disposition') ?? '';
       const name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1] ?? /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? null;
-      return { blob: await res.blob(), fileName: name ? decodeURIComponent(name) : null };
+      return { blob: await res.blob(), fileName: name ? safeDecode(name) : null };
     },
 
     // Recording and import
@@ -195,26 +218,33 @@ export function createApiClient(opts: ApiClientOptions) {
     search: (body: SearchRequest) => post('/v1/search', body, SearchResponse),
     /** The /v1/chat stream, one typed event at a time. Aborts with `signal`. */
     chat: async function* (body: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
-      const { res, traceId } = await send({ method: 'POST', path: '/v1/chat', body, timeoutMs: 120_000 }, 'text/event-stream');
+      const { res, traceId } = await send({ method: 'POST', path: '/v1/chat', body, timeoutMs: 120_000, signal }, 'text/event-stream');
       if (!res.body) throw new ApiError('invalid_response', { status: res.status, traceId });
-      const stream = signal ? res.body.pipeThrough(new TransformStream(), { signal }) : res.body;
-      for await (const frame of readSse(stream)) {
-        const data = parseJson(frame.data);
-        if (frame.event === 'citations') {
-          const hits = ChatCitationsEvent.safeParse(data);
-          if (!hits.success) throw new ApiError('invalid_response', { traceId, body: data });
-          yield { type: 'citations', hits: hits.data.hits };
-        } else if (frame.event === 'done') {
-          yield { type: 'done' };
-          return;
-        } else if (frame.event === 'error') {
-          const err = ChatErrorEvent.safeParse(data);
-          yield { type: 'error', error: err.success ? err.data.error : 'stream_failed' };
-          return;
-        } else {
-          const text = ChatTextEvent.safeParse(data);
-          if (text.success) yield { type: 'text', text: text.data.text };
+      try {
+        for await (const frame of readSse(res.body)) {
+          const data = parseJson(frame.data);
+          if (frame.event === 'citations') {
+            const hits = ChatCitationsEvent.safeParse(data);
+            if (!hits.success) throw new ApiError('invalid_response', { traceId, body: data });
+            yield { type: 'citations', hits: hits.data.hits };
+          } else if (frame.event === 'done') {
+            yield { type: 'done' };
+            return;
+          } else if (frame.event === 'error') {
+            const err = ChatErrorEvent.safeParse(data);
+            yield { type: 'error', error: err.success ? err.data.error : 'stream_failed' };
+            return;
+          } else {
+            const text = ChatTextEvent.safeParse(data);
+            if (text.success) yield { type: 'text', text: text.data.text };
+          }
         }
+      } catch (err) {
+        if (err instanceof ApiError) throw err; // our own verdict on a frame (invalid_response)
+        // The caller's Stop ends the stream quietly; our timeout or a dropped connection says so.
+        if (signal?.aborted) return;
+        yield { type: 'error', error: transportError(err, traceId).kind === 'timeout' ? 'timeout' : 'stream_ended' };
+        return;
       }
       // The stream closed without `done`: the answer may be cut short.
       yield { type: 'error', error: 'stream_ended' };
@@ -235,6 +265,15 @@ export function createApiClient(opts: ApiClientOptions) {
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;
+
+function safeDecode(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    // silent-catch-ok: a plain file name that isn't percent-encoded (a stray %) is used as it is.
+    return name;
+  }
+}
 
 function parseJson(text: string): unknown {
   if (!text) return undefined;

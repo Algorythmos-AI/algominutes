@@ -280,3 +280,69 @@ describe('origins', () => {
     expect(() => originsFromEnv({ VITE_API_ORIGIN: 'https://a.test' })).toThrow(/VITE_BILLING_ORIGIN/);
   });
 });
+
+describe('aborts, timeouts and token failures (review)', () => {
+  const abortable = () =>
+    (async (_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        const sig = init?.signal;
+        // As fetch does: an already-aborted signal rejects at once.
+        if (sig?.aborted) reject(sig.reason ?? new DOMException('Aborted', 'AbortError'));
+        sig?.addEventListener('abort', () => reject(sig.reason ?? new DOMException('Aborted', 'AbortError')));
+      })) as typeof fetch;
+
+  it("Stop before the first byte aborts the request itself, as 'cancelled'", async () => {
+    const stop = new AbortController();
+    const client = createApiClient({ origins: ORIGINS, getIdToken: async () => 't', fetch: abortable() });
+    const run = (async () => { for await (const _ of client.chat({ query: 'q' }, stop.signal)) void _; })();
+    stop.abort();
+    const r = await settle(run);
+    expect((r as { e: ApiError }).e.kind).toBe('cancelled');
+  });
+
+  it("no answer in time is 'timeout'", async () => {
+    const client = createApiClient({ origins: ORIGINS, getIdToken: async () => 't', fetch: abortable(), timeoutMs: 20 });
+    const r = await settle(client.entitlement());
+    expect((r as { e: ApiError }).e.kind).toBe('timeout');
+  });
+
+  it('Stop mid-answer ends the stream quietly and closes the connection', async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(new TextEncoder().encode('data: {"text":"one"}\n\n')); },
+      cancel() { cancelled = true; },
+    });
+    const stop = new AbortController();
+    const client = createApiClient({ origins: ORIGINS, getIdToken: async () => 't', fetch: async () => new Response(body, { status: 200 }) });
+    const got: ChatEvent[] = [];
+    for await (const ev of client.chat({ query: 'q' }, stop.signal)) {
+      got.push(ev);
+      stop.abort();
+      break;
+    }
+    expect(got).toEqual([{ type: 'text', text: 'one' }]);
+    expect(cancelled).toBe(true);
+  });
+
+  it('a malformed citations frame is still invalid_response, not a quiet stream end', async () => {
+    const client = createApiClient({ origins: ORIGINS, getIdToken: async () => 't', fetch: async () => new Response('event: citations\ndata: {"hits":"nope"}\n\n', { status: 200 }) });
+    const r = await settle((async () => { for await (const _ of client.chat({ query: 'q' })) void _; })());
+    expect((r as { e: ApiError }).e.kind).toBe('invalid_response');
+  });
+
+  it('a token refresh that fails is an ApiError, never a raw Firebase error', async () => {
+    const offline = Object.assign(new Error('Firebase: Error (auth/network-request-failed).'), { code: 'auth/network-request-failed' });
+    const revoked = Object.assign(new Error('Firebase: Error (auth/user-token-expired).'), { code: 'auth/user-token-expired' });
+    for (const [err, kind] of [[offline, 'network'], [revoked, 'not_signed_in']] as const) {
+      const client = createApiClient({ origins: ORIGINS, getIdToken: async (force) => { if (force) throw err; return 't'; }, fetch: async () => json({ error: 'unauthorized' }, 401) });
+      const r = await settle(client.entitlement());
+      expect((r as { e: ApiError }).e).toBeInstanceOf(ApiError);
+      expect((r as { e: ApiError }).e.kind).toBe(kind);
+    }
+  });
+
+  it("an export whose plain file name has a stray % still downloads", async () => {
+    const { client } = harness(() => new Response('DOCX', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="100% done.docx"' } }));
+    expect((await client.exportNote({ noteId: 'n', workspaceId: 'w' })).fileName).toBe('100% done.docx');
+  });
+});
