@@ -11,7 +11,8 @@
   "workspaces": [
     "packages/*",
     "services/*",
-    "apps/web"
+    "apps/web",
+    "apps/site"
   ],
   "scripts": {
     "gitleaks": "gitleaks detect --source . --config .gitleaks.toml --no-banner",

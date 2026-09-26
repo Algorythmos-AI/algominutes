@@ -1,0 +1,64 @@
+---
+import Base from '../layouts/Base.astro';
+import { facts, operator, retentionChoices } from '../lib/site';
+---
+<Base title="Support" description="Help with AlgoMinutes: recording, notes, minutes, retention and deleting your account, and how to contact us.">
+  <div class="prose">
+    <h1>Support</h1>
+    <p>
+      Email <a href={`mailto:${operator.support}`}>{operator.support}</a> and we'll get back to you. In the app,
+      <strong>Settings → Help &amp; Support</strong> sends us your message with your app version, so we can help faster.
+      If you're using the beta, include your User ID from <strong>Settings</strong>.
+    </p>
+
+    <h2>Common questions</h2>
+    <details>
+      <summary>Do I need permission to record?</summary>
+      <p>
+        Yes. Recording laws differ between places, and many require everyone's consent. Tell people you're recording
+        before you start. AlgoMinutes shows a notice before every recording and asks you to confirm you have permission.
+      </p>
+    </details>
+    <details>
+      <summary>How long does a note take?</summary>
+      <p>
+        Usually a few minutes after you stop recording, depending on length. You can leave the app; AlgoMinutes
+        notifies you when the note is ready, or if it couldn't be processed.
+      </p>
+    </details>
+    <details>
+      <summary>What are minutes?</summary>
+      <p>
+        Your plan includes a number of recording minutes. Settings shows how many you've used. A recording that fails
+        to process doesn't use your minutes.
+      </p>
+    </details>
+    <details>
+      <summary>How do I delete a note?</summary>
+      <p>Open the note and choose <strong>Delete</strong>. The note, its transcript and its recording are deleted.</p>
+    </details>
+    <details>
+      <summary>Can notes be deleted automatically?</summary>
+      <p>
+        Yes. In <strong>Settings → Data retention</strong>, choose to keep notes until you delete them, or to delete
+        them automatically after {retentionChoices()}.
+      </p>
+    </details>
+    <details>
+      <summary>I used AlgoMinutes as a guest. What happens to my notes?</summary>
+      <p>
+        A guest's notes belong to a guest account on that device. To keep them, choose <strong>Create account</strong>
+        in Settings and sign in with Apple or Google: your notes stay with you. If you sign out as a guest, you can't
+        get back into that guest account or its notes.
+      </p>
+    </details>
+    <details>
+      <summary>How do I delete my account?</summary>
+      <p>
+        In the app, go to <strong>Settings → Delete my account</strong>. If you can't use the app, see
+        <a href="/delete-account">Delete your account</a>. Everything is deleted at once, and removed from backups
+        within {facts.backupWindowDays} days.
+      </p>
+    </details>
+  </div>
+</Base>

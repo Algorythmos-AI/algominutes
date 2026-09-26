@@ -1,0 +1,47 @@
+---
+import Base from '../layouts/Base.astro';
+import { facts, operator } from '../lib/site';
+
+const subject = encodeURIComponent('Delete my AlgoMinutes account');
+---
+<Base
+  title="Delete your account"
+  description="How to delete your AlgoMinutes account and everything in it: in the app, or by asking us."
+>
+  <article class="prose">
+    <h1>Delete your AlgoMinutes account</h1>
+    <p>
+      Deleting your account permanently deletes everything in it. It can't be undone.
+    </p>
+
+    <h2 id="in-app">In the app (fastest)</h2>
+    <ol>
+      <li>Open AlgoMinutes and go to <strong>Settings</strong>.</li>
+      <li>Choose <strong>Delete my account</strong>.</li>
+      <li>Type <strong>DELETE</strong> to confirm.</li>
+    </ol>
+    <p>Your account is deleted straight away. If you signed in with Apple, AlgoMinutes also revokes its access to your Apple ID.</p>
+
+    <h2 id="by-email">If you can't use the app</h2>
+    <p>
+      Email <a href={`mailto:${operator.privacy}?subject=${subject}`}>{operator.privacy}</a> with the subject
+      "Delete my AlgoMinutes account", from the email address you sign in with. If you can, include your
+      <strong>User ID</strong> from Settings. We'll confirm the account is yours, delete it within 30 days (usually much
+      sooner), and reply when it's done.
+    </p>
+
+    <h2 id="what">What's deleted</h2>
+    <ul>
+      <li>Every recording, transcript, summary, action item, decision and chapter.</li>
+      <li>Your search index.</li>
+      <li>Your account, settings, product events, support messages and device push tokens.</li>
+    </ul>
+    <p>
+      Everything is deleted from our live systems at once, and from our backups within {facts.backupWindowDays} days.
+      Server logs that mention your account's ID expire within {facts.logRetentionDays} days.
+      We keep a record that the account was deleted (its IDs, with no content) for 30 days, so it can't be recreated
+      by mistake, and payment records for as long as tax law requires once subscriptions are sold.
+    </p>
+    <p>To delete a single note instead, open it in the app and choose <strong>Delete</strong>.</p>
+  </article>
+</Base>
