@@ -1392,6 +1392,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
       api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
+- [ ] **The retention shown on the web is this browser's, not the account's.** There's no read for
+      `users.retention_days`, so a limit set on iOS or in another browser shows as nothing chosen (saving still
+      works, and a shorter limit is confirmed first). Fix: return `retentionDays` from `/v1/entitlement` or
+      `/v1/config`, a contract change (three clients).
+- [ ] **Deleting an Apple account on the web needs a popup.** Where the browser blocks it, the user is told to
+      allow pop-ups (or use the iOS app); a redirect would leave the page mid-delete. The Apple token is also
+      revoked before the server delete, as on iOS: if the delete then fails, the account remains and the user
+      signs in again. A delete that resumes after a redirect would close both.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 

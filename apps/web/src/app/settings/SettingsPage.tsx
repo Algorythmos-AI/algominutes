@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { RETENTION_OPTIONS_DAYS, type EntitlementResponse } from '@algominutes/contracts';
 import pkg from '../../../package.json';
 import { ApiError } from '../../lib/api/errors';
+import { revokeAppleErrorMessage } from '../../lib/auth/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { useApi } from '../ApiContext';
 import { useAuth } from '../auth/AuthContext';
@@ -118,16 +119,27 @@ function PlanCard() {
   );
 }
 
+/** Whether moving from `from` to `to` deletes notes that are kept today: a shorter (or first) limit. */
+export function shortens(from: number | null | undefined, to: number | null): boolean {
+  if (to === null) return false;
+  return from === null || from === undefined || to < from;
+}
+
 function RetentionCard({ uid }: { uid: string }) {
   const { api } = useApi();
   const notice = useNotice();
-  const [value, setValue] = useState<number | null | undefined>(() => readRetention(uid));
+  const [saved, setSaved] = useState<number | null | undefined>(() => readRetention(uid));
+  // The radio is only a choice: moving through the group with the arrow keys checks each option, so
+  // nothing is saved until Save, and a limit that deletes notes is confirmed first.
+  const [choice, setChoice] = useState<number | null | undefined>(saved);
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const choose = async (days: number | null) => {
+  const save = async (days: number | null) => {
+    setConfirming(false);
     setBusy(true);
     try {
       await api.setRetention({ retentionDays: days });
-      setValue(days);
+      setSaved(days);
       try {
         localStorage.setItem(retentionKey(uid), days == null ? 'keep' : String(days));
       } catch (err) {
@@ -140,24 +152,46 @@ function RetentionCard({ uid }: { uid: string }) {
       setBusy(false);
     }
   };
+  const submit = () => {
+    if (choice === undefined || choice === saved) return;
+    if (shortens(saved, choice)) setConfirming(true);
+    else void save(choice);
+  };
   const options: Array<{ days: number | null; label: string }> = [
     { days: null, label: 'Keep until I delete them' },
     ...RETENTION_OPTIONS_DAYS.map((d) => ({ days: d as number, label: `Delete after ${d} days` })),
   ];
   return (
     <Card title="Data retention">
-      <fieldset disabled={busy}>
-        <legend className="mb-2 text-body">How long notes and recordings are kept:</legend>
-        <div className="flex flex-col gap-2">
-          {options.map((o) => (
-            <label key={String(o.days)} className="flex gap-2 text-body">
-              <input type="radio" name="retention" checked={value === o.days} onChange={() => void choose(o.days)} />
-              {o.label}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <fieldset aria-busy={busy}>
+          <legend className="mb-2 text-body">How long notes and recordings are kept:</legend>
+          <div className="flex flex-col gap-2">
+            {options.map((o) => (
+              <label key={String(o.days)} className="flex gap-2 text-body">
+                <input type="radio" name="retention" checked={choice === o.days} onChange={() => setChoice(o.days)} />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <button type="submit" disabled={busy || choice === undefined || choice === saved} className="mt-3 rounded-xl bg-accent px-4 py-2 font-semibold text-white disabled:opacity-60">
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </form>
       <p className="mt-2 text-sm text-muted">Deleted notes are removed from backups within 30 days.</p>
+      {confirming && typeof choice === 'number' && (
+        <Modal title={`Delete notes older than ${choice} days?`} onClose={() => setConfirming(false)}>
+          <p className="text-body">
+            Every note and recording older than {choice} days will be permanently deleted, starting within the hour, and so will each one as it reaches
+            that age. This can’t be undone.
+          </p>
+          <div className="mt-4 flex gap-2">
+            <button type="button" className="rounded-xl bg-danger px-4 py-2 font-semibold text-white" onClick={() => void save(choice)}>Delete after {choice} days</button>
+            <button type="button" className="px-4 py-2 text-muted" onClick={() => setConfirming(false)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
     </Card>
   );
 }
@@ -221,7 +255,7 @@ function DeleteAccountCard() {
       notice.show('Your account and everything in it were deleted.');
       navigate('/sign-in');
     } catch (err) {
-      setError(err instanceof ApiError ? `Your account wasn’t deleted. ${err.message}` : 'Your account wasn’t deleted. Try again.');
+      setError(err instanceof ApiError ? `Your account wasn’t deleted. ${err.message}` : `Your account wasn’t deleted. ${revokeAppleErrorMessage(err) ?? 'Try again.'}`);
       reportCrash('settings.deleteAccount', err);
     } finally {
       setBusy(false);

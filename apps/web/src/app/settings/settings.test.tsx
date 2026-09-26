@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { fakeAuth, GUEST, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, renderApp } from '../../test/renderApp';
+import { shortens } from './SettingsPage';
 
 const ENT = { state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 12.4, remainingMinutes: 47.6, overQuota: false };
 const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -44,13 +45,41 @@ describe('settings', () => {
     expect(await screen.findByText(/Guest \(not backed up\)/)).toBeTruthy();
   });
 
-  it('data retention is sent to the api, and remembered for display', async () => {
+  it('data retention is saved only on Save, and a limit that deletes notes is confirmed first', async () => {
     open();
-    fireEvent.click(await screen.findByLabelText('Delete after 90 days'));
-    await waitFor(() => expect(calls.find((c) => c.path === '/v1/account/retention')?.body).toEqual({ retentionDays: 90 }));
+    const retention = () => calls.filter((c) => c.path === '/v1/account/retention');
+    // Moving through the options (as the arrow keys do) saves nothing.
+    fireEvent.click(await screen.findByLabelText('Delete after 30 days'));
+    fireEvent.click(screen.getByLabelText('Delete after 90 days'));
+    expect(retention()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete notes older than 90 days?' });
+    expect(dialog.textContent).toMatch(/permanently deleted/);
+    expect(retention()).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete after 90 days' }));
+    await waitFor(() => expect(retention().map((c) => c.body)).toEqual([{ retentionDays: 90 }]));
     expect(localStorage.getItem('retention_days.u1')).toBe('90');
+    // Keeping notes longer deletes nothing, so it needs no confirmation.
     fireEvent.click(screen.getByLabelText('Keep until I delete them'));
-    await waitFor(() => expect(calls.filter((c) => c.path === '/v1/account/retention').at(-1)?.body).toEqual({ retentionDays: null }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(retention().at(-1)?.body).toEqual({ retentionDays: null }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('cancelling the confirmation saves nothing', async () => {
+    open();
+    fireEvent.click(await screen.findByLabelText('Delete after 30 days'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(calls.filter((c) => c.path === '/v1/account/retention')).toEqual([]);
+  });
+
+  it('knows which changes delete notes', () => {
+    expect(shortens(undefined, 365)).toBe(true);
+    expect(shortens(null, 365)).toBe(true);
+    expect(shortens(90, 30)).toBe(true);
+    expect(shortens(30, 90)).toBe(false);
+    expect(shortens(30, null)).toBe(false);
   });
 
   it('a support message carries diagnostics, never content', async () => {
@@ -95,6 +124,14 @@ describe('deleting the account', () => {
     fireEvent.click(within(dlg).getByRole('button', { name: 'Delete account' }));
     await waitFor(() => expect(calls.some((c) => c.path === '/v1/account/delete')).toBe(true));
     expect(auth.adapter.revokeApple).toHaveBeenCalledTimes(2);
+  });
+
+  it('an Apple window the browser blocks says how to fix it, and deletes nothing', async () => {
+    const { auth } = open({ ...PERMANENT, providers: ['apple.com'] });
+    auth.adapter.revokeApple.mockRejectedValueOnce(Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' }));
+    const dlg = await confirm();
+    expect((await within(dlg).findByRole('alert')).textContent).toMatch(/blocked the Apple window\. Allow pop-ups/);
+    expect(calls.some((c) => c.path === '/v1/account/delete')).toBe(false);
   });
 
   it('a refused delete keeps the account and says so', async () => {
