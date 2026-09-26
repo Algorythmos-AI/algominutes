@@ -13,13 +13,18 @@ configs:
   Staging: release
   Release: release
 
+# Exact versions, and Package.resolved is committed: Xcode Cloud resolves
+# packages only from a committed Package.resolved, and every build (local,
+# GitHub CI, Xcode Cloud) must get the same dependency graph. To upgrade, change
+# a version here, run `xcodegen generate` and
+# `xcodebuild -resolvePackageDependencies -scheme AlgoMinutes`, and commit both.
 packages:
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk
-    from: 11.0.0
+    exactVersion: 11.15.0
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
-    from: 8.0.0
+    exactVersion: 8.0.0
 
 settings:
   base:
@@ -77,8 +82,6 @@ targets:
     dependencies:
       - target: BroadcastExtension
         embed: true
-      - target: BroadcastExtensionSetupUI
-        embed: true
       - package: Firebase
         product: FirebaseAuth
       - package: Firebase
@@ -113,17 +116,21 @@ targets:
           /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${REVERSED}" "$PLIST"
         basedOnDependencyAnalysis: false
       # Crashlytics needs the dSYM of every build that reaches a device outside
-      # development (Staging and Release); Debug/simulator builds skip the upload.
+      # development (Staging and Release). This phase covers archives made on a
+      # Mac. Xcode Cloud uploads from ci_scripts/ci_post_xcodebuild.sh instead
+      # (CI_WORKFLOW is set there), and GitHub CI's unsigned Staging build sets
+      # ALGOMINUTES_SKIP_DSYM_UPLOAD=YES (it has a fake plist).
       - name: Upload dSYMs to Crashlytics
         script: |
-          if [ "${CONFIGURATION}" != "Debug" ]; then
-            RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
-            if [ -x "$RUN" ]; then
-              "$RUN"
-            else
-              # Visible in the build log; the archive still succeeds.
-              echo "warning: Crashlytics upload script not found at $RUN; dSYMs were not uploaded"
-            fi
+          if [ "${CONFIGURATION}" = "Debug" ] || [ -n "${CI_WORKFLOW:-}" ] || [ "${ALGOMINUTES_SKIP_DSYM_UPLOAD:-NO}" = "YES" ]; then
+            exit 0
+          fi
+          RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ -x "$RUN" ]; then
+            "$RUN"
+          else
+            # Visible in the build log; the archive still succeeds.
+            echo "warning: Crashlytics upload script not found at $RUN; dSYMs were not uploaded"
           fi
         inputFiles:
           - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}
@@ -169,17 +176,6 @@ targets:
         CODE_SIGN_ENTITLEMENTS: BroadcastExtension/BroadcastExtension.entitlements
         CODE_SIGN_STYLE: Automatic
 
-  BroadcastExtensionSetupUI:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: BroadcastExtensionSetupUI
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes.BroadcastExtensionSetupUI
-        INFOPLIST_FILE: BroadcastExtensionSetupUI/Info.plist
-        CODE_SIGN_STYLE: Automatic
-
 schemes:
   AlgoMinutes:
     build:
@@ -188,7 +184,6 @@ schemes:
         AlgoMinutesTests: [test]
         AlgoMinutesUITests: [test]
         BroadcastExtension: all
-        BroadcastExtensionSetupUI: all
     run:
       config: Debug
     test:
@@ -204,7 +199,6 @@ schemes:
       targets:
         AlgoMinutes: all
         BroadcastExtension: all
-        BroadcastExtensionSetupUI: all
     run:
       config: Staging
     archive:
