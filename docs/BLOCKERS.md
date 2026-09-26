@@ -216,10 +216,15 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   FCM one~~ **fixed (ios-fcm-token PR):** FirebaseMessaging exchanges the APNs token for the FCM token, and
   `PushTokenRegistrar` registers it once per signed-in user (again for a new token or user, again after a
   failure) and deletes it on sign-out, so the previous user's pushes stop reaching the device. Unit-tested.
-  - [ ] **Owner:** enable Push on the App ID and upload an APNs `.p8` to Firebase (staging, then prod).
-  - [ ] **Then (one line):** add `aps-environment` to `AlgoMinutes.entitlements`. Not before: an
-    entitlement the App ID lacks fails the archive's signing (M0). Until then APNs registration fails
-    harmlessly and local notifications carry the message. Prove it on a device (M1: "a push received").
+  - [x] **Owner:** Push enabled on the App ID `com.algorythmos.algominutes` (2026-09-26).
+  - [x] **Owner:** APNs auth key (`.p8`) uploaded in Firebase → Project settings → Cloud Messaging for staging,
+    development and production (2026-09-26).
+  - [ ] **Owner:** the same for the prod Firebase project, when it exists (S3-PR4).
+  - [x] **Done (push-end-to-end PR):** `aps-environment` is in `AlgoMinutes.entitlements` (Xcode's signing
+    makes it `production` for TestFlight), guarded by `tests/ios-entitlements.test.ts`. A tapped push opens
+    its note from any tab: `MainTabView` brings Home to the front on every link (`DeepLinkRouter.arrivals`),
+    and Home navigates. Unit-tested (`DeepLinkRouterTests`).
+  - [ ] Prove it on a device (M0/M1: "a push received", and the tap opens the note).
   - Android push is B2.
 - ~~**iOS `StoragePaths.maxBytes` = 50MB vs a 120MB doc/UploadService comment**~~ **fixed
   (ios-m0-readiness PR):** one 500 MB cap in the api and the app (see "one upload cap" above).

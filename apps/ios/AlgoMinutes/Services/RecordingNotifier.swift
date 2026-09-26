@@ -50,9 +50,10 @@ enum RecordingNotifier {
     /// here so it happens after the first recording (alongside the permission
     /// request), never at launch.
     ///
-    /// It succeeds only once the app is signed with the Push capability
-    /// (`aps-environment`, BLOCKERS A7.3); until then it fails harmlessly
-    /// (`apns_register_failed`) and local notifications carry the message.
+    /// The app is signed with the Push capability (`aps-environment`). In a
+    /// build without it (an unsigned simulator build) registration fails
+    /// harmlessly (`apns_register_failed`) and local notifications carry the
+    /// message.
     private static func registerForRemoteNotifications() {
         UIApplication.shared.registerForRemoteNotifications()
     }
