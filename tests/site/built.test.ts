@@ -112,7 +112,7 @@ describe('robots.txt, sitemap.xml, security.txt', () => {
     const days = (expires.getTime() - Date.now()) / 86400000;
     expect(days).toBeGreaterThan(30);
     expect(days).toBeLessThan(365);
-    expect(txt).toMatch(new RegExp(`^Canonical: ${SITE}/.well-known/security.txt$`, 'm'));
+    expect(txt.split('\n')).toContain(`Canonical: ${SITE}/.well-known/security.txt`);
   });
 
   it('the privacy page lists every processor in processing.json', async () => {

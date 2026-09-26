@@ -135,7 +135,7 @@ describe('every link the apps and server build has a page', () => {
   });
 
   it('the store listings (Play\'s account-deletion URL)', () => {
-    expect(read('docs/STORE-COMPLIANCE.md')).toMatch(/https:\/\/algominutes\.algorythmos\.com\/delete-account/);
+    expect(read('docs/STORE-COMPLIANCE.md')).toContain('`https://algominutes.algorythmos.com/delete-account`');
     expect(has('/delete-account')).toBe(true);
   });
 });
