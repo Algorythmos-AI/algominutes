@@ -11,6 +11,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useNotice } from '../Notice';
 import { useNow } from '../useNow';
 import { useNotes } from './NotesContext';
+import { NoteTools } from './NoteTools';
 
 type Load = { status: 'loading' } | { status: 'ready'; data: NoteReadResponse } | { status: 'gone' } | { status: 'error'; message: string };
 
@@ -35,6 +36,9 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Bumped after an edit: the page re-reads the note, keeping what it shows until the answer arrives.
+  const [version, setVersion] = useState(0);
+  const [renaming, setRenaming] = useState<{ tag: number; name: string } | null>(null);
 
   // The note's content comes from the api (Postgres), once it's ready.
   useEffect(() => {
@@ -56,7 +60,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [api, noteId, workspaceId, ready]);
+  }, [api, noteId, workspaceId, ready, version]);
 
   const loadMore = async () => {
     if (!cursor) return;
@@ -83,6 +87,17 @@ function NoteDetail({ noteId }: { noteId: string }) {
       unhide(noteId);
       notice.show(err instanceof ApiError ? `The note wasn't deleted. ${err.message}` : "The note wasn't deleted. Try again.");
       reportCrash('notes.delete', err);
+    }
+  };
+
+  const renameSpeaker = async (tag: number, name: string) => {
+    setRenaming(null);
+    try {
+      await api.setSpeakers(noteId, { workspaceId, speakerTag: tag, name });
+      setLines((ls) => ls.map((l) => (l.speakerTag === tag ? { ...l, speaker: name } : l)));
+      notice.show('Speaker renamed.');
+    } catch (err) {
+      notice.show(err instanceof ApiError ? `The speaker wasn't renamed. ${err.message}` : "The speaker wasn't renamed.");
     }
   };
 
@@ -119,6 +134,11 @@ function NoteDetail({ noteId }: { noteId: string }) {
             Delete
           </button>
         </div>
+        {ready && data && (
+          <div className="mt-2">
+            <NoteTools noteId={noteId} workspaceId={workspaceId} title={displayTitle(data.note.title ?? live.title)} summary={data.summary} reload={() => setVersion((v) => v + 1)} />
+          </div>
+        )}
         {audio.src && (
           <audio ref={audioRef} src={audio.src} controls autoPlay className="mt-4 w-full" onError={() => void audio.onError()}>
             Your browser can't play this recording.
@@ -200,7 +220,13 @@ function NoteDetail({ noteId }: { noteId: string }) {
                   <button type="button" className="font-mono text-sm text-muted" onClick={() => void audio.seek(l.startMs)} aria-label={`Play from ${formatClock(l.startMs)}`}>
                     {formatClock(l.startMs)}
                   </button>{' '}
-                  {l.speaker && <span className="font-semibold text-heading">{l.speaker}: </span>}
+                  {l.speaker && l.speakerTag != null ? (
+                    <button type="button" className="font-semibold text-heading" title="Rename this speaker" onClick={() => setRenaming({ tag: l.speakerTag!, name: l.speaker! })}>
+                      {l.speaker}:
+                    </button>
+                  ) : (
+                    l.speaker && <span className="font-semibold text-heading">{l.speaker}:</span>
+                  )}{' '}
                   {l.text}
                 </li>
               ))}
@@ -213,6 +239,33 @@ function NoteDetail({ noteId }: { noteId: string }) {
           )}
           {data.redaction?.applied && <p className="mt-4 text-sm text-muted">Card numbers and similar identifiers are hidden in transcripts.</p>}
         </section>
+      )}
+
+      {renaming && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)}>
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="spk-title"
+            className="w-full max-w-sm rounded-2xl border border-border bg-card p-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const name = String(new FormData(e.currentTarget).get('name') ?? '').trim();
+              if (name) void renameSpeaker(renaming.tag, name);
+            }}
+          >
+            <h2 id="spk-title" className="mb-2 text-xl font-bold text-heading">Rename speaker</h2>
+            <p className="mb-3 text-body">Every line by “{renaming.name}” in this note takes the new name.</p>
+            <label className="block text-body">
+              Name
+              <input name="name" autoFocus defaultValue={renaming.name} maxLength={80} className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-heading" />
+            </label>
+            <div className="mt-4 flex gap-2">
+              <button type="submit" className="rounded-xl bg-accent px-4 py-2 font-semibold text-white">Save</button>
+              <button type="button" className="px-4 py-2 text-muted" onClick={() => setRenaming(null)}>Cancel</button>
+            </div>
+          </form>
+        </div>
       )}
 
       {confirmDelete && (
