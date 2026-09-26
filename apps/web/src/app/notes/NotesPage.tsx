@@ -15,7 +15,10 @@ export function NotesPage() {
   const now = useNow();
   return (
     <section aria-labelledby="notes-title">
-      <h1 id="notes-title" className="mb-6 text-3xl font-bold text-heading">Your notes</h1>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <h1 id="notes-title" className="text-3xl font-bold text-heading">Your notes</h1>
+        <Link to="/import" className="rounded-xl bg-accent px-4 py-2 font-semibold text-white no-underline">Import a recording</Link>
+      </div>
       {state.status === 'loading' && <p role="status" className="text-muted">Loading your notes…</p>}
       {state.status === 'error' && (
         <p role="alert" className="text-body">Your notes couldn't be loaded. Check your connection and reload the page.</p>
@@ -23,7 +26,7 @@ export function NotesPage() {
       {state.status === 'ready' && visible.length === 0 && (
         <div className="rounded-2xl border border-border bg-card p-6">
           <p className="text-heading font-semibold">No notes yet</p>
-          <p className="mt-1 text-muted">Record a meeting in the AlgoMinutes app and its summary appears here. Recording and importing on the web are coming soon.</p>
+          <p className="mt-1 text-muted">Record a meeting in the AlgoMinutes app and its summary appears here. Or import a recording here.</p>
         </div>
       )}
       {visible.length > 0 && (

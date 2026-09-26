@@ -5,7 +5,21 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
-const LEGACY = ['src/components/**', 'src/lib/**', 'src/plugins/**', 'src/firebase.ts', 'src/types.ts'];
+// The legacy files still waiting to be ported, by name: anything new is held to every rule.
+const LEGACY = [
+  'src/components/**',
+  'src/plugins/**',
+  'src/types.ts',
+  'src/lib/admin.ts',
+  'src/lib/apiSchemas.ts',
+  'src/lib/costs.ts',
+  'src/lib/documentText.ts',
+  'src/lib/http.ts',
+  'src/lib/imagePdf.ts',
+  'src/lib/native-shim/**',
+  'src/lib/noteWatchdog.ts',
+  'src/lib/ocr.ts',
+];
 
 const rules = {
   ...js.configs.recommended.rules,
@@ -26,5 +40,5 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ['**/*.{ts,tsx}'], plugins: { 'react-hooks': reactHooks }, rules },
-  { files: LEGACY, ignores: ['src/lib/api/**', 'src/lib/auth/**', 'src/lib/notes/**'], rules: asWarnings },
+  { files: LEGACY, rules: asWarnings },
 );

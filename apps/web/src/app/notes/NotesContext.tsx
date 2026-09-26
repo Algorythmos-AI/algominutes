@@ -1,11 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { newestFirst, type NoteDoc, type NotesFeed } from '../../lib/notes/notesFeed';
+import type { NewNote } from '../../lib/notes/noteCache';
 import { reportCrash } from '../../lib/crashReport';
+import { STUCK_BUDGETS_MS } from '../../lib/noteWatchdog';
+import { abandonedUploads, endedUpload } from '../../lib/uploads/ownUploads';
 import { useAuth } from '../auth/AuthContext';
 
 type FeedState = { status: 'loading' } | { status: 'ready'; notes: NoteDoc[] } | { status: 'error' };
 
+/** The web's two note-doc writes (lib/notes/noteCache.ts), injected so tests can fake them. */
+export interface NoteWriter {
+  createNoteDoc(n: NewNote): Promise<void>;
+  markNoteFailed(uid: string, noteId: string, message: string): Promise<void>;
+}
+
 interface NotesValue {
+  writer: NoteWriter | null;
   state: FeedState;
   /** The notes the list shows: the feed, less any the user just deleted. */
   visible: NoteDoc[];
@@ -26,7 +36,7 @@ export const retryDelayMs = (attempt: number) => Math.min(60_000, 2000 * 2 ** at
  * The signed-in user's notes, live. `bootstrap` runs once per user first (the
  * workspace doc, as iOS does at sign-in); its failure is non-fatal.
  */
-export function NotesProvider({ feed, bootstrap, children }: { feed: NotesFeed; bootstrap?: (uid: string) => Promise<void>; children: ReactNode }) {
+export function NotesProvider({ feed, bootstrap, writer = null, children }: { feed: NotesFeed; bootstrap?: (uid: string) => Promise<void>; writer?: NoteWriter | null; children: ReactNode }) {
   const { user } = useAuth();
   const uid = user?.uid ?? null;
   // Tagged with the uid it belongs to: a different (or no) user reads as loading, with no reset in the effect.
@@ -68,6 +78,23 @@ export function NotesProvider({ feed, bootstrap, children }: { feed: NotesFeed; 
     };
   }, [feed, bootstrap, uid]);
 
+  // An upload this browser started and left behind (its tab was closed) leaves its note 'processing'
+  // with no server run to fail it: once it's past the client's window, it's marked failed.
+  useEffect(() => {
+    if (!uid || !writer || state.status !== 'ready') return;
+    const byId = new Map(state.notes.map((n) => [n.id, n]));
+    for (const id of abandonedUploads()) {
+      const n = byId.get(id);
+      if (!n || n.status !== 'processing') {
+        endedUpload(id);
+        continue;
+      }
+      if (Date.now() - new Date(n.updatedAt).getTime() < STUCK_BUDGETS_MS.processing) continue;
+      endedUpload(id);
+      writer.markNoteFailed(uid, id, 'The upload didn’t finish. Import the recording again.').catch((err) => reportCrash('notes.abandonedUpload', err));
+    }
+  }, [uid, writer, state]);
+
   const hide = useCallback((id: string) => setHidden((h) => new Set(h).add(id)), []);
   const unhide = useCallback(
     (id: string) =>
@@ -79,8 +106,8 @@ export function NotesProvider({ feed, bootstrap, children }: { feed: NotesFeed; 
     [],
   );
   const value = useMemo<NotesValue>(
-    () => ({ state, visible: state.status === 'ready' ? state.notes.filter((n) => !hidden.has(n.id)) : [], hide, unhide }),
-    [state, hidden, hide, unhide],
+    () => ({ writer, state, visible: state.status === 'ready' ? state.notes.filter((n) => !hidden.has(n.id)) : [], hide, unhide }),
+    [writer, state, hidden, hide, unhide],
   );
   return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>;
 }
