@@ -8,8 +8,11 @@
 // Matches PortalSessionResponse (packages/contracts/src/schemas/billing.ts).
 
 import { getSubscription } from '@algominutes/db';
+import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 import { getStripe } from '../lib/stripe.js';
+
+const { publicSiteUrl } = siteUrlModule;
 
 export async function portalRoute(req, res) {
   const uid = req.uid;
@@ -22,8 +25,8 @@ export async function portalRoute(req, res) {
 
   const stripe = getStripe();
 
-  // TODO(A11): set BILLING_PORTAL_RETURN_URL for the web app.
-  const returnUrl = process.env.BILLING_PORTAL_RETURN_URL || 'https://app.algominutes.com/billing';
+  // The public site's billing page unless an override is set.
+  const returnUrl = process.env.BILLING_PORTAL_RETURN_URL || `${publicSiteUrl()}/billing`;
 
   // TODO(A11): verify against live Stripe.
   const session = await stripe.billingPortal.sessions.create({

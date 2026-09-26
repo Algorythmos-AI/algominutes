@@ -1,11 +1,22 @@
 # Firebase iOS config contains an API key; the repo's gitleaks policy blocks
 # all AIza matches except firebase-applet-config.json. Fetch it locally with:
-#   npx firebase-tools apps:sdkconfig ios 1:909388484461:ios:187a96b94c319f3a5e1464 \
-#     > AlgoMinutes/Resources/GoogleService-Info.plist
+#   staging: npx firebase-tools apps:sdkconfig ios 1:627101926311:ios:1fa4a08d6de221d419ac82 \
+#     --project algominutes-staging > AlgoMinutes/Resources/GoogleService-Info.plist
+#   (the build writes its REVERSED_CLIENT_ID into the app's URL schemes)
 AlgoMinutes/Resources/GoogleService-Info.plist
 
-# XcodeGen output — regenerate with `xcodegen generate`
-AlgoMinutes.xcodeproj/
+# XcodeGen output — regenerate with `xcodegen generate`. Everything in it is
+# ignored except the resolved package versions, which Xcode Cloud needs and
+# every build must share. Git can't re-include a file under an ignored folder,
+# so each level is re-included in turn.
+AlgoMinutes.xcodeproj/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/
+AlgoMinutes.xcodeproj/project.xcworkspace/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/
+AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # Xcode noise
 DerivedData/
@@ -14,3 +25,9 @@ build/
 xcuserdata/
 test-results.txt
 clean-test.txt
+
+# Pinned build tools (scripts/install-xcodegen.sh)
+.tools/
+
+# TestFlight's What to Test, written per build by ci_scripts/what-to-test.sh
+TestFlight/

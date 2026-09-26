@@ -98,7 +98,9 @@ final class BillingService {
     /// Gate helper for metered call sites. If allowed, returns true. If gated,
     /// presents the paywall and returns false so the caller aborts.
     func guardMeteredAction() -> Bool {
-        if canStartMeteredAction { return true }
+        // With no paywall to offer, let the server decide: a refused kickoff
+        // marks the note with the quota message (KickoffFailure).
+        if canStartMeteredAction || !AppConfig.paywallEnabled { return true }
         presentPaywall(.meteredGate)
         return false
     }
@@ -106,6 +108,10 @@ final class BillingService {
     // MARK: - Paywall / prompt triggers
 
     func presentPaywall(_ context: PaywallContext) {
+        guard AppConfig.paywallEnabled else {
+            AppLog.info("paywall_suppressed context=\(context.rawValue)")
+            return
+        }
         paywallContext = context
         isPaywallPresented = true
         Task { await track(.paywallViewed, props: ["context": context.rawValue]) }
@@ -136,7 +142,10 @@ final class BillingService {
     }
 
     /// Called when the server refuses a metered action (402 quota_exceeded).
-    func onQuotaExceeded() {
+    /// `entitlement` is the server's state from the 402 body, so the paywall
+    /// shows the real usage without another round trip.
+    func onQuotaExceeded(entitlement: EntitlementResponse? = nil) {
+        if let entitlement { self.entitlement = entitlement }
         Task { await track(.quotaHit) }
         presentPaywall(.quotaHit)
     }

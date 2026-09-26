@@ -10,7 +10,6 @@ final class AppEnvironment {
     let api: APIClient
     let auth: AuthService
     let notes: NotesRepository
-    let uploads: UploadService
     let recorder: RecorderService
     let recordingStore: RecordingStore
     /// A10 §5 consent seam. Shared between the pre-recording notice UI
@@ -23,10 +22,13 @@ final class AppEnvironment {
     /// A9.4/A9.5/A9.6 billing: entitlement, StoreKit, paywall + funnel. Views
     /// bind to this for the trial banner, paywall, and account prompt.
     let billing: BillingService
-    /// A7.2 resumable/background uploader. Gated OFF by
-    /// `AppFeatureFlags.backgroundResumableUpload`; `UploadService` stays the
-    /// default path until this is verified on a device.
+    /// The uploader (POST /v1/uploads → GCS resumable session): every
+    /// recording and import goes through it.
     let backgroundUploads: BackgroundUploadService
+    /// Captures of another app's audio, finished by the broadcast extension.
+    let broadcast: BroadcastHandoff
+    /// Server-side feature switches, e.g. broadcast capture's kill switch.
+    let switches = AppSwitches()
 
     /// Upload progress (0-100) for the note currently uploading, keyed by id.
     var uploadProgress: [String: Int] = [:]
@@ -37,9 +39,17 @@ final class AppEnvironment {
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
 
-    /// Shown on a note that couldn't process because the user is out of quota
-    /// (A9.4). The paywall carries the actual upgrade path.
-    static let quotaMessage = "You've used up your included minutes. Upgrade to Pro to keep processing."
+    /// A capture of another app finished without this session's pre-recording
+    /// notice (it was started from Control Center). RootView asks the user to
+    /// confirm they had permission before it becomes a note.
+    var isBroadcastConsentPending = false
+    /// The kill switch held a finished capture back; said once per session.
+    @ObservationIgnored private var broadcastHoldNoticeShown = false
+
+    /// The api answered 426: this build is below its minimum. RootView covers
+    /// the app with the update screen; nothing else works until the update.
+    private(set) var updateRequired = false
+    private var updateRequiredObserver: NSObjectProtocol?
 
     /// Guards against a double-fired retry for the same note.
     private var retryInFlight = Set<String>()
@@ -51,7 +61,6 @@ final class AppEnvironment {
         self.api = api
         self.auth = AuthService()
         self.notes = NotesRepository(api: api)
-        self.uploads = UploadService()
         let store = RecordingStore()
         self.recordingStore = store
         let consentGate = SessionConsentGate()
@@ -59,11 +68,33 @@ final class AppEnvironment {
         self.recorder = RecorderService(store: store, consentGate: consentGate)
         let session = AudioSessionCoordinator()
         self.audioSession = session
-        self.player = AudioPlayerService(session: session, store: store)
+        self.player = AudioPlayerService(session: session, store: store, api: api)
         self.transcripts = TranscriptRepository(api: api)
         self.billing = BillingService(api: api)
         self.backgroundUploads = BackgroundUploadService(store: store, api: api)
+        self.broadcast = BroadcastHandoff(store: store)
+        notes.onQuotaExceeded = { [weak billing = self.billing] entitlement in
+            billing?.onQuotaExceeded(entitlement: entitlement)
+        }
+        updateRequiredObserver = NotificationCenter.default.addObserver(
+            forName: .algoMinutesUpdateRequired, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateRequired = true }
+        }
         startNetworkWatch()
+        // A transfer that finished while the app wasn't running (the system
+        // relaunched it to say so): finish the job, complete the upload session
+        // and kick processing off, under a background-time assertion so a
+        // relaunch in the background gets to do it.
+        backgroundUploads.onOrphanUploadFinished = { [weak self] in
+            guard let self else { return }
+            let bgTask = UIApplication.shared.beginBackgroundTask(withName: "finish-upload")
+            Task { @MainActor in
+                AppLog.info("bg_upload_finished_while_away_resuming")
+                await self.resumePendingUploads()
+                if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
+            }
+        }
     }
 
     /// Retry pending uploads the moment the network comes back.
@@ -141,6 +172,12 @@ final class AppEnvironment {
         Task { await billing.bootstrap() }
         // A10 #3: capture Terms + Privacy acceptance at account creation.
         Task { await recordTermsAcceptanceIfNeeded() }
+        Task { await refreshSwitches() }
+    }
+
+    /// Re-read the server-side switches (launch, sign-in, foreground).
+    func refreshSwitches() async {
+        await switches.refresh { [api] in try await api.fetchAppConfig() }
     }
 
     /// A10 #3: record timestamped Terms + Privacy acceptance for a permanent
@@ -209,6 +246,17 @@ final class AppEnvironment {
         auth.signOut()
     }
 
+    /// Deletes a note (NotesRepository.deleteNote, through the api), then any
+    /// recording still waiting on this device for it: the user deleted the note,
+    /// so its audio goes too, and nothing retries it into an id the server now
+    /// refuses. Only once the server has confirmed; a refused delete keeps both.
+    func deleteNote(id: String) async throws {
+        try await notes.deleteNote(id: id)
+        if recordingStore.removeRecording(forNoteId: id) {
+            AppLog.info("deleted_note_recording_removed noteId=\(id)")
+        }
+    }
+
     /// Resume any recording whose upload never confirmed — a Firebase Storage
     /// `putFile` cannot run in a background `URLSession`, so an upload that is
     /// interrupted by backgrounding/termination dies. The bytes still live on
@@ -270,9 +318,6 @@ final class AppEnvironment {
             return
         }
 
-        let storagePath = StoragePaths.path(kind: kind, workspaceId: wsId, noteId: noteId, ext: ext)
-        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-
         // Durably link the on-disk recording to this note BEFORE uploading, so a
         // failed or interrupted upload can be re-uploaded into the same note
         // rather than lost. Only recordings live in the store; imports/scans are
@@ -289,17 +334,27 @@ final class AppEnvironment {
         uploadProgress[noteId] = 0
         defer { uploadProgress[noteId] = nil }
 
+        // Through POST /v1/uploads into the api's recordings bucket; the object
+        // name comes back from the server (imports land under recordings/ too).
+        let storagePath: String
         do {
-            try await uploads.upload(
+            storagePath = try await backgroundUploads.upload(
                 fileURL: fileURL,
-                to: storagePath,
+                noteId: noteId,
+                workspaceId: wsId,
+                fileName: fileURL.lastPathComponent,
                 contentType: mimeType,
-                kind: kind,
-                applyTimeout: kind == .recording,
+                pending: kind == .recording ? recordingStore.pendingRecording(forNoteId: noteId) : nil,
                 onProgress: { [weak self] percent in
                     self?.uploadProgress[noteId] = percent
                 }
             )
+        } catch UploadError.noteGone {
+            // Deleted while its first upload ran. Deleting it here removed the
+            // recording too; deleted elsewhere, the next resume keeps it as a new
+            // note (reupload). Nothing to mark: the note is gone.
+            AppLog.info("upload_note_gone noteId=\(noteId)")
+            return
         } catch {
             // Keep the local recording — it is associated with `noteId` and the
             // user can retry, which re-uploads from disk.
@@ -315,7 +370,9 @@ final class AppEnvironment {
         }
 
         // Upload confirmed — the bytes are safely in Storage, so the local copy
-        // is no longer the only copy and can go.
+        // is no longer the only copy and can go. The doc records where they are
+        // (the player asks the api to sign it).
+        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
         if kind == .recording {
             recordingStore.remove(fileURL: fileURL)
         }
@@ -326,21 +383,90 @@ final class AppEnvironment {
                 workspaceId: wsId,
                 type: type,
                 storagePath: storagePath,
-                mimeType: mimeType
+                mimeType: mimeType,
+                durationSec: durationSeconds.map { Double($0) }
             ))
-        } catch APIError.quotaExceeded {
-            // A9.4: out of included minutes. Present the paywall rather than a
-            // dead-end error; the recording is safe and can process once Pro.
-            AppLog.info("process_kickoff_quota_exceeded noteId=\(noteId)")
-            notes.markNoteError(id: noteId, message: Self.quotaMessage)
-            billing.onQuotaExceeded()
         } catch {
-            AppLog.error("process_kickoff_failed: \(error.localizedDescription)")
-            let message = type == .importAudio
-                ? "Could not queue your file. Please try again."
-                : "Could not start processing. Please try again."
-            notes.markNoteError(id: noteId, message: message)
+            // Out of minutes opens the paywall (the recording is safe and can
+            // process once Pro); a refusal the server recorded is left as is.
+            handleKickoffFailure(
+                error, noteId: noteId, event: "process_kickoff_failed",
+                fallback: type == .importAudio
+                    ? "Could not queue your file. Please try again."
+                    : "Could not start processing. Please try again."
+            )
         }
+    }
+
+    /// A refused kickoff (KickoffFailure): the paywall for a spent quota, the
+    /// note marked unless the server already did, and the message returned
+    /// for the caller to show.
+    @discardableResult
+    private func handleKickoffFailure(_ error: Error, noteId: String, event: String, fallback: String) -> String {
+        let failure = KickoffFailure(error, fallback: fallback)
+        if case .quota(let entitlement) = failure {
+            AppLog.info("\(event) quota_exceeded noteId=\(noteId)")
+            billing.onQuotaExceeded(entitlement: entitlement)
+        } else {
+            AppLog.error("\(event) noteId=\(noteId): \(error.localizedDescription)")
+        }
+        if let noteError = failure.noteError { notes.markNoteError(id: noteId, message: noteError) }
+        return failure.message
+    }
+
+    /// Turns a capture the broadcast extension finished into a note, like a
+    /// recording: called whenever the app comes to the foreground, since the
+    /// capture ends while another app is in front.
+    func claimBroadcastCapture() async {
+        let decision = BroadcastHandoff.decide(
+            hasFinishedCapture: broadcast.hasFinishedCapture,
+            switchOn: switches.broadcastCapture,
+            consented: await consentGate.satisfied(for: .appAudio)
+        )
+        switch decision {
+        case .hold:
+            AppLog.info("broadcast_held_by_switch")
+            if !broadcastHoldNoticeShown {
+                broadcastHoldNoticeShown = true
+                alertMessage = "Capturing audio from another app is turned off right now, so your capture hasn't been uploaded. It stays on this iPhone and becomes a note when the feature is back."
+            }
+            return
+        case .askConsent:
+            isBroadcastConsentPending = true
+            return
+        case .claim:
+            break
+        }
+        switch await broadcast.claim() {
+        case .none:
+            break
+        case .ready(let fileURL, let seconds):
+            await uploadAndProcess(
+                fileURL: fileURL,
+                mimeType: "audio/mp4",
+                ext: "m4a",
+                type: .recording,
+                kind: .recording,
+                durationSeconds: seconds,
+                title: "App audio \(Self.dateStamp())"
+            )
+        case .failed(let message):
+            alertMessage = message
+        }
+    }
+
+    /// The user confirmed they had permission for a capture started outside
+    /// the app: record that on the consent gate, then make the note.
+    func confirmBroadcastConsent() async {
+        isBroadcastConsentPending = false
+        consentGate.acknowledge()
+        await claimBroadcastCapture()
+    }
+
+    /// The user declined: the capture is thrown away, never uploaded.
+    func discardBroadcastCapture() {
+        isBroadcastConsentPending = false
+        broadcast.discardFinished()
     }
 
     // MARK: - Retry / recovery (durable re-upload from disk)
@@ -418,15 +544,10 @@ final class AppEnvironment {
     ) async -> NotesRepository.RetryOutcome {
         guard let wsId = auth.workspaceId else { return .blocked(message: "Not signed in") }
         let fileURL = recordingStore.audioURL(for: pending)
-        let storagePath = StoragePaths.path(kind: .recording, workspaceId: wsId, noteId: noteId, ext: pending.ext)
-
-        // Re-arm the stuck watchdog — the note is going back in-progress.
-        notes.resetStuckGuard(noteId: noteId)
 
         var fields: [String: Any] = [
             "status": NoteStatus.queued.rawValue,
             "errorMessage": NSNull(),
-            "storagePath": storagePath,
         ]
         if let retryAttempt { fields["retryAttempt"] = retryAttempt }
         notes.updateNote(id: noteId, fields: fields)
@@ -437,31 +558,34 @@ final class AppEnvironment {
         // A7.1: clear any prior failure and mark uploading before bytes move.
         recordingStore.setUploadState(fileName: pending.fileName, state: .uploading, lastError: .some(nil))
 
+        let storagePath: String
         do {
-            if AppFeatureFlags.backgroundResumableUpload {
-                // A7.2 resumable path — survives reboot via a persisted byte
-                // offset. Gated OFF; see AppFeatureFlags. Untested on device.
-                try await backgroundUploads.upload(
-                    fileURL: fileURL,
-                    noteId: noteId,
-                    workspaceId: wsId,
-                    pending: pending,
-                    contentType: pending.mimeType,
-                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
-                )
-            } else {
-                // Documented fallback: Firebase resumable putFile (resumes within
-                // a session; restarts from byte 0 across launches — which is why
-                // the bytes are kept on disk and re-driven here).
-                try await uploads.upload(
-                    fileURL: fileURL,
-                    to: storagePath,
-                    contentType: pending.mimeType,
-                    kind: .recording,
-                    applyTimeout: true,
-                    onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
-                )
-            }
+            // Continues the recording's own upload session when the server still
+            // has it open (its sidecar remembers it), else starts a new one.
+            storagePath = try await backgroundUploads.upload(
+                fileURL: fileURL,
+                noteId: noteId,
+                workspaceId: wsId,
+                fileName: pending.fileName,
+                contentType: pending.mimeType,
+                pending: pending,
+                onProgress: { [weak self] percent in self?.uploadProgress[noteId] = percent }
+            )
+        } catch UploadError.noteGone {
+            // The note was deleted elsewhere (another device, the web) while its
+            // recording waited here. The server refuses its id for 30 days, so a
+            // retry would 404 on every foreground: keep the recording as a new
+            // note instead (associate() replaces the sidecar, old session and all).
+            AppLog.info("reupload_note_gone noteId=\(noteId)")
+            await uploadAndProcess(
+                fileURL: fileURL,
+                mimeType: pending.mimeType,
+                ext: pending.ext,
+                type: type,
+                kind: .recording,
+                durationSeconds: pending.durationSeconds
+            )
+            return .queued
         } catch {
             let message = (error as? UploadError)?.errorDescription ?? UploadError.failed.errorDescription!
             recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
@@ -469,23 +593,21 @@ final class AppEnvironment {
             return .blocked(message: message)
         }
 
+        notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
         recordingStore.remove(fileName: pending.fileName)
 
         do {
             try await api.processAudio(.init(
                 noteId: noteId, workspaceId: wsId, type: type,
-                storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt
+                storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt,
+                durationSec: pending.durationSeconds.map { Double($0) }
             ))
             return .queued
-        } catch APIError.quotaExceeded {
-            AppLog.info("reupload_kickoff_quota_exceeded noteId=\(noteId)")
-            notes.markNoteError(id: noteId, message: Self.quotaMessage)
-            billing.onQuotaExceeded()
-            return .blocked(message: Self.quotaMessage)
         } catch {
-            AppLog.error("reupload_process_kickoff_failed: \(error.localizedDescription)")
-            notes.markNoteError(id: noteId, message: "Could not start processing. Please try again.")
-            return .blocked(message: "Could not start processing. Please try again.")
+            return .blocked(message: handleKickoffFailure(
+                error, noteId: noteId, event: "reupload_process_kickoff_failed",
+                fallback: "Could not start processing. Please try again."
+            ))
         }
     }
 

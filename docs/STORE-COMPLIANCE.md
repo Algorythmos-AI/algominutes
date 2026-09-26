@@ -17,7 +17,7 @@
 
 | # | Data collected | Why (purpose) | Where it goes | Linked to user? | Used for tracking? | Retention (see DATA-RETENTION) |
 |---|---|---|---|---|---|---|
-| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Stored in **Cloud Storage** (GCS) in **Australia** (`australia-southeast1`). For transcription, longer recordings are sent to **AssemblyAI in the United States** (sub-processor under a DPA), which transcribes then deletes the audio; shorter clips go to Google's models. | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload; provider copy deleted after processing |
+| 1 | **Audio recordings** (device mic and/or app audio) | Core function — to transcribe & summarise | Stored in **Cloud Storage** (GCS) in **Australia** (`australia-southeast1`). Longer recordings are transcribed by **Google Cloud Speech-to-Text on its `global` endpoint** (`stt.js`, `STT_PROVIDER=google`), so audio **may be processed outside Australia**; short clips are transcribed by Gemini on Vertex AI in `australia-southeast1`. AssemblyAI is a code path (ADR 0005) that isn't enabled. | Yes (to uid/workspace) | No | Until user deletes; local device copy purged after confirmed upload; provider copy deleted after processing |
 | 2 | **Transcripts** (user content derived from audio) | Core function — the readable record + summaries/action items | **Postgres** (source of truth: `transcript_lines`, `summaries`, `action_items`, `key_decisions`, `embeddings`) + **Firestore** cache | Yes | No | Until user deletes / user-set retention |
 | 3 | **Account email + Firebase uid** | Account identity, auth, workspace membership | **Firebase Auth** + **Postgres** (`users`, `workspace_members`) + **Firestore** cache | Yes | No | Until account deletion |
 | 4 | **Device push token (FCM)** | Notify user when a recording is transcribed/ready | **FCM** + stored server-side to target the device | Yes | No | Until token rotates / account deletion |
@@ -30,13 +30,14 @@ Notes:
   tracking, no location.** This is what "tracking = NONE" means concretely.
 - Camera / Photo Library (see §4) are used for **on-device text scanning input** and the
   scanned image is treated as **user content** (same class as transcripts) if uploaded.
-- **Cross-border processing (diarisation / ADR 0005):** storage is in Australia, but audio
-  is **processed in the United States** by AssemblyAI (speech-to-text) and transcript text
-  by Google Vertex AI (summaries/chat/embeddings). This is disclosed in the Privacy Policy
-  under APP 8. ⚠️ **The "not shared / sub-processor" position below holds ONLY if we have
-  opted out of AssemblyAI using our content to train its models** — that opt-out is
-  account-level and requires a paid plan (see `docs/BLOCKERS.md`). Until it is in place, a
-  "no sharing" store declaration would be inaccurate.
+- **Cross-border processing (as deployed, 2026-09-26):** storage, Postgres, Firestore and Vertex AI
+  (Gemini, embeddings) are in Australia (`australia-southeast1`). Speech-to-Text runs on Google's
+  `global` endpoint, and Firebase Auth, FCM/APNs, Crashlytics and Cloud Logging are global services,
+  so some processing may happen outside Australia. The published Privacy Policy
+  (`apps/site`, "Information sent outside Australia") says so under APP 8, rendered from
+  `apps/site/src/data/processing.json`, which `tests/site-facts.test.ts` checks against Terraform and
+  the code. **If AssemblyAI is enabled** (`STT_PROVIDER=assemblyai`), that test fails until the
+  policy names it, and the training opt-out below becomes a precondition of the "not shared" answers.
 
 ---
 
@@ -79,21 +80,20 @@ Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the ac
 | **Financial info → Purchase history** | Yes | No | App functionality | No | No |
 | **Location** | **No** | — | — | — | — |
 
-¹ **Sharing = No, conditional on the training opt-out.** Under Play's Data Safety
-definition, transferring data to a *service provider that processes it on your behalf* is
-not "sharing." AssemblyAI (US) and Google Vertex AI are sub-processors under that carve-out
-— BUT only while they do **not** use our content for their own purposes. AssemblyAI trains
-on customer data by default, so this "No" is accurate **only once the account-level
-model-training opt-out is in place** (paid plan; see BLOCKERS). If that opt-out is not done,
-change this to "Yes (shared)".
+¹ **Sharing = No.** Under Play's Data Safety definition, transferring data to a *service
+provider that processes it on your behalf* is not "sharing." Google Cloud (Speech-to-Text,
+Vertex AI) processes our content only on our behalf and doesn't train on it. **If AssemblyAI is
+enabled**, it becomes a sub-processor under the same carve-out, but only while it does **not** use
+our content for its own purposes. AssemblyAI trains on customer data by default, so enabling it
+needs the account-level model-training opt-out first (paid plan; see BLOCKERS), or this answer
+becomes "Yes (shared)".
 
 Play form global answers:
 - **Does your app collect or share any of the required user data types?** Yes (collect).
-  **No sharing** with third parties — Google-provided infra AND the AssemblyAI speech-to-text
-  sub-processor are processors acting on our behalf under data processing agreements, not
-  recipients we "share" with (see footnote ¹ and the opt-out precondition).
-- **Cross-border:** audio is processed in the **United States** (AssemblyAI) and transcript
-  text in the United States (Vertex AI); storage is in Australia. Disclosed in the Privacy
+  **No sharing** with third parties — Google Cloud and Firebase are processors acting on our
+  behalf under their data processing terms, not recipients we "share" with (footnote ¹).
+- **Cross-border:** storage and Vertex AI are in Australia; Speech-to-Text (global endpoint) and
+  the global Firebase services may process data outside Australia. Disclosed in the Privacy
   Policy (APP 8).
 - **Is all collected data encrypted in transit?** Yes (HTTPS/TLS). State it.
 - **Do you provide a way for users to request that their data is deleted?** **Yes** — see
@@ -205,20 +205,22 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 
 ### 6.1 In-app deletion (iOS + Android + web)
 
-- Authenticated endpoint: **`services/api` `delete-account.cjs`** (`handleDeleteAccount`),
-  POST/DELETE, self-authenticating via `verifyIdToken`. Steps:
-  1. Find owned workspaces (Postgres `workspace_members` where `role = 'owner'`).
-  2. For each note in those workspaces, delete the Firestore doc at
-     `workspaces/{wsId}/notes/{noteId}` — which **fires the `onNoteDeleted` cascade**.
-  3. Remove the user from `workspace_members` (Postgres).
-  4. Delete the Postgres `users` row.
-  5. Delete the **Firebase Auth** user (last, so the token can't re-trigger anything).
-  - Idempotent: safe to re-run after a partial failure.
-- **`onNoteDeleted` cascade** (`functions/index.js`, Firestore trigger):
-  - **Cloud Storage:** best-effort delete of audio + scan images + intermediate FLAC
-    chunks under the note's prefix, with explicit logging (no silent catch).
-  - **Postgres:** `DELETE FROM notes` → `ON DELETE CASCADE` removes `transcript_lines`,
-    `embeddings`, `summaries`, `action_items`, `key_decisions`, `audio_chunks`.
+- Authenticated endpoint: **`services/api` `routes/delete-account.js`** (`POST|DELETE
+  /v1/account/delete`), self-authenticating via `verifyIdToken`. Postgres first, Auth last:
+  1. **Postgres, in one transaction:** a purge is queued for every note the account owns,
+     then the `users` row goes and `ON DELETE CASCADE` removes the rest (transcripts,
+     embeddings, summaries, action items, decisions, chunks). A tombstone
+     (`account_deletions`) records the owned workspaces. If this fails, nothing else
+     happens and the client retries.
+  2. **The purges:** each note's Firestore doc and audio.
+  3. **The account's own Firestore docs** (workspaces and their subcollections, analytics,
+     rate-limit counter), then any leftover uploads under its storage prefixes.
+  4. **The Firebase Auth user**, last; then the tombstone is marked complete.
+  - 200 only when everything is gone. Any failure in 2–4 answers 500 with Auth intact, so
+    the client retries; if it never does, the sweeper finishes from the tombstone. Every
+    step is idempotent.
+  - **Sign in with Apple:** the iOS app revokes the user's Apple token before deleting
+    (App Store 5.1.1(v); `AppleTokenRevocationTests`).
 - **Local device audio** is already purged after confirmed upload; on account deletion any
   remaining pending recordings are removed by `RecordingStore` (see DATA-RETENTION §5).
 - **Guest mode:** anonymous Firebase identities can delete the same way (uid-scoped);
@@ -226,15 +228,16 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 
 ### 6.2 Web-accessible deletion request page (Play requirement)
 
-- **URL:** `TODO(brand)` final domain — e.g. `https://algominutes.app/delete-account`
+- **URL:** `https://algominutes.algorythmos.com/delete-account` (the site, `apps/site`)
   (must be publicly reachable without installing the app; submit this exact URL in Play
   Console "Data deletion").
-- **What it does:** explains what deletion removes (recordings, transcripts, summaries,
-  account) and the propagation window; offers (a) a **"Sign in and delete now"** button
-  that calls the same `delete-account` endpoint, and (b) a fallback **email request**
-  (`TODO(brand)`: e.g. `privacy@algominutes.app`) for users who cannot sign in. State the
-  backup-propagation window from `docs/DATA-RETENTION.md` (e.g. deleted within 30 days
-  including backups).
+- **What it does (built, `apps/site/src/pages/delete-account.astro`):** the in-app path
+  (Settings → Delete my account, type DELETE), an **email request** to `privacy@algorythmos.com`
+  from the sign-in address (with the User ID if the user has it), answered within 30 days, what
+  deletion removes, and the window: live data at once, backups within 30 days
+  (`docs/DATA-RETENTION.md` §4). No backend is needed for Play.
+- **Later (plan Phase 3, with the web app):** a **"Sign in and delete now"** button that calls the
+  same `/v1/account/delete` endpoint.
 - `TODO(legal):` Confirm the page's stated retention/propagation window and that
   "what is kept vs deleted" matches the Privacy Policy exactly.
 
@@ -243,7 +246,10 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 ## 7. Age ratings (deliberate recommendation)
 
 ### Apple
-- **Recommend: 4+**, *with* the honest content declarations. AlgoMinutes has no
+- Apple's age ratings are now **4+, 9+, 13+, 16+ and 18+** (the questionnaire changed in 2025).
+  **Provisional: 13+** (plan decision D8), matching the recording-consent posture and the Terms'
+  minimum age; `TODO(legal)` confirms it.
+- *Earlier recommendation, kept for its reasoning:* **4+**, *with* the honest content declarations. AlgoMinutes has no
   objectionable content of its own. However, it is a **UGC / recording** app: user-created
   recordings and AI-generated summaries are unmoderated user content.
 - `TODO(legal):` Confirm whether the App Store's UGC expectations (moderation, reporting,
@@ -286,7 +292,7 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 | Terms of Service + Privacy Policy drafting/review (§8) | `TODO(legal)` — **blocking** |
 | UGC/moderation applicability + final age rating (§7) | `TODO(legal)` — blocking rating submission |
 | MediaProjection justification vs current Play policy (§5) | `TODO(legal)` |
-| Add OtherUserContent / DeviceID / CrashData to `.xcprivacy` (§4.1) | Eng — blocking iOS submission |
+| ~~Add OtherUserContent / DeviceID / CrashData to `.xcprivacy` (§4.1)~~ | ✅ Declared in `PrivacyInfo.xcprivacy` |
 | DiskSpace API-reason verification (§4.1) | Eng |
-| Final deletion-page domain + support email (§6.2) | `TODO(brand)` — blocking Play submission |
+| ~~Final deletion-page domain + support email (§6.2)~~ | ✅ Decided 2026-09-26; the page ships with `apps/site` |
 | Confirm retention wording parity across plist/policy/page (§4.2, §6.2) | `TODO(legal)` |

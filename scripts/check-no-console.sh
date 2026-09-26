@@ -3,9 +3,8 @@
 # the structured logger (lib/logger.ts / functions/lib/logger.js / shared logger).
 # CLAUDE.md §2: every server log line carries traceId/userId/noteId/workspaceId.
 #
-# ALLOWLIST: lib/db.ts uses console.error in the pg pool 'error' handler (a
-# low-level bootstrap path). Converting it to the structured logger is tracked
-# with the log-fields sweep (PR-11); until then it is allowlisted here.
+# No allowlist: packages/db/src/db.ts, the last exception, moved to the
+# structured logger in the one-Postgres-config change (#15).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,13 +15,12 @@ TARGETS=(
   "$ROOT/packages/ai"
   "$ROOT/packages/db"
 )
-ALLOWLIST_RE='packages/db/src/db\.ts'
 
 found=0
 for t in "${TARGETS[@]}"; do
   [ -e "$t" ] || continue
   hits="$(grep -RInE --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=DerivedData --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
-            'console\.(log|warn|error|info|debug)\(' "$t" 2>/dev/null | grep -vE "$ALLOWLIST_RE" || true)"
+            'console\.(log|warn|error|info|debug)\(' "$t" 2>/dev/null || true)"
   if [ -n "$hits" ]; then
     echo "$hits"
     found=1

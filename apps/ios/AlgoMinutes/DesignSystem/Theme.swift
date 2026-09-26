@@ -1,7 +1,7 @@
 // TODO(brand A6.5): provisional palette — final hue/typeface pending brand sign-off.
 // Values below mirror packages/tokens/tokens.json (single source of truth):
-// color.dark.* ramp + brand.* indigo accent. The prior client greyscale/Rajdhani
-// theme has been replaced. See apps/web/src/index.css and the Compose theme for parity.
+// color.dark.* ramp + brand.* indigo accent, on the system font. See
+// apps/web/src/index.css and the Compose theme for parity.
 
 import SwiftUI
 
@@ -75,25 +75,15 @@ enum Theme {
         /// Sheets.
         static let xl: CGFloat = 28
     }
-
-    #if DEBUG
-    /// TODO(brand A6.5): provisional typeface. The client brand fonts (Rajdhani)
-    /// were dropped; Typography now uses the system font (tokens.json
-    /// `typography.fontFamily` system stack). No custom-font registration to
-    /// assert until the final AlgoMinutes typeface is chosen. Kept as a no-op so
-    /// existing call sites (AlgoMinutesApp) still compile.
-    static func assertBrandFontsLoaded() {}
-    #endif
 }
 
 /// Type scale from tokens.json `typography.scale`. Sizes/weights match the
 /// shared tokens (also applied on web and Compose).
 ///
-/// TODO(brand A6.5): provisional typeface. The client brand font (Rajdhani) was
-/// dropped; every face now uses the system font (tokens.json
-/// `typography.fontFamily` system stack). Every token still scales with Dynamic
-/// Type: the design size is scaled through `UIFontMetrics` relative to the
-/// matching text style.
+/// Every face uses the system font (tokens.json `typography.fontFamily` system
+/// stack); a custom typeface waits on brand sign-off (TODO(brand A6.5)). Every
+/// token scales with Dynamic Type: the design size is scaled through
+/// `UIFontMetrics` relative to the matching text style.
 enum Typography {
     // MARK: Semantic scale (tokens.json typography.scale)
 

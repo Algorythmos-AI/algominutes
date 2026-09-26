@@ -12,9 +12,9 @@ framework-agnostic handlers (`src/routes/*.cjs`) are copied verbatim from
 from the workspace packages instead of copied in:
 
 - `@algominutes/db` → `pg-query.cjs` (pool + per-query timeout), `notes-repo`
-  (the note dual-write layer: `markReady` / `markError` / `applyNoteEdit`).
-- `@algominutes/ai` → `intelligence.cjs`, `redaction.cjs`, `share-links.cjs`,
-  `note-edit.cjs`, `logger.cjs`.
+  (the note dual-write layer: `markReady` / `markError` / `applyNoteEdit`),
+  `share-links.cjs`, `note-edit.cjs`, `note-feedback.cjs`.
+- `@algominutes/ai` → `intelligence.cjs`, `redaction.cjs`, `logger.cjs`.
 
 No shared lib is duplicated into this service.
 
@@ -27,7 +27,6 @@ send them.
 | Method | Path | Auth | Source it came from |
 |---|---|---|---|
 | `GET`  | `/v1/health`         | none | `server.ts` `/api/health` |
-| `POST` | `/v1/process-audio`  | ID token | `server.ts` `/api/process-audio` (sync transcribe+summarize) |
 | `POST` | `/v1/process`        | ID token | `functions/index.js` `processIntelligence` (async kickoff) |
 | `POST` | `/v1/notes/read`     | ID token | `functions/note-read.cjs` `handleNoteRead` (= `server.ts` `/api/note`) |
 | `POST` | `/v1/notes/update`   | ID token | `server.ts` `/api/update-note` (updateNote twin, `applyNoteEdit`) |
@@ -68,9 +67,8 @@ superset that keeps the native (Capacitor/Ionic) clients working:
 `capacitor://localhost`, `ionic://localhost`. Requests with no `Origin`
 (server-to-server, native WebViews, curl) are allowed, as before.
 
-> Production origins (`https://algominutes.com`, `https://api.algominutes.com`)
-> are supplied at deploy time via `ALLOWED_ORIGINS`; only the localhost dev
-> origins are baked in.
+> The deployed origin (`https://algominutes.algorythmos.com`) is supplied by
+> Terraform via `ALLOWED_ORIGINS`; only the localhost dev origins are baked in.
 
 ## Client-version gate
 
@@ -137,9 +135,9 @@ rather than re-created:
   on the **shared** `pool()`, never a local one.
 - **Cloud Tasks enqueue** → `@algominutes/ai` `cloud-tasks.cjs` `enqueueTask`.
 - **`validateStoragePath`** → `@algominutes/db` `storage-paths.cjs`.
-- **feedback / share-link / summary-template / redaction helpers** →
-  `@algominutes/ai` (`note-feedback.cjs`, `share-links.cjs`,
-  `summary-templates.cjs`, `redaction.cjs`).
+- **feedback / share-link writers** → `@algominutes/db` (`note-feedback.cjs`,
+  `share-links.cjs`); **summary-template / redaction helpers** → `@algominutes/ai`
+  (`summary-templates.cjs`, `redaction.cjs`).
 - **Firebase `defineString` deploy params** (`TRANSCODER_URL`, `SUMMARIZER_URL`,
   `JOBS_SA_EMAIL`, `TASKS_PROJECT`, `TASKS_LOCATION`, `TASKS_QUEUE`) become plain
   Cloud Run env vars with the source's defaults.
@@ -162,8 +160,8 @@ TypeScript source directly and there is no build step yet. `PORT` defaults to
 | `PORT` | Listen port (default `8080`). |
 | `ALLOWED_ORIGINS` | Extra CORS origins, comma-separated (added to defaults). |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | Firebase/GCP project for ADC. |
-| `STORAGE_BUCKET` | Default GCS bucket (audio for `/v1/process-audio`). |
-| `GEMINI_API_KEY` | Gemini key for `/v1/process-audio`. Search/chat embed + generate via Vertex ADC. |
+| `STORAGE_BUCKET` | Default GCS bucket (recordings; uploads and the processing kickoff). |
+| `GEMINI_API_KEY` | Unused (vestigial parameter). Search/chat embed + generate via Vertex ADC. |
 | `WRITE_POSTGRES` | `true` enables the Postgres-backed paths; otherwise those routes 503. |
 | `PGHOST` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` / `DATABASE_URL` | Postgres connection (via `@algominutes/db`). |
 | `AIPLATFORM_LOCATION` | Vertex region for search/chat (default `us-central1`). |

@@ -176,7 +176,7 @@ async function fetchSummary({ noteId, uid, log }) {
       // action-items array in it (fast-path.js, summarizer/handler.js) and
       // /api/update-note never refreshes it, so it is stale by design.
       // action_items is the real source. long_summary is always NULL today.
-      text: `SELECT gist, model, generated_at FROM summaries
+      text: `SELECT gist, model, generated_at, chapters FROM summaries
               WHERE note_id = $1 AND ${MEMBERSHIP_EXISTS}`,
       values: [noteId, uid],
       log,
@@ -209,6 +209,8 @@ async function fetchSummary({ noteId, uid, log }) {
   return {
     gist: (row && row.gist) || '',
     model: (row && row.model) || null,
+    // Sections of a long recording ([] for a short one or an older summary).
+    chapters: (row && Array.isArray(row.chapters)) ? row.chapters : [],
     generatedAt: iso(row && row.generated_at),
     actionItems: itemsRes.rows.map((r) => ({
       id: r.id,

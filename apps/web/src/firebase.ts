@@ -1,71 +1,79 @@
-import { initializeApp } from 'firebase/app';
-import {
-  initializeAuth,
-  indexedDBLocalPersistence,
-  browserLocalPersistence,
-  browserSessionPersistence,
-  inMemoryPersistence,
-  browserPopupRedirectResolver,
-  signInAnonymously,
-} from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-// Firebase web config is per-environment and regenerated (A4), never committed.
-// Read it from Vite build-time env (see apps/web/.env.example). These are public,
-// domain-restricted client keys, not secrets.
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
-};
-
-const app = initializeApp(firebaseConfig);
-
-// Persistence chain: try IndexedDB first, then localStorage, sessionStorage, in-memory.
-// Capacitor WKWebView IndexedDB can hang on first write; the chain falls through
-// to a working store so onAuthStateChanged still fires after signInWithCredential.
+// Firebase for the web app: Auth, and Firestore for the live note list
+// (read-only; every write goes through the /v1 api). Initialised on first use,
+// so tests and the signed-out pages never touch it.
 //
-// `popupRedirectResolver` is required for `signInWithPopup` to work. `getAuth(app)`
-// auto-bundles it; `initializeAuth(app, { persistence })` does NOT, so we attach
-// it explicitly. Without this, the web "Sign in with Google" button throws
-// `auth/argument-error` because Firebase has no resolver to drive the popup.
-// The Capacitor native paths (FirebaseAuthentication.signInWith*) use their own
-// flow and don't need this — but it's harmless on native.
-export const auth = initializeAuth(app, {
-  persistence: [
-    indexedDBLocalPersistence,
-    browserLocalPersistence,
-    browserSessionPersistence,
-    inMemoryPersistence,
-  ],
-  popupRedirectResolver: browserPopupRedirectResolver,
-});
+// The config is per environment (Vercel env vars, docs/runbooks/site.md) and
+// never committed. These are public client identifiers, restricted by the
+// Browser key's referrers and Auth's authorized domains, not secrets.
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import {
+  browserLocalPersistence,
+  browserPopupRedirectResolver,
+  browserSessionPersistence,
+  indexedDBLocalPersistence,
+  initializeAuth,
+  type Auth,
+} from 'firebase/auth';
+import type { Firestore } from 'firebase/firestore';
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const storage = getStorage(app);
+export interface FirebaseWebConfig {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  appId: string;
+  messagingSenderId: string;
+}
 
-// ── A6.3 guest identity ──────────────────────────────────────────────────────
-// Guest mode: a visitor can record/see a summary before any account. We back
-// that with a Firebase *anonymous* user so every request is still authed and,
-// crucially, the uid is stable — an "upgrade" later attaches Google to this
-// SAME uid via linkWithCredential (see lib/guestAuth.ts), so nothing the guest
-// created is orphaned. The prompt to upgrade is shown AFTER the first summary,
-// never at launch.
-let anonInFlight: Promise<void> | null = null;
-export async function ensureAnonymousIdentity(): Promise<void> {
-  if (auth.currentUser) return;
-  // Coalesce concurrent callers: onAuthStateChanged(null) can race an explicit
-  // bootstrap call, and we must never open two anonymous sessions.
-  if (!anonInFlight) {
-    anonInFlight = signInAnonymously(auth)
-      .then(() => undefined)
-      .finally(() => {
-        anonInFlight = null;
-      });
-  }
-  return anonInFlight;
+/**
+ * The config from the build's env. authDomain is VITE_FIREBASE_AUTH_DOMAIN,
+ * the environment's own site host (staging.algominutes.algorythmos.com): the
+ * site proxies /__/auth/* there to the project's firebaseapp.com (vercel.json),
+ * so the popup and its iframe are same-origin and survive browsers that block
+ * third-party storage. It's set per environment, not taken from the page, so a
+ * build on a host without the proxy (a PR preview) still signs in, through
+ * the project's own domain. A local dev server always uses that.
+ */
+export function firebaseConfigFromEnv(
+  env: Record<string, string | undefined> = import.meta.env,
+  dev: boolean = Boolean(import.meta.env.DEV),
+): FirebaseWebConfig {
+  const need = (name: string) => {
+    const v = (env[name] ?? '').trim();
+    if (!v) throw new Error(`${name} is not set`);
+    return v;
+  };
+  const projectId = need('VITE_FIREBASE_PROJECT_ID');
+  return {
+    apiKey: need('VITE_FIREBASE_API_KEY'),
+    projectId,
+    appId: need('VITE_FIREBASE_APP_ID'),
+    messagingSenderId: need('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+    authDomain: (!dev && (env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim()) || `${projectId}.firebaseapp.com`,
+  };
+}
+
+let instance: { app: FirebaseApp; auth: Auth } | null = null;
+
+export function firebase() {
+  if (instance) return instance;
+  const app = initializeApp(firebaseConfigFromEnv());
+  const auth = initializeAuth(app, {
+    persistence: [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence],
+    // initializeAuth, unlike getAuth, doesn't bundle the popup/redirect resolver.
+    popupRedirectResolver: browserPopupRedirectResolver,
+  });
+  instance = { app, auth };
+  return instance;
+}
+
+let db: Promise<Firestore> | null = null;
+
+/**
+ * Firestore, loaded on first use. It's the biggest part of the Firebase SDK
+ * (with its re2js dependency, over a third of the app), and nothing before
+ * sign-in needs it, so it stays out of the first download.
+ */
+export function firestore(): Promise<Firestore> {
+  db ??= import('firebase/firestore').then(({ getFirestore }) => getFirestore(firebase().app));
+  return db;
 }

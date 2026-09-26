@@ -35,7 +35,7 @@ export default function InstantRecorderConsent({ open, onCancel, onContinue }: P
   };
 
   let alreadySeen = false;
-  try { alreadySeen = localStorage.getItem('instant_recorder_consent_shown') === '1'; } catch { /* ignore */ }
+  try { alreadySeen = localStorage.getItem('instant_recorder_consent_shown') === '1'; } catch { /* silent-catch-ok: localStorage can be unavailable (private mode, blocked storage); no flag is the default */ }
 
   return (
     <AnimatePresence>

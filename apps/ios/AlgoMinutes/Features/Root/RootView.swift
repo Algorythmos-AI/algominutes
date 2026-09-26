@@ -41,7 +41,11 @@ struct RootView: View {
                 .environment(env)
                 .algoMinutesSheet([.large])
         }
-        .background(OwllBackground())
+        // The api answered 426: this build is too old to talk to it.
+        .fullScreenCover(isPresented: Binding(get: { env.updateRequired }, set: { _ in })) {
+            UpdateRequiredView()
+        }
+        .background(AlgoMinutesBackground())
         // Support Dynamic Type broadly, but clamp the largest accessibility
         // sizes so the fixed-layout recording screen doesn't overflow.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
@@ -56,10 +60,30 @@ struct RootView: View {
             // Uploads killed while backgrounded resume from disk on return.
             if phase == .active, env.auth.user != nil {
                 Task { await env.resumePendingUploads() }
+                // A capture of another app ends while that app is in front.
+                Task { await env.claimBroadcastCapture() }
                 // Re-read entitlement: a subscription may have changed in the
                 // system Settings while we were backgrounded.
                 Task { await env.billing.refresh() }
+                // A switch may have been flipped (broadcast's kill switch).
+                Task { await env.refreshSwitches() }
             }
+        }
+        // A capture started from Control Center skipped the app's consent step:
+        // it isn't uploaded until the user confirms, the same as in the app.
+        .confirmationDialog(
+            "Turn your capture into a note?",
+            isPresented: Binding(
+                get: { env.isBroadcastConsentPending },
+                set: { if !$0 { env.isBroadcastConsentPending = false } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("I have permission") { Task { await env.confirmBroadcastConsent() } }
+            Button("Discard the capture", role: .destructive) { env.discardBroadcastCapture() }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Confirm you have permission from everyone whose voice was captured. If others were present, let them know it was recorded.")
         }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { env.alertMessage != nil },
@@ -77,7 +101,7 @@ struct RootView: View {
 struct BootstrapSplash: View {
     var body: some View {
         ZStack {
-            OwllBackground()
+            AlgoMinutesBackground()
             VStack(spacing: Theme.Spacing.lg) {
                 Image("Logo")
                     .resizable()
@@ -92,6 +116,7 @@ struct BootstrapSplash: View {
 
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(DeepLinkRouter.self) private var deepLinkRouter
     @State private var selectedTab = 0
 
     init() {
@@ -126,5 +151,8 @@ struct MainTabView: View {
                 .tag(2)
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
+        // A tapped push (or an algominutes://note link) opens its note on Home,
+        // whichever tab the user was on: HomeView does the navigation.
+        .onChange(of: deepLinkRouter.arrivals) { selectedTab = 0 }
     }
 }

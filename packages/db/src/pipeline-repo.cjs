@@ -1,0 +1,409 @@
+'use strict';
+
+// The transcoder's Postgres writes and reads (the chunked pipeline, the fast
+// path's result), in the repo layer where CLAUDE.md §1 says every note write
+// lives. CommonJS, so the transcoder (and its tests) load it with plain require.
+// Callers pass a client from their own pool; nothing here opens connections.
+//
+// These are the gates that make Cloud Task replay safe:
+//   - claimSummarizerEnqueue / claimEmbedderEnqueue: exactly-once.
+//   - markChunkDone: idempotent UPDATE.
+//
+// CLAUDE.md PII invariant: every transcript_lines write goes through
+// redactTranscriptLines() before INSERT (insertTranscriptLines here; the fast
+// path redacts at its call site before persistFastPathResult).
+
+const _redaction = require('@algominutes/ai/redaction.cjs');
+const { randomUUID } = require('node:crypto');
+const { recordNotice } = require('./note-notices.cjs');
+
+// The shared structured logger, for a caller that passed none: a catch that
+// logs must not turn its failure into a TypeError on `log.error`.
+function logOr(log) {
+  return log && typeof log.error === 'function' ? log : require('@algominutes/ai/logger.cjs').logger;
+}
+
+/**
+ * Whether the task's note still exists in the task's workspace (deleted notes
+ * are gone from Postgres; see notes-repo deleteNote). Checked before the
+ * transcoder writes anything, so a note deleted after kickoff isn't touched.
+ */
+async function noteExists(client, { noteId, workspaceId }) {
+  const { rowCount } = await client.query(
+    'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rowCount > 0;
+}
+
+/**
+ * The note's status in the task's workspace, or null when it is gone or isn't
+ * there (the kickoff's replay guard).
+ */
+async function noteStatus(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? rows[0].status : null;
+}
+
+// Scoped to the task's workspace (CLAUDE.md §1): a note id from another
+// workspace, or a deleted note, matches nothing and throws NOTE_NOT_FOUND,
+// which the handler treats as "note gone".
+// `onlyIfStatus` (a list) makes the write conditional: a note whose status has
+// moved on is left alone and NOTE_MOVED_ON is thrown. The kickoff passes it on
+// every write, so an attempt that stalled past its replay can't drag a note
+// that finished meanwhile back to 'transcribing'.
+async function upsertNoteStatus(client, { noteId, workspaceId, status, durationSecProbed, chunksTotal, errorMessage, onlyIfStatus }) {
+  if (!workspaceId) throw new Error('upsertNoteStatus: workspaceId is required');
+  const sets = ['status = $3', 'updated_at = NOW()'];
+  const params = [noteId, workspaceId, status];
+  let next = 4;
+  if (durationSecProbed != null) { sets.push(`duration_sec_probed = $${next++}`); params.push(durationSecProbed); }
+  if (chunksTotal != null) { sets.push(`chunks_total = $${next++}`); params.push(chunksTotal); }
+  if (errorMessage !== undefined) { sets.push(`error_message = $${next++}`); params.push(errorMessage); }
+  let where = 'id = $1 AND workspace_id = $2 AND deleted_at IS NULL';
+  if (onlyIfStatus) { where += ` AND status = ANY($${next++}::text[])`; params.push(onlyIfStatus); }
+  const sql = `UPDATE notes SET ${sets.join(', ')} WHERE ${where} RETURNING id`;
+  const { rows } = await client.query(sql, params);
+  if (rows.length === 0) {
+    if (onlyIfStatus && (await noteExists(client, { noteId, workspaceId }))) {
+      const err = new Error(`note_moved_on:${noteId}`);
+      err.code = 'NOTE_MOVED_ON';
+      throw err;
+    }
+    const err = new Error(`note_missing_in_postgres:${noteId}`);
+    err.code = 'NOTE_NOT_FOUND';
+    throw err;
+  }
+}
+
+async function insertAudioChunkRow(client, { noteId, idx, startSec, endSec, storagePath }) {
+  const sql = `
+    INSERT INTO audio_chunks (note_id, idx, start_sec, end_sec, storage_path, status)
+    VALUES ($1, $2, $3, $4, $5, 'pending')
+    ON CONFLICT (note_id, idx) DO UPDATE
+      SET start_sec = EXCLUDED.start_sec,
+          end_sec   = EXCLUDED.end_sec,
+          storage_path = EXCLUDED.storage_path
+    RETURNING id`;
+  const { rows } = await client.query(sql, [noteId, idx, startSec, endSec, storagePath]);
+  return rows[0].id;
+}
+
+async function setChunkOperation(client, { chunkId, operationName }) {
+  await client.query('UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1', [chunkId, operationName]);
+}
+
+async function markChunkDone(client, { chunkId, noteId }) {
+  // Atomic + idempotent.
+  await client.query(
+    `UPDATE audio_chunks SET status = 'done' WHERE id = $1 AND status <> 'done'`,
+    [chunkId],
+  );
+  await client.query(
+    `UPDATE notes SET chunks_done = (
+       SELECT COUNT(*) FROM audio_chunks WHERE note_id = $1 AND status = 'done'
+     ), updated_at = NOW() WHERE id = $1`,
+    [noteId],
+  );
+  // Gate on chunks_done = chunks_total, NOT on "no pending rows".
+  //
+  // The rows are inserted one at a time inside runChunkedPath's loop, so for
+  // most of a long kickoff only a PREFIX of the plan exists in audio_chunks.
+  // "No pending rows" is therefore true whenever every row inserted *so far*
+  // has finished — which happens routinely if the kickoff task is re-dispatched
+  // (Cloud Tasks' dispatch deadline is shorter than Cloud Run's timeout) and
+  // the already-enqueued polls land in the gap.
+  //
+  // The old check let the summarizer run on the first two chunks of a
+  // six-chunk recording, and claimSummarizerEnqueue then made it permanent: the
+  // note reached 'ready' carrying a fluent, complete-looking summary of a third
+  // of the recording. Nothing anywhere reported an error. For a meeting
+  // transcript that is the worst possible failure — confidently wrong.
+  //
+  // chunks_total is written up front from plan.length (handler.js), so it is
+  // the authoritative denominator from the first moment the note is chunked.
+  const { rows } = await client.query(
+    `SELECT n.chunks_total::int AS total,
+            (SELECT COUNT(*) FROM audio_chunks c
+              WHERE c.note_id = n.id AND c.status = 'done')::int AS done
+       FROM notes n WHERE n.id = $1`,
+    [noteId],
+  );
+  const row = rows[0];
+  if (!row || row.total == null) return false;
+  return row.done === row.total;
+}
+
+async function claimSummarizerEnqueue(client, noteId) {
+  const { rows } = await client.query(
+    `UPDATE notes SET summarizer_enqueued_at = NOW()
+       WHERE id = $1 AND summarizer_enqueued_at IS NULL
+       RETURNING id`,
+    [noteId],
+  );
+  return rows.length > 0;
+}
+
+async function claimEmbedderEnqueue(client, noteId) {
+  const { rows } = await client.query(
+    `UPDATE notes SET embedder_enqueued_at = NOW()
+       WHERE id = $1 AND embedder_enqueued_at IS NULL
+       RETURNING id`,
+    [noteId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * A chunk's completion gate, as one transaction: mark it done and, if that
+ * completes the note, spend both enqueue claims and move the note to
+ * 'summarizing'. As separate statements, an error part-way left the chunk done
+ * with the gate unfinished, and a retry (which returns early on a done chunk)
+ * never ran it again: the note waited 3.5 h for the sweep. Now a failure rolls
+ * the chunk back to not-done and the retry runs the whole gate.
+ *
+ * Concurrent completions stay correct: each locks its chunk row, then the note
+ * row, so the second's count runs after the first commits and exactly one of
+ * them sees the note complete.
+ */
+// A note whose chunks are still being transcribed.
+const COMPLETABLE_STATUSES = ['queued', 'chunking', 'transcribing'];
+
+async function completeChunkGate(client, { chunkId, noteId, workspaceId, log }) {
+  await client.query('BEGIN');
+  try {
+    // The note first, then its chunk: the order every writer takes them
+    // (note-terminal markNoteFailed, markQueued, deleteNote), so none can
+    // deadlock with this. A note the run no longer owns (failed, finished,
+    // re-queued past this run, gone) takes no completion: a late chain mustn't
+    // turn a failed chunk 'done' and move the note on to 'summarizing' after
+    // its refund and "failed" notice.
+    const { rows: [note] } = await client.query(
+      'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 FOR NO KEY UPDATE', [noteId, workspaceId],
+    );
+    if (!note || !COMPLETABLE_STATUSES.includes(note.status)) {
+      await client.query('COMMIT');
+      return { allDone: false, summarizerClaimed: false, embedderClaimed: false, finished: true, status: note ? note.status : null };
+    }
+    const allDone = await markChunkDone(client, { chunkId, noteId });
+    let summarizerClaimed = false;
+    let embedderClaimed = false;
+    if (allDone) {
+      summarizerClaimed = await claimSummarizerEnqueue(client, noteId);
+      embedderClaimed = await claimEmbedderEnqueue(client, noteId);
+      if (summarizerClaimed) await upsertNoteStatus(client, { noteId, workspaceId, status: 'summarizing' });
+    }
+    await client.query('COMMIT');
+    return { allDone, summarizerClaimed, embedderClaimed };
+  } catch (err) {
+    await client.query('ROLLBACK').catch((rollbackErr) => logOr(log).error({ err: rollbackErr, noteId, workspaceId, chunkId }, 'chunk_gate_rollback_failed'));
+    throw err;
+  }
+}
+
+/**
+ * Paid work, recorded as it starts (usage_events, which the schema had for this
+ * and nothing wrote): a speech job, or the fast path's Gemini call, with the
+ * audio seconds the transcoder measured itself. The daily spend cap sums these
+ * (spend-repo.cjs), so it counts what was actually sent to be paid for, not
+ * what a client reported or a ledger key allowed. Best-effort: a failed write is
+ * logged and never fails the pipeline (the cap fails open the same way).
+ */
+async function recordPaidWork(queryable, { noteId, workspaceId, uid, event, audioSeconds, model, log }) {
+  try {
+    // A parent deleted meanwhile (note or account) becomes NULL rather than
+    // failing the foreign key: the speech was paid for either way.
+    await queryable.query(
+      `INSERT INTO usage_events (uid, workspace_id, note_id, event, model, audio_seconds)
+       VALUES ((SELECT uid FROM users WHERE uid = $1),
+               (SELECT id FROM workspaces WHERE id = $2),
+               (SELECT id FROM notes WHERE id = $3),
+               $4, $5, $6)`,
+      [uid || null, workspaceId || null, noteId || null, event, model || null, audioSeconds],
+    );
+  } catch (err) {
+    logOr(log).error({ err, noteId, workspaceId, userId: uid, event }, 'paid_work_record_failed');
+  }
+}
+
+async function fetchTailWords(client, { noteId, fromMs }) {
+  const { rows } = await client.query(
+    `SELECT id, start_ms AS "startMs", end_ms AS "endMs", text, confidence, speaker_tag AS "speakerTag"
+       FROM transcript_lines
+       WHERE note_id = $1 AND start_ms >= $2
+       ORDER BY start_ms ASC`,
+    [noteId, fromMs],
+  );
+  return rows;
+}
+
+/**
+ * End of the chunk immediately before `idx`, in absolute ms.
+ *
+ * The overlap dedup uses this rather than text similarity: what the prior
+ * chunk covered is recorded in audio_chunks, so it is a fact rather than
+ * something to infer from comparing strings. Returns null when there is no
+ * prior row — errored, or purged by a retry — and the caller then keeps every
+ * word, because duplicated speech is a nuisance and dropped speech in a
+ * meeting transcript is not.
+ */
+async function fetchPriorChunkEndMs(client, { noteId, idx }) {
+  const { rows } = await client.query(
+    `SELECT end_sec FROM audio_chunks
+      WHERE note_id = $1 AND idx = $2`,
+    [noteId, idx - 1],
+  );
+  if (!rows[0] || rows[0].end_sec == null) return null;
+  return Math.round(Number(rows[0].end_sec) * 1000);
+}
+
+async function insertTranscriptLines(client, { noteId, chunkId, lines, log }) {
+  // CLAUDE.md §2 PII invariant: redact BEFORE storage so embedder/summarizer/
+  // search downstream see only redacted text. Same shape contract as
+  // fast-path's call to redactTranscriptLines.
+  const { lines: redacted, counts } = _redaction.redactTranscriptLines(lines || []);
+  if (log && counts && Object.keys(counts).length > 0) {
+    log.info({ noteId, chunkId, redactionCounts: counts }, 'transcript_redacted_chunked');
+  }
+  for (let i = 0; i < redacted.length; i++) {
+    const l = redacted[i];
+    await client.query(
+      `INSERT INTO transcript_lines (note_id, chunk_id, idx, speaker_tag, start_ms, end_ms, text, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (chunk_id, idx) WHERE chunk_id IS NOT NULL DO NOTHING`,
+      [noteId, chunkId, i, l.speakerTag || null, l.startMs, l.endMs, l.text, l.confidence],
+    );
+  }
+}
+
+async function deleteTranscriptLinesForNote(client, noteId) {
+  await client.query('DELETE FROM transcript_lines WHERE note_id = $1', [noteId]);
+}
+
+/**
+ * The note's chunk progress, for the progress mirror; null when the note is
+ * gone or isn't in the task's workspace (CLAUDE.md §1).
+ */
+async function chunkProgress(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    `SELECT chunks_done AS "done", chunks_total AS "total" FROM notes
+      WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+    [noteId, workspaceId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * The note's author and workspace, for the dead-letter row and the author's
+ * notification when a task carried no uid. Scoped to the task's workspace when
+ * it has one (CLAUDE.md §1): a note id from another workspace matches nothing,
+ * so that note's author is never told about this task. A task without one gets
+ * the note's own workspace. Null when nothing matches.
+ */
+async function noteAuthor(client, { noteId, workspaceId }) {
+  const { rows } = workspaceId
+    ? await client.query(
+      'SELECT author_uid AS "uid", workspace_id AS "workspaceId" FROM notes WHERE id = $1 AND workspace_id = $2',
+      [noteId, workspaceId],
+    )
+    : await client.query(
+      'SELECT author_uid AS "uid", workspace_id AS "workspaceId" FROM notes WHERE id = $1',
+      [noteId],
+    );
+  return rows[0] || null;
+}
+
+async function getChunkRow(client, chunkId) {
+  const { rows } = await client.query(
+    `SELECT id, note_id AS "noteId", idx, start_sec AS "startSec", end_sec AS "endSec",
+            storage_path AS "storagePath", status, stt_operation_id AS "sttOperationId"
+       FROM audio_chunks WHERE id = $1`,
+    [chunkId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * The fast path's whole result, in one transaction: 'ready', the (already
+ * redacted) transcript lines, the summary, action items and key decisions, and
+ * the "ready" notice (note-notices.cjs), enqueued after the commit: a short
+ * recording's author is told too. `lines` are `{ startMs, text }`. Throws after
+ * a rollback; a failed rollback is logged (never swallowed). Returns the notice.
+ */
+// A kickoff delivered twice (or a stalled attempt waking after its retry
+// finished) must not overwrite the finished note: that would lose the user's
+// edits since, and overlapping runs could leave the two stores with different
+// summaries. The second commit throws NOTE_MOVED_ON, which handle() acknowledges.
+const FAST_PATH_IN_PROGRESS = ['queued', 'chunking', 'transcribing'];
+
+async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary, model, traceId = null }, log, {
+  enqueueNotice = (args) => require('@algominutes/ai/notify.cjs').enqueueNotice(args),
+} = {}) {
+  const client = await pool.connect();
+  let notice = null;
+  // The recording's traceId for the notice row and its task (minted before the
+  // write only if the caller had none, so both agree).
+  const trace = traceId || randomUUID();
+  try {
+    await client.query('BEGIN');
+    await upsertNoteStatus(client, { noteId, workspaceId, status: 'ready', onlyIfStatus: FAST_PATH_IN_PROGRESS });
+    await deleteTranscriptLinesForNote(client, noteId);
+    for (const l of lines) {
+      await client.query(
+        `INSERT INTO transcript_lines (note_id, speaker_tag, start_ms, end_ms, text, confidence)
+           VALUES ($1, NULL, $2, $2, $3, NULL)`,
+        [noteId, l.startMs || 0, l.text],
+      );
+    }
+    await client.query(
+      `INSERT INTO summaries (note_id, gist, long_summary, topics, model, chapters)
+         VALUES ($1, $2, $3, $4, $5, '[]'::jsonb)
+       ON CONFLICT (note_id) DO UPDATE
+         SET gist = EXCLUDED.gist, long_summary = EXCLUDED.long_summary,
+             topics = EXCLUDED.topics, model = EXCLUDED.model,
+             chapters = EXCLUDED.chapters, generated_at = NOW()`,
+      [noteId, summary.gist || '', null, JSON.stringify(summary.actionItems || []), model || null],
+    );
+    await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
+    for (const item of summary.actionItems || []) {
+      await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, item]);
+    }
+    await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
+    for (const dec of summary.keyDecisions || []) {
+      await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
+    }
+    notice = await recordNotice(client, { noteId, workspaceId, kind: 'note_ready', traceId: trace });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch((rollbackErr) => logOr(log).error({ err: rollbackErr, noteId, workspaceId }, 'fast_path_rollback_failed'));
+    throw err;
+  } finally {
+    client.release();
+  }
+  if (notice) await enqueueNotice({ notice, traceId: trace, log: logOr(log) });
+  return notice;
+}
+
+module.exports = {
+  completeChunkGate,
+  recordPaidWork,
+  noteExists,
+  noteStatus,
+  fetchPriorChunkEndMs,
+  upsertNoteStatus,
+  insertAudioChunkRow,
+  setChunkOperation,
+  markChunkDone,
+  claimSummarizerEnqueue,
+  claimEmbedderEnqueue,
+  fetchTailWords,
+  insertTranscriptLines,
+  deleteTranscriptLinesForNote,
+  getChunkRow,
+  chunkProgress,
+  noteAuthor,
+  persistFastPathResult,
+};

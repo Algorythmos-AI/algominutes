@@ -9,11 +9,16 @@
 # authoritative check. It matches the common one-liner idioms and allowlists the
 # known repo/mirror sites.
 #
-# ALLOWLIST (legitimate repo + mirror writers):
+# ALLOWLIST (legitimate repo + mirror writers), same as check-no-direct-firestore.mjs:
 #   - packages/db/src/notes-repo.ts             (the repo layer)
-#   - services/api/src/routes/process-intelligence.js (ported error-state Firestore mirror)
+#   - packages/db/src/note-terminal.cjs         (terminal-failure writer: PG first, then mirror)
+#   - packages/db/src/mirror-repair.ts          (the sweep's mirror repair: PG read, precondition write)
 #   - services/transcoder/src/firestore-mirror.js
-#   - services/summarizer/src/handler.js        (Cloud Run mirror; tracked TODO)
+#
+# (services/api/src/routes/process-intelligence.js was allowlisted here as a
+#  "ported mirror" and hid six direct note-status writes plus an unguarded
+#  cross-tenant Postgres upsert. It now goes through notes-repo; never
+#  allowlist a whole route file again.)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,12 +28,13 @@ TARGETS=(
   "$ROOT/services"
   "$ROOT/packages/db"
 )
+# One-line writes are covered syntax-aware by check-no-direct-firestore.mjs
+# (run at the end, which also catches multi-line writes). Kept here: any direct
+# reference to the notes collection outside the allowlisted layer.
 PATTERNS=(
-  '\.doc\([^)]*\)\.(set|update|delete)\('
-  'noteRef\.(set|update|delete)\('
   "collection\((['\"])notes\1\)"
 )
-ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|services/api/src/routes/process-intelligence\.js|services/transcoder/src/firestore-mirror\.js|services/summarizer/src/handler\.js)'
+ALLOWLIST_RE='(packages/db/src/notes-repo\.ts|packages/db/src/note-terminal\.cjs|packages/db/src/mirror-repair\.ts|services/transcoder/src/firestore-mirror\.js)'
 
 found=0
 for t in "${TARGETS[@]}"; do
@@ -45,8 +51,10 @@ done
 
 if [ "$found" -ne 0 ]; then
   echo
-  echo "ERROR: direct Firestore note mutation outside the repo/mirror layer."
-  echo "Route note writes through lib/notes-repo.ts (see CLAUDE.md §2)."
+  echo "ERROR: direct reference to the notes collection outside the repo/mirror layer."
+  echo "Route note writes through @algominutes/db (notes-repo) — CLAUDE.md §1."
   exit 1
 fi
-echo "OK: no direct Firestore note mutations outside the allowlisted layer."
+
+# Document writes (any formatting, multi-line included): syntax-aware.
+cd "$ROOT" && node scripts/check-no-direct-firestore.mjs

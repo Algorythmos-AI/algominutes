@@ -39,7 +39,7 @@ struct PaywallView: View {
                 }
                 .padding(Theme.Spacing.xl)
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             .navigationTitle("AlgoMinutes Pro")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -63,7 +63,7 @@ struct PaywallView: View {
             Text(contextHeadline)
                 .font(Typography.title())
                 .foregroundStyle(Theme.heading)
-            Text("Unlimited recordings, longer meetings, and priority processing.")
+            Text("1,500 minutes a month, and every note searchable and summarised.")
                 .font(Typography.body(15))
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -312,7 +312,8 @@ struct TrialBanner: View {
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
-        if env.billing.isTrialing, let days = env.billing.trialDaysRemaining {
+        // Only with a paywall to open: without one, the banner's tap goes nowhere.
+        if AppConfig.paywallEnabled, env.billing.isTrialing, let days = env.billing.trialDaysRemaining {
             Button {
                 env.billing.presentPaywall(.manual)
             } label: {

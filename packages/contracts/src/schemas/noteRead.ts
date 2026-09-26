@@ -4,7 +4,7 @@
 // transcript is only reachable here. Two response variants: the first page
 // carries note + summary + transcript; a cursor page carries transcript only.
 import { z } from './zod';
-import { NoteStatus, NoteType } from './note';
+import { Chapter, NoteStatus, NoteType } from './note';
 import { DateOnly, IsoDateTime, RedactionMeta } from './common';
 import { TranscriptLine, TranscriptPage } from './transcript';
 
@@ -30,7 +30,8 @@ export const NoteReadMeta = z
   .object({
     id: z.string(),
     workspaceId: z.string(),
-    title: z.string(),
+    /** Null until the note is titled: the kickoff doesn't set one (notes.title is nullable). */
+    title: z.string().nullable(),
     status: NoteStatus,
     sourceType: NoteType,
     sourceUrl: z.string().nullable(),
@@ -80,6 +81,8 @@ export const NoteReadSummary = z
     generatedAt: IsoDateTime.nullable(),
     actionItems: z.array(ActionItem),
     keyDecisions: z.array(KeyDecision),
+    /** Sections of a long recording; [] for a short one or an older summary. */
+    chapters: z.array(Chapter),
   })
   .openapi('NoteReadSummary');
 

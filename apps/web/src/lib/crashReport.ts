@@ -1,17 +1,13 @@
 /**
- * Report a web crash so it is as findable as an iOS one.
+ * Report a web crash so it is as findable as an iOS one: a fire-and-forget
+ * POST to the api's public /v1/client-error, which logs it where the log-based
+ * alerting sees it. No third-party SDK, no bundle cost.
  *
- * iOS has Crashlytics — which is how the Sign in with Apple crash was located
- * in under a minute after five TestFlight builds had shipped it. The web app
- * had nothing: `componentDidCatch` only wrote to `console.error`, and there was
- * no `window.onerror` or `unhandledrejection` handler anywhere, so every
- * unhandled rejection on the note-creation path was invisible. A doctor whose
- * screen went blank had no way to tell us and we had no way to know.
- *
- * Deliberately small: a fire-and-forget beacon into Cloud Logging via
- * `/api/client-error`, where the existing log-based alerting can see it. No
- * third-party SDK, no bundle cost, nothing new to authorise.
+ * It goes cross-origin (the api isn't on the site's origin), so it's a fetch
+ * with keepalive, not sendBeacon: a beacon can't carry a JSON body across
+ * origins without a CORS preflight, which beacons don't make.
  */
+import { CLIENT_HEADER_VALUE, originsFromEnv } from './api/config';
 
 /** Never let reporting a crash cause one. */
 let sent = 0;
@@ -22,40 +18,46 @@ function truncate(value: unknown, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-export function reportCrash(kind: string, error: unknown, extra?: Record<string, unknown>): void {
+/** Where reports go; null when the build has no api origin (a local build), so nothing is sent. */
+function endpoint(): string | null {
+  try {
+    return `${originsFromEnv().api}/v1/client-error`;
+  } catch {
+    // silent-catch-ok: an unconfigured build has nowhere to report to; the crash still shows on screen.
+    return null;
+  }
+}
+
+export function reportCrash(kind: string, error: unknown, extra?: { componentStack?: string; source?: string }): void {
   // A crash loop must not turn into a request loop.
   if (sent >= MAX_PER_SESSION) return;
+  const url = endpoint();
+  if (!url) return;
   sent += 1;
 
   const err = error as { message?: unknown; stack?: unknown; name?: unknown } | null;
+  // ClientErrorReport (@algominutes/contracts): all optional, each capped server-side too.
   const body = JSON.stringify({
-    kind,
+    kind: truncate(kind, 100),
     name: truncate(err?.name, 100),
     message: truncate(err?.message ?? error, 500),
     // Enough to identify the frame; not enough to be a payload.
     stack: truncate(err?.stack, 2000),
     url: truncate(typeof location !== 'undefined' ? location.pathname : '', 200),
     userAgent: truncate(typeof navigator !== 'undefined' ? navigator.userAgent : '', 300),
-    at: new Date().toISOString(),
-    ...(extra || {}),
+    ...(extra?.componentStack ? { componentStack: truncate(extra.componentStack, 2000) } : {}),
+    ...(extra?.source ? { source: truncate(extra.source, 200) } : {}),
   });
 
-  try {
-    // sendBeacon survives the page being torn down, which is exactly when a
-    // crash report is most likely to be lost.
-    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-      navigator.sendBeacon('/api/client-error', new Blob([body], { type: 'application/json' }));
-      return;
-    }
-    void fetch('/api/client-error', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      keepalive: true,
-    }).catch((err) => console.warn('crash_report_failed', err));
-  } catch (err) {
-    console.warn('crash_report_failed', err);
-  }
+  void fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-AlgoMinutes-Client': CLIENT_HEADER_VALUE },
+    body,
+    keepalive: true,
+    credentials: 'omit',
+  }).catch(() => {
+    // silent-catch-ok: this is the last channel; a report that can't be sent has nowhere left to go.
+  });
 }
 
 /**
@@ -68,10 +70,8 @@ export function installGlobalCrashHandlers(): void {
   if (typeof window === 'undefined') return;
 
   window.addEventListener('error', (event) => {
-    reportCrash('window.onerror', event.error ?? event.message, {
-      source: truncate((event as ErrorEvent).filename, 200),
-      line: (event as ErrorEvent).lineno,
-    });
+    const e = event as ErrorEvent;
+    reportCrash('window.onerror', e.error ?? e.message, { source: `${e.filename ?? ''}:${e.lineno ?? ''}` });
   });
 
   window.addEventListener('unhandledrejection', (event) => {

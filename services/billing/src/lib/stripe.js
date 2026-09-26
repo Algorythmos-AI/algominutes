@@ -25,6 +25,13 @@ export function getStripe() {
   }
   _stripe = new Stripe(key, {
     apiVersion: process.env.STRIPE_API_VERSION || '2024-06-20',
+    // A stand-in Stripe for tests (and stripe-mock): unset in every deployed
+    // environment, where the SDK talks to api.stripe.com.
+    ...(process.env.STRIPE_API_HOST ? {
+      host: process.env.STRIPE_API_HOST,
+      port: Number(process.env.STRIPE_API_PORT) || undefined,
+      protocol: process.env.STRIPE_API_PROTOCOL || 'https',
+    } : {}),
   });
   return _stripe;
 }

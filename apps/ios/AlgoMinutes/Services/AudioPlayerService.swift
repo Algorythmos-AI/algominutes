@@ -1,5 +1,4 @@
 import AVFoundation
-import FirebaseStorage
 import MediaPlayer
 import Observation
 
@@ -48,12 +47,14 @@ final class AudioPlayerService {
 
     private let session: AudioSessionCoordinator
     private let store: RecordingStore
+    private let api: APIClient
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var itemObservation: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
 
-    init(session: AudioSessionCoordinator, store: RecordingStore) {
+    init(session: AudioSessionCoordinator, store: RecordingStore, api: APIClient) {
+        self.api = api
         self.session = session
         self.store = store
     }
@@ -76,17 +77,15 @@ final class AudioPlayerService {
         case .local(let url):
             sizeBytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
             attach(url: url, noteId: note.id)
-        case .remote(let path):
+        case .remote:
             isLoading = true
             defer { isLoading = false }
             do {
-                let ref = Storage.storage().reference(withPath: path)
-                // Metadata and URL in one round trip each; the size is wanted
-                // for the header regardless of whether playback starts.
-                async let metadata = ref.getMetadata()
-                async let url = ref.downloadURL()
-                sizeBytes = try await metadata.size
-                attach(url: try await url, noteId: note.id)
+                // The api checks membership and signs a 15-minute GET for the
+                // note's own object (the recordings bucket isn't readable directly).
+                let url = try await api.noteAudioURL(noteId: note.id, workspaceId: note.workspaceId)
+                sizeBytes = nil
+                attach(url: url, noteId: note.id)
             } catch {
                 AppLog.error("audio_resolve_failed: \(error)")
                 self.error = .loadFailed

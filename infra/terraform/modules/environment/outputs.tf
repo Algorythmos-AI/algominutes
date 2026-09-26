@@ -98,3 +98,12 @@ output "wif_provider_name" {
   description = "Full resource name of the GitHub WIF provider — set as workload_identity_provider in the deploy workflow."
   value       = google_iam_workload_identity_pool_provider.github.name
 }
+
+output "bastion_ssh_command" {
+  description = "How to reach the in-VPC proof VM (null when enable_bastion = false)."
+  value = var.enable_bastion ? join(" ", [
+    "gcloud compute ssh", google_compute_instance.bastion[0].name,
+    "--zone", google_compute_instance.bastion[0].zone,
+    "--project", var.project_id, "--tunnel-through-iap",
+  ]) : null
+}

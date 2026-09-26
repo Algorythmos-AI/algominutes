@@ -1,0 +1,82 @@
+---
+// Every page's shell: the head (title, description, canonical, Open Graph),
+// the header, the footer. No client JavaScript.
+import '../styles/site.css';
+import { nav, operator } from '../lib/site';
+
+interface Props {
+  title: string;
+  description: string;
+  /** Kept out of search results (placeholders, the app, share links). */
+  noindex?: boolean;
+  /** The 404 page is served at every missing path, so it has no canonical URL. */
+  canonical?: boolean;
+}
+
+const { title, description, noindex = false, canonical: withCanonical = true } = Astro.props;
+const path = Astro.url.pathname.replace(/\.html$/, '').replace(/\/index$/, '/') || '/';
+const canonical = new URL(path, Astro.site).href;
+const fullTitle = path === '/' ? title : `${title} · AlgoMinutes`;
+const year = 2026;
+---
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    {withCanonical && <link rel="canonical" href={canonical} />}
+    {noindex && <meta name="robots" content="noindex" />}
+    <meta name="theme-color" content="#120C33" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/brand.css" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AlgoMinutes" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL('/og.png', Astro.site).href} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="AlgoMinutes: every meeting, summed up" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="/">
+          <img src="/favicon.svg" alt="" width="32" height="32" />
+          <span>AlgoMinutes</span>
+        </a>
+        <nav class="site-nav" aria-label="Main">
+          <ul>
+            {nav.map((item) => (
+              <li><a href={item.href} aria-current={path === item.href ? 'page' : undefined}>{item.label}</a></li>
+            ))}
+          </ul>
+        </nav>
+      </div>
+    </header>
+    <main id="main">
+      <div class="wrap">
+        <slot />
+      </div>
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        <ul>
+          <li><a href="/support">Support</a></li>
+          <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/terms">Terms of Service</a></li>
+          <li><a href="/delete-account">Delete your account</a></li>
+        </ul>
+        <p>© {year} {operator.name} · ABN {operator.abn} · {operator.locality}</p>
+        <p>Contact: <a href={`mailto:${operator.support}`}>{operator.support}</a></p>
+      </div>
+    </footer>
+  </body>
+</html>

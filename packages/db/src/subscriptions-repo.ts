@@ -7,7 +7,8 @@
  * States (A9.3): trialing → active | (expired →) free_floor.
  */
 import { PlanId, DEFAULT_PLAN_ID, TRIAL_DAYS, EntitlementState } from '@algominutes/contracts';
-import { getPool, isPostgresEnabled } from './db.js';
+import { getPool, isPostgresEnabled, withTx } from './db.js';
+import { ensureUser } from './workspace-access.js';
 
 export interface SubscriptionRow {
   uid: string;
@@ -55,7 +56,15 @@ export async function deviceHasPriorTrial(deviceHash: string): Promise<boolean> 
  */
 export async function ensureTrial(
   uid: string,
-  opts: { deviceHash?: string; platform?: 'ios' | 'android' | 'web'; emailPresent?: boolean } = {},
+  opts: {
+    deviceHash?: string;
+    platform?: 'ios' | 'android' | 'web';
+    emailPresent?: boolean;
+    /** The caller's claims: the user row is created from them if this is their first write. */
+    user?: { email?: string | null; name?: string | null };
+    /** The request logger, so a rollback failure carries its trace. */
+    log?: { error: (o: any, m?: string) => void };
+  } = {},
 ): Promise<SubscriptionRow> {
   if (!isPostgresEnabled()) {
     return {
@@ -77,26 +86,31 @@ export async function ensureTrial(
   }
   // Unknown platform (server-to-server / tests): default to eligible.
 
-  if (eligible) {
-    const { rows } = await getPool().query(
-      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, trial_device_hash)
-         VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval, $3)
-       ON CONFLICT (uid) DO NOTHING
-       RETURNING *`,
-      [uid, String(TRIAL_DAYS), opts.deviceHash ?? null],
-    );
-    return rows[0] ?? (await getSubscription(uid))!;
-  }
-
-  // Not eligible for a fresh trial → open on the free floor (no trial_end set).
-  const { rows } = await getPool().query(
-    `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_device_hash)
-       VALUES ($1, 'free', 'active', 'free_floor', $2)
-     ON CONFLICT (uid) DO NOTHING
-     RETURNING *`,
-    [uid, opts.deviceHash ?? null],
-  );
-  return rows[0] ?? (await getSubscription(uid))!;
+  // subscriptions.uid is a foreign key to users, and this can be a new user's
+  // first write (a YouTube import creates no upload session first). So the
+  // user row is ensured in the same transaction; ensureUser also refuses a
+  // deleted account (ACCOUNT_DELETED).
+  const created = await withTx(async (client) => {
+    await ensureUser(client, { uid, email: opts.user?.email, name: opts.user?.name });
+    const { rows } = eligible
+      ? await client.query(
+        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, trial_device_hash)
+           VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval, $3)
+         ON CONFLICT (uid) DO NOTHING
+         RETURNING *`,
+        [uid, String(TRIAL_DAYS), opts.deviceHash ?? null],
+      )
+      // Not eligible for a fresh trial → open on the free floor (no trial_end set).
+      : await client.query(
+        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_device_hash)
+           VALUES ($1, 'free', 'active', 'free_floor', $2)
+         ON CONFLICT (uid) DO NOTHING
+         RETURNING *`,
+        [uid, opts.deviceHash ?? null],
+      );
+    return rows[0] as SubscriptionRow | undefined;
+  }, { log: opts.log, fields: { userId: uid } });
+  return created ?? (await getSubscription(uid))!;
 }
 
 /** Pure, server-time derivation of the current entitlement state. */

@@ -63,7 +63,7 @@ export default function Waveform({
 
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      try { source.disconnect(); } catch (_e) { /* node already gone */ }
+      try { source.disconnect(); } catch (_e) { /* silent-catch-ok: the node is already disconnected on teardown */ }
       ctxAudio.close().catch((closeErr) => console.warn('waveform_audioctx_close_failed', closeErr));
     };
   }, [stream, color, background]);

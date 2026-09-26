@@ -1,0 +1,86 @@
+rules_version = '2';
+
+// Firestore is a cache. The server writes it through the Admin SDK, which these
+// rules don't apply to; Postgres is the source of truth (CLAUDE.md §1). Clients
+// (iOS, web) may only:
+//   - read their own workspace doc and their own notes;
+//   - create their workspace doc at sign-in, and a note doc before its upload;
+//   - make the few small note updates the app does itself (upload path, retry,
+//     the stuck-note watchdog, auto-retitle).
+// Anything else is denied, including deleting a note: that is
+// POST /v1/notes/delete (Postgres first, then this doc, then the audio).
+// Tested against the emulator: tests/rules/firestore-rules.test.ts (CI job
+// firestore-rules). Released by Terraform (modules/environment/firebase-rules.tf).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Workspaces are personal today: workspace_<uid>.
+    function ownWorkspace(ws) {
+      return signedIn() && ws == 'workspace_' + request.auth.uid;
+    }
+
+    match /workspaces/{ws} {
+      allow get: if ownWorkspace(ws);
+
+      // The sign-in bootstrap (iOS AuthService, web App.tsx). The server owns it after that.
+      allow create: if ownWorkspace(ws)
+        && request.resource.data.keys().hasOnly(['name', 'ownerId', 'members'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.members == [request.auth.uid]
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 100;
+
+      allow update, delete: if false;
+
+      match /notes/{noteId} {
+        function isMine() {
+          return ownWorkspace(ws) && resource.data.authorId == request.auth.uid;
+        }
+
+        // The object name the api expects for this note (storage-paths.cjs).
+        function validStoragePath(p) {
+          return p is string
+            && p.matches('^(recordings|imports|scans)/' + ws + '/' + noteId + '([.][a-z0-9]{1,8})?$');
+        }
+
+        function changed() {
+          return request.resource.data.diff(resource.data).affectedKeys();
+        }
+
+        // The notes list queries `authorId == uid`, which this admits.
+        allow get, list: if isMine();
+
+        allow create: if ownWorkspace(ws)
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.workspaceId == ws
+          && request.resource.data.keys().hasOnly([
+            'title', 'status', 'type', 'mimeType', 'duration', 'sourceUrl', 'storagePath',
+            'rawText', 'wordCount', 'transcriptTruncated', 'transcript', 'summary',
+            'workspaceId', 'authorId', 'createdAt', 'updatedAt'
+          ])
+          && (
+            request.resource.data.status in ['processing', 'queued']
+            // A scanned or pasted text note is complete on the device: the user's own text.
+            || (request.resource.data.status == 'ready' && request.resource.data.type == 'scan_text')
+          )
+          && (!('storagePath' in request.resource.data) || validStoragePath(request.resource.data.storagePath));
+
+        allow update: if isMine()
+          && changed().hasOnly([
+            'storagePath', 'status', 'errorMessage', 'retryAttempt', 'diagnosticCode', 'title', 'updatedAt'
+          ])
+          // A client may re-queue (a retry) or give up (the watchdog); only the server marks progress or 'ready'.
+          && (!changed().hasAny(['status']) || request.resource.data.status in ['queued', 'error'])
+          && (!changed().hasAny(['storagePath']) || validStoragePath(request.resource.data.storagePath))
+          && (!changed().hasAny(['title'])
+              || (request.resource.data.title is string && request.resource.data.title.size() <= 300));
+
+        allow delete: if false;
+      }
+    }
+  }
+}

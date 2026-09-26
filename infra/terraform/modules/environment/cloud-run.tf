@@ -37,6 +37,10 @@ locals {
 
   # Env every service shares.
   common_env = {
+    # Which environment this is (staging | prod). The spend cap's default is
+    # per environment (spend-guard.cjs); without it every environment read as
+    # 'production' (NODE_ENV) and staging got prod's cap.
+    ALGOMINUTES_ENV                = var.env
     NODE_ENV                       = "production"
     GOOGLE_CLOUD_PROJECT           = var.project_id
     GCLOUD_PROJECT                 = var.project_id
@@ -61,20 +65,38 @@ locals {
   # Postgres connection env for the DB-touching services (password comes from a
   # Secret Manager ref, not a plain value — see the dynamic env below).
   db_env = {
+    # Postgres is the source of truth (CLAUDE.md §1). Every @algominutes/db repo
+    # function and the api's pg-query reads are no-ops unless this is 'true' —
+    # a leftover migration toggle from the Firestore-only era. Unset, staging
+    # would silently drop note writes and dead-letter rows.
+    WRITE_POSTGRES = "true"
+    # Every pool encrypts (pg-config.cjs); the instance is ENCRYPTED_ONLY.
+    PGSSLMODE  = "require"
     PGHOST     = google_sql_database_instance.pg.private_ip_address
     PGPORT     = "5432"
     PGDATABASE = google_sql_database.app.name
     PGUSER     = google_sql_user.app.name
   }
 
-  # Per-service extra plain env, merged over common_env.
+  # Operator uids for the api's /v1/admin/* routes. Set only when there are
+  # some: an unset ADMIN_UIDS means every admin route answers 403.
+  admin_env = length(var.admin_uids) > 0 ? { ADMIN_UIDS = join(",", var.admin_uids) } : {}
+
+  # Per-service extra plain env, merged over common_env. Every name a service's
+  # src/env-spec.cjs requires must be set here, non-blank
+  # (tests/tf-env-contract.test.ts).
   service_env = {
-    api        = merge(local.db_env, { STORAGE_BUCKET = local.region_bucket["recordings"], ALLOWED_ORIGINS = var.allowed_origins })
+    api = merge(local.db_env, local.admin_env, {
+      STORAGE_BUCKET    = local.region_bucket["recordings"]
+      ALLOWED_ORIGINS   = var.allowed_origins
+      PUBLIC_SITE_URL   = var.public_site_url
+      BROADCAST_CAPTURE = var.broadcast_capture
+    })
     transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     summarizer = local.db_env
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
-    billing    = local.db_env
+    billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
     notifier   = local.db_env
   }
 
@@ -85,8 +107,11 @@ locals {
 
   # Services end users / third parties call directly. They authenticate at the
   # application layer (api: Firebase ID token; billing: store/Stripe webhook
-  # signatures), so Cloud Run IAM must admit unauthenticated requests. Every
-  # other service stays private (only run-jobs may invoke).
+  # signatures), so Cloud Run must admit unauthenticated requests. That is done
+  # by turning off the invoker IAM check (invoker_iam_disabled), not by granting
+  # run.invoker to allUsers: the organization's iam.allowedPolicyMemberDomains
+  # policy refuses any allUsers binding, so the apply would fail. Every other
+  # service keeps the check on (only run-jobs may invoke).
   public_services = ["api", "billing"]
 }
 
@@ -96,9 +121,10 @@ resource "google_cloud_run_v2_service" "services" {
   project  = var.project_id
   name     = each.key
   location = var.region
-  # Network ingress is open; *who* may invoke is IAM (see jobs_invoker and
-  # public_invoker below): workers are private, api/billing are public.
-  ingress = "INGRESS_TRAFFIC_ALL"
+  # Network ingress is open; *who* may invoke is IAM (see jobs_invoker below):
+  # workers are private, api/billing skip the invoker check (public_services).
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = contains(local.public_services, each.key)
 
   deletion_protection = false
 
@@ -109,7 +135,9 @@ resource "google_cloud_run_v2_service" "services" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = var.cloud_run_max_instances
+      # From the connection budget, so max instances x pools x PG_POOL_MAX fits
+      # the database (connection-budget.json). Also the cost guard.
+      max_instance_count = var.connection_budget.services[each.key].max_instances
     }
 
     vpc_access {
@@ -133,9 +161,13 @@ resource "google_cloud_run_v2_service" "services" {
         container_port = 8080
       }
 
-      # Plain env: common + per-service overrides.
+      # Plain env: common + per-service overrides (+ the pool cap for DB services).
       dynamic "env" {
-        for_each = merge(local.common_env, local.service_env[each.key])
+        for_each = merge(
+          local.common_env,
+          local.service_env[each.key],
+          contains(local.db_services, each.key) ? { PG_POOL_MAX = tostring(var.connection_budget.services[each.key].pool_max) } : {},
+        )
         content {
           name  = env.key
           value = env.value
@@ -199,7 +231,7 @@ resource "google_cloud_run_v2_job" "db_job" {
           limits = { cpu = "1", memory = "1Gi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env)
+          for_each = merge(local.common_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
           content {
             name  = env.key
             value = env.value
@@ -232,8 +264,9 @@ resource "google_cloud_run_v2_job" "db_job" {
 # ---------------------------------------------------------------------------
 # Task-invocation IAM
 # run-jobs is the OIDC identity Cloud Tasks carries; it needs run.invoker on
-# each service. The enqueuing services (api, transcoder, summarizer) must be
-# able to mint a token AS run-jobs -> actAs (serviceAccountUser) on it.
+# each service. The enqueuing services (api, transcoder, summarizer) and the
+# sweep (its notices step, as db-sweep or a hand-run db-job) must be able to
+# mint a token AS run-jobs -> actAs (serviceAccountUser) on it.
 # ---------------------------------------------------------------------------
 resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
   for_each = google_cloud_run_v2_service.services
@@ -245,19 +278,8 @@ resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
   member   = "serviceAccount:${google_service_account.runtime["run-jobs"].email}"
 }
 
-# api + billing are called by the app / store webhooks without a Google identity.
-resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  for_each = toset(local.public_services)
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.services[each.value].name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
 resource "google_service_account_iam_member" "act_as_jobs" {
-  for_each = toset(["run-api", "run-transcoder", "run-summarizer"])
+  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep"])
 
   service_account_id = google_service_account.runtime["run-jobs"].name
   role               = "roles/iam.serviceAccountUser"
@@ -307,8 +329,16 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
   }
-  # Only tokens from our repo are accepted at all.
-  attribute_condition = "assertion.repository == \"${var.github_repo}\""
+  # Fail-closed: a token is accepted only from THIS repo, on this environment's
+  # branch(es), in a job running in its GitHub Environment (whose protection
+  # rules apply). A workflow on any other branch, a PR ref (refs/pull/N/merge),
+  # or a job without the environment is rejected: a missing claim cannot
+  # satisfy the expression.
+  attribute_condition = join(" && ", [
+    "assertion.repository == \"${var.github_repo}\"",
+    "(${join(" || ", [for r in var.wif_allowed_refs : "assertion.ref == \"${r}\""])})",
+    "assertion.environment == \"${var.wif_github_environment}\"",
+  ])
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -345,4 +375,13 @@ resource "google_compute_router_nat" "nat" {
   region                             = var.region
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+}
+
+# POST /v1/notes/audio-url signs a short-lived GET for a note's audio. On Cloud
+# Run the storage client signs through the IAM Credentials API (signBlob) as the
+# service's own identity, which needs Token Creator on itself, and nothing wider.
+resource "google_service_account_iam_member" "api_signs_audio_urls" {
+  service_account_id = google_service_account.runtime["run-api"].name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.runtime["run-api"].email}"
 }

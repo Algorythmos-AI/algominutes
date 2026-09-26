@@ -21,7 +21,9 @@ export const AcceptTermsRequest = z
 export const SupportRequest = z
   .object({
     kind: z.enum(['contact', 'bad_transcript', 'bad_summary']),
-    message: z.string().max(4000).optional(),
+    // Accepted at any length; the server keeps the first 4000 characters, so
+    // a long pasted report is trimmed rather than refused.
+    message: z.string().optional().openapi({ description: 'Free text. The server keeps the first 4000 characters.' }),
     noteId: z.string().optional(), // reference only — the server never attaches transcript/audio
     appVersion: z.string().optional(),
     device: z.string().optional(),

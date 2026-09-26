@@ -2,12 +2,15 @@ name: docker-build
 
 # Builds every service image from the repo root (the context all the service
 # Dockerfiles assume) to prove the npm-workspaces vendoring resolves and the
-# image is coherent. Build-only — no registry push; that is the deploy
-# workflow's job (PR-07).
+# image is coherent, then boots each one (scripts/boot-smoke.sh). No registry
+# push; that is the deploy workflow's job.
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -17,15 +20,21 @@ jobs:
       matrix:
         service: [api, billing, db-job, embedder, extractor, notifier, summarizer, transcoder]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build ${{ matrix.service }} image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
           push: false
+          load: true
           tags: algominutes-${{ matrix.service }}:ci
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      # Building proves the image assembles; this proves it STARTS. A missing
+      # runtime dependency (e.g. a package only another workspace declares)
+      # builds fine and then crash-loops on Cloud Run.
+      - name: Boot smoke ${{ matrix.service }}
+        run: bash scripts/boot-smoke.sh "${{ matrix.service }}" "algominutes-${{ matrix.service }}:ci"

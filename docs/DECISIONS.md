@@ -3,6 +3,474 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The web app is rebuilt on a clean shell at /app, not split in place (2026-09-26, plan W1)
+
+- **Context.** `apps/web` was a Capacitor-era app in one 2,865-line `App.tsx`. It calls seven `/api/*` routes
+  the api no longer serves, never sends `X-AlgoMinutes-Client`, writes Firestore directly, had no router, no
+  tests and no React types (JSX was untyped). It was never deployed, and nothing in it works against today's
+  backend.
+- **Decision.** W1 deletes `App.tsx` and the four `pages/*` (the public site serves Privacy, Terms and
+  deletion now). It mounts a small, typed shell: React Router 8 (`basename: '/app'`), a layout, and
+  placeholder routes. Each feature is then rebuilt against `/v1` with tests (plan W2–W11), porting what's
+  worth keeping from `components/` and `lib/`, and deleting each legacy file as its feature lands. Git
+  history keeps the old app.
+- **Guard rails.**
+  - New code is lint-clean, with errors; legacy code is capped at today's 46 warnings, which can only
+    go down.
+  - `@types/react` is on, so JSX is typed.
+  - `apps/web` has vitest (jsdom) in CI.
+- **Hosting.**
+  - Vite `base: '/app/'`. `scripts/build-site.mjs` composes the build into the site's `dist/app` only
+    when `APP_ENABLED=true` (Vercel Preview, i.e. staging); Production keeps the "coming soon"
+    placeholder until the launch.
+  - `/app` has its own CSP (still `'self'`-only in W1; W2 and W3 add the api, billing and Firebase
+    origins, each deliberately).
+  - The CSP is enforced from the start rather than Report-Only: there's no report endpoint, and the
+    browser tests fail on any violation.
+
+## The public site: apps/site, Astro on Vercel, one origin (2026-09-26)
+
+- **What.** `apps/site`, a static Astro site with no client JavaScript, at `algominutes.algorythmos.com`:
+  home, `/privacy`, `/terms`, `/support`, `/delete-account`, and placeholders for every path the server
+  already links to (`/s/<token>`, `/billing`, `/billing/success`, `/billing/cancel`) and for `/app`. The
+  React web app (`apps/web`) mounts at `/app` on the same origin in Phase 2 (plan "site and web app").
+- **Why Astro, not the web app's own legal pages.** The store listings and the iOS app need these pages
+  now, with no sign-in, and they must render and be crawlable without JavaScript. The old web copy was
+  wrong in several places (L21). Static HTML also lets the CSP be strict: `'self'` only, with no inline
+  scripts or styles.
+- **The legal facts are data.** The Privacy Policy's processor table renders from
+  `apps/site/src/data/processing.json`. `tests/site-facts.test.ts` checks it against Terraform and the
+  code: region, Vertex location, Speech-to-Text provider and endpoint, log bucket, backups, Crashlytics.
+  A code change that makes the policy untrue fails CI.
+- **Hosting: Vercel Pro** (verified 2026-09-26: team "skalaliya's projects" is on Pro, active). The team
+  already pays for its one member, so the site adds **no cost**. Project `algominutes-site`, root
+  `apps/site`. Cloudflare stays the DNS, with DNS-only CNAMEs.
+- **Environments.**
+  - `main` → Production, `algominutes.algorythmos.com`.
+  - `integration` → the branch domain `staging.algominutes.algorythmos.com`, behind Vercel
+    Authentication.
+  - Site changes go public through the normal promotion PR.
+- **One origin, paths not subdomains.** `/app`, `/s`, `/billing` and (Phase 2) `/__/auth` all live on
+  the site's origin. The api's CORS already allows it, and Firebase sign-in on its own domain survives
+  browsers that block third-party storage. Staging's `allowed_origins` also gains the staging site.
+- **No web analytics or trackers** on the site. It keeps "No ads. No tracking." literally true.
+- **Operating surface.**
+  - The `site-build` CI job, a required check.
+  - `site-smoke`, after each deploy and daily.
+  - Five Cloud Monitoring uptime checks and one alert (within the free uptime allowance). They sit in
+    staging's project until prod exists, then move to prod (`site_uptime_host`).
+  - Runbook `docs/runbooks/site.md`. Rollback is Vercel Instant Rollback.
+
+## TestFlight launch: domain, site, api URLs, analytics and paywall (2026-09-26)
+
+- **Domain: `algorythmos.com`.** The company owns it (Cloudflare DNS, Zoho mail, renews 2026-12-06).
+  `algominutes.com` isn't registered (Verisign: no match), and a URL baked into a shipped app, or an
+  origin that receives ID tokens, must be one we control. The public site is
+  `https://algominutes.algorythmos.com` (`/privacy`, `/terms`, `/support`, `/delete-account`); mail is
+  `support@` and `privacy@algorythmos.com`. Code reads the site from `PUBLIC_SITE_URL`
+  (`@algominutes/ai/site-url.cjs`), never a literal.
+- **The api keeps its Cloud Run `run.app` URLs through external beta.** Cloud Run domain mapping isn't
+  offered in australia-southeast1, and a global load balancer for a custom api domain costs about
+  US$18 a month. A custom api domain is settled in the App Store 1.0 plan, because the build that ships
+  there keeps its URL for good. Until prod's origins exist, a Release build is made to fail rather
+  than fall back to a guessed URL.
+- **Site host: Vercel.** Operating cost: Vercel's Hobby plan is for non-commercial use only, so a
+  company's product site belongs on **Pro, US$20 per member per month** (one member). The owner
+  confirms the plan when connecting the repo. The fallback is Cloudflare Pages ($0, on the DNS we
+  already run). The web app itself stays undeployed: it still calls the legacy `/api/*`.
+- **Analytics is declared, not denied.** The app sends product events to `/v1/events` (our own
+  table, no third-party SDK). They're linked to the account and never used for tracking or
+  advertising. The privacy manifest declares Product Interaction for Analytics, and the store copy
+  says "No ads. No tracking." It no longer says "no analytics".
+- **Paywall off for internal TestFlight** (`PAYWALL_ENABLED=NO`), with every billing surface hidden,
+  because the App Store products don't exist yet. Testers get minutes through the `entitlement_grants`
+  allowlist (tester uids never in git). For external beta it turns on only after sandbox purchase,
+  restore and renewal are proven on prod; until then the 7-day reverse trial plus a beta floor.
+- **iPhone only for the first releases** (`TARGETED_DEVICE_FAMILY` 1). iPad is A6.8, after 1.0, so the
+  listing carries no iPad screenshots and makes no iPad claim.
+- **YouTube import removed from iOS** (App Review 5.2.3: downloading a third party's media).
+
+## Public services skip the invoker check instead of granting allUsers (2026-09-26, #169)
+
+- **Context.** api and billing are called without a Google identity: the app sends a Firebase ID
+  token, and the stores and Stripe send signed webhooks. So Cloud Run must admit unauthenticated
+  requests. They were made public with `roles/run.invoker` for `allUsers`. The organization enforces
+  `iam.allowedPolicyMemberDomains` (effective policy on `algominutes-staging`: only the org's own
+  customer id), which refuses that member at apply time, though `terraform plan` succeeds.
+- **Decision.** The public services set `invoker_iam_disabled = true` (Cloud Run's documented way
+  to serve publicly under domain-restricted sharing), and no binding names `allUsers` or
+  `allAuthenticatedUsers`. Every other service keeps the invoker check, so only `run-jobs` (Cloud
+  Tasks) may call it.
+- **Enforced by** `tests/tf-iam-contract.test.ts` (no `allUsers` in any `.tf`; the invoker check is off
+  for exactly api and billing) and `scripts/check-tfplan-env.mjs` (the same checks on a saved plan).
+- **Not changed.** Authentication stays at the application layer: the Firebase token on every
+  `/v1` route, and webhook signatures on billing.
+- **Open.** The managed constraint `run.managed.requireInvokerIam` would refuse this. It can't be
+  read from the project, so it's checked at the organization before the first apply (runbook
+  `resume-staging-and-deploy.md` §1). If it's enforced, the fallback is a project-level exception,
+  recorded here.
+
+## Spend cap: paid work as it starts, new kickoffs only, and a failed note rather than a dropped task (2026-09-25, PR-15)
+
+The §4.6 daily cap was wired but inert: its reader returned 0. It now reads **the audio minutes the
+transcoder sent to paid work in the last 24 hours, times a blended cost per minute**
+(`@algominutes/db/spend-repo.cjs`).
+- **Where the minutes come from:** the transcoder writes a `usage_events` row as each paid step starts.
+  Each row carries the audio seconds the transcoder measured itself (`pipeline-repo` `recordPaidWork`).
+  The schema had this table for per-call cost; nothing wrote it. The paid steps are:
+  - **Each chunk's speech job, and a whole-file job.** Recorded as soon as the job exists, before its op
+    id is saved. A crash in between restarts the job, pays again and records again. A crash after the
+    save only re-polls.
+  - **Deepgram's inline call:** every call. No op id guards its replay.
+  - **The fast path's Gemini call:** only once an answer comes back, meaning it was billed. A 429/5xx
+    outage returns none, and counting its retries would trip the cap with nothing spent.
+- **Why not the `usage_ledger` debits** (the first version): the debit is the duration the client reports.
+  An import sends none, so it was debited 0 minutes and never counted, and a client could under-report.
+  A note retried after a refund also reuses its debit key, so the rerun was never counted.
+- **Best-effort:** a failed write is logged (`paid_work_record_failed`), never fatal. A reader error fails
+  open.
+- **Window:** a rolling 24 hours rather than a calendar day, so there is no midnight cliff and no time zone
+  to choose. Migration 021 indexes `usage_events.created_at` for it. Nothing deletes `usage_events` rows
+  yet; retention is queued.
+- **The rate:** `COGS_AUD_PER_MINUTE`, default **A$0.03/min**. That is deliberately high: Google speech is
+  about US$0.016/min, and the Gemini summary is a fraction of a cent per minute. Replace it with the
+  measured blended cost (BLOCKERS A11).
+  - With the default caps, staging (A$20) allows about 660 minutes a day, and prod (A$200) about 6,600.
+  - A heavy test day on staging (the 3 h M1 run plus the weekly 3 h e2e fixture) is about 360 minutes.
+    Raise `DAILY_SPEND_CAP_AUD` for more.
+- **Only a kickoff whose note is still `queued` is stopped.** Nothing has been paid for at that point.
+  - A kickoff replayed mid-run carries on: its speech is partly paid for. A replay that failed before its
+    speech started (status already `chunking`) also carries on, a leak bounded to that one note.
+  - A poll task checks a job already paid for, so it isn't gated.
+  - **The summarizer isn't gated.** A note that reaches it has its speech paid for, and failing it would
+    throw that away for the price of one Gemini call. A regeneration would fail a note that already has
+    a good summary. Regenerations are rate-limited by the api.
+- **At the cap, the note fails; it isn't deferred.** The note is failed, Postgres first, with "We've
+  reached today's processing limit. Please try again tomorrow.". Then, **only on that transition**,
+  the terminal hooks refund the minutes (as `refund:spend_cap`), record a dead letter and notify the
+  author, and the task is acknowledged.
+  - A replay, a note that moved on, or another workspace's note fails nothing and runs no hook; it
+    carries on to the worker as it would anyway.
+  - Before, the task was acknowledged alone, and the note stayed in progress until the 3.5 h stuck-note
+    sweep.
+  - A `deferred` status with a re-drive would be a new note status. That is a three-client contract
+    change, for a state the user can resolve by retrying later.
+  - If Postgres misses the failed write, the answer is 500, so the task retries and checks the cap again.
+    On the last attempt the task is dropped with the note still queued in both stores. The stuck-note
+    sweep then fails and refunds it (as `refund:stuck`, without a notice); that beats guessing at the
+    mirror without Postgres.
+- **`ALGOMINUTES_ENV` is set on every service** (`var.env`). Cloud Run sets `NODE_ENV=production`, so
+  without it staging read as production and got prod's cap.
+- **Unchanged:** the budget alerts stay the backstop. The api doesn't refuse a kickoff at the cap; the
+  transcoder fails it and refunds.
+
+## Audio playback through api-signed URLs, not Storage rules (2026-09-25)
+
+The api's recordings bucket (`algominutes-<env>-recordings`) isn't a Firebase Storage bucket, and the iOS
+player read audio through the Firebase SDK from the default bucket, which the api never writes. Rather than
+connect the bucket to Firebase and keep a second access policy (`storage.rules`) in step with Postgres
+membership, **clients never touch the bucket**:
+- uploads go through `POST /v1/uploads` (server-minted resumable sessions);
+- playback goes through `POST /v1/notes/audio-url`: the api checks membership in Postgres, then signs a
+  15-minute V4 GET for the note's own object only (the client-supplied `storage_path` is never trusted
+  past that).
+
+Signing on Cloud Run uses the IAM Credentials API as the service's own identity, which needs
+`roles/iam.serviceAccountTokenCreator` on itself, and nothing wider. The URL is a bearer capability, so it
+is never logged, and the response is `no-store`.
+
+## Firestore security rules live in the repo, least privilege, released by Terraform (2026-09-25)
+
+Staging had **no rules released**, so every client request was denied: the app couldn't list, create or
+update a note doc. `infra/firebase/firestore.rules` is now the single source, released by Terraform
+(`modules/environment/firebase-rules.tf`), and tested against the emulator in CI (`firestore-rules`).
+- **Reads:** a user reads their own workspace doc and their own notes (the app lists by `authorId`).
+- **Creates:** the workspace doc at sign-in (`{name, ownerId, members:[uid]}`), and a note doc before its
+  upload, with a fixed field set, the caller as author, and status `processing`/`queued`. A scanned-text
+  note may be created `ready`, since it is the user's own text.
+- **Updates:** only what the app does itself: the upload path (which must be this note's own object), a
+  retry (`queued`), the watchdog giving up (`error`), and a retitle. Only the server (Admin SDK) marks
+  progress or `ready`, or writes a summary or transcript.
+- **Deletes:** never from a client. Deletion is `POST /v1/notes/delete`, Postgres first.
+- **Everything else** (rate limits, analytics, any other path) is unreachable from clients.
+- **Consequence:** the legacy web app's merge-writes (BLOCKERS R2) are refused until its `/v1` migration.
+  The iOS app's current writes all pass; its direct note delete is refused, which iOS PR-C replaces.
+
+## Alerts on the silent failures, by email (2026-09-25)
+
+PR-16c's first slice, `infra/terraform/modules/environment/alerting.tf`.
+- **What pages:** each silent-failure event the code already logs gets a log-based counter and an alert
+  policy: `storage_purge_stuck`, `delete_account_incomplete`, `sweep_step_failed`, `dead_letter_recorded`,
+  `note_failed` (more than 2 in 30 min), `gemini_model_unavailable` (a rung retired or not served in
+  Sydney: the 2026-10-20 cutover), and `auth_account_check_failed` / `readiness_db_unreachable` (Postgres
+  unreachable). A ninth policy watches Cloud Run's own 5xx count for the api and billing, so it fires even
+  when the app can't log. Each policy's documentation names the log line to read.
+- **No suppression** (CLAUDE.md §4.8): a stuck purge is re-logged every sweep, so its incident stays open
+  until fixed.
+- **Who:** email channels from `TF_VAR_alert_emails`, passed at plan time and never committed (public repo).
+  With none, incidents still open in the console.
+- **Cost:** log-based metrics on these low-volume events fall within the free allotment. Alerting bills per
+  condition per month (9 conditions per environment) at Cloud Monitoring's current rate; check the pricing
+  page before prod. Not a new service, so no new deploy, dashboard or on-call surface.
+
+## Postgres connections: a per-environment budget that fits the tier (2026-09-25)
+
+Owner decision: **cap the pools to fit the tier** rather than buy a bigger one. Staging's db-f1-micro allows
+25 connections (3 reserved). The services' pools used to add up to well over 100 at max scale (the api alone
+was 4 instances × 18), which fails with "remaining connection slots are reserved" under a burst.
+
+- **`infra/terraform/envs/<env>/connection-budget.json`** is the single source. For each service it sets max
+  instances, the pools its code opens, and `pool_max`, which becomes its `PG_POOL_MAX`: a cap on every pool
+  it opens, never a raise. Each job gets its connection count. Worst case = Σ instances × pools × pool_max +
+  jobs. That must fit `max_connections − reserved − operator_headroom`.
+- **Enforced three ways:** a Terraform precondition on the Cloud SQL instance (it fails the plan);
+  `tests/connection-budget.test.ts` (sum, tier, every service covered, pool counts matched against the code);
+  and CI runs the integration suite with every pool capped at 1.
+- **Why caps of 1 are safe:** that CI run proves no code holds a client while asking the same pool for
+  another. The sweep's advisory lock uses a dedicated connection outside the pool, and the budget counts it.
+  A small pool only queues; it never refuses.
+- **Staging:** api 1 instance (pools of 3), transcoder 2, the rest 1: worst case 19 of 20. **Prod**
+  (db-custom-1-3840, 100 connections): 83 of 95. Scaling past these is a tier change plus a budget edit.
+
+## The JSON services send the strictest CSP, not none (2026-09-25)
+
+`services/api` and `services/billing` serve JSON (and file downloads), never HTML. Both had helmet's CSP
+**disabled**, which CLAUDE.md forbids without a recorded decision, and which CodeQL flags
+(`js/insecure-helmet-configuration`). A JSON API needs no content sources at all, so both now send
+`default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. That costs nothing
+and makes a response inert if a browser ever renders one. `tests/security-headers.test.ts` pins it.
+
+## Deleting from versioned buckets deletes every generation; noncurrent versions expire in 7 days (2026-09-25)
+
+The recordings, imports and scans buckets are versioned (a guard against accidental overwrite or
+delete). But deleting an object by name only makes its live version noncurrent: the bytes stay. So
+a "deleted" note's or account's audio survived indefinitely, which contradicts
+docs/DATA-RETENTION.md ("removed from all systems … within 30 days"). The account-deletion audit
+found this.
+
+- **The app deletes every generation.** The purges (`note-storage.cjs`) list with
+  `versions: true` and delete each generation, so note and account deletion remove the bytes
+  immediately.
+- **Backstop:** a lifecycle rule on every bucket deletes noncurrent versions after
+  `noncurrent_version_retention_days` (default **7**, validated 1–30). That keeps a short undo
+  window for accidental overwrites and never outlives the 30-day promise.
+- **Versioning stays on.** Turning it off would remove the overwrite guard; the two rules above
+  make it compatible with deletion.
+
+## Primary GCP identity: algorythmos.france@gmail.com; billing is a full account (2026-09-25)
+
+Owner decision: **`algorythmos.france@gmail.com` is the official working account for
+Algorythmos' Google Cloud.** It already held Owner on both projects, Billing Account
+Administrator and the payments profile, so no IAM change is needed.
+`gcp-admin@algorythmos.com` keeps Organisation Admin, for org-level work and as
+break-glass.
+
+- **How tooling authenticates:**
+  - run `gcloud auth login algorythmos.france@gmail.com --no-activate` once per machine;
+  - Terraform uses `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token --account=…)`,
+    a token lasting about an hour;
+  - the operator's default gcloud account and ADC are never overwritten.
+- **Risk:** it's a consumer Gmail account (no org-managed recovery). Keep 2FA via an
+  authenticator or hardware key (not SMS), current recovery details, and gcp-admin
+  as the second path in.
+- **Trial end decided:** the billing account was upgraded to a full (paid) account.
+  The remaining credit ($411 of $432, as of 2026-09-25) is used first until
+  2026-11-14, then usage is billed pay-as-you-go. The budget alerts (PR-08c)
+  watch the spend.
+
+## In-VPC proof VM for staging (2026-09-25)
+
+The owner asked to prove everything on staging. Cloud SQL is private-IP only
+and Vertex is pinned to Sydney, so the proof has to run inside the VPC.
+
+- **`bastion.tf`, off by default and on for staging.** It's an e2-small Debian
+  VM with SSH only over IAP, OS Login, a Shielded VM, and its own service
+  account (the DB-password secret and Vertex, nothing else). An ephemeral IP
+  gives it outbound installs; Cloud NAT stays off.
+- **`scripts/prove-staging.sh`** checks TLS enforcement, extensions, schema at
+  head, the **integration suite against Cloud SQL itself** (in a throwaway
+  database), leak-free cleanup, and the Vertex models in-region. The deploy
+  pipeline proves the running services.
+- **Operating cost:** roughly US$15/month while enabled. It's a proving tool, not
+  a permanent fixture, so switch it off when not in use (runbook).
+
+## Gemini models: one registry, Sydney-only, gemini-3.5-flash first (2026-09-24, PR-10)
+
+The ladder was `gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash`. Per Google's
+official lifecycle table (checked today):
+- **1.5-flash retired on 2025-09-24** and **2.0-flash on 2026-06-01**;
+- **2.5-flash retires on 2026-10-20**.
+
+Worse, a 404 was treated as non-transient, so the ladder never fell through a
+retired rung: today it is effectively one model, and after 2026-10-20 every summary
+and transcript fast path would fail.
+
+- **Data residency decides the model.** Everything runs in australia-southeast1,
+  for both availability and ML processing (A4). Google's locations table serves
+  only **gemini-3.5-flash** and gemini-2.5-flash in Sydney among current Flash
+  models. None of 3.6, 3.7 or 3.8-flash, nor any flash-lite, is served there,
+  including Google's own recommended successor for 2.5-flash
+  (`gemini-3.1-flash-lite`). So the ladder is `gemini-3.5-flash → gemini-2.5-flash`.
+  3.5-flash is GA, supported to 2027-05-19 or later, with structured output, audio
+  input and 65,536 max output tokens. 2.5-flash drops out automatically on
+  2026-10-20; the ladder is filtered by date at call time.
+  **Using a newer model means relaxing residency (a global or other-region
+  endpoint). That is an owner decision, not a code change.**
+- **`packages/ai/src/models.cjs` is the only place model ids live.** It holds the
+  lifecycle dates and regions, with source links. `tests/models.test.ts` fails CI:
+  - if a model id is hard-coded anywhere else;
+  - if the primary, chat or embedding model is within 45 days of an announced
+    retirement (or of its "supported until at least" floor).
+- **The ladder falls through a 404** (model unavailable) instead of failing. Calls
+  now return `finishReason` and log `gemini_output_truncated` on `MAX_TOKENS`,
+  because thinking tokens count against `maxOutputTokens`.
+- **`vertex-smoke` preflight.** A db-job step in every deploy, after migrate and
+  before rollout. It calls every active rung with the summarizer's real template,
+  schema and 16,384-token budget on a ~40-minute synthetic transcript, plus one
+  embedding call, and fails on any error, non-`STOP` finish, or schema mismatch.
+  run-db-job gains `roles/aiplatform.user` (which its existing eval handlers also
+  lacked). **Operating cost:** about one summary call per rung, plus one
+  embedding, per deploy.
+- **Embeddings:** `text-embedding-004` retires on 2027-04-01. The successor served
+  in Sydney is `gemini-embedding-001` (supported to 2028-05-20 or later). Vectors
+  don't compare across models, so that is a planned re-embed migration (BLOCKERS),
+  not a swap.
+
+## Security baseline for a public repo (2026-09-24, PR-09)
+
+The repo is public (free CI), so anything a workflow can do, a stranger's PR
+branch might try.
+
+- **Keyless deploy is scoped to branch + environment, not just the repo.** The
+  WIF provider condition was `repository == Algorythmos-AI/algominutes`, so any
+  workflow on any branch or PR ref could mint a token for `gha-deployer`
+  (`run.admin`). Now it also requires `ref == refs/heads/integration` (staging)
+  or `refs/heads/main` (prod), plus the GitHub Environment claim
+  (`staging` / `production`). Every deploy job runs in that environment. A token
+  therefore needs both Google's check and GitHub's environment gate:
+  - staging deploys only from `integration`;
+  - production deploys only from `main`, and the owner approves each run.
+- **CodeQL** (`security-extended`):
+  - JS/TS and the workflows themselves (`actions`) run on every PR;
+  - Swift traces a real Xcode build on macOS, so it runs on iOS changes, on
+    pushes and weekly.
+  - Android/Kotlin is deferred with the Android track.
+- **Dependency review** blocks a PR that *adds* a high or critical advisory.
+  **Dependabot** is grouped, weekly, with low PR limits, covering npm, actions,
+  the Docker base images and the Terraform providers. The iOS SPM packages are
+  not covered: Dependabot can't read XcodeGen's `project.yml`.
+- **Repo settings are code** (`scripts/github-settings.sh`: dry run by default,
+  `--apply` needs the owner's go-ahead):
+  - merge methods: squash for features, merge commit for promotions;
+  - Environments with branch policies, and a reviewer on `production`;
+  - branch protection with only the always-run checks required;
+  - Dependabot security updates.
+- **Already on:** secret scanning and push protection.
+- **Operating cost:** $0. GitHub security features and Actions (including macOS)
+  are free for public repos. If the repo goes private, CodeQL and dependency
+  review need GitHub Advanced Security; record that when it happens.
+
+## Every environment has a gross-cost budget with alerts (2026-09-24, PR-08c)
+
+- **`google_billing_budget` per environment** (`modules/environment/budget.tf`):
+  - scoped to the project;
+  - monthly; staging is **A$100**;
+  - alerts at 50/90/100% of actual spend, plus a forecast-100% alert;
+  - emails go to the billing account admins (default IAM recipients), plus any
+    Cloud Monitoring channels passed in.
+  - `billing_account` is a **required** module input, so an environment cannot
+    forget its budget.
+- **Gross cost (`EXCLUDE_ALL_CREDITS`).** The trial credit (A$431, expires
+  14 Nov 2026) makes the net bill $0, so a net-cost budget would stay silent
+  until the credit ran out. Gross cost is also the post-trial monthly cost.
+- **The billing account ID is not committed** (the repo is public). The runbook
+  derives it at plan time into `TF_VAR_billing_account`.
+- **Quota project:** the Budgets API rejects user ADC without one. The override
+  (`user_project_override` + `billing_project`) lives on a `google.billing`
+  provider alias used only by the budget, so no other resource changes behaviour.
+- **The trial end is a dated decision:** upgrade to paid billing, or pause. It is
+  in the runbook, and the outcome is recorded here before 14 Nov.
+- **Operating cost:** budgets and budget emails are free. There is no new service.
+- **Not done:** automatic shutdown at 100% (a Pub/Sub budget topic → a function
+  that pauses the DB). Alerts plus a human decision are enough for staging;
+  revisit for prod (PR-35) if needed.
+
+## Migrations run inside the VPC before every rollout (2026-09-24, PR-08b)
+
+Migrations were run by hand from a laptop over the Auth Proxy. Nothing ran them
+on deploy, so a merged migration (013, 014…) would never reach staging, while
+code that depends on it would.
+
+- **Order: build → migrate → rollout → smoke** (`deploy-staging.yml`). Every image
+  is built first. db-job is pointed at this commit's image, runs `JOB_NAME=migrate`
+  inside the VPC, and must succeed before any service image rolls out. Any deploy
+  rebuilds db-job, so migrate never runs an older schema. A failed migrate leaves
+  every service on its previous image.
+- **Safe only because new migrations are expand-only, and that is now enforced.**
+  BUILD-PLAN §4.4 is expand/contract, and `006` already drops a column and sets
+  NOT NULL. Run before rollout, a contract step would break the images still
+  serving. The dual-write auditor caught that this safety claim had nothing
+  behind it. `scripts/check-migration-expand.mjs` (invariants CI) fails a *new*
+  migration that does any of the following, unless it carries
+  `-- contract: <why the serving code is compatible>`, i.e. the code that
+  stopped depending on the old shape already shipped:
+  - drop, rename or SET NOT NULL;
+  - change a column type;
+  - add a NOT NULL column without a DEFAULT;
+  - add a constraint or unique index to an existing table.
+
+  Its classifier is pinned by a test on the real history, which flags exactly
+  002, 006 and 009.
+- **One runner** (`packages/db/src/migrator.ts`) is shared by the CLI, the
+  integration harness and the job. Its properties, each covered by an integration
+  test and a mutation check:
+  - an advisory lock serializes overlapping runs;
+  - bookkeeping is atomic with the DDL;
+  - `lock_timeout` 15s stops DDL queueing behind live traffic;
+  - sha256 drift detection refuses edited history;
+  - `EXPECTED_MIGRATION_HEAD` must match the image, and the head is read back
+    from `schema_migrations` afterwards.
+- **"Smoke asserts schema at head"** is enforced by the migrate job itself, from
+  inside the VPC. GitHub has no route to the private-IP instance, and exposing
+  the schema version on a public endpoint buys nothing.
+- **Cost:** one Cloud Run Job execution per deploy (seconds of vCPU) plus one db-job
+  image build (cached).
+
+## One Postgres connection config; Cloud SQL is ENCRYPTED_ONLY (2026-09-24)
+
+Six pools (repo layer, api read path, transcoder, summarizer, embedder, migrations) each built their own
+config and disagreed: the repo layer — used by api/billing/notifier — connected **without TLS** while the
+workers forced it, after Cloud SQL once rejected unencrypted VPC-connector traffic ("pg_hba.conf rejects
+connection ... no encryption", Bug 16). Defaults also differed (`postgres` vs `algominutes`).
+
+- **`packages/ai/src/pg-config.cjs` is the single builder.** TLS via libpq-style `PGSSLMODE`: `disable` =
+  plaintext; any other value = encrypted; **unset = encrypted unless the host is local** (dev/CI). The server
+  certificate is not chain-verified (Cloud SQL private-IP certs are not public-CA; traffic stays in the VPC) —
+  encryption is what the server enforces. `sslmode` in `DATABASE_URL` is stripped so it can't override the
+  policy (pg lets it). Idle-client pool errors are always logged (the api read pool had an empty handler).
+- **Terraform:** instance `ssl_mode = ENCRYPTED_ONLY`; services get `PGSSLMODE=require`.
+- **Readiness:** `GET /v1/health/ready` (api) and `/health/ready` (billing) ping every pool with a bounded
+  3s timeout → 200 / 503; the post-deploy smoke requires both. `/health` stays DB-free for uptime probes.
+- Evidence: locally, a TLS-only Postgres (`hostssl` + self-signed cert) rejects plaintext with the exact
+  historical error; the whole integration suite passes over encrypted connections; the OLD repo pool fails
+  9 tests against it.
+
+## Branch model: `integration` = staging (default), `main` = production (2026-09-23)
+
+Owner decision. Every change lands on **`integration`** (the default branch) through a
+feature-branch PR; **`main`** only moves by a promotion PR from `integration`, so production is
+always a state that already ran on staging.
+
+- `deploy-staging.yml` deploys on pushes to `integration`; prod deploys from `main` arrive with the
+  prod environment (plan PR-35).
+- `promotion-guard.yml` fails any PR into `main` whose head is not this repo's `integration`
+  (make it a required check on `main`).
+- ci / docker-build / gitleaks / invariants / ios run on pushes to both branches and on every PR.
+- `scripts/check-migrations.sh` now diffs against the PR's base (`GITHUB_BASE_REF`, default
+  `integration`), so an edit to a migration already merged to `integration` is caught before it
+  can reach `main`.
+- Same flow the source repo used (feature → `integration` → promotion → `main`).
+
 ## A11 — release engineering plan of record (2026-09-20)
 
 The A11 plan is `docs/plans/A11-release.md`: a **strictly serial PR train** (one open PR at a time, one
@@ -352,8 +820,8 @@ for short clips untouched.
   recordings lifecycle. Both ZONAL to start (REGIONAL HA is a later prod hardening).
 - **§4.6 circuit breaker fails OPEN on a meter-read error** — a broken cost meter logs loudly but does not
   halt the whole product; the sustained-outage backstop is the budget alerts + monitoring. Trip on a real
-  over-cap read is hard (non-retryable). The spend reader is a stub (returns 0) until A9 wires
-  usage_ledger/COGS, so the breaker is present-and-wired but inert now.
+  over-cap read is hard (non-retryable). The spend reader was a stub (returns 0) until PR-15 wired the
+  usage_ledger estimate (see "Spend cap", 2026-09-25).
 - **Budgets not managed in Terraform** — they already exist (INFRASTRUCTURE §4.4); recreating would
   conflict. The prod-budget re-scope stays a manual open item.
 - **Firebase configs regenerated per env via the CLI** (runbook step 4), never copied from the client

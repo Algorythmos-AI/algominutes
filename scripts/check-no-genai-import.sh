@@ -12,6 +12,7 @@ TARGETS=(
   "$ROOT/functions"
   "$ROOT/services"
   "$ROOT/packages/ai"
+  "$ROOT/packages/db"
 )
 PATTERN="(require\(['\"]@google/generative-ai|from ['\"]@google/generative-ai)"
 

@@ -33,6 +33,9 @@ function loadShared(name) {
   }
 }
 const noteTerminal = loadShared('note-terminal.cjs');
+// The refund markNoteFailed writes in the failure's transaction.
+const { transcodeRefund } = require('./terminal-hooks');
+const { NoteGoneError, isNoteGone } = require('./note-gone');
 
 const KICKOFF = 'kickoff';
 const STT_POLL = 'stt-poll';
@@ -40,14 +43,88 @@ const STT_POLL = 'stt-poll';
 async function handle(payload, deps) {
   if (!payload || typeof payload !== 'object') throw new Error('handle: empty payload');
   const kind = payload.kind;
-  if (kind === KICKOFF) return handleKickoff(payload, deps);
-  if (kind === STT_POLL) return handleSttPoll(payload, deps);
+  try {
+    if (kind === KICKOFF) return await handleKickoff(payload, deps);
+    if (kind === STT_POLL) return await handleSttPoll(payload, deps);
+  } catch (err) {
+    // A replayed or stalled kickoff whose note moved on (another attempt, or the
+    // pipeline, finished it): nothing to do, and nothing was written.
+    if (err && err.code === 'NOTE_MOVED_ON') {
+      deps.log.info({ noteId: payload.noteId, workspaceId: payload.workspaceId }, 'kickoff_replay_after_progress');
+      return undefined;
+    }
+    // A missing Firestore doc alone doesn't prove the note is gone: Firestore
+    // answers NOT_FOUND for a wrong project or database too, and a half-failed
+    // account deletion removes docs first. Ask Postgres, the source of truth.
+    // If the note is still there, this is a real failure, so retry and let it
+    // dead-letter visibly rather than drop a live note.
+    if (isNoteGone(err) && err.where === 'firestore') {
+      const c = await deps.db.pool().connect();
+      let live;
+      try { live = await deps.db.noteExists(c, { noteId: payload.noteId, workspaceId: payload.workspaceId }); }
+      finally { c.release(); }
+      if (live) {
+        deps.log.error({ noteId: payload.noteId, workspaceId: payload.workspaceId }, 'transcoder_mirror_doc_missing');
+        throw new Error('mirror_doc_missing_for_live_note');
+      }
+    }
+    // Deleted (or not in the task's workspace) while we worked: acknowledge.
+    // Retrying would re-create nothing useful, and the terminal path would
+    // dead-letter it and push "note failed" about a note the user deleted.
+    if (isNoteGone(err)) {
+      // `constraint` names the foreign key for a 23503, so a misclassified
+      // failure (some other FK) is visible in the log.
+      deps.log.warn(
+        { noteId: payload.noteId, workspaceId: payload.workspaceId, reason: err.code, constraint: err.constraint },
+        'transcoder_note_gone',
+      );
+      return undefined;
+    }
+    throw err;
+  }
   throw new Error(`handle: unknown kind ${kind}`);
+}
+
+// A kickoff replayed by Cloud Tasks (after a crash or a timeout) resumes only a
+// note still being transcribed. One that moved on (summarizing, ready, error) is
+// acknowledged: rewriting its status would drag a finished note backwards.
+const KICKOFF_RESUMABLE = new Set(['queued', 'chunking', 'transcribing']);
+// Every kickoff status write is conditional on this, not just the first
+// (pipeline-repo upsertNoteStatus onlyIfStatus): an attempt that stalls past its
+// dispatch deadline can wake after its replay finished the note.
+const ONLY_IF_IN_PROGRESS = [...KICKOFF_RESUMABLE];
+
+// Poll tasks carry a deterministic id, so a replayed kickoff or a duplicate poll
+// chain collapses into the running one instead of polling twice (cloud-tasks.cjs).
+function pollTaskId(chunkId, poll) {
+  return `${chunkId}-stt-poll-${poll}`;
 }
 
 async function handleKickoff(payload, deps) {
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType } = payload;
+  // §4.6: what the daily spend cap counts, recorded as each paid step starts
+  // (pipeline-repo recordPaidWork).
+  const recordPaidWork = (event, audioSeconds, model) => deps.db.recordPaidWork(deps.db.pool(), {
+    noteId, workspaceId, uid: payload.uid, event, audioSeconds, model, log: deps.log,
+  });
   const { db, storage, ffmpeg, youtube, stt, fastPath, mirror, tasks, log, env, traceId, terminalHooks } = deps;
+
+  // Postgres first: a note deleted between kickoff and now must not be touched
+  // (the mirror below would otherwise be the first write, to a deleted note),
+  // and the mirror only ever shows a status Postgres holds.
+  const pre = await db.pool().connect();
+  let status;
+  try {
+    status = await db.noteStatus(pre, { noteId, workspaceId });
+    if (KICKOFF_RESUMABLE.has(status)) {
+      await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking', onlyIfStatus: ONLY_IF_IN_PROGRESS });
+    }
+  } finally { pre.release(); }
+  if (status == null) throw new NoteGoneError('postgres');
+  if (!KICKOFF_RESUMABLE.has(status)) {
+    log.info({ noteId, workspaceId, status }, 'kickoff_replay_after_progress');
+    return;
+  }
 
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'chunking' });
 
@@ -61,21 +138,28 @@ async function handleKickoff(payload, deps) {
       } catch (err) {
         if (err.isPermanent) {
           log.error({ err, noteId }, 'youtube_permanent_failure');
-          await mirror.mirrorError({
-            workspaceId,
+          // Postgres first, then the mirror (note-terminal). A Firestore-only
+          // error mirror left Postgres at 'queued', so the idempotent kickoff
+          // saw the note as still in flight and refused a retry for 3 h.
+          const outcome = await noteTerminal.markNoteFailed({
+            refund: transcodeRefund(noteId),
+            traceId: deps.traceId,
+            pool: db.pool(),
+            firestore: mirror.db(),
             noteId,
-            errorMessage: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
+            workspaceId,
+            message: err.publicMessage || 'YouTube download failed. This video may be restricted or YouTube has updated its protections. Please try again later or upload the file directly.',
+            log,
+            event: 'youtube_permanent_failure',
+            retryOnPgError: true,
           });
-          // A7.4 tail for a permanent (non-retryable) terminal failure — DLQ +
-          // refund + notify. Best-effort; never throws (guarded when the hooks
-          // aren't wired into deps).
-          if (terminalHooks) {
-            await terminalHooks.onTranscodeTerminalFailure({
-              pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
-              payload: { kind: 'kickoff', type, noteId, workspaceId, sourceUrl },
-              log,
-            });
-          }
+          // A7.4 tail for a permanent (non-retryable) terminal failure.
+          // Best-effort; never throws.
+          await terminalTail(terminalHooks, outcome, {
+            pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+            payload: { kind: 'kickoff', type, noteId, workspaceId, sourceUrl },
+            log,
+          });
           return; // Stop retries
         }
         throw err;
@@ -87,7 +171,34 @@ async function handleKickoff(payload, deps) {
       throw new Error('kickoff: neither storagePath nor sourceUrl provided');
     }
 
-    const durationSec = await ffmpeg.probeDuration(inputLocal);
+    let durationSec;
+    try {
+      durationSec = await ffmpeg.probeDuration(inputLocal);
+    } catch (err) {
+      // ffprobe/ffmpeg didn't run (not spawnable, or killed): retry.
+      if (err.transient) throw err;
+      // Permanent: the same bytes won't have a length on a retry, and guessing
+      // one would send a long recording down the single-call fast path.
+      log.error({ err, noteId, workspaceId }, 'duration_unreadable');
+      const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        message: "We couldn't read this recording's length, so it may be damaged. Please record or upload it again.",
+        log,
+        event: 'duration_unreadable',
+        retryOnPgError: true,
+      });
+      await terminalTail(terminalHooks, outcome, {
+        pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+        payload: { kind: 'kickoff', type, noteId, workspaceId, storagePath },
+        log,
+      });
+      return;
+    }
     const decision = route.routeForDuration(durationSec);
     log.info({ noteId, durationSec, decision }, 'transcoder_routed');
 
@@ -95,8 +206,10 @@ async function handleKickoff(payload, deps) {
     try {
       await db.upsertNoteStatus(client, {
         noteId,
+        workspaceId,
         status: decision === 'fast' ? 'transcribing' : 'chunking',
         durationSecProbed: durationSec,
+        onlyIfStatus: ONLY_IF_IN_PROGRESS,
       });
     } finally {
       client.release();
@@ -104,7 +217,7 @@ async function handleKickoff(payload, deps) {
 
     if (decision === 'fast') {
       await fastPath.run({
-        noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps,
+        noteId, workspaceId, type, mimeType, inputLocal, durationSec, log, deps, recordPaidWork,
       });
     } else {
       // Long path. STT_PROVIDER decides the engine: Google (null) keeps the
@@ -114,26 +227,33 @@ async function handleKickoff(payload, deps) {
       const provider = sttProvider.getProvider(env);
       if (provider) {
         await runWholeFilePath({
-          noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps,
+          noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps, recordPaidWork,
         });
       } else {
         await runChunkedPath({
-          noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps,
+          noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps, recordPaidWork,
         });
       }
     }
   } catch (err) {
+    // A vanished note is acknowledged by handle(). Mirroring an error to it
+    // is exactly the write that must not happen.
+    if (isNoteGone(err) || err.code === 'NOTE_MOVED_ON') throw err;
     log.error({ err, noteId }, 'kickoff_failed');
-    await mirror.mirrorError({ workspaceId, noteId, errorMessage: 'Processing failed.' });
+    // Rethrown for Cloud Tasks to retry, and nothing mirrored: Postgres still
+    // has the note in progress, so Firestore must not say it failed. (It used
+    // to mirror 'Processing failed.' here; the app then showed a failure the
+    // api refused to retry, as in flight.) The queue's last attempt marks both
+    // stores, in index.js.
     throw err;
   } finally {
     // Best-effort cleanup. Do not fail the task on cleanup errors.
     try { ffmpeg.cleanupTempDir(noteId); }
-    catch (cleanupErr) { log.warn({ cleanupErr, noteId }, 'tmp_cleanup_failed'); }
+    catch (cleanupErr) { log.warn({ err: cleanupErr, noteId, workspaceId }, 'tmp_cleanup_failed'); }
   }
 }
 
-async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps }) {
+async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tmpDir, log, env, deps, recordPaidWork }) {
   const { db, storage, ffmpeg, stt, mirror, tasks } = deps;
 
   const plan = route.planChunks(durationSec);
@@ -141,14 +261,59 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, status: 'transcribing', chunksTotal: plan.length });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: plan.length, onlyIfStatus: ONLY_IF_IN_PROGRESS });
   } finally {
     client.release();
   }
   await mirror.mirrorStatus({ workspaceId, noteId, status: 'transcribing' });
-  await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: plan.length });
+  // What Postgres holds: a replay may resume with chunks already done.
+  const pc = await db.pool().connect();
+  let progress;
+  try { progress = await db.chunkProgress(pc, { noteId, workspaceId }); }
+  finally { pc.release(); }
+  await mirror.mirrorProgress({ workspaceId, noteId, done: (progress && progress.done) || 0, total: plan.length });
 
   for (const slice of plan) {
+    const gcsPath = `transcoder/${noteId}/chunk-${slice.idx}.flac`;
+
+    // The row first (an upsert: a replay gets the same one), so a replayed
+    // kickoff can see how far the last attempt got.
+    let chunkId;
+    let row;
+    const c = await db.pool().connect();
+    try {
+      chunkId = await db.insertAudioChunkRow(c, {
+        noteId, idx: slice.idx, startSec: slice.startSec, endSec: slice.endSec,
+        storagePath: gcsPath,
+      });
+      row = await db.getChunkRow(c, chunkId);
+    } finally {
+      c.release();
+    }
+    if (row && row.status === 'done') {
+      log.info({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_done');
+      continue;
+    }
+    if (row && row.status === 'error') {
+      // The run already failed on this chunk (its terminal path ran). Re-mark
+      // the note (idempotent) rather than restart or re-poll a failed run.
+      log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_failed');
+      await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
+        pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+        message: 'Transcription failed for part of this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
+      });
+      return;
+    }
+    if (row && row.sttOperationId) {
+      // Its speech job is already running (and paid for): don't start another.
+      // Poll it; the task id folds this into the live poll chain when recent.
+      log.info({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_already_started');
+      await tasks.enqueue({ kind: STT_POLL, jobId: payloadJobId(), chunkId, noteId, workspaceId }, 60, pollTaskId(chunkId, 0));
+      continue;
+    }
+
     const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
     await ffmpeg.extractChunk({
       inputPath: inputLocal,
@@ -156,21 +321,8 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       endSec: slice.endSec,
       outputPath: localChunk,
     });
-
-    const gcsPath = `transcoder/${noteId}/chunk-${slice.idx}.flac`;
     const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
     fs.rmSync(localChunk, { force: true });
-
-    let chunkId;
-    const c = await db.pool().connect();
-    try {
-      chunkId = await db.insertAudioChunkRow(c, {
-        noteId, idx: slice.idx, startSec: slice.startSec, endSec: slice.endSec,
-        storagePath: gcsPath,
-      });
-    } finally {
-      c.release();
-    }
 
     const operationName = await stt.startLongRunning({
       recognizer: env.STT_RECOGNIZER || null,
@@ -178,6 +330,10 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       languageCodes: (env.LANGUAGE_CODES || 'en-US').split(',').map((s) => s.trim()).filter(Boolean),
       log,
     });
+    // Recorded as soon as the job exists, before its op id is saved: a crash in
+    // between restarts (and pays for) the chunk again, and records it again; a
+    // crash after the save re-polls it and records nothing more.
+    await recordPaidWork('stt_call', slice.endSec - slice.startSec, 'google-stt');
 
     const c2 = await db.pool().connect();
     try { await db.setChunkOperation(c2, { chunkId, operationName }); }
@@ -187,8 +343,21 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       kind: STT_POLL,
       jobId: payloadJobId(),
       chunkId, noteId, workspaceId,
-    }, 60);
+    }, 60, pollTaskId(chunkId, 0));
   }
+}
+
+/**
+ * The A7.4 tail after a terminal markNoteFailed (which wrote the refund with
+ * the failure): the dead letter, and the "failed" notice for a new failure
+ * only. A note this didn't fail (ready anyway) gets the dead letter alone; one
+ * that's gone, nothing.
+ */
+async function terminalTail(terminalHooks, outcome, hookArgs) {
+  if (!terminalHooks) return;
+  // Gone, or a verdict whose run is over (superseded: exists is false too).
+  if (!outcome.marked && !outcome.exists) return;
+  await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked });
 }
 
 function payloadJobId() {
@@ -217,6 +386,32 @@ async function handleSttPoll(payload, deps) {
     log.info({ chunkId }, 'stt_poll_already_done');
     return;
   }
+  // This chunk's terminal decision already committed (the chunk fails with
+  // its note, in one statement). That attempt may have died before the mirror
+  // and the tail, and this may be its retry, so both run again while the note
+  // is still failed: the mirror is idempotent, the note keeps its first
+  // message, the refund is net-guarded, and the notice went with the new
+  // failure. A note that has moved on (a regeneration took it to
+  // 'summarizing', or it's ready) is left alone: that failure is superseded.
+  // Nothing is polled or revived.
+  if (chunkRow.status === 'error') {
+    log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
+    const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
+      pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+      message: 'Transcription failed for part of this recording.',
+      log, event: 'stt_poll_chunk_failed', retryOnPgError: true, chunkId, onlyIfStatus: ['error'],
+    });
+    if (outcome.marked) {
+      await terminalTail(terminalHooks, outcome, {
+        pool: db.pool(), noteId, workspaceId, err: new Error('chunk_already_failed'), attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'chunk_already_failed', chunkId, noteId, workspaceId },
+        log,
+      });
+    }
+    return;
+  }
 
   // Whole-file provider jobs store a provider-prefixed operation id
   // (`assemblyai:<id>`). Route those to the whole-file poll; Google's opaque LRO
@@ -236,32 +431,35 @@ async function handleSttPoll(payload, deps) {
     // 'transcribing' and nothing anywhere reporting a problem.
     if (poll >= MAX_STT_POLLS) {
       log.error({ chunkId, noteId, polls: poll }, 'stt_poll_exhausted');
-      const c2 = await db.pool().connect();
-      try {
-        await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]);
-      } finally { c2.release(); }
       // Terminal, and decided here rather than by a retry count — this loop
-      // re-enqueues, so Cloud Tasks never sees a final attempt. mirrorError
-      // alone left Postgres at 'transcribing' forever.
-      await noteTerminal.markNoteFailed({
+      // re-enqueues, so Cloud Tasks never sees a final attempt. A Firestore-only
+      // error mirror used to leave Postgres at 'transcribing'.
+      //
+      // The chunk's error goes in the note's statement (note-terminal
+      // `chunkId`): if Postgres misses it this throws and the task retries with
+      // neither written, so the retry decides again. The tail (terminalTail)
+      // tells the author only if this is what failed the note.
+      const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(),
         firestore: mirror.db(),
         noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
         log,
         event: 'stt_poll_exhausted',
+        retryOnPgError: true,
+        chunkId,
       });
       // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
       // never sees a final attempt here — DLQ/refund/notify must be driven from
       // this terminal decision, not from the index.js final-attempt branch.
-      if (terminalHooks) {
-        await terminalHooks.onTranscodeTerminalFailure({
-          pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-          attempts: poll, traceId,
-          payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
-          log,
-        });
-      }
+      await terminalTail(terminalHooks, outcome, {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
+        log,
+      });
       return;
     }
     // jobId is carried through so the whole poll chain stays attributable in
@@ -269,34 +467,34 @@ async function handleSttPoll(payload, deps) {
     await tasks.enqueue(
       { kind: STT_POLL, jobId, chunkId, noteId, workspaceId, poll: poll + 1 },
       60,
+      pollTaskId(chunkId, poll + 1),
     );
     return;
   }
 
   if (op.error) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
-    const c2 = await db.pool().connect();
-    try {
-      await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]);
-    } finally { c2.release(); }
-    await noteTerminal.markNoteFailed({
+    // One statement for the chunk and the note, as for stt_poll_exhausted above.
+    const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(),
       firestore: mirror.db(),
       noteId, workspaceId,
       message: 'Transcription failed for part of this recording.',
       log,
       event: 'stt_operation_errored',
+      retryOnPgError: true,
+      chunkId,
     });
     // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
-    if (terminalHooks) {
-      await terminalHooks.onTranscodeTerminalFailure({
-        pool: db.pool(), noteId, workspaceId,
-        err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
-        log,
-      });
-    }
+    await terminalTail(terminalHooks, outcome, {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
+      log,
+    });
     return;
   }
 
@@ -376,34 +574,58 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
     await db.insertTranscriptLines(c4, { noteId, chunkId, lines, log });
   } finally { c4.release(); }
 
-  // Atomic completion gate.
+  // Atomic completion gate, one transaction (pipeline-repo completeChunkGate).
+  // Postgres holds 'summarizing' before the mirror shows it (below).
   const c5 = await db.pool().connect();
-  let allDone = false;
-  let summarizerClaimed = false;
-  let embedderClaimed = false;
+  let allDone;
+  let summarizerClaimed;
+  let embedderClaimed;
+  let gate;
   try {
-    allDone = await db.markChunkDone(c5, { chunkId, noteId });
-    if (allDone) {
-      summarizerClaimed = await db.claimSummarizerEnqueue(c5, noteId);
-      embedderClaimed = await db.claimEmbedderEnqueue(c5, noteId);
-    }
+    gate = await db.completeChunkGate(c5, { chunkId, noteId, workspaceId, log });
+    ({ allDone, summarizerClaimed, embedderClaimed } = gate);
   } finally { c5.release(); }
+  if (gate.finished) {
+    // Its run is over (failed, finished or gone): nothing to advance.
+    log.info({ noteId, workspaceId, chunkId, status: gate.status }, 'chunk_complete_note_finished');
+    return;
+  }
 
-  // Mirror progress.
-  const c6 = await db.pool().connect();
-  try {
-    const { rows } = await c6.query(
-      `SELECT chunks_done AS "done", chunks_total AS "total" FROM notes WHERE id = $1`, [noteId],
-    );
-    if (rows[0]) await mirror.mirrorProgress({ workspaceId, noteId, done: rows[0].done || 0, total: rows[0].total || 0 });
-  } finally { c6.release(); }
+  // Past the commit above, a failed mirror is logged, not thrown: a retry of
+  // this poll finds the chunk done and returns, so a throw here skipped the
+  // enqueues below with their claims spent, and the note waited 3.5 h for the
+  // sweep to fail it. The mirror still goes first, so a quick summarizer's
+  // 'ready' can't be overwritten by a late 'summarizing'. A doc that's gone
+  // still throws, for handle() to judge.
+  const mirrorAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      if (isNoteGone(err)) throw err;
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_mirror_failed');
+    }
+  };
+  await mirrorAfterCommit('progress', async () => {
+    const c6 = await db.pool().connect();
+    let progress;
+    try { progress = await db.chunkProgress(c6, { noteId, workspaceId }); } finally { c6.release(); }
+    if (progress) await mirror.mirrorProgress({ workspaceId, noteId, done: progress.done || 0, total: progress.total || 0 });
+  });
 
+  // Both enqueues run whatever the other does: their claims are spent, and a
+  // retry returns early, so a throw from the first used to drop the second too.
+  // The first failure is rethrown once both have been tried.
+  let enqueueErr = null;
+  const enqueueAfterCommit = async (what, fn) => {
+    try { await fn(); } catch (err) {
+      log.error({ err, noteId, workspaceId, what }, 'chunk_complete_enqueue_failed');
+      enqueueErr = enqueueErr || err;
+    }
+  };
   if (allDone && summarizerClaimed) {
-    await mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' });
-    await tasks.enqueueSummarizer({ noteId, workspaceId });
+    await mirrorAfterCommit('summarizing', () => mirror.mirrorStatus({ workspaceId, noteId, status: 'summarizing' }));
+    await enqueueAfterCommit('summarizer', () => tasks.enqueueSummarizer({ noteId, workspaceId }));
   }
   if (allDone && embedderClaimed) {
-    await tasks.enqueueEmbedder({ noteId, workspaceId });
+    await enqueueAfterCommit('embedder', () => tasks.enqueueEmbedder({ noteId, workspaceId }));
   }
 
   // Every chunk is transcribed, so the intermediate FLAC files have served
@@ -422,6 +644,7 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
   if (allDone) {
     await storage.deletePrefix(`transcoder/${noteId}/`, log);
   }
+  if (enqueueErr) throw enqueueErr;
 }
 
 // ── Whole-file provider path (AssemblyAI primary / Deepgram failover) ──────────
@@ -431,7 +654,7 @@ async function completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, de
 // tails are reused unchanged. There is no ffmpeg chunking, no GCS chunk upload,
 // no per-chunk offset math, and no overlap dedup — the provider diarises the
 // whole file in one pass and returns absolute-ms lines with GLOBAL speaker tags.
-async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps }) {
+async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, mimeType, provider, log, env, deps, recordPaidWork }) {
   const { db, mirror, tasks } = deps;
   // Bind correlation fields so the low-level provider client's log lines carry
   // noteId/workspaceId (CLAUDE.md §logging), which the generic client can't know.
@@ -439,7 +662,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
 
   const client = await db.pool().connect();
   try {
-    await db.upsertNoteStatus(client, { noteId, status: 'transcribing', chunksTotal: 1 });
+    await db.upsertNoteStatus(client, { noteId, workspaceId, status: 'transcribing', chunksTotal: 1, onlyIfStatus: ONLY_IF_IN_PROGRESS });
   } finally {
     client.release();
   }
@@ -447,13 +670,36 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   await mirror.mirrorProgress({ workspaceId, noteId, done: 0, total: 1 });
 
   let chunkId;
+  let row;
   const c = await db.pool().connect();
   try {
     chunkId = await db.insertAudioChunkRow(c, {
       noteId, idx: 0, startSec: 0, endSec: durationSec,
       storagePath: `wholefile:${provider.name}`,
     });
+    row = await db.getChunkRow(c, chunkId);
   } finally { c.release(); }
+  // A replayed kickoff: the file is already transcribed, or already submitted
+  // (and paid for). Don't submit it again; make sure it is polled.
+  if (row && row.status === 'done') {
+    plog.info({}, 'chunk_already_done');
+    return;
+  }
+  if (row && row.status === 'error') {
+    plog.warn({}, 'chunk_already_failed');
+    await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
+      pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
+      message: 'Transcription failed for this recording.', log, event: 'chunk_already_failed', retryOnPgError: true,
+    });
+    return;
+  }
+  if (row && row.sttOperationId) {
+    plog.info({}, 'chunk_already_started');
+    await tasks.enqueue({ kind: STT_POLL, jobId: payloadJobId(), chunkId, noteId, workspaceId }, 60, pollTaskId(chunkId, 0));
+    return;
+  }
 
   const languageCodes = (env.LANGUAGE_CODES || 'en-US')
     .split(',').map((s) => s.trim()).filter(Boolean);
@@ -461,6 +707,9 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   if (provider.mode === 'inline') {
     // Deepgram: synchronous API — transcribe now, while the audio is still on
     // local disk, then complete exactly like the poll path would.
+    // Paid per call, and no op id guards a replay (BLOCKERS: inline mode
+    // re-transcribes on replay), so every call is recorded.
+    await recordPaidWork('stt_call', durationSec, provider.name);
     const lines = await provider.transcribeInline({
       audioPath: inputLocal,
       languageCodes,
@@ -476,6 +725,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   // existing STT poll loop. The local file is not needed after submit — the
   // vendor already holds the audio.
   const jobId = await provider.submit({ audioPath: inputLocal, languageCodes, log: plog });
+  await recordPaidWork('stt_call', durationSec, provider.name);
   const operationName = sttProvider.encodeOperationId(provider.name, jobId);
 
   const c2 = await db.pool().connect();
@@ -486,7 +736,7 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
     kind: STT_POLL,
     jobId: payloadJobId(),
     chunkId, noteId, workspaceId,
-  }, 60);
+  }, 60, pollTaskId(chunkId, 0));
 }
 
 // Poll a whole-file provider job (AssemblyAI). Mirrors the Google poll loop's
@@ -513,50 +763,47 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   if (!op.done) {
     if (poll >= MAX_STT_POLLS) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
-      const c2 = await db.pool().connect();
-      try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
-      finally { c2.release(); }
-      await noteTerminal.markNoteFailed({
+      // One statement for the chunk and the note, as in handleSttPoll.
+      const outcome = await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId),
+        traceId: deps.traceId,
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
-        log, event: 'stt_poll_exhausted',
+        log, event: 'stt_poll_exhausted', retryOnPgError: true, chunkId,
       });
-      if (terminalHooks) {
-        await terminalHooks.onTranscodeTerminalFailure({
-          pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-          attempts: poll, traceId,
-          payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
-          log,
-        });
-      }
+      await terminalTail(terminalHooks, outcome, {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
+        log,
+      });
       return;
     }
     await tasks.enqueue(
       { kind: STT_POLL, jobId, chunkId, noteId, workspaceId, poll: poll + 1 },
       60,
+      pollTaskId(chunkId, poll + 1),
     );
     return;
   }
 
   if (op.error) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
-    const c2 = await db.pool().connect();
-    try { await c2.query(`UPDATE audio_chunks SET status='error' WHERE id=$1`, [chunkId]); }
-    finally { c2.release(); }
-    await noteTerminal.markNoteFailed({
+    // One statement for the chunk and the note, as in handleSttPoll.
+    const outcome = await noteTerminal.markNoteFailed({
+      refund: transcodeRefund(noteId),
+      traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
-      log, event: 'stt_operation_errored',
+      log, event: 'stt_operation_errored', retryOnPgError: true, chunkId,
     });
-    if (terminalHooks) {
-      await terminalHooks.onTranscodeTerminalFailure({
-        pool: db.pool(), noteId, workspaceId,
-        err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
-        log,
-      });
-    }
+    await terminalTail(terminalHooks, outcome, {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
+      log,
+    });
     return;
   }
 
@@ -569,4 +816,4 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   }
 }
 
-module.exports = { handle, handleKickoff, handleSttPoll, completeChunkAndAdvance, runWholeFilePath };
+module.exports = { handle, handleKickoff, handleSttPoll, completeChunkAndAdvance, runWholeFilePath, pollTaskId };

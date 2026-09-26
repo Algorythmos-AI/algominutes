@@ -22,7 +22,10 @@ enum APIError: LocalizedError {
     /// A9.4: the server refused a metered action because the user is out of
     /// quota (HTTP 402, `error: "quota_exceeded"`). Modelled as its own case so
     /// callers can present the paywall instead of surfacing a raw 402 alert.
-    case quotaExceeded
+    /// Carries the entitlement from the 402 body, when it had one.
+    case quotaExceeded(EntitlementResponse?)
+    /// This app version is below the server's minimum (HTTP 426, `please_update`).
+    case updateRequired
 
     var errorDescription: String? {
         switch self {
@@ -30,39 +33,92 @@ enum APIError: LocalizedError {
         case .http(let status, let message): return message ?? "Request failed (\(status))"
         case .invalidResponse: return "Invalid server response"
         case .quotaExceeded: return "You've used up your included minutes. Upgrade to keep going."
+        case .updateRequired: return "Please update AlgoMinutes to continue."
         }
     }
 }
 
-/// HTTPS client for the AlgoMinutes backend.
-/// TODO(A9-infra): api.algominutes.com is the target origin; confirm it is live
-/// (the web client still points at the old hosting origin until infra lands).
+/// HTTPS client for the AlgoMinutes backend. The origin is the build
+/// configuration's (AppConfig: Debug and Staging → staging, Release → prod).
 final class APIClient: Sendable {
-    static let baseURL = URL(string: "https://api.algominutes.com")!
+    static let baseURL = AppConfig.apiBaseURL
+    /// The billing service's own host (/v1/purchases/verify).
+    static let billingBaseURL = AppConfig.billingBaseURL
+
+    /// Every /v1 request names the client and its version; the api answers 400
+    /// without it and 426 below its minimum (services/api client-version.js).
+    static let clientHeader = "X-AlgoMinutes-Client"
+    static var clientHeaderValue: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        return "ios/\(version)"
+    }
 
     private let session: URLSession
+    private let tokenProvider: @Sendable () async throws -> String
 
-    init() {
-        let config = URLSessionConfiguration.default
-        // Parity with authedFetch's CapacitorHttp timeouts.
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 300
-        session = URLSession(configuration: config)
+    /// `session` and `idToken` are injectable for tests (URLProtocol stubs, no Firebase).
+    init(session: URLSession? = nil, idToken: (@Sendable () async throws -> String)? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            // Parity with authedFetch's CapacitorHttp timeouts.
+            config.timeoutIntervalForRequest = 20
+            config.timeoutIntervalForResource = 300
+            self.session = URLSession(configuration: config)
+        }
+        self.tokenProvider = idToken ?? {
+            guard let user = Auth.auth().currentUser else { throw APIError.notSignedIn }
+            return try await user.getIDToken()
+        }
     }
 
     private func idToken() async throws -> String {
-        guard let user = Auth.auth().currentUser else { throw APIError.notSignedIn }
-        return try await user.getIDToken()
+        try await tokenProvider()
     }
 
-    private func request(path: String, body: [String: Any], accept: String = "application/json") async throws -> URLRequest {
-        var req = URLRequest(url: Self.baseURL.appendingPathComponent(path))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    private func request(
+        path: String,
+        method: String = "POST",
+        body: [String: Any]? = [:],
+        accept: String = "application/json",
+        base: URL = APIClient.baseURL
+    ) async throws -> URLRequest {
+        var req = URLRequest(url: base.appendingPathComponent(path))
+        req.httpMethod = method
         req.setValue(accept, forHTTPHeaderField: "Accept")
+        req.setValue(Self.clientHeaderValue, forHTTPHeaderField: Self.clientHeader)
         req.setValue("Bearer \(try await idToken())", forHTTPHeaderField: "Authorization")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if method != "GET", let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         return req
+    }
+
+    /// The typed error for a non-2xx answer: a spent quota (402, with the
+    /// entitlement it carries) and an app too old for the server (426) get
+    /// their own cases.
+    static func httpError(status: Int, json: [String: Any]?) -> Error {
+        let code = json?["error"] as? String
+        if isQuota(status: status, error: code) { return APIError.quotaExceeded(entitlement(in: json)) }
+        if status == 426 { return updateRequired() }
+        return APIError.http(status: status, message: code)
+    }
+
+    /// Any endpoint's 426 raises the update screen (AppEnvironment observes
+    /// this), so an outdated app says so wherever it first hits the server.
+    static func updateRequired() -> APIError {
+        NotificationCenter.default.post(name: .algoMinutesUpdateRequired, object: nil)
+        return APIError.updateRequired
+    }
+
+    /// The 402 body's `entitlement` (EntitlementResponse), or nil.
+    private static func entitlement(in json: [String: Any]?) -> EntitlementResponse? {
+        guard let raw = json?["entitlement"] as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: raw)
+        else { return nil }
+        return try? JSONDecoder().decode(EntitlementResponse.self, from: data)
     }
 
     private func post(path: String, body: [String: Any]) async throws -> [String: Any] {
@@ -79,10 +135,7 @@ final class APIClient: Sendable {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard (200..<300).contains(http.statusCode) else {
-            if Self.isQuota(status: http.statusCode, error: json?["error"] as? String) {
-                throw APIError.quotaExceeded
-            }
-            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+            throw Self.httpError(status: http.statusCode, json: json)
         }
         return json ?? [:]
     }
@@ -93,21 +146,24 @@ final class APIClient: Sendable {
         status == 402 && error == "quota_exceeded"
     }
 
-    /// `post` variant that decodes the body into a `Decodable` rather than a
-    /// dictionary — used by the typed A7.2 upload-session endpoints.
-    private func postDecoded<T: Decodable>(path: String, body: [String: Any]) async throws -> T {
-        let req = try await request(path: path, body: body)
+    /// Send a prepared request and decode the body into a `Decodable` rather
+    /// than a dictionary (the typed upload, entitlement and purchase endpoints).
+    private func sendDecoded<T: Decodable>(_ req: URLRequest) async throws -> T {
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            if Self.isQuota(status: http.statusCode, error: json?["error"] as? String) {
-                throw APIError.quotaExceeded
-            }
-            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+            throw Self.httpError(status: http.statusCode, json: (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw APIError.invalidResponse }
+    }
+
+    private func postDecoded<T: Decodable>(path: String, body: [String: Any], base: URL = APIClient.baseURL) async throws -> T {
+        try await sendDecoded(try await request(path: path, body: body, base: base))
+    }
+
+    private func getDecoded<T: Decodable>(path: String) async throws -> T {
+        try await sendDecoded(try await request(path: path, method: "GET", body: nil))
     }
 
     // MARK: - Endpoints
@@ -119,7 +175,11 @@ final class APIClient: Sendable {
         var storagePath: String?
         var sourceUrl: String?
         var mimeType: String?
+        /// Kept for the caller's own bookkeeping (the Firestore doc); not part
+        /// of ProcessRequest, so it isn't sent.
         var retryAttempt: Int?
+        /// The recording's length: the quota check meters on it (ProcessRequest).
+        var durationSec: Double?
     }
 
     @discardableResult
@@ -132,7 +192,7 @@ final class APIClient: Sendable {
         if let p = r.storagePath { body["storagePath"] = p }
         if let u = r.sourceUrl { body["sourceUrl"] = u }
         if let m = r.mimeType { body["mimeType"] = m }
-        if let a = r.retryAttempt { body["retryAttempt"] = a }
+        if let d = r.durationSec, d > 0 { body["durationSec"] = d }
 
         // A10 #7: the process request is the trial kickoff. Bind it to the
         // device with a DeviceCheck token so the server (which hashes it into
@@ -141,7 +201,7 @@ final class APIClient: Sendable {
         // server falls back to account-level trial checks.
         // TODO(A4-apple): server-side DeviceCheck validation needs the Apple
         // DeviceCheck key configured; the client half is wired here.
-        var req = try await request(path: "api/process-audio", body: body)
+        var req = try await request(path: "v1/process", body: body)
         req.setValue(DeviceAttestationService.platformHeaderValue, forHTTPHeaderField: "X-Device-Platform")
         if let token = await DeviceAttestationService.attestationToken() {
             req.setValue(token, forHTTPHeaderField: "X-Device-Attestation")
@@ -156,9 +216,7 @@ final class APIClient: Sendable {
     // names match the contract exactly. The server creates a GCS resumable
     // session; BackgroundUploadService PUTs chunks to `sessionUri` directly.
     //
-    // TODO(A7.2): these endpoints are not built server-side yet — the paths below
-    // are provisional and the feature is gated OFF (see AppFeatureFlags). Confirm
-    // the routes when the backend lands.
+    // Routes: POST /v1/uploads, GET /v1/uploads/{id}, POST /v1/uploads/{id}/complete.
 
     struct CreateUploadSessionResponse: Decodable, Sendable {
         let uploadId: String
@@ -197,18 +255,18 @@ final class APIClient: Sendable {
             "totalBytes": totalBytes,
         ]
         if let sha256 { body["sha256"] = sha256 }
-        return try await postDecoded(path: "api/upload-session-create", body: body)
+        return try await postDecoded(path: "v1/uploads", body: body)
     }
 
     /// How many bytes the server already holds — the client's resume anchor.
     func uploadSessionStatus(uploadId: String) async throws -> UploadSessionStatus {
-        try await postDecoded(path: "api/upload-session-status", body: ["uploadId": uploadId])
+        try await getDecoded(path: "v1/uploads/\(uploadId)")
     }
 
     /// Finalise a fully-transferred session before kicking off processing.
     @discardableResult
     func completeUpload(uploadId: String) async throws -> CompleteUploadResponse {
-        try await postDecoded(path: "api/upload-session-complete", body: ["uploadId": uploadId])
+        try await postDecoded(path: "v1/uploads/\(uploadId)/complete", body: [:])
     }
 
     // MARK: - Push registration (A7.3)
@@ -223,12 +281,11 @@ final class APIClient: Sendable {
     ) async throws -> [String: Any] {
         var body: [String: Any] = ["token": token, "platform": platform]
         if let appVersion { body["appVersion"] = appVersion }
-        // TODO(A7.3): confirm the route when the notifier service lands.
-        return try await post(path: "api/register-push-token", body: body)
+        return try await post(path: "v1/push/register", body: body)
     }
 
     func search(query: String, k: Int = 12) async throws -> [SearchHit] {
-        let json = try await post(path: "api/search", body: ["query": query, "k": k])
+        let json = try await post(path: "v1/search", body: ["query": query, "k": k])
         guard let hitsRaw = json["hits"],
               let data = try? JSONSerialization.data(withJSONObject: hitsRaw) else {
             return []
@@ -238,14 +295,34 @@ final class APIClient: Sendable {
 
     @discardableResult
     func deleteAccount() async throws -> [String: Any] {
-        try await post(path: "api/delete-account", body: [:])
+        try await post(path: "v1/account/delete", body: [:])
+    }
+
+    /// A short-lived signed URL (15 minutes) to play a note's audio
+    /// (POST /v1/notes/audio-url). Clients never read the recordings bucket
+    /// directly. Don't log or persist the URL: it is a capability until it expires.
+    func noteAudioURL(noteId: String, workspaceId: String) async throws -> URL {
+        let json = try await post(path: "v1/notes/audio-url", body: ["noteId": noteId, "workspaceId": workspaceId])
+        guard let raw = json["url"] as? String, let url = URL(string: raw), url.scheme == "https" else {
+            throw APIError.invalidResponse
+        }
+        return url
+    }
+
+    /// Delete a note: Postgres first, then its Firestore doc, then its audio
+    /// (POST /v1/notes/delete). Clients can't delete note docs directly (the
+    /// Firestore rules refuse it). Returns whether a Postgres row went.
+    @discardableResult
+    func deleteNote(noteId: String, workspaceId: String) async throws -> Bool {
+        let json = try await post(path: "v1/notes/delete", body: ["noteId": noteId, "workspaceId": workspaceId])
+        return (json["deleted"] as? Bool) ?? false
     }
 
     /// Persist a manual note edit.
     ///
-    /// Goes through `/api/update-note` rather than writing Firestore directly,
+    /// Goes through `/v1/notes/update` rather than writing Firestore directly,
     /// because Postgres is the system of record: an edit written only to the
-    /// Firestore cache leaves `/api/search` and `/api/chat` serving the
+    /// Firestore cache leaves `/v1/search` and `/v1/chat` serving the
     /// pre-edit text. The endpoint writes Postgres first, then mirrors.
     ///
     /// Live since PR #58 and, until now, called by nothing on iOS.
@@ -267,7 +344,7 @@ final class APIClient: Sendable {
             if let keyPoints = summary.keyPoints { s["keyPoints"] = keyPoints }
             body["summary"] = s
         }
-        return try await post(path: "api/update-note", body: body)
+        return try await post(path: "v1/notes/update", body: body)
     }
 
     /// Save a transcription-quality rating.
@@ -284,7 +361,7 @@ final class APIClient: Sendable {
     ) async throws -> [String: Any] {
         var body: [String: Any] = ["noteId": noteId, "workspaceId": workspaceId, "rating": rating]
         if let comment, !comment.isEmpty { body["comment"] = comment }
-        return try await post(path: "api/note-feedback", body: body)
+        return try await post(path: "v1/notes/feedback", body: body)
     }
 
     /// Name a diarised speaker (ADR 0005). Renaming "Speaker 2" → a name updates
@@ -336,7 +413,7 @@ final class APIClient: Sendable {
         if let template { body["template"] = template }
         if confirmOverwrite { body["confirmOverwrite"] = true }
 
-        let req = try await request(path: "api/regenerate-summary", body: body)
+        let req = try await request(path: "v1/notes/regenerate-summary", body: body)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -350,7 +427,7 @@ final class APIClient: Sendable {
             throw RegenerateConflict.alreadyRegenerating(status: json?["status"] as? String)
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+            throw Self.httpError(status: http.statusCode, json: json)
         }
         return json?["generation"] as? Int ?? 0
     }
@@ -377,7 +454,7 @@ final class APIClient: Sendable {
             "noteId": noteId, "workspaceId": workspaceId, "scope": scope.rawValue,
         ]
         if let expiresInHours { body["expiresInHours"] = expiresInHours }
-        let json = try await post(path: "api/share-create", body: body)
+        let json = try await post(path: "v1/shares/create", body: body)
         guard let url = json["url"] as? String, let id = json["shareId"] as? String else {
             throw APIError.invalidResponse
         }
@@ -388,7 +465,7 @@ final class APIClient: Sendable {
     @discardableResult
     func revokeShareLink(noteId: String, workspaceId: String, shareId: String) async throws -> Bool {
         let json = try await post(
-            path: "api/share-revoke",
+            path: "v1/shares/revoke",
             body: ["noteId": noteId, "workspaceId": workspaceId, "shareId": shareId],
         )
         return (json["revoked"] as? Bool) ?? true
@@ -413,7 +490,7 @@ final class APIClient: Sendable {
         ]
         // Ask for the binary explicitly; the default Accept is JSON.
         let req = try await request(
-            path: "api/export-note", body: body,
+            path: "v1/export", body: body,
             accept: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
         let (data, response) = try await session.data(for: req)
@@ -421,7 +498,7 @@ final class APIClient: Sendable {
         guard (200..<300).contains(http.statusCode) else {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             if http.statusCode == 413 { throw ExportError.transcriptTooLarge }
-            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+            throw Self.httpError(status: http.statusCode, json: json)
         }
         return data
     }
@@ -442,17 +519,16 @@ final class APIClient: Sendable {
         if let cursor { body["cursor"] = cursor }
         if let limit { body["limit"] = limit }
 
-        let req = try await request(path: "api/note", body: body)
+        let req = try await request(path: "v1/notes/read", body: body)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw APIError.http(status: http.statusCode, message: json?["error"] as? String)
+            throw Self.httpError(status: http.statusCode, json: (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
         }
         return try JSONDecoder().decode(TranscriptPageResponse.self, from: data).transcript
     }
 
-    /// Streams `/api/chat`. The stream finishes on `done`, throws on transport
+    /// Streams `/v1/chat`. The stream finishes on `done`, throws on transport
     /// failure, and surfaces server-sent errors as `.serverError` events.
     ///
     /// Passing `noteId` scopes retrieval to that note —
@@ -463,20 +539,21 @@ final class APIClient: Sendable {
             let task = Task {
                 do {
                     var req = try await self.request(
-                        path: "api/chat",
+                        path: "v1/chat",
                         body: noteId.map { ["query": query, "noteId": $0] } ?? ["query": query],
                         accept: "text/event-stream"
                     )
                     // Chat streams can exceed the default request timeout.
                     req.timeoutInterval = 180
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: req)
+                    let (bytes, response) = try await self.session.bytes(for: req)
                     guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
                     guard http.statusCode == 200 else {
                         var body = Data()
                         for try await byte in bytes { body.append(byte) }
-                        let message = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String
-                        throw APIError.http(status: http.statusCode, message: message ?? "Chat failed (\(http.statusCode))")
+                        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+                        if http.statusCode == 426 { throw APIClient.updateRequired() }
+                        throw APIError.http(status: http.statusCode, message: json?["error"] as? String ?? "Chat failed (\(http.statusCode))")
                     }
 
                     // Raw byte reads: blank lines are the SSE frame delimiter and
@@ -575,24 +652,29 @@ final class APIClient: Sendable {
     //   from a validated receipt — the client posts the StoreKit JWS and reads
     //   back the resolved state; it never self-grants.
     //
-    // TODO(A9-infra): confirm these routes when services/billing lands. Paths
-    // follow the existing `api/*` convention except `track`, which the plan
-    // pins to `/v1/events`.
+    // Purchases go to the billing service's own host; entitlement and events
+    // are the api's.
 
     /// Validate a StoreKit 2 signed transaction (JWS) server-side. On success the
     /// server activates the entitlement keyed to the current user and echoes the
     /// resolved state. Mirrors `VerifyPurchaseRequest` (rail: apple_storekit).
     func verifyPurchase(jws: String) async throws -> VerifyPurchaseResponse {
         try await postDecoded(
-            path: "api/verify-purchase",
-            body: ["rail": "apple_storekit", "jwsRepresentation": jws]
+            path: "v1/purchases/verify",
+            body: ["rail": "apple_storekit", "jwsRepresentation": jws],
+            base: Self.billingBaseURL
         )
     }
 
     /// Read the server-resolved entitlement (A9.1). This is the ONLY source of
     /// truth for trial/active/free_floor state and the trial countdown.
     func fetchEntitlement() async throws -> EntitlementResponse {
-        try await postDecoded(path: "api/entitlement", body: [:])
+        try await getDecoded(path: "v1/entitlement")
+    }
+
+    /// Server-side feature switches (`AppSwitches`).
+    func fetchAppConfig() async throws -> AppConfigResponse {
+        try await getDecoded(path: "v1/config")
     }
 
     /// A9.6 funnel event. Best-effort: analytics must never block a user action,
@@ -608,4 +690,9 @@ final class APIClient: Sendable {
         body["occurredAt"] = ISO8601DateFormatter.entitlement.string(from: Date())
         return try await post(path: "v1/events", body: body)
     }
+}
+
+extension Notification.Name {
+    /// Posted when the api answers 426: this build is below its minimum.
+    static let algoMinutesUpdateRequired = Notification.Name("AlgoMinutesUpdateRequired")
 }

@@ -39,14 +39,24 @@ struct NoteContextMenu: View {
         }
         if note.status == .error {
             Button {
-                Task { _ = await env.notes.retryProcessing(note: note) }
+                // Through env.retry, like the note screen: it re-uploads a
+                // recording still on disk, and a refusal is shown.
+                Task {
+                    if case .blocked(let message) = await env.retry(note: note) {
+                        env.alertMessage = message
+                    }
+                }
             } label: {
                 Label("Retry processing", systemImage: "arrow.clockwise")
             }
         }
         Divider()
         Button(role: .destructive) {
-            env.notes.deleteNote(id: note.id)
+            let id = note.id
+            Task {
+                do { try await env.deleteNote(id: id) }
+                catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+            }
         } label: {
             Label("Delete", systemImage: "trash")
         }

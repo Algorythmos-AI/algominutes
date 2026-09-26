@@ -12,7 +12,7 @@
 // redactPII → @algominutes/ai.
 
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
-import noteFeedbackModule from '@algominutes/ai/note-feedback.cjs';
+import noteFeedbackModule from '@algominutes/db/note-feedback.cjs';
 import redactionModule from '@algominutes/ai/redaction.cjs';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 

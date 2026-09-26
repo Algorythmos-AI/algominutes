@@ -26,10 +26,12 @@ echo
 # ---------------------------------------------------------------------------
 # 1. No committed migration has been modified.
 #
-# Compared against origin/main rather than HEAD~1, so a branch that edits an
-# old migration is caught however many commits it took to get there.
+# Compared against the branch the change is going INTO (the PR base — normally
+# `integration`, or `main` for a promotion) rather than HEAD~1, so a branch that
+# edits an already-merged migration is caught however many commits it took.
+# Pushes (no PR base) compare against `integration`, the default branch.
 # ---------------------------------------------------------------------------
-BASE="${MIGRATION_BASE_REF:-origin/main}"
+BASE="${MIGRATION_BASE_REF:-origin/${GITHUB_BASE_REF:-integration}}"
 if git rev-parse --verify --quiet "$BASE" >/dev/null; then
   # Numbered migrations only. The seed-*.sql and retire-*.sql files are
   # deliberately re-runnable operator tools, not schema history.

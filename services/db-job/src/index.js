@@ -4,8 +4,9 @@
 //   gcloud run jobs execute db-job --update-env-vars JOB_NAME=verify-phase-0 --wait
 //
 // Env contract:
-//   JOB_NAME       — required. One of: verify-phase-0, backfill-pr-d.
-//   MODE           — handler-specific. e.g. backfill-pr-d takes dry-run|commit.
+//   JOB_NAME       — required. One of the HANDLERS keys below (the deploy
+//                    pipeline runs `migrate` before every rollout).
+//   MODE           — handler-specific.
 //   PGHOST/PGUSER/PGPASSWORD/PGDATABASE — set by --set-env-vars + --set-secrets at deploy time.
 //   TRACE_ID       — optional; auto-generated if absent. Mirrors lib/logger.ts contract.
 
@@ -25,27 +26,24 @@ function loadShared(name) {
 }
 
 const HANDLERS = {
+  'migrate':        () => require('./handlers/migrate.js'),
+  'sweep':          () => require('./handlers/sweep.js'),
+  'vertex-smoke':   () => require('./handlers/vertex-smoke.js'),
   'verify-phase-0': () => require('./handlers/verify-phase-0.js'),
-  'backfill-pr-d':  () => require('./handlers/backfill-pr-d.js'),
   'eval-recall':    () => require('./handlers/eval-recall.js'),
   'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
-  'debug-corpus':   () => require('./handlers/debug-corpus.js'),
+  'grant-tester':   () => require('./handlers/grant-tester.js'),
 };
 
 async function main() {
   const jobName = process.env.JOB_NAME;
   const traceId = process.env.TRACE_ID || randomUUID();
 
-  // Structured log (no console.* per CLAUDE.md §2). The shared logger
-  // exists as `shared/logger.cjs`; tolerate it not being copied yet.
-  let log;
-  try {
-    log = loadShared('logger.cjs').forContext({ traceId, service: 'db-job', jobName });
-  } catch {
-    // Fallback minimal pino-shaped logger so we never crash on logging.
-    const emit = (level, obj, msg) => process.stdout.write(JSON.stringify({ level, traceId, service: 'db-job', jobName, ...obj, msg }) + '\n');
-    log = { info: (o, m) => emit('info', o, m), warn: (o, m) => emit('warn', o, m), error: (o, m) => emit('error', o, m) };
-  }
+  // The shared structured logger (CLAUDE.md §1): Cloud Logging severity +
+  // traceId on every line. (It exports `logger`/`makeLogger`; the old
+  // `.forContext` call never existed, so every run fell back to a hand-rolled
+  // logger with no severity field.)
+  const log = loadShared('logger.cjs').logger.child({ traceId, service: 'db-job', jobName });
 
   if (!jobName) {
     log.error({}, 'job_name_missing');
@@ -65,11 +63,7 @@ async function main() {
   const { requireEnv } = loadShared('require-env.cjs');
   requireEnv(
     'db-job',
-    {
-      oneOf: [
-        { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      ],
-    },
+    require('./env-spec.cjs'),
     { logger: log, exit: false },
   );
 
@@ -80,7 +74,7 @@ async function main() {
     await handler.run({ log, traceId, env: process.env });
     log.info({ wallMs: Date.now() - startMs }, 'job_succeeded');
   } catch (err) {
-    log.error({ err: { message: err?.message, stack: err?.stack }, wallMs: Date.now() - startMs }, 'job_failed');
+    log.error({ err, wallMs: Date.now() - startMs }, 'job_failed');
     process.exitCode = 1;
   }
 }

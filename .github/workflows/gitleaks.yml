@@ -2,7 +2,7 @@ name: gitleaks
 
 on:
   push:
-    branches: [main]
+    branches: [integration, main]
   pull_request:
 
 # Runs the gitleaks binary directly rather than gitleaks/gitleaks-action@v2.
@@ -10,11 +10,14 @@ on:
 # repos (Algorythmos-AI is an org); the CLI itself is free and unlimited and is
 # exactly what `npm run gitleaks` runs locally. Same engine, same empty
 # allowlist in .gitleaks.toml — no license, no allowlist widening (CLAUDE.md §6).
+permissions:
+  contents: read
+
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install gitleaks

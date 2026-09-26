@@ -12,10 +12,12 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 import { authMiddleware } from '../middleware/auth.js';
 import { adminMiddleware } from '../middleware/admin.js';
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 
 // server.ts-derived routes (ESM).
-import { processAudioRoute } from './process-audio.js';
 import { updateNoteRoute } from './update-note.js';
+import { deleteNoteRoute } from './delete-note.js';
+import { noteAudioUrlRoute } from './note-audio.js';
 import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
 // functions/index.js HTTP handlers, ported to services/api (ESM).
@@ -29,6 +31,7 @@ import { clientErrorRoute } from './client-error.js';
 import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
+import { appConfigRoute } from './app-config.js';
 import { trackEventRoute } from './events.js';
 import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
@@ -38,15 +41,19 @@ import noteReadModule from './note-read.cjs';
 import exportNoteModule from './export-note.cjs';
 import searchAndChatModule from './search-and-chat.cjs';
 import sharedNoteModule from './shared-note.cjs';
-import deleteAccountModule from './delete-account.cjs';
+import { deleteAccountRoute } from './delete-account.js';
 import pgQueryModule from '@algominutes/ai/pg-query.cjs';
+import pgConfigModule from '@algominutes/ai/pg-config.cjs';
+import { getPool } from '@algominutes/db';
 
 const { handleNoteRead } = noteReadModule;
 const { handleExportNote } = exportNoteModule;
 const { handleSearch, handleChatStream } = searchAndChatModule;
 const { handleSharedNote } = sharedNoteModule;
-const { handleDeleteAccount } = deleteAccountModule;
 const { pool } = pgQueryModule;
+const readPool = pool;
+const { pingPool } = pgConfigModule;
+const { userRateLimit } = rateLimitModule;
 
 const DOCX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -61,37 +68,59 @@ function wrap(fn) {
 export function buildRouter() {
   const router = Router();
 
+  // Every authenticated route: verify the token, then count the request against
+  // the caller's per-user budget. One limiter, shared across routes, so the
+  // budget is per user for the whole API, not per route.
+  const authed = [authMiddleware, userRateLimit()];
+
   // ── health ── (no auth, no version gate — see app.js exempt list) ──────
   router.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
 
-  // ── POST /v1/process-audio ── server.ts /api/process-audio ─────────────
-  router.post('/process-audio', authMiddleware, wrap(processAudioRoute));
+  // ── readiness ── proves BOTH Postgres pools this service uses can reach the
+  // database (the repo layer and the read-path pool). Used by the post-deploy
+  // smoke; kept separate from /health so uptime probes never touch the DB.
+  router.get('/health/ready', async (req, res) => {
+    try {
+      await Promise.all([pingPool(getPool()), pingPool(readPool())]);
+      res.json({ status: 'ok', db: 'ok' });
+    } catch (err) {
+      req.log.error({ err }, 'readiness_db_unreachable');
+      res.status(503).json({ status: 'degraded', db: 'unreachable' });
+    }
+  });
+
 
   // ── POST /v1/process ── functions/index.js processIntelligence (async) ──
-  router.post('/process', authMiddleware, wrap(processIntelligenceRoute));
+  router.post('/process', authed, wrap(processIntelligenceRoute));
 
   // ── POST /v1/notes/read ── functions/note-read.cjs (also server.ts /api/note)
-  router.post('/notes/read', authMiddleware, wrap(async (req, res) => {
+  router.post('/notes/read', authed, wrap(async (req, res) => {
     const result = await handleNoteRead({ uid: req.uid, body: req.body, log: req.log });
     return res.status(result.status).json(result.body);
   }));
 
   // ── POST /v1/notes/update ── server.ts /api/update-note (updateNote twin) ─
-  router.post('/notes/update', authMiddleware, wrap(updateNoteRoute));
+  router.post('/notes/update', authed, wrap(updateNoteRoute));
+
+  // ── /v1/notes/delete ── the single deletion path (notes-repo deleteNote) ──
+  router.post('/notes/delete', authed, wrap(deleteNoteRoute));
+
+  // ── POST /v1/notes/audio-url ── a 15-minute signed URL for playback ──────
+  router.post('/notes/audio-url', authed, wrap(noteAudioUrlRoute));
 
   // ── POST /v1/notes/:id/speakers ── name diarised speakers (ADR 0005) ────
-  router.post('/notes/:id/speakers', authMiddleware, wrap(setNoteSpeakersRoute));
+  router.post('/notes/:id/speakers', authed, wrap(setNoteSpeakersRoute));
 
   // ── POST /v1/notes/regenerate-summary ── functions/index.js regenerateSummary
-  router.post('/notes/regenerate-summary', authMiddleware, wrap(regenerateSummaryRoute));
+  router.post('/notes/regenerate-summary', authed, wrap(regenerateSummaryRoute));
 
   // ── POST /v1/notes/feedback ── functions/index.js noteFeedback ─────────
-  router.post('/notes/feedback', authMiddleware, wrap(noteFeedbackRoute));
+  router.post('/notes/feedback', authed, wrap(noteFeedbackRoute));
 
   // ── POST /v1/export ── functions/export-note.cjs (binary DOCX) ─────────
-  router.post('/export', authMiddleware, wrap(async (req, res) => {
+  router.post('/export', authed, wrap(async (req, res) => {
     const result = await handleExportNote({ uid: req.uid, body: req.body, log: req.log });
     if (!result.buffer) return res.status(result.status).json(result.body);
     res.setHeader('Content-Type', DOCX_CONTENT_TYPE);
@@ -102,7 +131,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/search ── functions/search-and-chat.cjs handleSearch ──────
-  router.post('/search', authMiddleware, wrap(async (req, res) => {
+  router.post('/search', authed, wrap(async (req, res) => {
     const result = await handleSearch({
       uid: req.uid,
       body: req.body,
@@ -115,7 +144,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/chat ── functions/search-and-chat.cjs handleChatStream (SSE) ─
-  router.post('/chat', authMiddleware, wrap(async (req, res) => {
+  router.post('/chat', authed, wrap(async (req, res) => {
     await handleChatStream({
       uid: req.uid,
       body: req.body,
@@ -126,10 +155,10 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/shares/create ── functions/index.js shareCreate ───────────
-  router.post('/shares/create', authMiddleware, wrap(shareCreateRoute));
+  router.post('/shares/create', authed, wrap(shareCreateRoute));
 
   // ── POST /v1/shares/revoke ── functions/index.js shareRevoke ───────────
-  router.post('/shares/revoke', authMiddleware, wrap(shareRevokeRoute));
+  router.post('/shares/revoke', authed, wrap(shareRevokeRoute));
 
   // ── POST /v1/shares/read ── functions/shared-note.cjs (PUBLIC, no auth) ─
   //
@@ -161,22 +190,12 @@ export function buildRouter() {
     return res.status(result.status).json(result.body);
   }));
 
-  // ── /v1/account/delete ── functions/delete-account.cjs ─────────────────
+  // ── /v1/account/delete ── the single deletion path (delete-account.js) ──
   //
-  // Self-authenticating (same verifyIdToken primitive) and self-managing its
-  // method envelope, so it is mounted raw rather than behind authMiddleware.
-  // CORS is applied globally, so the handler is handed a no-op applyCors. It
-  // accepts POST and DELETE, exactly as the source did.
-  const deleteAccountHandler = wrap(async (req, res) => {
-    await handleDeleteAccount({
-      req,
-      res,
-      pgPool: pool,
-      applyCors: () => {},
-      traceId: req.traceId,
-      log: req.log,
-    });
-  });
+  // Self-authenticating (verifyIdToken) and self-managing its method
+  // envelope, so it is mounted without authMiddleware; the client IP limit
+  // (app.js) covers it. It accepts POST and DELETE, as before.
+  const deleteAccountHandler = wrap((req, res) => deleteAccountRoute(req, res));
   router.post('/account/delete', deleteAccountHandler);
   router.delete('/account/delete', deleteAccountHandler);
 
@@ -188,27 +207,29 @@ export function buildRouter() {
   router.post('/client-error', wrap(async (req, res) => clientErrorRoute(req, res)));
 
   // ── A7.2 resumable uploads ── services/api/src/routes/uploads.js ────────
-  router.post('/uploads', authMiddleware, wrap(createUploadSessionRoute));
-  router.get('/uploads/:uploadId', authMiddleware, wrap(getUploadStatusRoute));
-  router.post('/uploads/:uploadId/complete', authMiddleware, wrap(completeUploadRoute));
+  router.post('/uploads', authed, wrap(createUploadSessionRoute));
+  router.get('/uploads/:uploadId', authed, wrap(getUploadStatusRoute));
+  router.post('/uploads/:uploadId/complete', authed, wrap(completeUploadRoute));
 
   // ── A7.3 POST /v1/push/register ── push-register.js ─────────────────────
-  router.post('/push/register', authMiddleware, wrap(registerPushTokenRoute));
+  router.post('/push/register', authed, wrap(registerPushTokenRoute));
 
   // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
-  router.get('/entitlement', authMiddleware, wrap(entitlementRoute));
+  router.get('/entitlement', authed, wrap(entitlementRoute));
+  // Server-side feature switches (broadcast capture's kill switch).
+  router.get('/config', authed, wrap(appConfigRoute));
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
-  router.post('/events', authMiddleware, wrap(trackEventRoute));
+  router.post('/events', authed, wrap(trackEventRoute));
   // ── A10 compliance ── compliance.js ────────────────────────────────────
-  router.post('/account/retention', authMiddleware, wrap(setRetentionRoute));
-  router.post('/account/accept-terms', authMiddleware, wrap(acceptTermsRoute));
-  router.post('/support', authMiddleware, wrap(supportRoute));
+  router.post('/account/retention', authed, wrap(setRetentionRoute));
+  router.post('/account/accept-terms', authed, wrap(acceptTermsRoute));
+  router.post('/support', authed, wrap(supportRoute));
 
   // ── A7.4 dead-letter admin view ── admin-dead-letters.js ────────────────
   // Operator-only: authMiddleware sets req.uid, adminMiddleware gates on the
   // ADMIN_UIDS allowlist (see middleware/admin.js).
-  router.get('/admin/dead-letters', authMiddleware, adminMiddleware, wrap(listDeadLettersRoute));
-  router.post('/admin/dead-letters/:id/resolve', authMiddleware, adminMiddleware, wrap(resolveDeadLetterRoute));
+  router.get('/admin/dead-letters', authed, adminMiddleware, wrap(listDeadLettersRoute));
+  router.post('/admin/dead-letters/:id/resolve', authed, adminMiddleware, wrap(resolveDeadLetterRoute));
 
   return router;
 }

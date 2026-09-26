@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@asteasolutions/zod-to-openapi": "^8.0.0",
+    "@asteasolutions/zod-to-openapi": "^9.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

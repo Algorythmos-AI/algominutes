@@ -32,7 +32,7 @@ struct NoteDetailView: View {
                 EmptyStateView(icon: "doc.questionmark", message: "This note is no longer available.")
             }
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let note {
@@ -117,12 +117,14 @@ struct NoteDetailView: View {
                                 transcript: exportLines(for: note), api: env.api
                             ) { env.alertMessage = $0 }
                         },
-                        onCreateLink: { scope in
+                        // A public link opens on the site, which has no viewer
+                        // yet: offered only when SHARE_LINKS_ENABLED is on.
+                        onCreateLink: AppConfig.shareLinksEnabled ? { scope in
                             viewModel.createShareLink(
                                 scope: scope, noteId: note.id, workspaceId: note.workspaceId,
                                 api: env.api
                             ) { env.alertMessage = $0 }
-                        },
+                        } : nil,
                         mintedLink: viewModel.mintedShareLink,
                         isMintingLink: viewModel.isMintingShareLink
                     )
@@ -191,7 +193,8 @@ struct NoteDetailView: View {
                             status: note.status,
                             progress: note.progress,
                             uploadPercent: env.uploadProgress[note.id]
-                        )
+                        ),
+                        isSlow: env.notes.slowNoteIds.contains(note.id)
                     )
                 }
             }
@@ -238,7 +241,7 @@ struct NoteDetailView: View {
 
         switch viewModel.tab {
         case .summary:
-            SummaryPane(summary: note.summary)
+            SummaryPane(summary: note.summary, onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil)
                 // A9.6 + A6.3: the moment the first summary is actually on screen.
                 // Fires `first_summary_viewed` once and, for a guest, presents the
                 // account prompt (or the paywall if the trial is already over).
@@ -337,7 +340,11 @@ struct NoteDetailView: View {
         // and an AVPlayer streaming a deleted object fails with a network
         // error rather than stopping cleanly.
         if env.player.currentNoteId == noteId { env.player.stop() }
-        env.notes.deleteNote(id: noteId)
+        let id = noteId
+        Task {
+            do { try await env.deleteNote(id: id) }
+            catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+        }
         dismiss()
     }
 

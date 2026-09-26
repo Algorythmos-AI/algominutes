@@ -36,7 +36,7 @@ function validateYoutubeUrl(rawUrl) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
-  } catch (err) {
+  } catch { // silent-catch-ok: an unparseable URL is invalid input, reported as such
     return { ok: false, reason: 'invalid_url' };
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -94,6 +94,17 @@ function badRequest(reason) {
   err.status = 400;
   err.isPermanent = true;
   err.publicMessage = 'That is not a valid YouTube URL.';
+  return err;
+}
+
+// Captions exist but can't be parsed. Not the same as "no captions", which is
+// what the user was told before (the parse failure was swallowed as '').
+function captionsMalformed(cause) {
+  const err = new Error(`youtube_captions_malformed: ${cause.message}`);
+  err.status = 422;
+  err.isPermanent = true;
+  err.code = 'YOUTUBE_CAPTIONS_MALFORMED';
+  err.cause = cause;
   return err;
 }
 
@@ -190,7 +201,7 @@ function parseSubtitles(file, raw) {
 function parseJson3(raw) {
   let doc;
   try { doc = JSON.parse(raw); }
-  catch { return ''; }
+  catch (err) { throw captionsMalformed(err); }
   const lines = [];
   for (const ev of doc.events || []) {
     if (!ev.segs) continue;
@@ -210,10 +221,24 @@ function parseVtt(raw) {
     if (/^\d+$/.test(line)) continue;                 // SRT cue index
     if (line.includes('-->')) continue;                // timing line
     if (/^(NOTE|Kind:|Language:)/i.test(line)) continue;
-    const clean = line.replace(/<[^>]*>/g, '').trim(); // inline <c>/<00:00:00> tags
+    const clean = stripTags(line).trim(); // inline <c>/<00:00:00> tags
     if (clean) out.push(clean);
   }
   return dedupeConsecutive(out).join('\n');
+}
+
+// Remove markup until none is left, then any stray angle bracket. One pass of
+// /<[^>]*>/ can leave a tag behind (`<scr<script>ipt>` becomes `<script>`;
+// CodeQL js/incomplete-multi-character-sanitization). Captions are spoken
+// text, so a literal < or > is never needed.
+function stripTags(s) {
+  let prev;
+  let out = s;
+  do {
+    prev = out;
+    out = out.replace(/<[^<>]*>/g, '');
+  } while (out !== prev);
+  return out.replace(/[<>]/g, '');
 }
 
 // Auto-captions repeat each line as it "rolls up"; collapse adjacent dupes.

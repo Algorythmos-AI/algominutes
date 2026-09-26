@@ -10,22 +10,18 @@
  * is what the user consumed against their plan quota.
  */
 import { getPool, isPostgresEnabled } from './db.js';
+import { currentBillingPeriod, insertDebit, type MeterInput } from './ledger.js';
+import ledgerReversal from '@algominutes/db/ledger-reversal.cjs';
 
-/** 'YYYY-MM' in UTC — the monthly quota window key. */
-export function currentBillingPeriod(now: Date = new Date()): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-}
+// The one copy of the reversal SQL (a failure writes it in its own transaction).
+const { reverseNoteUsage } = ledgerReversal as {
+  reverseNoteUsage: (
+    queryable: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+    input: { noteId: string; reason: string; idempotencyKey: string },
+  ) => Promise<{ applied: boolean; minutesReversed: number }>;
+};
 
-export interface MeterInput {
-  uid: string;
-  workspaceId?: string | null;
-  noteId?: string | null;
-  minutes: number;
-  reason?: string;
-  /** Stable key so a Cloud Tasks replay does not double-charge, e.g. `${noteId}:ingest`. */
-  idempotencyKey: string;
-  billingPeriod?: string;
-}
+export { currentBillingPeriod, type MeterInput } from './ledger.js';
 
 /**
  * Append a debit (minutes consumed). Idempotent: a second call with the same
@@ -33,30 +29,17 @@ export interface MeterInput {
  */
 export async function meterMinutes(input: MeterInput): Promise<{ applied: boolean; id?: number }> {
   if (!isPostgresEnabled()) return { applied: false };
-  const period = input.billingPeriod ?? currentBillingPeriod();
-  const { rows } = await getPool().query(
-    `INSERT INTO usage_ledger
-       (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, idempotency_key)
-     VALUES ($1, $2, $3, 'debit', $4, $5, $6, $7)
-     ON CONFLICT (idempotency_key) DO NOTHING
-     RETURNING id`,
-    [
-      input.uid,
-      input.workspaceId ?? null,
-      input.noteId ?? null,
-      Math.max(0, input.minutes),
-      period,
-      input.reason ?? 'ingest',
-      input.idempotencyKey,
-    ],
-  );
-  return rows.length ? { applied: true, id: rows[0].id } : { applied: false };
+  return insertDebit(getPool(), input);
 }
 
 /**
  * Refund a note's metered minutes on pipeline failure (A7.4) — a reversal row,
  * never a delete. Reverses the note's current NET debit (so repeated calls with
  * the same idempotency_key, or after a prior reversal, do not over-refund).
+ *
+ * Keyed per run: the caller's key is suffixed with the note's latest debit (the
+ * run being refunded). A per-note key refunded a note's first failed run and
+ * then, after its re-queue charged it again, silently refused the next.
  */
 export async function reverseUsageForNote(input: {
   noteId: string;
@@ -65,38 +48,7 @@ export async function reverseUsageForNote(input: {
   idempotencyKey: string;
 }): Promise<{ applied: boolean; minutesReversed: number }> {
   if (!isPostgresEnabled()) return { applied: false, minutesReversed: 0 };
-  const pool = getPool();
-  // Net minutes still charged for this note (debits + prior reversals).
-  const net = await pool.query(
-    `SELECT COALESCE(SUM(minutes), 0)::float AS net,
-            (SELECT uid FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS uid,
-            (SELECT workspace_id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS workspace_id,
-            (SELECT billing_period FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS billing_period,
-            (SELECT id FROM usage_ledger WHERE note_id = $1 AND entry_type='debit' ORDER BY id LIMIT 1) AS debit_id
-       FROM usage_ledger WHERE note_id = $1`,
-    [input.noteId],
-  );
-  const row = net.rows[0];
-  const remaining = Number(row?.net ?? 0);
-  if (!row || !row.uid || remaining <= 0) return { applied: false, minutesReversed: 0 };
-  const { rows } = await pool.query(
-    `INSERT INTO usage_ledger
-       (uid, workspace_id, note_id, entry_type, minutes, billing_period, reason, reverses_id, idempotency_key)
-     VALUES ($1, $2, $3, 'reversal', $4, $5, $6, $7, $8)
-     ON CONFLICT (idempotency_key) DO NOTHING
-     RETURNING id`,
-    [
-      row.uid,
-      row.workspace_id ?? null,
-      input.noteId,
-      -remaining,
-      row.billing_period ?? currentBillingPeriod(),
-      input.reason,
-      row.debit_id ?? null,
-      input.idempotencyKey,
-    ],
-  );
-  return rows.length ? { applied: true, minutesReversed: remaining } : { applied: false, minutesReversed: 0 };
+  return reverseNoteUsage(getPool(), input);
 }
 
 /** Net minutes used by a user in a billing period (debits − reversals). */
@@ -108,4 +60,18 @@ export async function usedMinutes(uid: string, billingPeriod: string = currentBi
     [uid, billingPeriod],
   );
   return Number(rows[0]?.used ?? 0);
+}
+
+/**
+ * Drop paid-work records (usage_events, written by the transcoder for the §4.6
+ * spend cap) older than olderThanDays. The cap reads only the last 24 hours;
+ * the rest is kept a while for cost attribution. Returns how many went.
+ */
+export async function pruneUsageEvents(input: { olderThanDays: number }): Promise<number> {
+  if (!isPostgresEnabled()) return 0;
+  const { rowCount } = await getPool().query(
+    `DELETE FROM usage_events WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`,
+    [input.olderThanDays],
+  );
+  return rowCount ?? 0;
 }

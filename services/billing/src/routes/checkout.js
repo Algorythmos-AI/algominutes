@@ -11,9 +11,12 @@
 // (packages/contracts/src/schemas/billing.ts).
 
 import { getSubscription } from '@algominutes/db';
+import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 import { getStripe } from '../lib/stripe.js';
 import { productById } from '../lib/plans.js';
+
+const { publicSiteUrl } = siteUrlModule;
 
 export async function checkoutRoute(req, res) {
   const uid = req.uid;
@@ -37,10 +40,10 @@ export async function checkoutRoute(req, res) {
   const existing = await getSubscription(uid);
   const customerId = existing?.stripe_customer_id || null;
 
-  // URLs are config, not secrets.
-  // TODO(A11): set BILLING_SUCCESS_URL / BILLING_CANCEL_URL for the web app.
-  const successUrl = process.env.BILLING_SUCCESS_URL || 'https://app.algominutes.com/billing/success';
-  const cancelUrl = process.env.BILLING_CANCEL_URL || 'https://app.algominutes.com/billing/cancel';
+  // URLs are config, not secrets: the public site's billing pages unless an
+  // override is set.
+  const successUrl = process.env.BILLING_SUCCESS_URL || `${publicSiteUrl()}/billing/success`;
+  const cancelUrl = process.env.BILLING_CANCEL_URL || `${publicSiteUrl()}/billing/cancel`;
 
   // TODO(A11): verify against live Stripe (real secret key + price ids).
   const session = await stripe.checkout.sessions.create({

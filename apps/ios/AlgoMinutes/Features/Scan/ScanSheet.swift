@@ -32,7 +32,7 @@ struct ScanSheet: View {
                 }
 
                 if let busy = busyLabel {
-                    OwllCard {
+                    AlgoMinutesCard {
                         HStack(spacing: 12) {
                             ProgressView().tint(Theme.outline)
                             Text(busy)
@@ -133,7 +133,7 @@ struct ScanSheet: View {
     }
 
     private func rowLabel(icon: String, title: String, subtitle: String) -> some View {
-        OwllCard {
+        AlgoMinutesCard {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .semibold))
@@ -267,12 +267,8 @@ struct ScanSheet: View {
             return
         }
 
-        // Best-effort source upload (parity with the web).
-        if let data = sourceData {
-            let path = StoragePaths.path(kind: .scan, workspaceId: wsId, noteId: noteId, ext: sourceExt)
-            env.notes.updateNote(id: noteId, fields: ["storagePath": path])
-            env.uploads.uploadData(data, to: path, contentType: sourceMime)
-        }
+        // The source image isn't uploaded: the note is its text. (It used to go to
+        // Firebase's default bucket, which account deletion never purged.)
 
         onDone(noteId)
     }

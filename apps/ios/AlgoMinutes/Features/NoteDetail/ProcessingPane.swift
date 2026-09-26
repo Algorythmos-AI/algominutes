@@ -7,10 +7,13 @@ import SwiftUI
 /// pane only draws what it is handed.
 struct ProcessingPane: View {
     let stage: NoteProcessingStage
+    /// Past its StuckBudgets budget (NotesRepository.slowNoteIds). Still running:
+    /// only the server fails a stuck note.
+    var isSlow = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xxl) {
-            OwllCard {
+            AlgoMinutesCard {
                 HStack(spacing: Theme.Spacing.lg) {
                     ProgressRing(stage: stage)
                     VStack(alignment: .leading, spacing: 4) {
@@ -18,7 +21,7 @@ struct ProcessingPane: View {
                             .font(Typography.heading(17, weight: .bold))
                             .foregroundStyle(Theme.heading)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(NoteProcessingStage.backgroundNotice)
+                        Text(isSlow ? NoteProcessingStage.slowNotice : NoteProcessingStage.backgroundNotice)
                             .font(Typography.body(13))
                             .foregroundStyle(Theme.muted)
                             .fixedSize(horizontal: false, vertical: true)

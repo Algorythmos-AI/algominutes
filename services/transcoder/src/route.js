@@ -6,9 +6,11 @@
 
 const FAST_PATH_MAX_SEC = 600;
 
+// An unknown duration is an error, never 'fast': the fast path sends the whole
+// file to Gemini in one call, which a long recording would overflow.
 function routeForDuration(durationSec) {
   if (typeof durationSec !== 'number' || !Number.isFinite(durationSec) || durationSec <= 0) {
-    return 'fast';
+    throw new Error(`routeForDuration: unknown duration (${durationSec})`);
   }
   return durationSec <= FAST_PATH_MAX_SEC ? 'fast' : 'chunked';
 }

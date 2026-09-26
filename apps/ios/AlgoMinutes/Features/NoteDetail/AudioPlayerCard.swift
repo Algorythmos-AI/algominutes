@@ -22,7 +22,7 @@ struct AudioPlayerCard: View {
     }
 
     var body: some View {
-        OwllCard(style: .raised) {
+        AlgoMinutesCard(style: .raised) {
             VStack(spacing: Theme.Spacing.md) {
                 transport
                 scrubber

@@ -19,16 +19,12 @@ const sharedLogger = loadShared('logger.cjs');
 const { requireEnv } = loadShared('require-env.cjs');
 requireEnv(
   'transcoder',
-  {
-    oneOf: [
-      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
-    ],
-  },
+  require('./env-spec.cjs'),
   { logger: sharedLogger.logger },
 );
 const noteTerminal = loadShared('note-terminal.cjs');
 const spendGuard = loadShared('spend-guard.cjs');
+const spendRepo = loadShared('spend-repo.cjs');
 const handler = require('./handler');
 const db = require('./db');
 const storage = require('./storage');
@@ -39,6 +35,11 @@ const mirror = require('./firestore-mirror');
 const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
+const { spendGate } = require('./spend-gate');
+const { onLastAttempt } = require('./last-attempt');
+
+// §4.6: the daily cap reads the audio minutes sent to paid work in the last 24 hours.
+spendGuard.setDailySpendReader(spendRepo.createPaidWorkSpendReader({ pool: () => db.pool() }));
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -56,7 +57,6 @@ const env = {
   TRANSCODER_URL: process.env.TRANSCODER_URL || '',
   SUMMARIZER_URL: process.env.SUMMARIZER_URL || '',
   EMBEDDER_URL: process.env.EMBEDDER_URL || '',
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   LANGUAGE_CODES: process.env.LANGUAGE_CODES || 'en-US,en-GB,en-AU',
   // Long-path STT engine seam. Default 'google' keeps the legacy per-chunk path
   // (shadow-eval baseline / a1 fallback). Flip to 'assemblyai' after the shadow
@@ -76,25 +76,24 @@ const rootLog = sharedLogger.logger.child({ svc: 'transcoder' });
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const traceId = sharedLogger.traceIdFrom(req.headers);
-  const log = rootLog.child({ traceId, kind: req.body && req.body.kind, jobId: req.body && req.body.jobId });
+  // The enqueuer's traceId, carried in the task body (CLAUDE.md §1).
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
+  const log = rootLog.child({
+    traceId,
+    kind: req.body && req.body.kind,
+    jobId: req.body && req.body.jobId,
+    noteId: req.body && req.body.noteId,
+    workspaceId: req.body && req.body.workspaceId,
+    userId: req.body && req.body.uid,
+  });
 
-  // §4.6 spend circuit breaker — this is the pipeline entry and the priciest
-  // stage (paid STT). Halt before spending if today's cost hit the daily cap.
-  try {
-    await spendGuard.assertUnderDailyCap({ log });
-  } catch (err) {
-    if (err && err.code === 'SPEND_CAP_EXCEEDED') {
-      log.error({ err }, 'spend_cap_tripped_pipeline_halted');
-      // Ack (200) so Cloud Tasks does not retry-storm while capped.
-      // TODO(A9): mark the note 'deferred', re-drive when spend resets, and
-      // refund metered minutes (A7.4) rather than silently dropping the task.
-      return res.status(200).json({ ok: false, deferred: true, reason: 'spend_cap' });
-    }
-    throw err;
-  }
+  // §4.6 spend circuit breaker (spend-gate.js): kickoffs only.
+  const halted = await spendGate(req.body, {
+    db, mirror, log, traceId, terminalHooks, noteTerminal, spendGuard,
+  });
+  if (halted) return res.status(halted.status).json(halted.body);
 
-  const tasks = tasksClient.makeClient({ env, log });
+  const tasks = tasksClient.makeClient({ env, log, traceId, uid: req.body && req.body.uid });
   // traceId is threaded into deps so the in-handler terminal paths (STT
   // exhaustion / errors, YouTube permanent failures) can propagate it across
   // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
@@ -107,38 +106,14 @@ app.post('/', async (req, res) => {
     log.error({ err }, 'transcoder_task_failed');
     // Surface 500 so Cloud Tasks retries per the queue's backoff policy.
     //
-    // On the LAST attempt, write a terminal state to Postgres as well as
-    // Firestore. Without this the note sat at 'queued'/'chunking'/'transcribing'
-    // forever: mirrorError writes Firestore only, /api/note serves the Postgres
-    // status, and the iOS app therefore showed a spinner that could never
-    // resolve. There is no server-side sweeper to catch it, and the queue has
-    // no dead-letter sink, so this log line is the only trace a human gets.
-    const { noteId, workspaceId } = req.body || {};
+    // On the LAST attempt, write a terminal state (and its refund) to Postgres
+    // and mirror it, then dead-letter and notify (the hooks below). The
+    // kickoff mirrors nothing on the way out, so until here the app shows the
+    // note processing; without this it would stay so until the stuck-note
+    // sweep (db-job, 3.5 h). The ids come from the body (last-attempt.js).
     if (noteTerminal.isFinalAttempt(req.headers)) {
-      await noteTerminal.markNoteFailed({
-        pool: db.pool(),
-        firestore: mirror.db(),
-        noteId,
-        workspaceId,
-        message: 'We could not process this recording.',
-        log,
-        event: 'transcoder_mark_failed',
-      });
-      // A7.4 tail: dead-letter the exhausted job, refund the note's metered
-      // minutes, and notify the author. Best-effort — never masks the original
-      // failure. Transcoder SUCCESS is not terminal (the pipeline continues to
-      // summarize), so there is no note_ready here.
-      const attempts = Number((req.headers && req.headers['x-cloudtasks-taskretrycount']) || 0) + 1;
-      const b = req.body || {};
-      await terminalHooks.onTranscodeTerminalFailure({
-        pool: db.pool(),
-        noteId,
-        workspaceId,
-        err,
-        attempts,
-        traceId,
-        payload: { kind: b.kind, type: b.type, noteId, workspaceId, storagePath: b.storagePath, sourceUrl: b.sourceUrl, mimeType: b.mimeType },
-        log,
+      await onLastAttempt({
+        body: req.body, headers: req.headers, err, noteTerminal, terminalHooks, db, mirror, log, traceId,
       });
     }
     return res.status(500).json({ error: 'task_failed' });

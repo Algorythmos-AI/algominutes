@@ -3,7 +3,7 @@
 #
 # ⚠️ BOOTSTRAP: the state bucket must be created ONCE, by hand, BEFORE the
 # first `terraform init`. Terraform cannot create the bucket that holds its
-# own state. One-time bootstrap (run as gcp-admin@algorythmos.com):
+# own state. One-time bootstrap (run as an Owner, e.g. algorythmos.france@gmail.com):
 #
 #   gcloud storage buckets create gs://algominutes-staging-tfstate \
 #     --project=algominutes-staging \

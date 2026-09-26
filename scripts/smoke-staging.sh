@@ -55,12 +55,24 @@ for pair in TRANSCODER_URL:transcoder SUMMARIZER_URL:summarizer EMBEDDER_URL:emb
   fi
 done
 
+wp=$(printf '%s\n' "$api_env" | sed -n 's/^WRITE_POSTGRES=//p')
+if [ "$wp" = "true" ]; then
+  echo "ok   WRITE_POSTGRES=true on api"
+else
+  echo "FAIL WRITE_POSTGRES is '${wp:-unset}' on api (Postgres paths would be silent no-ops)"
+  fail=1
+fi
+
 echo "== 2. public services reachable without auth =="
 api_url=$(describe api | jq -r .status.url)
 billing_url=$(describe billing | jq -r .status.url)
 check_code api "$api_url/v1/health" 200
 # /health, not /healthz: Cloud Run's front end reserves paths ending in "z".
 check_code billing "$billing_url/health" 200
+# Readiness: each public service proves its Postgres pools reach Cloud SQL over
+# TLS (ENCRYPTED_ONLY instance) — the path that failed silently before.
+check_code api-ready "$api_url/v1/health/ready" 200
+check_code billing-ready "$billing_url/health/ready" 200
 
 echo "== 3. workers reject unauthenticated callers =="
 for svc in "${PRIVATE[@]}"; do

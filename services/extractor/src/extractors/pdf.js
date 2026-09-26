@@ -72,7 +72,9 @@ async function extractPdf(buffer, { log } = {}) {
       page.cleanup();
     }
   } finally {
-    await pdf.destroy();
+    // The loading task owns the document: pdf.js 5 removed
+    // PDFDocumentProxy.destroy(), and this works on 4 as well.
+    await loadingTask.destroy();
     if (tmpPdfPath) {
       // Best-effort temp cleanup — surfaced, never silent.
       try { fs.rmSync(tmpPdfPath, { force: true }); }

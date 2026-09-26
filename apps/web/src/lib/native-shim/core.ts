@@ -11,7 +11,7 @@ export const Capacitor = {
 export const CapacitorHttp = {
   // Native used this to bypass CORS; the web path (getPlatform() === 'web') uses
   // fetch() and never reaches here.
-  request: async (): Promise<never> => {
+  request: async (_options?: unknown): Promise<never> => {
     throw new Error('CapacitorHttp is native-only; the web client uses fetch().');
   },
 };

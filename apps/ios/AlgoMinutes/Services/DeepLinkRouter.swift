@@ -18,12 +18,19 @@ final class DeepLinkRouter {
     /// and cleared by the first view that can navigate.
     var pendingNoteId: String?
 
+    /// Counts the links that arrived. `MainTabView` watches it to bring Home to
+    /// the front. It can't watch `pendingNoteId` for that: `HomeView` stays
+    /// alive behind another tab, and it clears the id in the same update it
+    /// arrives in, so the change could be gone before the tab bar sees it.
+    private(set) var arrivals = 0
+
     private init() {}
 
     /// Route a parsed note id. Safe to call from any deep-link source.
     func open(noteId: String) {
         guard !noteId.isEmpty else { return }
         pendingNoteId = noteId
+        arrivals += 1
     }
 
     /// Route from a raw notification `userInfo` payload (mirrors

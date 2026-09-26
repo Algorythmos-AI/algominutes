@@ -2,16 +2,16 @@
 /**
  * check-migrations-applied.mjs — is production's schema actually current?
  *
- * `npm run db:migrate` is run by hand. Nothing verified it had been. So a push
+ * Migrations used to be run by hand, and nothing verified they had been. So a push
  * to main could ship code that queries a column no migration had created:
  * functions/index.js on main already selects `shares.token_hash`, and if 006
  * had not been applied, shareCreate would have 500'd in production with nothing
  * anywhere reporting why.
  *
- * This is NOT a CI check, and cannot be — CI has no route to the private-IP
- * Cloud SQL instance, which is the reason migrations are manual. Run it from a
- * machine with database access (see docs/runbooks/bastion-psql.md), and run it
- * after any deploy that touches the schema.
+ * Deploys now apply migrations from inside the VPC (db-job `migrate`, before
+ * any rollout) and fail unless the schema is at head. This script is the
+ * operator's independent check from a machine with database access (see
+ * docs/runbooks/bastion-psql.md) — CI has no route to the private-IP instance.
  *
  *   DATABASE_URL=postgres://... node scripts/check-migrations-applied.mjs
  *
@@ -20,7 +20,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { Pool } from 'pg';
+
+// Same connection config (TLS policy, defaults) as every service pool.
+const { buildPgConfig } = createRequire(import.meta.url)('../packages/ai/src/pg-config.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'packages', 'db', 'migrations');
@@ -38,18 +42,7 @@ const onDisk = fs
   .filter((f) => /^\d{3}_.*\.sql$/.test(f))
   .sort();
 
-const pool = new Pool(
-  process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL, max: 1 }
-    : {
-        host: process.env.PGHOST,
-        port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-        database: process.env.PGDATABASE || 'postgres',
-        user: process.env.PGUSER || 'postgres',
-        password: process.env.PGPASSWORD,
-        max: 1,
-      },
-);
+const pool = new Pool(buildPgConfig({ max: 1 }));
 
 let applied;
 try {
@@ -81,7 +74,7 @@ if (orphaned.length) {
 
 if (missing.length) {
   console.error(`\nFAIL  ${missing.length} migration(s) never applied here.`);
-  console.error('Run: DATABASE_URL=... npm run db:migrate');
+  console.error('Deploys apply them (db-job migrate); by hand: DATABASE_URL=... npm run migrate');
   console.error('Code on main may already depend on the columns these create.');
   process.exit(1);
 }

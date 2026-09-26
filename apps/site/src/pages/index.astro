@@ -1,0 +1,57 @@
+---
+import Base from '../layouts/Base.astro';
+
+const features = [
+  { title: 'Instant summaries', body: 'The gist of any meeting, a few minutes after it ends.' },
+  { title: 'Action items, extracted', body: "Who's doing what, pulled out of the conversation for you." },
+  { title: 'Key decisions, captured', body: 'The calls that were made, in one place.' },
+  { title: 'A searchable transcript', body: 'Find any moment without scrubbing through audio.' },
+  { title: 'Templates for how you meet', body: 'Standups, interviews, sales calls, lectures, one-on-ones and board meetings.' },
+  { title: 'Ask your notes', body: 'Search every meeting, or ask one a question.' },
+];
+---
+<Base
+  title="AlgoMinutes: AI meeting notes"
+  description="AlgoMinutes records your meetings and gives you back a summary, the decisions and a clear list of action items. No ads. No tracking."
+>
+  <section class="hero" aria-labelledby="hero-title">
+    <img src="/favicon.svg" alt="" width="88" height="88" />
+    <h1 id="hero-title">Every meeting, summed up</h1>
+    <p class="lede">
+      Record a meeting and get back a clean summary, the key decisions and a ready-to-go action list. Stay in the
+      conversation; AlgoMinutes takes the notes.
+    </p>
+    <p><span class="badge">Coming soon to the App Store</span></p>
+  </section>
+
+  <section aria-labelledby="features-title">
+    <h2 id="features-title">What you get</h2>
+    <ul class="grid">
+      {features.map((f) => (
+        <li class="card">
+          <h3>{f.title}</h3>
+          <p>{f.body}</p>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="prose" aria-labelledby="how-title">
+    <h2 id="how-title">How it works</h2>
+    <ol class="steps">
+      <li><strong>Tell everyone, then record.</strong> AlgoMinutes shows a plain-English notice first, and you confirm you have permission to record.</li>
+      <li><strong>AlgoMinutes transcribes it.</strong> Your recording is uploaded to your account and turned into a transcript.</li>
+      <li><strong>Read the result.</strong> A summary, decisions and action items, with the transcript underneath.</li>
+    </ol>
+  </section>
+
+  <section class="prose" aria-labelledby="privacy-title">
+    <h2 id="privacy-title">Private by design</h2>
+    <ul>
+      <li><strong>No ads. No tracking.</strong> Your recordings are yours, and we never sell or share them for advertising.</li>
+      <li>Your notes and recordings are stored in Sydney, Australia.</li>
+      <li>Delete any note, or your whole account, whenever you want.</li>
+    </ul>
+    <p><a href="/privacy">Read the Privacy Policy</a></p>
+  </section>
+</Base>

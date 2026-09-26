@@ -40,10 +40,10 @@ targeting), and "free" as a keyword (weak, and interacts with the reverse-trial 
 
 - **Apple app name (≤30):** `AlgoMinutes: AI Meeting Notes` (28)
 - **Apple subtitle (≤30):** `Record, transcribe, summarise` (29)
-- **Apple keywords field (≤100, no spaces):**
-  `transcribe,transcription,voice recorder,meeting summary,action items,notetaker,speech to text,audio to text,minutes`
-  (drop spaces on submit; do **not** repeat words already in the name/subtitle — that wastes
-  the 100 chars).
+- **Apple keywords field (≤100 characters, commas, no spaces after them):**
+  `transcription,voice recorder,notetaker,action items,speech to text,minutes,lecture,interview`
+  (92 characters). No word from the name or subtitle (AI, meeting, notes, record, transcribe, summarise):
+  Apple already indexes those, so repeating them wastes the field.
 - **Play title (≤30):** `AlgoMinutes: AI Meeting Notes` (28)
 - **Play short description (≤80):**
   `Record meetings, get instant AI transcripts, summaries and action items.` (73)
@@ -85,13 +85,13 @@ All imagery `TODO(brand)`; captions below are the copy.
    front-and-centre.)
 
 6. **Yours, everywhere / private by design.**
-   Cross-device (phone records, web reads/manages) + a privacy line. Caption: **"Record on
-   your phone, review anywhere. No ads, no tracking."** (Reinforces the analytics-off
-   posture — a genuine differentiator.)
+   Search and chat across every note + a privacy line. Caption: **"Ask any meeting a
+   question. No ads, no tracking."** (The web app isn't shipped, so no cross-device claim;
+   "no tracking" is true: nothing is shared with third parties for advertising.)
 
 - `TODO(brand):` Device frames, real-looking (non-PII) sample content, light/dark variants,
-  and localized text overlays. Provide 6.7" + 6.5" (iOS) and phone + 7"/10" tablet (Play)
-  sizes.
+  and localized text overlays. iOS: the 6.9" set (1320 × 2868), which App Store Connect scales for
+  smaller iPhones; the app is iPhone-only, so no iPad set. Play: phone + 7"/10" tablet.
 
 ---
 
@@ -108,8 +108,8 @@ footage/VO.
   indicator. Text: *"Record in a tap — everyone in the loop."*
 - **15–23s — The magic:** Processing → transcript appears → summary + decisions + action
   items populate. Text: *"AI writes the transcript, summary and to-dos."*
-- **23–28s — Anywhere + private:** Phone → web handoff; text: *"Review anywhere. No ads, no
-  tracking."*
+- **23–28s — Ask + private:** Ask the note a question in chat; text: *"Ask any meeting. No ads,
+  no tracking."*
 - **28–30s — CTA / logo:** `TODO(brand)` logo + *"AlgoMinutes"* + app-store badges.
 - Constraints: readable **muted** (most previews autoplay silent — burn in captions);
   first 3s must stand alone; keep to the store's ≤30s app-preview limit.
@@ -153,10 +153,10 @@ footage/VO.
 > - **Templates** — standup, interview, sales call, lecture, one-on-one, board meeting and
 >   more, each tuned for a better summary.
 > - **Record what matters** — capture from your microphone, or the audio of a call.
-> - **Review anywhere** — record on your phone, read and manage on the web.
+> - **Ask your notes** — search every meeting, or ask one a question.
 >
 > **Private by design**
-> - **No ads. No tracking. No analytics.** Your recordings are yours.
+> - **No ads. No tracking.** Your recordings are yours.
 > - Delete any note — or your whole account — whenever you want.
 > - A clear, plain-English notice before every recording, so everyone's in the loop.
 >
@@ -189,7 +189,7 @@ footage/VO.
 > - 💻 **Record on mobile, review on the web** — your notes follow you.
 >
 > **Private by design**
-> - No ads, no third-party tracking, and no analytics SDKs.
+> - No ads and no third-party tracking.
 > - Delete a note or your entire account at any time — including from the web.
 > - A plain-English notice appears before every recording, and you confirm you have
 >   permission to record.

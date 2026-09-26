@@ -2,7 +2,7 @@
 //
 // The middleware order encodes the consolidation contract (BUILD-PLAN §3.1):
 //
-//   helmet → trace → CORS → client-version gate → JSON body → /v1 router
+//   helmet → trace → CORS → client-version gate → client rate limit → JSON body → /v1 router
 //
 // ONE trace context, ONE CORS config, ONE client-version gate, and — inside
 // the router — ONE auth path. The public share read and the health check are
@@ -14,9 +14,23 @@ import helmet from 'helmet';
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { buildCorsMiddleware } from './middleware/cors.js';
 import { clientVersionMiddleware } from './middleware/client-version.js';
+// Imported straight from the shared module, as billing does: CodeQL
+// (js/missing-rate-limiting) can't follow a destructured re-export to the
+// express-rate-limit call, and flagged every /v1 route.
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 import { buildRouter } from './routes/index.js';
 
+const { clientRateLimit, trustProxyHops } = rateLimitModule;
+
 const API_PREFIX = '/v1';
+
+// A JSON API needs no content sources at all. See docs/DECISIONS.md.
+export const STRICT_CSP = {
+  defaultSrc: ["'none'"],
+  baseUri: ["'none'"],
+  formAction: ["'none'"],
+  frameAncestors: ["'none'"],
+};
 
 // The version gate does not apply to the health probe (infra calls it without
 // an app identity), the public share read (the stranger surface, kept
@@ -25,6 +39,7 @@ const API_PREFIX = '/v1';
 // present X-AlgoMinutes-Client.
 const VERSION_EXEMPT_PATHS = new Set([
   `${API_PREFIX}/health`,
+  `${API_PREFIX}/health/ready`,
   `${API_PREFIX}/shares/read`,
   `${API_PREFIX}/client-error`,
 ]);
@@ -33,13 +48,17 @@ export function buildApp() {
   const app = express();
 
   app.disable('x-powered-by');
-  // API serves JSON and binary, never HTML, so the SPA-oriented CSP from
-  // server.ts is not meaningful here — keep helmet's other protections.
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // The API serves JSON and file downloads, never HTML, so the strictest CSP
+  // costs nothing: nothing may load, run or frame a response. (It used to be
+  // disabled outright, which CLAUDE.md forbids without a recorded decision.)
+  app.use(helmet({ contentSecurityPolicy: { useDefaults: false, directives: STRICT_CSP } }));
 
-  // Trust the proxy so req.ip / X-Forwarded-For behave correctly behind Cloud
-  // Run's load balancer (the share-read rate limiter keys on the forwarded IP).
-  app.set('trust proxy', true);
+  // Trust exactly the proxy hops in front of the service, so req.ip is the
+  // address Cloud Run's front end appended (the rightmost X-Forwarded-For
+  // entry). This used to be `true`, which made req.ip the LEFTMOST entry, a
+  // value the client controls, so the share-read limiter keyed on something
+  // any caller could rotate.
+  app.set('trust proxy', trustProxyHops());
 
   app.use(traceMiddleware);
   app.use(buildCorsMiddleware());
@@ -48,6 +67,7 @@ export function buildApp() {
       exempt: (req) => VERSION_EXEMPT_PATHS.has(req.path),
     }),
   );
+  app.use(API_PREFIX, clientRateLimit());
   app.use(express.json({ limit: '1mb' }));
 
   app.use(API_PREFIX, buildRouter());

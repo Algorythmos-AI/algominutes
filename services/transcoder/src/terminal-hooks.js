@@ -2,28 +2,20 @@
 
 // A7.4 terminal-failure hooks for the transcoder.
 //
-// When a transcode job fails permanently the note is already being flipped to
-// 'error' (note-terminal.cjs). This module ADDS the A7.4 reliability tail:
-//   1. dead-letter the exhausted job so it is never silently lost (Cloud Tasks
-//      has no native DLQ sink),
-//   2. refund the note's metered minutes (a failed recording must not be
-//      charged), and
-//   3. notify the author that the recording failed.
+// When a transcode job fails permanently the note is already flipped to
+// 'error', its minutes refunded and its "failed" notice written, all in the
+// failure's own write (note-terminal.cjs markNoteFailed, with `refund`:
+// transcodeRefund below). This module ADDS the rest of the A7.4 tail: the dead
+// letter for the exhausted job, so it is never silently lost (Cloud Tasks has
+// no native DLQ sink).
 //
 // Everything here is BEST-EFFORT and never throws into the caller's failure
 // path — the same discipline as note-terminal.cjs: a failure to record the
 // failure must not mask the original error, and these additions must never
 // change the behaviour of the existing terminal write.
 
-function loadShared(name) {
-  try { return require(`@algominutes/ai/${name}`); }
-  catch (err) {
-    if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
-    throw err;
-  }
-}
-
-const sharedTasks = loadShared('cloud-tasks.cjs');
+// The note-author read lives in the repo layer, scoped to the task's workspace.
+const pipelineRepo = require('@algominutes/db/pipeline-repo.cjs');
 
 // The A7.4 repo layer (dead_letter, usage_ledger) is authored in TypeScript
 // under @algominutes/db and is resolvable at runtime on Node 24 (type-stripping
@@ -59,16 +51,8 @@ function repoFn(basename, fnName, log) {
 async function resolveNoteUid({ pool, noteId, workspaceId, uid, log }) {
   if (uid) return { uid, workspaceId: workspaceId || null };
   try {
-    const { rows } = await pool.query(
-      'SELECT author_uid, workspace_id FROM notes WHERE id = $1',
-      [noteId],
-    );
-    if (rows[0]) {
-      return {
-        uid: rows[0].author_uid || null,
-        workspaceId: workspaceId || rows[0].workspace_id || null,
-      };
-    }
+    const row = await pipelineRepo.noteAuthor(pool, { noteId, workspaceId });
+    if (row) return { uid: row.uid || null, workspaceId: workspaceId || row.workspaceId || null };
   } catch (err) {
     log.error({ err, noteId }, 'note_author_lookup_failed');
   }
@@ -86,58 +70,12 @@ async function recordDeadLetterSafe(input, log) {
   }
 }
 
-async function refundSafe(input, log) {
-  const fn = repoFn('usage-repo', 'reverseUsageForNote', log);
-  if (!fn) return;
-  try {
-    const r = await fn(input);
-    log.info({ noteId: input.noteId, applied: r && r.applied, minutesReversed: r && r.minutesReversed }, 'usage_refunded');
-  } catch (err) {
-    log.error({ err, noteId: input.noteId }, 'usage_refund_failed');
-  }
-}
-
 /**
- * Enqueue a `notify` Cloud Task (queue `notify`, target `NOTIFIER_URL`).
- * Where the tasks/notifier config is absent (local/dev) this skips with a log
- * line rather than crashing. Never throws.
- */
-async function enqueueNotify({ type, noteId, workspaceId, uid, traceId, log }) {
-  const targetUrl = process.env.NOTIFIER_URL;
-  const projectId = process.env.TASKS_PROJECT;
-  const oidcServiceAccount = process.env.JOBS_SA_EMAIL;
-  const location = process.env.TASKS_LOCATION || 'us-central1';
-  const queue = process.env.NOTIFY_QUEUE || 'notify';
-
-  if (!targetUrl || !projectId || !oidcServiceAccount) {
-    log.info({ type, noteId, hasNotifierUrl: !!targetUrl }, 'notify_enqueue_skipped_no_config');
-    return;
-  }
-  if (!uid) {
-    log.warn({ type, noteId }, 'notify_enqueue_skipped_no_uid');
-    return;
-  }
-  try {
-    await sharedTasks.enqueueTask({
-      projectId,
-      location,
-      queue,
-      targetUrl,
-      oidcServiceAccount,
-      payload: { type, noteId, workspaceId, uid, traceId },
-      log,
-    });
-    log.info({ type, noteId }, 'notify_enqueued');
-  } catch (err) {
-    log.error({ err, type, noteId }, 'notify_enqueue_failed');
-  }
-}
-
-/**
- * The full A7.4 tail for a permanently-failed transcode: DLQ + refund + notify.
+ * The A7.4 tail for a permanently-failed transcode: the dead letter (the
+ * refund and the "failed" notice are markNoteFailed's).
  * `payload` must be job METADATA only (no transcript/PII).
  */
-async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log }) {
+async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -149,19 +87,19 @@ async function onTranscodeTerminalFailure({ pool, noteId, workspaceId, uid, err,
     attempts: attempts != null ? attempts : null,
     traceId: traceId || null,
   }, log);
-  await refundSafe({
-    noteId,
-    reason: 'refund:transcode_failed',
-    idempotencyKey: `${noteId}:refund:transcode`,
-  }, log);
-  await enqueueNotify({
-    type: 'note_failed',
-    noteId,
-    workspaceId: resolved.workspaceId,
-    uid: resolved.uid,
-    traceId,
-    log,
-  });
+  // Work lost on a note that isn't failed (ready anyway, or Postgres couldn't
+  // say): the dead letter is the only record of it.
+  if (deadLetterOnly) log.warn({ traceId, userId: resolved.uid, noteId, workspaceId: resolved.workspaceId }, 'transcode_dead_letter_note_not_failed');
 }
 
-module.exports = { onTranscodeTerminalFailure, enqueueNotify, resolveNoteUid };
+/**
+ * The refund every transcoder failure passes to markNoteFailed, which writes it
+ * in the failure's transaction. One key per run (ledger-reversal.cjs suffixes
+ * the debit). 'refund:spend_cap' labels a note the cap stopped before any paid
+ * work.
+ */
+function transcodeRefund(noteId, reason = 'refund:transcode_failed') {
+  return { reason, idempotencyKey: `${noteId}:refund:transcode` };
+}
+
+module.exports = { onTranscodeTerminalFailure, resolveNoteUid, transcodeRefund };

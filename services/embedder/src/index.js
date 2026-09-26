@@ -15,41 +15,20 @@ const sharedLogger = loadShared('logger.cjs');
 const { requireEnv } = loadShared('require-env.cjs');
 requireEnv(
   'embedder',
-  {
-    oneOf: [
-      { label: 'a Postgres target', of: [['DATABASE_URL'], ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD']] },
-      { label: 'a GCP project', of: [['GOOGLE_CLOUD_PROJECT'], ['GCLOUD_PROJECT']] },
-    ],
-  },
+  require('./env-spec.cjs'),
   { logger: sharedLogger.logger },
 );
-const sharedEmbeddings = loadShared('embeddings.cjs');
+// The transcript read and the embeddings write live in the repo layer.
+const embeddingsRepo = require('@algominutes/db/embeddings-repo.cjs');
 const noteTerminal = loadShared('note-terminal.cjs');
 const terminalHooks = require('./terminal-hooks');
 
 let _pool = null;
 function pool() {
   if (_pool) return _pool;
-  // Cloud SQL pg_hba.conf rejects unencrypted connections from the VPC
-  // connector range. Same fix as services/transcoder/src/db.js:35.
-  // Without this the embedder fails every task with
-  // "pg_hba.conf rejects connection ... no encryption" and the
-  // alpha search/chat path has no embeddings to query (Bug 16).
-  const ssl = { rejectUnauthorized: false };
-  _pool = new Pool(
-    process.env.DATABASE_URL
-      ? { connectionString: process.env.DATABASE_URL, ssl, max: 4, idleTimeoutMillis: 30000 }
-      : {
-          host: process.env.PGHOST,
-          port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-          database: process.env.PGDATABASE || 'postgres',
-          user: process.env.PGUSER || 'postgres',
-          password: process.env.PGPASSWORD,
-          ssl,
-          max: 4,
-          idleTimeoutMillis: 30000,
-        },
-  );
+  // Shared connection config (TLS policy + defaults): @algominutes/ai/pg-config.cjs.
+  const { buildPgConfig, attachPoolErrorLogger } = loadShared('pg-config.cjs');
+  _pool = attachPoolErrorLogger(new Pool(buildPgConfig({ max: 4 })), loadShared('logger.cjs').logger, { pool: 'embedder' });
   return _pool;
 }
 
@@ -60,25 +39,22 @@ const rootLog = sharedLogger.logger.child({ svc: 'embedder' });
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 app.post('/', async (req, res) => {
-  const { noteId, workspaceId } = req.body || {};
-  const traceId = sharedLogger.traceIdFrom(req.headers);
-  const log = rootLog.child({ traceId, noteId });
+  const { noteId, workspaceId, uid } = req.body || {};
+  // The enqueuer's traceId and the caller's uid, carried in the task body (CLAUDE.md §1).
+  const traceId = sharedLogger.traceIdFromTask(req.body, req.headers);
+  const log = rootLog.child({ traceId, noteId, workspaceId, userId: uid });
   if (!noteId || !workspaceId) return res.status(400).json({ error: 'missing noteId/workspaceId' });
 
   try {
-    const client = await pool().connect();
-    let transcript;
-    try {
-      const { rows } = await client.query(
-        `SELECT speaker_tag AS "speakerTag", start_ms AS "startMs", end_ms AS "endMs", text
-           FROM transcript_lines WHERE note_id = $1 ORDER BY start_ms ASC`,
-        [noteId],
-      );
-      transcript = rows;
-    } finally { client.release(); }
+    const transcript = await embeddingsRepo.loadTranscriptForEmbedding(pool(), { noteId, workspaceId });
+    if (transcript === null) {
+      // Deleted (or not in this workspace): nothing to index, nothing to retry.
+      log.warn({}, 'embedder_note_gone');
+      return res.status(200).json({ ok: true, skipped: 'note_gone' });
+    }
 
     // Vertex AI embeddings: ADC from the bound service account; no API key.
-    const result = await sharedEmbeddings.indexEmbeddings({
+    const result = await embeddingsRepo.indexEmbeddings({
       pool: pool(),
       noteId,
       workspaceId,
@@ -91,6 +67,11 @@ app.post('/', async (req, res) => {
     log.info({ chunkCount: result.chunkCount }, 'embedder_complete');
     return res.status(200).json({ ok: true, chunkCount: result.chunkCount });
   } catch (err) {
+    // Deleted mid-run: the embeddings INSERT hits the notes foreign key.
+    if (err && err.code === '23503') {
+      log.warn({ constraint: err.constraint }, 'embedder_note_gone');
+      return res.status(200).json({ ok: true, skipped: 'note_gone' });
+    }
     log.error({ err }, 'embedder_task_failed');
     // Deliberately NOT marked as a failed note, unlike the transcoder and
     // summarizer. By the time embedding runs the transcript and summary exist

@@ -16,7 +16,7 @@ enum CaptureAction: String, Identifiable, CaseIterable {
     var subtitle: String {
         switch self {
         case .recording: return "Record and generate a smart summary"
-        case .importFiles: return "Import a file and summarize its contents"
+        case .importFiles: return "Import an audio file and summarize it"
         case .scanText: return "Extract text from images and documents"
         }
     }
@@ -24,8 +24,8 @@ enum CaptureAction: String, Identifiable, CaseIterable {
     var chips: [String] {
         switch self {
         case .recording: return ["Meetings", "Lectures", "Interviews"]
-        case .importFiles: return ["PDF", "Audio", "YouTube"]
-        case .scanText: return ["Camera", "Images", "TXT"]
+        case .importFiles: return ["MP3", "M4A", "WAV"]
+        case .scanText: return ["Camera", "PDF", "Images"]
         }
     }
 
@@ -80,7 +80,7 @@ struct HomeView: View {
                 .padding(.top, Theme.Spacing.md)
                 .padding(.bottom, Theme.Spacing.xxxl)
             }
-            .background(OwllBackground())
+            .background(AlgoMinutesBackground())
             // Clean top edge: content scrolls under a short fade instead of
             // colliding with the status bar.
             .overlay(alignment: .top) {
@@ -244,7 +244,7 @@ struct HomeView: View {
         .padding(.top, Theme.Spacing.sm)
     }
 
-    // MARK: - Capture actions (Owll-style stacked feature cards)
+    // MARK: - Capture actions (stacked feature cards)
 
     private var captureActions: some View {
         VStack(spacing: Theme.Spacing.lg) {
@@ -254,14 +254,14 @@ struct HomeView: View {
         }
     }
 
-    private func featureCard(_ action: CaptureAction, style: OwllCardStyle, index: Int) -> some View {
+    private func featureCard(_ action: CaptureAction, style: AlgoMinutesCardStyle, index: Int) -> some View {
         Button {
             // A9.3: on the free floor (post-trial, unpaid) metered capture is
             // gated behind the paywall; trial/active pass straight through.
             guard env.billing.guardMeteredAction() else { return }
             activeSheet = action
         } label: {
-            OwllCard(style: style) {
+            AlgoMinutesCard(style: style) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                     HStack(alignment: .bottom, spacing: Theme.Spacing.lg) {
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {

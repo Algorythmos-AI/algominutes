@@ -1,0 +1,18 @@
+---
+// A page the server already links to (share links, Stripe's return pages, the
+// web app) before the web app takes it over, so no link from the api ever 404s.
+import Base from '../layouts/Base.astro';
+
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+---
+<Base title={title} description={description} noindex>
+  <div class="prose">
+    <h1>{title}</h1>
+    <slot />
+    <p><a href="/">Back to AlgoMinutes</a> · <a href="/support">Support</a></p>
+  </div>
+</Base>

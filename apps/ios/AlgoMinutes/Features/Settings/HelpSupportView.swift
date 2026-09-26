@@ -49,7 +49,7 @@ struct HelpSupportView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                OwllCard {
+                AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(Array(faqs.enumerated()), id: \.element.id) { index, item in
                             if index > 0 { Divider().overlay(Theme.borderSoft) }
@@ -84,7 +84,7 @@ struct HelpSupportView: View {
             }
             .padding(20)
         }
-        .background(OwllBackground())
+        .background(AlgoMinutesBackground())
         .navigationTitle("Help & Support")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showComposer) {

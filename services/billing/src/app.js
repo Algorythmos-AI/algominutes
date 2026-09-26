@@ -18,6 +18,12 @@
 
 import express from 'express';
 import helmet from 'helmet';
+import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
+import pgConfigModule from '@algominutes/ai/pg-config.cjs';
+import { getPool } from '@algominutes/db';
+
+const { pingPool } = pgConfigModule;
+const { clientRateLimit, userRateLimit, trustProxyHops } = rateLimitModule;
 
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -41,13 +47,24 @@ export function buildApp() {
   const app = express();
 
   app.disable('x-powered-by');
-  // JSON + webhook service, never HTML — keep helmet's protections, drop CSP.
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // JSON + webhook service, never HTML, so the strictest CSP costs nothing
+  // (docs/DECISIONS.md): nothing may load, run or frame a response.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: { defaultSrc: ["'none'"], baseUri: ["'none'"], formAction: ["'none'"], frameAncestors: ["'none'"] },
+    },
+  }));
 
-  // Trust the proxy so req.ip / X-Forwarded-For behave behind Cloud Run's LB.
-  app.set('trust proxy', true);
+  // Trust exactly the proxy hops in front of the service (the rightmost
+  // X-Forwarded-For entry is the one Cloud Run appended). `true` made req.ip
+  // the leftmost entry, a value the client controls.
+  app.set('trust proxy', trustProxyHops());
 
   app.use(traceMiddleware);
+  // Per client IP on everything but the health probes, including the store
+  // webhooks, which are public and signature-authenticated.
+  app.use(clientRateLimit());
 
   // ── health ── (no auth — infra probes it without an app identity) ──────
   // Cloud Run's front end reserves request paths ending in "z", so an external
@@ -57,6 +74,16 @@ export function buildApp() {
   const health = (_req, res) => res.status(200).send('ok');
   app.get('/health', health);
   app.get('/healthz', health);
+  // Readiness: proves the repo-layer pool reaches Postgres (post-deploy smoke).
+  app.get('/health/ready', async (req, res) => {
+    try {
+      await pingPool(getPool());
+      res.status(200).json({ status: 'ok', db: 'ok' });
+    } catch (err) {
+      req.log.error({ err }, 'readiness_db_unreachable');
+      res.status(503).json({ status: 'degraded', db: 'unreachable' });
+    }
+  });
 
   // ── PUBLIC webhook: Stripe ── RAW body BEFORE express.json ──────────────
   // Signature is verified over these exact bytes (see lib/stripe.js).
@@ -70,9 +97,11 @@ export function buildApp() {
   app.post('/webhooks/google', wrap(googleWebhookRoute));
 
   // ── AUTHED client endpoints (Firebase ID token → req.uid) ───────────────
-  app.post('/v1/purchases/verify', authMiddleware, wrap(verifyPurchaseRoute));
-  app.post('/v1/billing/checkout', authMiddleware, wrap(checkoutRoute));
-  app.post('/v1/billing/portal', authMiddleware, wrap(portalRoute));
+  // Auth, then the caller's per-user budget (one limiter, shared by the three).
+  const authed = [authMiddleware, userRateLimit()];
+  app.post('/v1/purchases/verify', authed, wrap(verifyPurchaseRoute));
+  app.post('/v1/billing/checkout', authed, wrap(checkoutRoute));
+  app.post('/v1/billing/portal', authed, wrap(portalRoute));
 
   // Unmatched → JSON 404 (never an HTML error page).
   app.use((_req, res) => {

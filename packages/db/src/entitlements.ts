@@ -8,6 +8,9 @@
  *   trialing   → Pro-level minutes (full features, bounded — trialIncludedMinutes)
  *   active     → the paid plan's minutes (monthlyIncludedMinutes)
  *   free_floor → FREE_FLOOR_MINUTES (config, UNSET → fails safe to 0)
+ *
+ * A live manual grant (entitlement_grants, internal testers) counts as `active`
+ * on the granted plan, unless a real paid subscription is already active.
  */
 import {
   PlanId,
@@ -18,6 +21,7 @@ import {
 } from '@algominutes/contracts';
 import { usedMinutes, currentBillingPeriod } from './usage-repo.js';
 import { getSubscription, deriveState } from './subscriptions-repo.js';
+import { getActiveGrant } from './entitlement-grants-repo.js';
 
 export interface Entitlement {
   uid: string;
@@ -28,16 +32,22 @@ export interface Entitlement {
   usedMinutes: number;
   remainingMinutes: number; // Infinity when includedMinutes is null
   overQuota: boolean;
+  trialEndsAt: string | null; // ISO; set only while trialing (reverse trial end)
 }
 
 export async function resolveEntitlement(uid: string): Promise<Entitlement> {
   const period = currentBillingPeriod();
   const sub = await getSubscription(uid);
-  const state = deriveState(sub);
+  const derived = deriveState(sub);
+  const grant = derived === 'active' ? null : await getActiveGrant(uid);
+  const state: EntitlementState = grant ? 'active' : derived;
 
   let plan: PlanId;
   let included: number | null;
-  if (state === 'active') {
+  if (grant) {
+    plan = grant.plan;
+    included = grant.includedMinutes ?? monthlyIncludedMinutes(grant.plan);
+  } else if (state === 'active') {
     plan = ((sub?.plan as PlanId) || 'pro');
     included = monthlyIncludedMinutes(plan);
   } else if (state === 'trialing') {
@@ -59,6 +69,7 @@ export async function resolveEntitlement(uid: string): Promise<Entitlement> {
     usedMinutes: used,
     remainingMinutes: remaining,
     overQuota: included != null && used >= included,
+    trialEndsAt: state === 'trialing' && sub?.trial_end ? new Date(sub.trial_end).toISOString() : null,
   };
 }
 

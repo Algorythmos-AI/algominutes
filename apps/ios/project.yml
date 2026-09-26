@@ -5,13 +5,26 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+# Debug and Staging talk to the staging backend; Release to production.
+# Staging is a release-type build (optimised, no DEBUG), archived by the
+# AlgoMinutes-Staging scheme for internal TestFlight.
+configs:
+  Debug: debug
+  Staging: release
+  Release: release
+
+# Exact versions, and Package.resolved is committed: Xcode Cloud resolves
+# packages only from a committed Package.resolved, and every build (local,
+# GitHub CI, Xcode Cloud) must get the same dependency graph. To upgrade, change
+# a version here, run `xcodegen generate` and
+# `xcodebuild -resolvePackageDependencies -scheme AlgoMinutes`, and commit both.
 packages:
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk
-    from: 11.0.0
+    exactVersion: 11.15.0
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
-    from: 8.0.0
+    exactVersion: 8.0.0
 
 settings:
   base:
@@ -21,11 +34,41 @@ settings:
     CURRENT_PROJECT_VERSION: "14"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # Share links (POST /v1/shares) open on the public site, which has no
+    # viewer yet. Off everywhere until it does; the share sheet still exports.
+    SHARE_LINKS_ENABLED: "NO"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
     # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic
     # (-allowProvisioningUpdates registers ids/profiles at archive; see A4/PR-25).
     DEVELOPMENT_TEAM: NY9MS8GSBK
+  # The backend each build talks to (Info.plist → AppConfig.swift). Cloud Run
+  # URLs are deterministic: https://<service>-<project number>.<region>.run.app
+  # (infra/terraform/modules/environment/cloud-run.tf).
+  configs:
+    Debug:
+      API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+      UPDATE_URL: itms-beta://
+      PAYWALL_ENABLED: "YES"
+    Staging:
+      API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
+      UPDATE_URL: itms-beta://
+      # No paywall until the products exist and purchases verify (PR-32).
+      PAYWALL_ENABLED: "NO"
+    Release:
+      # TODO(prod): the production Cloud Run origins, once prod is applied
+      # (https://api-<prod project number>.australia-southeast1.run.app). Until
+      # then they're empty, and the "Backend origins are set" phase fails a
+      # Release build rather than shipping one that talks to nothing (it named
+      # api.algominutes.com, a domain that isn't registered).
+      API_BASE_URL: ""
+      BILLING_BASE_URL: ""
+      # The update screen's button (426). TestFlight until the App Store
+      # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
+      UPDATE_URL: itms-beta://
+      PAYWALL_ENABLED: "NO"
 
 targets:
   AlgoMinutes:
@@ -46,27 +89,80 @@ targets:
     dependencies:
       - target: BroadcastExtension
         embed: true
-      - target: BroadcastExtensionSetupUI
-        embed: true
       - package: Firebase
         product: FirebaseAuth
       - package: Firebase
         product: FirebaseFirestore
       - package: Firebase
-        product: FirebaseStorage
-      - package: Firebase
         product: FirebaseCrashlytics
+      - package: Firebase
+        product: FirebaseMessaging
       - package: GoogleSignIn
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+    preBuildScripts:
+      # Every build that reaches a device talks to a real backend: fail early,
+      # and clearly, when a configuration has no API or billing origin.
+      - name: Backend origins are set
+        script: |
+          set -eu
+          for pair in "API_BASE_URL=${API_BASE_URL:-}" "BILLING_BASE_URL=${BILLING_BASE_URL:-}"; do
+            value="${pair#*=}"
+            case "$value" in
+              https://?*) ;;
+              *)
+                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Release waits for the production origins: TODO(prod)."
+                exit 1 ;;
+            esac
+          done
+        basedOnDependencyAnalysis: false
     postBuildScripts:
-      # Crashlytics needs the dSYM after every Release build; Debug/simulator
-      # builds skip the upload (no symbols leave the machine in development).
+      # The Google Sign-In callback scheme is the bundled GoogleService-Info.plist's
+      # REVERSED_CLIENT_ID, written into the built Info.plist (before signing), so
+      # it always matches the Firebase project the build was configured with and
+      # no client id lives in the repo. Staging and Release builds need the plist;
+      # Debug (CI, simulator tests) runs with FirebaseBootstrap's placeholder.
+      - name: Google Sign-In URL scheme from GoogleService-Info.plist
+        script: |
+          set -euo pipefail
+          GSI="${SRCROOT}/AlgoMinutes/Resources/GoogleService-Info.plist"
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          # The built Info.plist is this phase's declared input (below), so the
+          # build system runs it after that file is written. Without the input the
+          # two raced, and PlistBuddy created a stray Info.plist and failed.
+          if [ ! -f "$PLIST" ]; then
+            echo "error: the built Info.plist isn't there yet ($PLIST): this phase must run after it's processed"
+            exit 1
+          fi
+          if [ ! -f "$GSI" ]; then
+            if [ "${CONFIGURATION}" != "Debug" ]; then
+              echo "error: ${CONFIGURATION} needs AlgoMinutes/Resources/GoogleService-Info.plist (git-ignored; see docs/runbooks)"
+              exit 1
+            fi
+            exit 0
+          fi
+          REVERSED=$(/usr/libexec/PlistBuddy -c "Print :REVERSED_CLIENT_ID" "$GSI")
+          /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${REVERSED}" "$PLIST"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
+      # Crashlytics needs the dSYM of every build that reaches a device outside
+      # development (Staging and Release). This phase covers archives made on a
+      # Mac. Xcode Cloud uploads from ci_scripts/ci_post_xcodebuild.sh instead
+      # (CI_WORKFLOW is set there), and GitHub CI's unsigned Staging build sets
+      # ALGOMINUTES_SKIP_DSYM_UPLOAD=YES (it has a fake plist).
       - name: Upload dSYMs to Crashlytics
         script: |
-          if [ "${CONFIGURATION}" = "Release" ]; then
-            "${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ "${CONFIGURATION}" = "Debug" ] || [ -n "${CI_WORKFLOW:-}" ] || [ "${ALGOMINUTES_SKIP_DSYM_UPLOAD:-NO}" = "YES" ]; then
+            exit 0
+          fi
+          RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ -x "$RUN" ]; then
+            "$RUN"
+          else
+            # Visible in the build log; the archive still succeeds.
+            echo "warning: Crashlytics upload script not found at $RUN; dSYMs were not uploaded"
           fi
         inputFiles:
           - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}
@@ -81,6 +177,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: AlgoMinutesTests
+    dependencies:
+      - target: AlgoMinutes
+
+  # XCUITest smoke (plan PR-29): the real app launches and renders its first
+  # screen on the simulator, on every iOS PR (ios.yml runs the scheme's tests).
+  AlgoMinutesUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - path: AlgoMinutesUITests
     dependencies:
       - target: AlgoMinutes
 
@@ -99,30 +208,30 @@ targets:
         CODE_SIGN_ENTITLEMENTS: BroadcastExtension/BroadcastExtension.entitlements
         CODE_SIGN_STYLE: Automatic
 
-  BroadcastExtensionSetupUI:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: BroadcastExtensionSetupUI
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes.BroadcastExtensionSetupUI
-        INFOPLIST_FILE: BroadcastExtensionSetupUI/Info.plist
-        CODE_SIGN_STYLE: Automatic
-
 schemes:
   AlgoMinutes:
     build:
       targets:
         AlgoMinutes: all
         AlgoMinutesTests: [test]
+        AlgoMinutesUITests: [test]
         BroadcastExtension: all
-        BroadcastExtensionSetupUI: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - AlgoMinutesTests
+        - AlgoMinutesUITests
     archive:
       config: Release
+  # Internal TestFlight against staging (Xcode Cloud, plan PR-30).
+  AlgoMinutes-Staging:
+    build:
+      targets:
+        AlgoMinutes: all
+        BroadcastExtension: all
+    run:
+      config: Staging
+    archive:
+      config: Staging

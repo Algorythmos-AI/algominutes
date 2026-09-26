@@ -19,15 +19,22 @@ function runChild(cmd, args, { stdoutSink } = {}) {
     });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
     child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       if (code === 0) resolve({ stdout, stderr });
       else {
-        const err = new Error(`${cmd} exited ${code}: ${stderr.slice(0, 500)}`);
+        const err = new Error(`${cmd} exited ${code}${signal ? ` (${signal})` : ''}: ${stderr.slice(0, 500)}`);
         err.code = code;
+        err.signal = signal || null;
         reject(err);
       }
     });
   });
+}
+
+// A spawn failure (a string code like ENOENT) or a process killed by a signal,
+// as opposed to the tool running and rejecting the file (a numeric exit code).
+function isInfraFault(err) {
+  return !!err && (typeof err.code === 'string' || (err.code == null && !!err.signal));
 }
 
 async function probeDuration(localPath) {
@@ -37,20 +44,29 @@ async function probeDuration(localPath) {
   try {
     const { stdout } = await runChild('ffprobe', [
       '-v', 'error',
-      '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '-show_entries', 'format=duration,format_name',
+      '-of', 'default=noprint_wrappers=1',
       localPath,
     ]);
-    const dur = Number(String(stdout).trim());
-    if (Number.isFinite(dur) && dur > 0) {
+    const fields = {};
+    for (const line of String(stdout).split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) fields[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+    const dur = Number(fields.duration);
+    // ADTS AAC (the iOS recorder's crash-safe format, and imported .aac files)
+    // has no duration header: ffprobe only estimates it from the bitrate. That
+    // read a 4 h recording as 43 s short (its end never transcribed) and a 30 s
+    // clip that opens with silence as 223 s. Measure it by decoding instead.
+    if (fields.format_name !== 'aac' && Number.isFinite(dur) && dur > 0) {
       return dur;
     }
   } catch (err) {
     ffprobeError = err;
   }
 
-  // Fallback for WebM (MediaRecorder) files without duration header:
-  // Decode the audio quickly and parse the final time=00:00:00.00
+  // Fallback for files without a trustworthy duration header (WebM from
+  // MediaRecorder, ADTS AAC): decode the audio and parse the final time=00:00:00.00
   try {
     const { stderr } = await runChild('ffmpeg', ['-i', localPath, '-f', 'null', '-']);
     // Look for the last 'time=XX:XX:XX.XX' in stderr
@@ -71,6 +87,9 @@ async function probeDuration(localPath) {
 
   const err = new Error(`could not determine duration for ${localPath}`);
   err.cause = fallbackError || ffprobeError;
+  // The tools failing to run (not spawnable, or killed, e.g. out of memory) says
+  // nothing about the file: that is worth a retry, not "damaged recording".
+  err.transient = isInfraFault(ffprobeError) || isInfraFault(fallbackError);
   throw err;
 }
 

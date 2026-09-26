@@ -17,7 +17,7 @@ struct TranscriptRatingCard: View {
     var onReport: (() -> Void)?
 
     var body: some View {
-        OwllCard {
+        AlgoMinutesCard {
             VStack(spacing: Theme.Spacing.md) {
                 Text(rating == nil ? "Rate transcription quality" : "Thanks — you rated this")
                     .font(Typography.heading(15, weight: .bold))

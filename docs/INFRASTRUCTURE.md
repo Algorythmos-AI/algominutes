@@ -43,12 +43,11 @@ separate entity. All AlgoMinutes assets, contracts and billing belong to the **P
 | Wordmark (all user-facing text) | **AlgoMinutes** |
 | iOS bundle ID | `com.algorythmos.algominutes` |
 | iOS broadcast extension | `com.algorythmos.algominutes.BroadcastExtension` |
-| iOS broadcast setup UI | `com.algorythmos.algominutes.BroadcastExtensionSetupUI` |
 | **App Group** ⚠️ | `group.com.algorythmos.algominutes` |
 | Android applicationId / package | `com.algorythmos.algominutes` |
 | Android package path | `com/algorythmos/algominutes/` |
-| Web domain | `algominutes.com` |
-| API domain | `api.algominutes.com` |
+| Public site | `algominutes.algorythmos.com` (privacy, terms, support, account deletion) |
+| API | the Cloud Run `run.app` URLs through external beta (DECISIONS, 2026-09-26) |
 | GCP region (all services, both envs) | `australia-southeast1` (Sydney) |
 
 **Casing rule:** `AlgoMinutes` in prose and display names. **lowercase** in every identifier —
@@ -94,8 +93,8 @@ audio.
 |---|---|
 | **Organisation** | `algorythmos.com` — **org ID `327264144426`** |
 | Created via | **Cloud Identity Free** (SKU `identitybasic`) — free tier, up to 50 users |
-| Org admin account | `gcp-admin@algorythmos.com` |
-| Secondary owner | `algorythmos.france@gmail.com` |
+| **Primary working account** (owner decision, 2026-09-25) | **`algorythmos.france@gmail.com`** |
+| Org admin account | `gcp-admin@algorythmos.com` (org-level admin + break-glass) |
 | Domain verification | TXT record on `algorythmos.com` — `google-site-verification=4k5baR-…` (Cloudflare) |
 
 **Cloud Identity provides identity only — no mailbox.** `gcp-admin@algorythmos.com` is a sign-in
@@ -105,10 +104,10 @@ identity; mail addressed to it lands in **Zoho** (§6). MX records were never to
 
 | Account | Role |
 |---|---|
-| `gcp-admin@algorythmos.com` | Organisation Admin · Owner on both projects · Billing Account Administrator. **Primary working account** |
-| `algorythmos.france@gmail.com` | Owner on both projects · Billing Account Administrator · owns the payments profile. **Recovery only** |
+| `algorythmos.france@gmail.com` | Owner on both projects · Billing Account Administrator · owns the payments profile. **Primary working account** since 2026-09-25 (owner decision). Terraform, deploys and operations run as this account. |
+| `gcp-admin@algorythmos.com` | Organisation Admin · Owner on both projects · Billing Account Administrator. Org-level administration and **break-glass**. |
 
-⚠️ **Access risk:** the org admin is a single account. Ensure 2FA (authenticator or hardware key,
+⚠️ **Access risk:** each of these accounts can do everything on its own, and the primary is a consumer Gmail account (no org-managed recovery). Ensure 2FA (authenticator or hardware key,
 **not SMS**), a recovery email that will still exist in three years, and printed backup codes.
 
 ### 4.2 Billing
@@ -236,7 +235,7 @@ project: `google-services.json`, `GoogleService-Info.plist`, web config.
 
 ⚠️ **Apple enrolment is the long pole.** It gates the Team ID, which gates the Apple half of A4, the
 iOS release, and App Store Connect. **Apply for the Small Business Program before the first sale** —
-worth roughly A$4.35 per subscriber per month at A$29.
+worth roughly A$2.25 per subscriber per month at A$14.99.
 
 ---
 
@@ -247,8 +246,7 @@ worth roughly A$4.35 per subscriber per month at A$29.
 | `algorythmos.com` | **Cloudflare** (DNS) | Primary — company site, GCP org identity |
 | `algorythmos.com.au` | Cloudflare | Secondary |
 | `algorythmos.fr` | Cloudflare | Secondary |
-| `algominutes.com` | `TODO — confirm registrar` | Product web app |
-| `algominutes.com.au` | `TODO — confirm registered` | Product, AU |
+| `algominutes.com`, `algominutes.com.au` | **Not registered** (checked 2026-09-26) | Nothing may point at them: the product lives under `algorythmos.com` |
 
 **Email: Zoho Mail** for all three `algorythmos` domains. MX, SPF, DKIM and DMARC configured and
 verified. Confirmed working — Google Cloud invitations to `gcp-admin@algorythmos.com` were delivered

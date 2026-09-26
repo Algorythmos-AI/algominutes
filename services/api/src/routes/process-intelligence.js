@@ -8,12 +8,11 @@ import crypto from 'node:crypto';
 // work — this handler should finish in <1s of CPU.
 //
 // Repointed onto the workspace packages:
-//   - the local pg-pool factory  → @algominutes/db pg-query.cjs `pool()`
 //   - validateStoragePath        → @algominutes/db storage-paths.cjs
 //   - enqueueTask                → @algominutes/ai cloud-tasks.cjs
 //   - intelligence helpers       → @algominutes/ai intelligence.cjs
-//   The queued-upsert SQL has no repo function, so it stays here but runs on the
-//   SHARED pool (not a re-created local one). Behaviour is preserved exactly.
+//   - every note status write    → @algominutes/db notes-repo (markQueued /
+//     markError): Postgres first, then the Firestore mirror, tenant-scoped.
 //
 // Firebase `defineString`/`defineSecret` params become plain Cloud Run env
 // vars (TRANSCODER_URL, JOBS_SA_EMAIL, TASKS_*), with the source's defaults.
@@ -26,100 +25,52 @@ import { getStorage } from 'firebase-admin/storage';
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
-import pgQueryModule from '@algominutes/ai/pg-query.cjs';
 
 // A9.2 metered-minutes gate — assert quota and charge the ledger BEFORE any paid
-// transcode work is queued. resolveEntitlement/assertCanMeter/meterMinutes all
-// live in the @algominutes/db repo layer (never trust the client for quota).
-import { assertCanMeter, meterMinutes, QuotaExceededError, ensureTrial } from '@algominutes/db';
+// transcode work is queued. assertCanMeter and the debit (written by
+// markQueued) live in the @algominutes/db repo layer (never trust the client
+// for quota).
+import {
+  assertCanMeter,
+  QuotaExceededError,
+  ensureTrial,
+  markQueued,
+  markError,
+  markKickoffRejected,
+  getNoteQueueState,
+  WorkspaceBoundaryError,
+} from '@algominutes/db';
 import { toEntitlementResponse } from './entitlement.js';
+import { NoteType } from '@algominutes/contracts/schemas';
 
 const { MAX_AUDIO_BYTES, isValidId, publicErrorFor, enforceUsageBudget } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
 const { enqueueTask } = cloudTasksModule;
-const { pool, postgresEnabled } = pgQueryModule;
-
-// Lazy-sync the user, workspace, and workspace membership rows before
-// inserting the note. Without this, any Firebase user not previously
-// backfilled hits an FK violation on notes_workspace_id_fkey or
-// notes_author_uid_fkey, the kickoff swallows the error (defensive), and the
-// transcoder's downstream writes fail silently.
-//
-// Idempotent: ON CONFLICT DO NOTHING on every parent insert. Wrapped in a
-// single transaction so a partial failure rolls back cleanly. Runs on the
-// SHARED @algominutes/db pool.
-async function upsertNoteQueued({
-  noteId, workspaceId, callerUid, callerEmail, callerName,
-  sourceType, storagePath, sourceUrl, mimeType, log,
-}) {
-  if (!postgresEnabled()) return;
-  const client = await pool().connect();
+// Mark the note failed through the repo layer (Postgres scoped to the caller's
+// workspace, then the Firestore mirror). Never throws: the caller is already on
+// an error path, and a failure to record the failure is itself logged.
+// Refunded in the failure's transaction: past markQueued the run was already
+// charged, and it never started (net-guarded, so a note never charged gets
+// nothing back).
+async function failNote(db, { noteId, workspaceId, userMsg, log, event }) {
+  const refund = { reason: 'refund:enqueue_failed', idempotencyKey: `${noteId}:refund:enqueue` };
+  await markError(db, { noteId, workspaceId, errorMessage: userMsg, refund }, log).catch((err) =>
+    log.error({ err, event }, 'mark_error_failed'),
+  );
+}
+// A refusal before markQueued (too large, rate limit): as failNote, but a note
+// a concurrent duplicate kickoff already queued is left running.
+async function rejectNote(db, { noteId, workspaceId, userMsg, log, event }) {
   try {
-    await client.query('BEGIN');
-
-    await client.query(
-      `INSERT INTO users (uid, email, display_name)
-         VALUES ($1, $2, $3)
-       ON CONFLICT (uid) DO UPDATE SET
-         email        = COALESCE(EXCLUDED.email, users.email),
-         display_name = COALESCE(EXCLUDED.display_name, users.display_name)`,
-      [callerUid, callerEmail || null, callerName || null],
-    );
-
-    await client.query(
-      `INSERT INTO workspaces (id, owner_uid, name)
-         VALUES ($1, $2, $3)
-       ON CONFLICT (id) DO NOTHING`,
-      [workspaceId, callerUid, callerName ? `${callerName}'s Workspace` : 'My Workspace'],
-    );
-
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, uid, role)
-         VALUES ($1, $2, 'owner')
-       ON CONFLICT (workspace_id, uid) DO NOTHING`,
-      [workspaceId, callerUid],
-    );
-
-    await client.query(
-      `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, storage_path, source_url, mime_type)
-         VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET
-         status = 'queued',
-         source_type = EXCLUDED.source_type,
-         storage_path = COALESCE(EXCLUDED.storage_path, notes.storage_path),
-         source_url   = COALESCE(EXCLUDED.source_url, notes.source_url),
-         mime_type    = COALESCE(EXCLUDED.mime_type, notes.mime_type),
-         summarizer_enqueued_at = NULL,
-         embedder_enqueued_at = NULL,
-         chunks_done = 0,
-         chunks_total = NULL,
-         duration_sec_probed = NULL,
-         error_message = NULL,
-         updated_at = NOW()`,
-      [noteId, workspaceId, callerUid, sourceType, storagePath || null, sourceUrl || null, mimeType || null],
-    );
-
-    // A retry is a fresh start, so the previous run's chunk rows have to go.
-    // Safe because it runs in the same transaction that sets status='queued',
-    // before any chunk work for this run begins.
-    await client.query(`DELETE FROM audio_chunks WHERE note_id = $1`, [noteId]);
-
-    await client.query('COMMIT');
+    const { marked } = await markKickoffRejected(db, { noteId, workspaceId, errorMessage: userMsg }, log);
+    if (!marked) log.info({ event }, 'kickoff_rejection_spared_in_flight_note');
   } catch (err) {
-    await client.query('ROLLBACK').catch((rollbackErr) => {
-      // Log the rollback failure separately so it doesn't mask the
-      // original cause when both surface in the same flow.
-      log.child({ noteId, workspaceId }).error({ rollbackErr }, 'upsert_note_queued_rollback_failed');
-    });
-    throw err;
-  } finally {
-    client.release();
+    log.error({ err, event }, 'mark_error_failed');
   }
 }
 
 export async function processIntelligenceRoute(req, res) {
   const baseLog = req.log;
-  const traceId = req.traceId;
 
   // Auth handled by the shared middleware; identity claims come from it.
   const callerUid = req.uid;
@@ -128,7 +79,8 @@ export async function processIntelligenceRoute(req, res) {
 
   // ── Validate body (storagePath OR sourceUrl, not both) ────
   const { noteId, workspaceId, type, storagePath, sourceUrl, mimeType: clientMime } = req.body || {};
-  if (!isValidId(noteId) || !isValidId(workspaceId) || !type) {
+  // `type` must be a published NoteType (the documented ProcessRequest contract).
+  if (!isValidId(noteId) || !isValidId(workspaceId) || !NoteType.safeParse(type).success) {
     return res.status(400).json({ error: 'Missing or invalid required fields' });
   }
   if (workspaceId !== `workspace_${callerUid}`) {
@@ -143,6 +95,7 @@ export async function processIntelligenceRoute(req, res) {
       return res.status(400).json({ error: 'Invalid sourceUrl' });
     }
     let parsedHost = '';
+    // silent-catch-ok: an unparseable URL is the client's input error, answered with a 400.
     try { parsedHost = new URL(sourceUrl).host; } catch { return res.status(400).json({ error: 'Invalid sourceUrl' }); }
     const allowedHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be']);
     if (!allowedHosts.has(parsedHost)) return res.status(400).json({ error: 'URL host not allowed' });
@@ -168,6 +121,26 @@ export async function processIntelligenceRoute(req, res) {
     return res.status(500).json({ error: 'Ownership check failed' });
   }
 
+  // ── Postgres pre-check: foreign or already in flight? ─────
+  // Before the size probe, rate limit and metering, so a duplicate kickoff (a
+  // client retry after a timeout) or a foreign note id costs nothing and
+  // changes nothing. markQueued repeats this check atomically.
+  let queueState;
+  try {
+    queueState = await getNoteQueueState({ noteId, workspaceId });
+  } catch (err) {
+    log.error({ err }, 'note_queue_state_failed');
+    return res.status(500).json({ error: "We couldn't queue your audio. Please try again." });
+  }
+  if (queueState.foreign) {
+    log.warn({}, 'process_note_workspace_boundary');
+    return res.status(404).json({ error: 'Note not found' });
+  }
+  if (queueState.inFlight) {
+    log.info({ status: queueState.status }, 'process_already_in_flight');
+    return res.status(202).json({ success: true, noteId, status: queueState.status, inFlight: true });
+  }
+
   // ── Probe audio size (drives bytes budget; storagePath only) ─
   let probedSize = 0;
   if (storagePath) {
@@ -182,9 +155,7 @@ export async function processIntelligenceRoute(req, res) {
     }
     if (probedSize > MAX_AUDIO_BYTES) {
       const userMsg = publicErrorFor(new Error('TOO_LARGE'));
-      await noteRef
-        .set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-        .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:too_large_mirror'));
+      await rejectNote(db, { noteId, workspaceId, userMsg, log, event: 'too_large' });
       return res.status(413).json({ error: userMsg });
     }
   }
@@ -194,9 +165,7 @@ export async function processIntelligenceRoute(req, res) {
     await enforceUsageBudget(db, callerUid, probedSize);
   } catch (err) {
     const userMsg = publicErrorFor(err);
-    await noteRef
-      .set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-      .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:rate_limit_mirror'));
+    await rejectNote(db, { noteId, workspaceId, userMsg, log, event: 'rate_limit' });
     log.warn({ reason: err.message, bytes: probedSize }, 'usage_budget_exceeded');
     return res.status(429).json({ error: userMsg });
   }
@@ -229,19 +198,18 @@ export async function processIntelligenceRoute(req, res) {
       deviceHash,
       platform: devPlatform,
       emailPresent: !!req.authEmail,
+      user: { email: callerEmail, name: callerName },
+      log,
     });
     await assertCanMeter(callerUid, minutes);
-    // Idempotent under Cloud Tasks / client retry: the UNIQUE idempotency_key
-    // makes a replay a no-op, so we never double-charge a note's ingest.
-    await meterMinutes({
-      uid: callerUid,
-      workspaceId,
-      noteId,
-      minutes,
-      reason: 'ingest',
-      idempotencyKey: `${noteId}:ingest`,
-    });
+    // The debit itself is written by markQueued, in the transaction that
+    // creates the note row (usage_ledger.note_id is a foreign key), and only
+    // if it actually queues. Idempotent by key: a retry never charges twice.
   } catch (err) {
+    if (err?.code === 'ACCOUNT_DELETED') {
+      log.warn({}, 'process_account_deleted');
+      return res.status(401).json({ error: 'account_deleted' });
+    }
     // instanceof is the intent; the code check is the cross-realm fallback
     // (a QuotaExceededError thrown from another module copy still matches).
     if (err instanceof QuotaExceededError || err?.code === 'QUOTA_EXCEEDED') {
@@ -256,23 +224,43 @@ export async function processIntelligenceRoute(req, res) {
     return res.status(500).json({ error: "We couldn't queue your audio. Please try again." });
   }
 
-  // ── Persist queued state in PG + Firestore mirror ─────────
+  // ── Persist queued state: Postgres, then the Firestore mirror ──
+  let queued;
   try {
-    await upsertNoteQueued({
-      noteId, workspaceId, callerUid, callerEmail, callerName,
-      sourceType: type, storagePath, sourceUrl, mimeType: clientMime, log,
-    });
+    queued = await markQueued(db, {
+      noteId, workspaceId,
+      authorUid: callerUid, authorEmail: callerEmail, authorName: callerName,
+      sourceType: type, storagePath, sourceUrl, mimeType: clientMime,
+      meter: { minutes, idempotencyKey: `${noteId}:ingest` },
+    }, log);
   } catch (err) {
-    log.error({ err }, 'pg_upsert_queued_failed');
+    if (err?.code === 'ACCOUNT_DELETED') {
+      // The account was deleted; its token is still valid for up to an hour.
+      log.warn({}, 'process_account_deleted');
+      return res.status(401).json({ error: 'account_deleted' });
+    }
+    if (err instanceof WorkspaceBoundaryError || err?.code === 'WORKSPACE_BOUNDARY') {
+      // Postgres note ids are global: this id belongs to another workspace.
+      // Nothing was written; answer exactly as for a note that doesn't exist.
+      log.warn({ err }, 'process_note_workspace_boundary');
+      return res.status(404).json({ error: 'Note not found' });
+    }
+    log.error({ err }, 'mark_queued_failed');
     const userMsg = "We couldn't queue your audio. Please try again.";
-    await noteRef.set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-      .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:pg_queue'));
+    await failNote(db, { noteId, workspaceId, userMsg, log, event: 'queue' });
     return res.status(500).json({ error: userMsg });
   }
-  await noteRef.set({
-    status: 'queued',
-    updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  if (queued.deleted) {
+    // Deleted while this request ran: it stays deleted, and nothing is queued.
+    log.info({}, 'process_note_deleted');
+    return res.status(404).json({ error: 'Note not found' });
+  }
+  if (!queued.queued) {
+    // Lost the race to a concurrent duplicate that queued first: that run owns
+    // the note. Don't enqueue a second kickoff.
+    log.info({ status: queued.status }, 'process_already_in_flight');
+    return res.status(202).json({ success: true, noteId, status: queued.status, inFlight: true });
+  }
 
   // ── Enqueue Cloud Task ────────────────────────────────────
   // Firebase defineString params → Cloud Run env vars (same defaults).
@@ -286,8 +274,7 @@ export async function processIntelligenceRoute(req, res) {
   if (!transcoderUrl || !jobsSa || !tasksProject) {
     log.error({ transcoderUrl: !!transcoderUrl, jobsSa: !!jobsSa, tasksProject: !!tasksProject }, 'kickoff_misconfigured');
     const userMsg = 'Service is being upgraded. Please try again shortly.';
-    await noteRef.set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-      .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:kickoff_misconfig'));
+    await failNote(db, { noteId, workspaceId, userMsg, log, event: 'kickoff_misconfig' });
     return res.status(503).json({ error: userMsg });
   }
 
@@ -308,22 +295,24 @@ export async function processIntelligenceRoute(req, res) {
         storagePath,
         sourceUrl,
         mimeType: clientMime,
+        // The caller, carried through every worker hop so their logs name the
+        // user (CLAUDE.md §1: userId where it exists).
+        uid: callerUid,
       },
+      traceId: req.traceId,
       log,
     });
   } catch (err) {
     log.error({ err }, 'task_enqueue_failed');
     const userMsg = "We couldn't queue your audio. Please try again.";
-    await noteRef.set({ status: 'error', errorMessage: userMsg, updatedAt: new Date().toISOString() }, { merge: true })
-      .catch((mirrorErr) => log.error({ err: mirrorErr }, 'firestore_write_failed:enqueue'));
+    await failNote(db, { noteId, workspaceId, userMsg, log, event: 'enqueue' });
     return res.status(500).json({ error: userMsg });
   }
 
-  await db
-    .collection('analytics')
-    .add({ event: 'process_queued', noteId, noteType: type, workspaceId, traceId, jobId, timestamp: new Date().toISOString() })
-    .catch((err) => log.error({ err }, 'analytics_write_failed:queued'));
-
+  // The kickoff's record: this line carries traceId, userId, noteId,
+  // workspaceId, the note type (`source`) and the jobId, and a log-based
+  // metric counts it. (It used to be duplicated into a root Firestore
+  // `analytics` doc, which nothing read and account deletion had to sweep.)
   log.info({ jobId }, 'kickoff_enqueued');
   return res.json({ success: true, noteId, jobId, status: 'queued' });
 }

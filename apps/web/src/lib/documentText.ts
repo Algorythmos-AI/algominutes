@@ -84,7 +84,9 @@ async function extractPdfText(
       });
     }
   } finally {
-    await pdf.destroy();
+    // The loading task owns the document: pdf.js 5 removed
+    // PDFDocumentProxy.destroy(), and this works on 4 as well.
+    await loadingTask.destroy();
   }
 
   return pages.join('\n\n');

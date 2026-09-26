@@ -9,6 +9,7 @@
 apps/ios
 apps/android
 apps/web
+apps/site
 packages/contracts/generated
 **/.DS_Store
 **/*.log

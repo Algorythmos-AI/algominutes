@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Elevation levels — applied by component, never ad hoc. At most ONE hero
 /// card per screen; lists sit flat so feature cards can pop.
-enum OwllCardStyle {
+enum AlgoMinutesCardStyle {
     /// List rows, settings cells: plain surface + hairline, no shadow.
     case flat
     /// Feature cards: gradient fill + soft shadow.
@@ -13,8 +13,8 @@ enum OwllCardStyle {
     case hero
 }
 
-struct OwllCard<Content: View>: View {
-    var style: OwllCardStyle = .raised
+struct AlgoMinutesCard<Content: View>: View {
+    var style: AlgoMinutesCardStyle = .raised
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -311,9 +311,9 @@ struct EmptyStateView: View {
     }
 }
 
-// MARK: - Background mesh (port of .owll-bg)
+// MARK: - Background mesh
 
-struct OwllBackground: View {
+struct AlgoMinutesBackground: View {
     var body: some View {
         ZStack {
             Theme.background
