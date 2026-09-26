@@ -83,6 +83,31 @@ describe('the notes list', () => {
     expect(await screen.findByText('No notes yet')).toBeTruthy();
   });
 
+  it('a null field (as the mirror repair writes) or a missing title keeps the note in the list', () => {
+    const { notes, invalid } = parseNotes([{ id: 'r', data: { ...note('r'), errorMessage: null, title: undefined } }]);
+    expect(invalid).toEqual([]);
+    expect(notes[0]).toMatchObject({ id: 'r', title: '' });
+  });
+
+  it("when the feed fails it says so, and tries again on its own", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    const feed = {
+      subscribe: (_uid: string, onNotes: (n: NoteDoc[]) => void, onError: (e: unknown) => void) => {
+        calls += 1;
+        if (calls === 1) setTimeout(() => onError(new Error('unavailable')), 0);
+        else onNotes([note('back')]);
+        return () => {};
+      },
+    };
+    renderApp('/app', fakeAuth(PERMANENT).adapter, undefined, feed);
+    expect(await screen.findByText(/couldn't be loaded/)).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(await screen.findByText('Note back')).toBeTruthy();
+    expect(calls).toBe(2);
+    vi.useRealTimers();
+  });
+
   it('parseNotes drops a doc that breaks the contract, and sorts', () => {
     const { notes, invalid } = parseNotes([
       { id: 'a', data: { ...note('a'), createdAt: '2026-01-01T00:00:00Z' } },
@@ -126,13 +151,25 @@ describe('a note', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/The audio was silent\. It didn’t use any of your minutes/);
   });
 
-  it("a note that isn't the user's, or is gone, isn't available", async () => {
+  it("a note that isn't in the user's list isn't available", async () => {
     renderApp('/app/notes/nope', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([note('n1')]).feed);
     expect(await screen.findByRole('heading', { name: "This note isn't available" })).toBeTruthy();
-    cleanup();
+  });
+
+  it('a ready note the api has no copy of is shown from its doc, not called deleted', async () => {
     const s = server((url) => (url.endsWith('/v1/notes/read') ? json({ error: 'note_not_found' }, 404) : undefined));
-    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('n1')]).feed);
-    expect(await screen.findByRole('heading', { name: "This note isn't available" })).toBeTruthy();
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('n1', { summary: { gist: 'From the doc.', actionItems: ['Doc action'], keyDecisions: [] } })]).feed);
+    expect(await screen.findByText('From the doc.')).toBeTruthy();
+    expect(screen.getByText('Doc action')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: "This note isn't available" })).toBeNull();
+  });
+
+  it('a scanned note is read from its doc alone, as on iOS', async () => {
+    const s = server(() => undefined);
+    renderApp('/app/notes/sc', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('sc', { type: 'scan_text', storagePath: undefined, rawText: 'Scanned words.', summary: { gist: 'Scan gist.', actionItems: [], keyDecisions: [] } })]).feed);
+    expect(await screen.findByText('Scanned words.')).toBeTruthy();
+    expect(screen.getByText('Scan gist.')).toBeTruthy();
+    expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/read'))).toEqual([]);
   });
 
   it('plays the recording from a fresh signed URL, and fetches one more when it expires', async () => {
@@ -148,9 +185,14 @@ describe('a note', () => {
     await waitFor(() => expect(document.querySelector('audio')?.getAttribute('src')).toMatch(/sig=1$/));
     fireEvent.error(document.querySelector('audio')!);
     await waitFor(() => expect(document.querySelector('audio')?.getAttribute('src')).toMatch(/sig=2$/));
+    // It played on the new URL, so a later expiry is refreshed too (a long listen).
+    fireEvent.playing(document.querySelector('audio')!);
+    fireEvent.error(document.querySelector('audio')!);
+    await waitFor(() => expect(document.querySelector('audio')?.getAttribute('src')).toMatch(/sig=3$/));
+    // Failing again before it ever played: give up, and say so.
     fireEvent.error(document.querySelector('audio')!);
     expect(await screen.findByText("The recording couldn't be played.")).toBeTruthy();
-    expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/audio-url'))).toHaveLength(2);
+    expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/audio-url'))).toHaveLength(3);
   });
 });
 
@@ -176,6 +218,28 @@ describe('deleting a note', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
     expect(await screen.findByText(/The note wasn't deleted\./)).toBeTruthy();
     expect(await screen.findByText('Note n1')).toBeTruthy();
+  });
+
+  it('a note that was already gone counts as deleted', async () => {
+    const s = server((url) => (url.endsWith('/v1/notes/read') ? json(READ) : url.endsWith('/v1/notes/delete') ? json({ error: 'note_not_found' }, 404) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('n1')]).feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    expect(await screen.findByText('Note deleted.')).toBeTruthy();
+    expect(screen.queryByText('Note n1')).toBeNull();
+  });
+
+  it('the dialog takes focus, closes on Escape, and gives focus back', async () => {
+    const s = server((url) => (url.endsWith('/v1/notes/read') ? json(READ) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('n1')]).feed);
+    const del = await screen.findByRole('button', { name: 'Delete' });
+    del.focus();
+    fireEvent.click(del);
+    const dialog = screen.getByRole('dialog', { name: 'Delete this note?' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(del);
   });
 
   it('cancel deletes nothing', async () => {

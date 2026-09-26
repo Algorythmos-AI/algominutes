@@ -10,12 +10,24 @@ import { workspaceIdFor } from './workspace';
 
 export type NoteDoc = z.infer<typeof Note>;
 
-/** Parses docs into notes, newest first; the ids of any that don't match the contract come back separately. */
+/**
+ * A doc as the contract reads it, leniently, as iOS does: a null field is an
+ * absent one (the sweep's mirror repair writes errorMessage: null), and a
+ * missing title is an empty one. Status and type must still be real values.
+ */
+function lenient(id: string, data: unknown): unknown {
+  const out: Record<string, unknown> = { title: '' };
+  for (const [k, v] of Object.entries((data as Record<string, unknown>) ?? {})) if (v !== null && v !== undefined) out[k] = v;
+  out.id = id;
+  return out;
+}
+
+/** Parses docs into notes, newest first; the ids of any that still don't match the contract come back separately. */
 export function parseNotes(docs: Array<{ id: string; data: unknown }>): { notes: NoteDoc[]; invalid: string[] } {
   const notes: NoteDoc[] = [];
   const invalid: string[] = [];
   for (const d of docs) {
-    const parsed = Note.safeParse({ ...(d.data as object), id: d.id });
+    const parsed = Note.safeParse(lenient(d.id, d.data));
     if (parsed.success) notes.push(parsed.data);
     else invalid.push(d.id);
   }
@@ -25,6 +37,9 @@ export function parseNotes(docs: Array<{ id: string; data: unknown }>): { notes:
 /** Newest first by createdAt (ISO strings sort as times); ties keep their order. */
 export const newestFirst = (notes: NoteDoc[]): NoteDoc[] =>
   [...notes].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+
+// Each bad doc is reported once per page load, not on every snapshot.
+const reported = new Set<string>();
 
 export interface NotesFeed {
   subscribe(uid: string, onNotes: (notes: NoteDoc[]) => void, onError: (err: unknown) => void): () => void;
@@ -43,13 +58,19 @@ export function firestoreNotesFeed(getDb: () => Promise<Firestore>): NotesFeed {
             query(collection(db, 'workspaces', workspaceIdFor(uid), 'notes'), where('authorId', '==', uid)),
             (snap) => {
               const { notes, invalid } = parseNotes(snap.docs.map((d) => ({ id: d.id, data: d.data() })));
-              if (invalid.length) reportCrash('notes.invalidDocs', new Error(`${invalid.length} note doc(s) failed the contract`), { source: invalid.slice(0, 5).join(',') });
+              const fresh = invalid.filter((id) => !reported.has(id));
+              if (fresh.length) {
+                fresh.forEach((id) => reported.add(id));
+                reportCrash('notes.invalidDocs', new Error(`${fresh.length} note doc(s) failed the contract`), { source: fresh.slice(0, 5).join(',') });
+              }
               onNotes(notes);
             },
             onError,
           );
         })
-        .catch(onError);
+        .catch((err) => {
+          if (!cancelled) onError(err);
+        });
       return () => {
         cancelled = true;
         stop?.();

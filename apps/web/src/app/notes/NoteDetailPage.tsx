@@ -10,6 +10,8 @@ import { useApi } from '../ApiContext';
 import { useAuth } from '../auth/AuthContext';
 import { useNotice } from '../Notice';
 import { useNow } from '../useNow';
+import { Modal } from '../Modal';
+import type { NoteDoc } from '../../lib/notes/notesFeed';
 import { useNotes } from './NotesContext';
 import { NoteTools } from './NoteTools';
 
@@ -24,12 +26,15 @@ export function NoteDetailPage() {
 function NoteDetail({ noteId }: { noteId: string }) {
   const { user } = useAuth();
   const { api } = useApi();
-  const { state, hide, unhide } = useNotes();
+  const { state, visible, hide, unhide } = useNotes();
   const notice = useNotice();
   const navigate = useNavigate();
   const workspaceId = user ? workspaceIdFor(user.uid) : '';
-  const live = state.status === 'ready' ? state.notes.find((n) => n.id === noteId) : undefined;
+  // `visible`: a note being deleted is already gone from here, as from the list.
+  const live = visible.find((n) => n.id === noteId);
   const ready = live?.status === 'ready';
+  // A scanned note is complete on the device and lives only in Firestore (as on iOS): nothing to read from the api.
+  const firestoreOnly = live?.type === 'scan_text';
 
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [lines, setLines] = useState<TranscriptLine[]>([]);
@@ -40,14 +45,18 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [version, setVersion] = useState(0);
   const [renaming, setRenaming] = useState<{ tag: number; name: string } | null>(null);
 
+  // Each first-page read is a generation: a "show more" answer from an older one is dropped.
+  const generation = useRef(0);
+
   // The note's content comes from the api (Postgres), once it's ready.
   useEffect(() => {
-    if (!ready || !workspaceId) return;
+    if (!ready || firestoreOnly || !workspaceId) return;
     let cancelled = false;
     api
       .readNote({ noteId, workspaceId })
       .then((data) => {
         if (cancelled) return;
+        generation.current += 1;
         setLoad({ status: 'ready', data });
         setLines(data.transcript.lines);
         setCursor(data.transcript.nextCursor);
@@ -60,13 +69,15 @@ function NoteDetail({ noteId }: { noteId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [api, noteId, workspaceId, ready, version]);
+  }, [api, noteId, workspaceId, ready, firestoreOnly, version]);
 
   const loadMore = async () => {
     if (!cursor) return;
+    const gen = generation.current;
     setMoreBusy(true);
     try {
       const page = await api.readNotePage({ noteId, workspaceId, cursor });
+      if (gen !== generation.current) return; // the note was re-read meanwhile; its first page replaced these
       setLines((l) => [...l, ...page.transcript.lines]);
       setCursor(page.transcript.nextCursor);
     } catch (err) {
@@ -84,6 +95,11 @@ function NoteDetail({ noteId }: { noteId: string }) {
       await api.deleteNote({ noteId, workspaceId });
       notice.show('Note deleted.');
     } catch (err) {
+      // Already gone (a retry, or deleted elsewhere) is what was asked for.
+      if (err instanceof ApiError && err.kind === 'not_found') {
+        notice.show('Note deleted.');
+        return;
+      }
       unhide(noteId);
       notice.show(err instanceof ApiError ? `The note wasn't deleted. ${err.message}` : "The note wasn't deleted. Try again.");
       reportCrash('notes.delete', err);
@@ -105,7 +121,10 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const now = useNow();
 
   if (state.status === 'loading') return <p role="status" className="text-muted">Loading…</p>;
-  if (!live || load.status === 'gone') {
+  if (state.status === 'error') {
+    return <p role="alert" className="text-body">Your notes couldn't be loaded. Check your connection; this page retries on its own.</p>;
+  }
+  if (!live) {
     return (
       <section aria-labelledby="nd-title">
         <h1 id="nd-title" className="mb-2 text-3xl font-bold text-heading">This note isn't available</h1>
@@ -117,6 +136,8 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const s = statusOf(live.status);
   const meta = [formatDate(live.createdAt), formatDuration(live.duration)].filter(Boolean).join(' · ');
   const data = load.status === 'ready' ? load.data : null;
+  // Read from the doc when the api has no copy: a scanned note, or an older note that never reached Postgres.
+  const fromDoc = ready && (firestoreOnly || load.status === 'gone');
 
   return (
     <article aria-labelledby="nd-title" className="flex flex-col gap-8">
@@ -140,7 +161,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
           </div>
         )}
         {audio.src && (
-          <audio ref={audioRef} src={audio.src} controls autoPlay className="mt-4 w-full" onError={() => void audio.onError()}>
+          <audio ref={audioRef} src={audio.src} controls autoPlay={audio.autoPlay} className="mt-4 w-full" onError={() => void audio.onError()}>
             Your browser can't play this recording.
           </audio>
         )}
@@ -160,8 +181,9 @@ function NoteDetail({ noteId }: { noteId: string }) {
         </p>
       )}
 
-      {ready && load.status === 'loading' && <p role="status" className="text-muted">Loading the summary…</p>}
+      {ready && !fromDoc && load.status === 'loading' && <p role="status" className="text-muted">Loading the summary…</p>}
       {load.status === 'error' && <p role="alert" className="text-body">{load.message}</p>}
+      {fromDoc && <DocView note={live} />}
 
       {data?.summary && (
         <>
@@ -242,45 +264,83 @@ function NoteDetail({ noteId }: { noteId: string }) {
       )}
 
       {renaming && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)}>
+        <Modal title="Rename speaker" onClose={() => setRenaming(null)} initialFocus="input">
           <form
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="spk-title"
-            className="w-full max-w-sm rounded-2xl border border-border bg-card p-6"
             onSubmit={(e) => {
               e.preventDefault();
               const name = String(new FormData(e.currentTarget).get('name') ?? '').trim();
               if (name) void renameSpeaker(renaming.tag, name);
             }}
           >
-            <h2 id="spk-title" className="mb-2 text-xl font-bold text-heading">Rename speaker</h2>
             <p className="mb-3 text-body">Every line by “{renaming.name}” in this note takes the new name.</p>
             <label className="block text-body">
               Name
-              <input name="name" autoFocus defaultValue={renaming.name} maxLength={80} className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-heading" />
+              <input name="name" defaultValue={renaming.name} maxLength={80} className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-heading" />
             </label>
             <div className="mt-4 flex gap-2">
               <button type="submit" className="rounded-xl bg-accent px-4 py-2 font-semibold text-white">Save</button>
               <button type="button" className="px-4 py-2 text-muted" onClick={() => setRenaming(null)}>Cancel</button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {confirmDelete && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4">
-          <div role="dialog" aria-modal="true" aria-labelledby="del-title" className="w-full max-w-sm rounded-2xl border border-border bg-card p-6">
-            <h2 id="del-title" className="mb-2 text-xl font-bold text-heading">Delete this note?</h2>
-            <p className="mb-4 text-body">Its recording, transcript and summary are deleted for good.</p>
-            <div className="flex flex-col gap-2">
-              <button type="button" className="rounded-xl bg-danger px-4 py-3 font-semibold text-white" onClick={() => void remove()}>Delete note</button>
-              <button type="button" className="py-2 text-muted" onClick={() => setConfirmDelete(false)}>Cancel</button>
-            </div>
+        <Modal title="Delete this note?" onClose={() => setConfirmDelete(false)} initialFocus="[data-cancel]">
+          <p className="mb-4 text-body">Its recording, transcript and summary are deleted for good.</p>
+          <div className="flex flex-col gap-2">
+            <button type="button" className="rounded-xl bg-danger px-4 py-3 font-semibold text-white" onClick={() => void remove()}>Delete note</button>
+            <button type="button" data-cancel className="py-2 text-muted" onClick={() => setConfirmDelete(false)}>Cancel</button>
           </div>
-        </div>
+        </Modal>
       )}
     </article>
+  );
+}
+
+/** A note the api has no copy of, shown from its Firestore doc, as iOS shows it. */
+function DocView({ note }: { note: NoteDoc }) {
+  const sum = note.summary;
+  return (
+    <>
+      {sum?.gist && (
+        <section aria-labelledby="dsum-title">
+          <h2 id="dsum-title" className="mb-2 text-xl font-bold text-heading">Summary</h2>
+          <p className="whitespace-pre-line text-body">{sum.gist}</p>
+        </section>
+      )}
+      {!!sum?.actionItems.length && (
+        <section aria-labelledby="dai-title">
+          <h2 id="dai-title" className="mb-2 text-xl font-bold text-heading">Action items</h2>
+          <ul className="list-disc pl-6 text-body">{sum.actionItems.map((a, i) => <li key={i}>{a}</li>)}</ul>
+        </section>
+      )}
+      {!!sum?.keyDecisions.length && (
+        <section aria-labelledby="dkd-title">
+          <h2 id="dkd-title" className="mb-2 text-xl font-bold text-heading">Key decisions</h2>
+          <ul className="list-disc pl-6 text-body">{sum.keyDecisions.map((d, i) => <li key={i}>{d}</li>)}</ul>
+        </section>
+      )}
+      {note.rawText && (
+        <section aria-labelledby="dtext-title">
+          <h2 id="dtext-title" className="mb-2 text-xl font-bold text-heading">Text</h2>
+          <p className="whitespace-pre-line text-body">{note.rawText}</p>
+        </section>
+      )}
+      {!!note.transcript?.length && (
+        <section aria-labelledby="dtr-title">
+          <h2 id="dtr-title" className="mb-2 text-xl font-bold text-heading">Transcript</h2>
+          <ol className="flex flex-col gap-3">
+            {note.transcript.map((l, i) => (
+              <li key={i} className="text-body">
+                <span className="font-mono text-sm text-muted">{l.time}</span> {l.speaker && <span className="font-semibold text-heading">{l.speaker}:</span>} {l.text}
+              </li>
+            ))}
+          </ol>
+          {note.transcriptTruncated && <p className="mt-3 text-sm text-muted">Only the start of the transcript is shown here.</p>}
+        </section>
+      )}
+    </>
   );
 }
 
@@ -293,9 +353,12 @@ function useAudio(noteId: string, workspaceId: string) {
   const { api } = useApi();
   const ref = useRef<HTMLAudioElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
+  const [autoPlay, setAutoPlay] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One refetch per URL: reset once the new URL plays, so a long listen survives every expiry.
   const refreshed = useRef(false);
+  const inFlight = useRef(false);
   const pendingSeek = useRef<number | null>(null);
 
   const fetchUrl = useCallback(async () => {
@@ -304,14 +367,17 @@ function useAudio(noteId: string, workspaceId: string) {
   }, [api, noteId, workspaceId]);
 
   const start = useCallback(async () => {
-    if (src) return;
+    if (src || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
       setSrc(await fetchUrl());
     } catch (err) {
+      pendingSeek.current = null; // a later Play starts from the beginning, not an old chapter
       setError(err instanceof ApiError ? err.message : "The recording couldn't be loaded.");
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }, [src, fetchUrl]);
@@ -331,17 +397,24 @@ function useAudio(noteId: string, workspaceId: string) {
     [src, start],
   );
 
-  // Apply a seek asked for before the player existed.
+  // Apply a seek asked for before this URL loaded; and once it plays, it may be refreshed again later.
   useEffect(() => {
     const el = ref.current;
-    if (!el || pendingSeek.current == null) return;
-    const at = pendingSeek.current;
+    if (!el) return;
     const apply = () => {
-      el.currentTime = at;
+      if (pendingSeek.current == null) return;
+      el.currentTime = pendingSeek.current;
       pendingSeek.current = null;
     };
-    el.addEventListener('loadedmetadata', apply, { once: true });
-    return () => el.removeEventListener('loadedmetadata', apply);
+    const playing = () => {
+      refreshed.current = false;
+    };
+    el.addEventListener('loadedmetadata', apply);
+    el.addEventListener('playing', playing);
+    return () => {
+      el.removeEventListener('loadedmetadata', apply);
+      el.removeEventListener('playing', playing);
+    };
   }, [src]);
 
   const onError = useCallback(async () => {
@@ -350,14 +423,16 @@ function useAudio(noteId: string, workspaceId: string) {
       return;
     }
     refreshed.current = true;
-    const at = ref.current?.currentTime ?? 0;
+    const el = ref.current;
+    pendingSeek.current = el?.currentTime ?? 0;
+    // Resume only if it was playing: a paused listen stays paused on the fresh URL.
+    setAutoPlay(el ? !el.paused : true);
     try {
-      pendingSeek.current = at;
       setSrc(await fetchUrl());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The recording couldn't be played.");
     }
   }, [fetchUrl]);
 
-  return [ref, { src, busy, error, start, seek, onError }] as const;
+  return [ref, { src, autoPlay, busy, error, start, seek, onError }] as const;
 }

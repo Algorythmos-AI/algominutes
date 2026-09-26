@@ -3,6 +3,7 @@ import { SUMMARY_TEMPLATES, type NoteReadResponse } from '@algominutes/contracts
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { useApi } from '../ApiContext';
+import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 
 type Summary = NonNullable<NoteReadResponse['summary']>;
@@ -166,14 +167,10 @@ export function download(blob: Blob, fileName: string) {
 }
 
 function Dialog({ title, children, onCancel }: { title: string; children: ReactNode; onCancel: () => void }) {
-  const id = `dlg-${title.replace(/\W+/g, '-').toLowerCase()}`;
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={id} className="max-h-full w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card p-6">
-        <h2 id={id} className="mb-4 text-xl font-bold text-heading">{title}</h2>
-        {children}
-      </div>
-    </div>
+    <Modal title={title} onClose={onCancel}>
+      {children}
+    </Modal>
   );
 }
 
@@ -199,7 +196,7 @@ function RenameDialog({ initial, busy, error, onCancel, onSave }: { initial: str
       <form onSubmit={(e) => { e.preventDefault(); onSave(trimmed); }}>
         <label className="block text-body">
           Title
-          <input autoFocus className={field} value={value} maxLength={300} onChange={(e) => setValue(e.target.value)} />
+          <input className={field} value={value} maxLength={300} onChange={(e) => setValue(e.target.value)} />
         </label>
         <Footer busy={busy} error={error} label="Save" onCancel={onCancel} disabled={!trimmed || trimmed === initial} />
       </form>

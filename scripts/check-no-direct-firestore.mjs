@@ -48,7 +48,7 @@ function* sourceFiles(dir) {
     const p = path.join(dir, name);
     if (skip(p)) continue;
     if (fs.statSync(p).isDirectory()) yield* sourceFiles(p);
-    else if (/\.(c|m)?[jt]s$/.test(name)) yield p;
+    else if (/\.(c|m)?[jt]sx?$/.test(name)) yield p;
   }
 }
 
@@ -63,7 +63,7 @@ function isDocRef(node) {
 
 /** Direct document writes in one file: [{ line, snippet }]. */
 export function findDirectWrites(file, source) {
-  const kind = /\.tsx?$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.jsx') ? ts.ScriptKind.JSX : /\.ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind);
   const lines = source.split('\n');
   const out = [];

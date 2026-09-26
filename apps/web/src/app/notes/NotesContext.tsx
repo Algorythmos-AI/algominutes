@@ -16,6 +16,12 @@ interface NotesValue {
 
 const NotesContext = createContext<NotesValue | null>(null);
 
+// The workspace bootstrap runs once per uid per page load: StrictMode and a
+// re-subscription would otherwise race two creates, and the second is refused.
+const bootstrapped = new Set<string>();
+/** Backoff for a listener that errored: 2s, 4s, 8s … up to a minute, as iOS retries. */
+export const retryDelayMs = (attempt: number) => Math.min(60_000, 2000 * 2 ** attempt);
+
 /**
  * The signed-in user's notes, live. `bootstrap` runs once per user first (the
  * workspace doc, as iOS does at sign-in); its failure is non-fatal.
@@ -30,15 +36,36 @@ export function NotesProvider({ feed, bootstrap, children }: { feed: NotesFeed; 
 
   useEffect(() => {
     if (!uid) return;
-    bootstrap?.(uid).catch((err) => reportCrash('notes.bootstrap', err));
-    return feed.subscribe(
-      uid,
-      (notes) => setTagged({ uid, state: { status: 'ready', notes: newestFirst(notes) } }),
-      (err) => {
-        reportCrash('notes.feed', err);
-        setTagged({ uid, state: { status: 'error' } });
-      },
-    );
+    if (bootstrap && !bootstrapped.has(uid)) {
+      bootstrapped.add(uid);
+      bootstrap(uid).catch((err) => reportCrash('notes.bootstrap', err));
+    }
+    let stop: (() => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let closed = false;
+    const connect = () => {
+      stop = feed.subscribe(
+        uid,
+        (notes) => {
+          attempt = 0;
+          setTagged({ uid, state: { status: 'ready', notes: newestFirst(notes) } });
+        },
+        (err) => {
+          reportCrash('notes.feed', err);
+          // Keep showing the last notes if there were any; say so only when there's nothing to show.
+          setTagged((t) => (t && t.uid === uid && t.state.status === 'ready' ? t : { uid, state: { status: 'error' } }));
+          stop?.();
+          if (!closed) timer = setTimeout(connect, retryDelayMs(attempt++));
+        },
+      );
+    };
+    connect();
+    return () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      stop?.();
+    };
   }, [feed, bootstrap, uid]);
 
   const hide = useCallback((id: string) => setHidden((h) => new Set(h).add(id)), []);

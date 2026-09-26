@@ -42,6 +42,11 @@ describe('direct-Firestore gate (syntax-aware)', () => {
     expect(hits(src)).toBe(0);
   });
 
+  it('reads components too: a write in a .tsx file is flagged, JSX and all', () => {
+    const tsx = "export function Save() { return <button onClick={() => setDoc(doc(db, 'workspaces', w), {})}>Save</button>; }";
+    expect((findDirectWrites('Save.tsx', tsx) as unknown[]).length).toBe(1);
+  });
+
   it('every allowlisted file states its reason', () => {
     for (const [file, why] of ALLOWLIST as Map<string, string>) {
       expect(file).toMatch(/\.(c|m)?[jt]s$/);
