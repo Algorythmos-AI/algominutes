@@ -1,0 +1,28 @@
+{
+  "name": "@algominutes/site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "algominutes.algorythmos.com: AlgoMinutes' public site (home, privacy, terms, support, account deletion).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "validate": "html-validate \"dist/**/*.html\""
+  },
+  "dependencies": {
+    "@algominutes/contracts": "*",
+    "@algominutes/tokens": "*",
+    "astro": "^7.3.5",
+    "cookie": "^2.0.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "html-validate": "^11.16.0",
+    "playwright": "^1.63.0",
+    "typescript": "^5.9.3"
+  },
+  "$comment": "cookie: astro's prerender bundle (dist/.prerender) imports it from apps/site, and the repo root hoists express's cookie@0.7; this pins astro's cookie@2 next to the site."
+}

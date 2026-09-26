@@ -1,0 +1,96 @@
+{
+  "$comment": "What the Privacy Policy says about who processes data and where. The page renders from this file, and tests/site-facts.test.ts checks every region and provider here against the code and Terraform, so a change that makes the policy untrue fails CI. Change the code and this file together.",
+  "operator": {
+    "name": "Algorythmos Pty Ltd",
+    "abn": "22 701 006 626",
+    "locality": "Sydney NSW 2010, Australia",
+    "support": "support@algorythmos.com",
+    "privacy": "privacy@algorythmos.com"
+  },
+  "primaryRegion": "australia-southeast1",
+  "primaryRegionLabel": "Sydney, Australia",
+  "backupWindowDays": 30,
+  "logRetentionDays": 30,
+  "processors": [
+    {
+      "id": "firebase-auth",
+      "service": "Firebase Authentication (Google)",
+      "purpose": "Signing you in with Apple or Google, or as a guest.",
+      "data": "Your account ID, email address, name (if your sign-in provider shares it) and sign-in provider.",
+      "region": "global",
+      "where": "Google's global infrastructure, which may be outside Australia"
+    },
+    {
+      "id": "cloud-sql",
+      "service": "Cloud SQL for PostgreSQL (Google Cloud)",
+      "purpose": "Storing your notes: transcripts, summaries, action items, decisions and search index.",
+      "data": "Your notes and account records.",
+      "region": "australia-southeast1",
+      "where": "Sydney, Australia"
+    },
+    {
+      "id": "cloud-storage",
+      "service": "Cloud Storage (Google Cloud)",
+      "purpose": "Storing the audio you record or import.",
+      "data": "Your recordings.",
+      "region": "australia-southeast1",
+      "where": "Sydney, Australia"
+    },
+    {
+      "id": "firestore",
+      "service": "Cloud Firestore (Google Cloud)",
+      "purpose": "Keeping your note list up to date on your devices.",
+      "data": "A copy of your notes (titles, status, summaries and transcripts), for fast display.",
+      "region": "australia-southeast1",
+      "where": "Sydney, Australia"
+    },
+    {
+      "id": "vertex-ai",
+      "service": "Vertex AI: Gemini models and text embeddings (Google Cloud)",
+      "purpose": "Writing summaries, action items and decisions; transcribing short recordings; answering questions about your notes; building the search index.",
+      "data": "Your transcripts, and the audio of short recordings. Card numbers and similar identifiers are removed from transcript text before it's sent.",
+      "region": "australia-southeast1",
+      "where": "Sydney, Australia"
+    },
+    {
+      "id": "speech-to-text",
+      "service": "Cloud Speech-to-Text (Google Cloud)",
+      "purpose": "Transcribing longer recordings.",
+      "data": "Your recordings.",
+      "region": "global",
+      "where": "Google's global endpoint, so audio may be processed outside Australia"
+    },
+    {
+      "id": "cloud-logging",
+      "service": "Cloud Logging and Error Reporting (Google Cloud)",
+      "purpose": "Running the service reliably and investigating faults.",
+      "data": "Technical records: request IDs, your account and note IDs, and error details. They're designed to exclude your recordings and note content.",
+      "region": "global",
+      "where": "Google's global infrastructure, kept 30 days"
+    },
+    {
+      "id": "push",
+      "service": "Firebase Cloud Messaging (Google) and the Apple Push Notification service",
+      "purpose": "Telling you when a note is ready, or couldn't be processed.",
+      "data": "Your device's push token and the note's ID.",
+      "region": "global",
+      "where": "Google's and Apple's global infrastructure"
+    },
+    {
+      "id": "crashlytics",
+      "service": "Firebase Crashlytics (Google)",
+      "purpose": "Finding and fixing crashes in the app.",
+      "data": "Crash reports: the app and OS version, device model, and an installation identifier.",
+      "region": "global",
+      "where": "Google's global infrastructure, which may be outside Australia"
+    },
+    {
+      "id": "apple-app-store",
+      "service": "Apple App Store",
+      "purpose": "Handling subscriptions, when they go on sale (they aren't sold during the beta).",
+      "data": "Your subscription status. Apple handles payment; we never see your card.",
+      "region": "global",
+      "where": "Apple's infrastructure"
+    }
+  ]
+}

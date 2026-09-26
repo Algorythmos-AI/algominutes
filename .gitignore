@@ -63,3 +63,5 @@ tmp/
 .claude/settings.local.json
 .vscode/
 *.swp
+# Lighthouse CI reports (apps/site/lighthouserc.json)
+.lighthouseci/

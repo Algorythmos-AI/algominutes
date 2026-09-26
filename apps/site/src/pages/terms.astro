@@ -1,0 +1,115 @@
+---
+import Base from '../layouts/Base.astro';
+import LegalNotice from '../components/LegalNotice.astro';
+import { TERMS_VERSION, longDate, operator } from '../lib/site';
+---
+<Base title="Terms of Service" description="The terms for using AlgoMinutes, the AI meeting-notes app from Algorythmos Pty Ltd.">
+  <article class="prose">
+    <h1>Terms of Service</h1>
+    <p class="meta">Version {TERMS_VERSION} · last updated {longDate(TERMS_VERSION)}</p>
+    <LegalNotice />
+
+    <p>
+      These terms are an agreement between you and {operator.name} (ABN {operator.abn}, "we", "us") for your use of
+      AlgoMinutes: the app, this website and the service behind them. By creating an account, or continuing as a
+      guest, you agree to them and to our <a href="/privacy">Privacy Policy</a>.
+    </p>
+
+    <h2 id="beta">1. The beta</h2>
+    <p>
+      AlgoMinutes is in beta. Features may change, be limited, or stop working while we improve them, and we may end
+      the beta. Keep your own copy of anything you can't afford to lose.
+    </p>
+
+    <h2 id="eligibility">2. Who can use AlgoMinutes</h2>
+    <p>You must be at least 13, and old enough where you live to agree to these terms yourself.</p>
+
+    <h2 id="accounts">3. Your account</h2>
+    <ul>
+      <li>Sign in with Apple or Google, or continue as a guest. A guest account lives on one device; to keep its notes, create an account from Settings. If you sign out as a guest, you can't get back into that guest account.</li>
+      <li>Keep access to your sign-in account secure. You're responsible for what happens in your AlgoMinutes account.</li>
+      <li>You can delete your account at any time in Settings → Delete my account.</li>
+    </ul>
+
+    <h2 id="consent">4. Recording other people</h2>
+    <p>
+      <strong>You're responsible for having permission to record.</strong> Recording laws differ between places, and
+      many require the consent of everyone being recorded. Tell people before you record them, and don't record
+      anyone secretly or where the law doesn't allow it. The notice AlgoMinutes shows before recording is a reminder,
+      not legal advice.
+    </p>
+
+    <h2 id="content">5. Your content</h2>
+    <p>
+      Your recordings and notes are yours. You give us a licence to store, copy and process them (including with the
+      AI services described in our Privacy Policy) only to provide AlgoMinutes to you. The licence ends when you delete
+      them, apart from backups, which expire as the Privacy Policy describes. You confirm you have the rights you need
+      in what you upload.
+    </p>
+
+    <h2 id="ai-output">6. AI output</h2>
+    <p>
+      Transcripts, summaries, action items and answers are produced automatically and can be incomplete or wrong,
+      including about who said what. Check anything important against the recording before you rely on it. AlgoMinutes
+      doesn't give legal, medical, financial or other professional advice.
+    </p>
+
+    <h2 id="use">7. Acceptable use</h2>
+    <p>Don't use AlgoMinutes to:</p>
+    <ul>
+      <li>record people unlawfully, or to harass, threaten or harm anyone;</li>
+      <li>upload content you don't have the right to, or that's unlawful;</li>
+      <li>break, overload, probe or get around the security or limits of the service, or access other people's data;</li>
+      <li>copy, resell or reverse engineer the service, except where the law allows it.</li>
+    </ul>
+
+    <h2 id="fees">8. Fees</h2>
+    <p>
+      AlgoMinutes is free during the beta, with usage limits shown in the app. If we introduce paid plans, we'll show
+      the price before you buy. Subscriptions bought in the App Store are also governed by Apple's terms, and you
+      manage or cancel them in your Apple account.
+    </p>
+
+    <h2 id="changes-service">9. Changes and availability</h2>
+    <p>
+      We may change or discontinue features. We'll give you reasonable notice of a change that significantly reduces
+      what you can do, and the chance to export or delete your notes before we end the service.
+    </p>
+
+    <h2 id="termination">10. Ending this agreement</h2>
+    <p>
+      You can stop using AlgoMinutes and delete your account at any time. We may suspend or close an account that
+      seriously or repeatedly breaks these terms, or where the law requires, and we'll tell you why unless we're not
+      allowed to.
+    </p>
+
+    <h2 id="liability">11. Our responsibility to you</h2>
+    <p>
+      Nothing in these terms excludes, restricts or modifies any right or remedy you have under the Australian Consumer
+      Law or other laws that can't be excluded. Our goods and services come with guarantees that can't be excluded
+      under the Australian Consumer Law.
+    </p>
+    <p>
+      Apart from those rights, and to the extent the law allows: AlgoMinutes is provided "as is" during the beta; we
+      aren't liable for indirect or consequential loss, or for loss of data you could have kept a copy of; and our
+      total liability to you is limited to the amount you paid us in the 12 months before the claim (or, where the
+      Australian Consumer Law applies, to supplying the service again or paying for it to be supplied again).
+    </p>
+
+    <h2 id="law">12. Governing law</h2>
+    <p>
+      These terms are governed by the laws of New South Wales, Australia, and you and we submit to its courts. If you
+      live elsewhere, you keep the protections of your local consumer laws.
+    </p>
+
+    <h2 id="changes">13. Changes to these terms</h2>
+    <p>
+      When we change these terms we update the version and date above. Before a significant change takes effect,
+      we'll tell you in the app or by email. If you keep using AlgoMinutes after that, the new terms apply; if you
+      don't agree, you can delete your account.
+    </p>
+
+    <h2 id="contact">14. Contact</h2>
+    <p>{operator.name}, {operator.locality}. Email <a href={`mailto:${operator.support}`}>{operator.support}</a>.</p>
+  </article>
+</Base>
