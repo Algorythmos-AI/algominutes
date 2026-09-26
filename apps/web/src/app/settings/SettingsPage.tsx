@@ -239,7 +239,8 @@ function DeleteAccountCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!user) return null;
-  const apple = (user.providers ?? []).includes('apple.com');
+  // Firebase's provider ids, compared whole (a provider list, not a URL).
+  const apple = (user.providers ?? []).some((id) => id === 'apple.com');
 
   const remove = async () => {
     setBusy(true);
