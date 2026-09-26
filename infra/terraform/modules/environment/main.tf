@@ -15,7 +15,9 @@ terraform {
     google = {
       source  = "hashicorp/google"
       version = "~> 6.0"
-      # google.billing: user_project_override for the Budgets API (budget.tf).
+      # google.billing: user_project_override, for the APIs that need a quota
+      # project on user credentials: Budgets (budget.tf), Firebase Rules
+      # (firebase-rules.tf).
       configuration_aliases = [google.billing]
     }
     google-beta = {

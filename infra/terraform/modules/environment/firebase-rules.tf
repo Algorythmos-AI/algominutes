@@ -7,9 +7,15 @@
 # request: the iOS and web apps couldn't list, create or update a note doc.
 # A change to the file makes a new ruleset, and the release is replaced to
 # point at it.
+#
+# The Firebase Rules API needs a quota project when Terraform runs on a user's
+# credentials (the first staging apply was refused: "requires a quota
+# project"), so both resources use the `google.billing` alias
+# (user_project_override), as the budget does.
 # ---------------------------------------------------------------------------
 resource "google_firebaserules_ruleset" "firestore" {
-  project = var.project_id
+  provider = google.billing
+  project  = var.project_id
 
   source {
     files {
@@ -26,6 +32,7 @@ resource "google_firebaserules_ruleset" "firestore" {
 }
 
 resource "google_firebaserules_release" "firestore" {
+  provider     = google.billing
   project      = var.project_id
   name         = "cloud.firestore" # the (default) database
   ruleset_name = "projects/${var.project_id}/rulesets/${google_firebaserules_ruleset.firestore.name}"
