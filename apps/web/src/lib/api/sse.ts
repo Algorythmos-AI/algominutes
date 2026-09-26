@@ -8,9 +8,24 @@ export interface SseEvent {
   data: string;
 }
 
-/** Yields each event in `body` as its frame completes. Handles \n, \r\n and \r line ends, split chunks and multi-line data. */
-export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+/**
+ * Yields each event in `body` as its frame completes. Handles \n, \r\n and \r
+ * line ends, split chunks and multi-line data. `signal` cancels the read (and so
+ * the connection) at once, whatever the fetch underneath does with it.
+ */
+export async function* readSse(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<SseEvent> {
   const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  const onAbort = () => {
+    void (async () => {
+      try {
+        await reader.cancel();
+      } catch {
+        // silent-catch-ok: a stream that already closed can't be cancelled, and nothing is left open
+      }
+    })();
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   let buffer = '';
   let event = '';
   let data: string[] = [];
@@ -50,6 +65,7 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
     const last = dispatch();
     if (last) yield last;
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     // An early exit (the consumer stopped reading, or unmounted) closes the connection, not just the lock.
     try {
       await reader.cancel();

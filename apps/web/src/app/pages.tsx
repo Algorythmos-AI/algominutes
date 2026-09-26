@@ -1,14 +1,5 @@
 import { Link } from 'react-router';
 
-export function SearchPage() {
-  return (
-    <section aria-labelledby="search-title">
-      <h1 id="search-title" className="mb-2 text-3xl font-bold text-heading">Search</h1>
-      <p className="text-muted">Search every note, or ask one a question. Coming soon.</p>
-    </section>
-  );
-}
-
 export function SettingsPage() {
   return (
     <section aria-labelledby="settings-title">
