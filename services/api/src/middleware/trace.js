@@ -15,23 +15,32 @@ const { logger: rootLogger, traceIdFrom, isTraceId } = loggerModule;
 
 export { rootLogger, traceIdFrom };
 
+/** Cloud Run's trace id, from X-Cloud-Trace-Context (TRACE_ID/SPAN_ID;o=1), or null when there's none. */
+function cloudTraceIdFrom(headers) {
+  const raw = headers && headers['x-cloud-trace-context'];
+  const id = typeof raw === 'string' ? raw.split(/[/;]/)[0] : '';
+  return isTraceId(id) ? id : null;
+}
+
 /**
- * The request's traceId: the client's X-Trace-Id when it's well formed (the
- * web app sends one on every call, and keeps it on any error, so a failure it
- * reports is findable here; a browser can't send X-Cloud-Trace-Context
- * cross-origin), else Cloud Run's trace id, else a fresh one.
+ * The request's trace identity. traceId is the client's X-Trace-Id when it's
+ * well formed (the web app sends one on every call, and keeps it on any
+ * error, so a failure it reports is findable here; a browser can't send
+ * X-Cloud-Trace-Context cross-origin), else Cloud Run's trace id, else a
+ * fresh one. cloudTraceId is Cloud Run's id when it differs from traceId, so
+ * the request stays findable in Cloud Trace; null when there's no real one.
  */
-export function requestTraceId(headers) {
+export function traceContext(headers) {
   const client = headers && headers['x-trace-id'];
-  return typeof client === 'string' && isTraceId(client) ? client : traceIdFrom(headers);
+  const cloud = cloudTraceIdFrom(headers);
+  const traceId = typeof client === 'string' && isTraceId(client) ? client : cloud ?? traceIdFrom(headers);
+  return { traceId, cloudTraceId: cloud && cloud !== traceId ? cloud : null };
 }
 
 export function traceMiddleware(req, res, next) {
-  const traceId = requestTraceId(req.headers);
+  const { traceId, cloudTraceId } = traceContext(req.headers);
   req.traceId = traceId;
-  // Keep Cloud Run's own id too when the client chose the traceId, so the request is still findable in Cloud Trace.
-  const cloudTraceId = traceIdFrom(req.headers);
-  req.log = rootLogger.child({ traceId, ...(cloudTraceId !== traceId ? { cloudTraceId } : {}), path: req.path, method: req.method });
+  req.log = rootLogger.child({ traceId, ...(cloudTraceId ? { cloudTraceId } : {}), path: req.path, method: req.method });
   // Every answer names its traceId, so any client can quote it (CORS exposes the header).
   res.setHeader('X-Trace-Id', traceId);
   next();

@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 // @ts-expect-error: plain ESM module, no type declarations
 import { buildApp } from '../services/api/src/app.js';
 // @ts-expect-error: plain ESM module, no type declarations
-import { requestTraceId } from '../services/api/src/middleware/trace.js';
+import { traceContext } from '../services/api/src/middleware/trace.js';
 
 // The web app sends X-Trace-Id on every call and keeps it on any error. The
 // api logs the request under it, and answers with it, so the id a user or a
@@ -11,16 +11,24 @@ import { requestTraceId } from '../services/api/src/middleware/trace.js';
 // X-Cloud-Trace-Context cross-origin, which was the only header read.
 const CLOUD = '105445aa7843bc8bf206b12000100000/1;o=1';
 
-describe('requestTraceId', () => {
-  it("prefers the client's well-formed X-Trace-Id", () => {
-    expect(requestTraceId({ 'x-trace-id': '3f1c2a9e-2b0d-4a7e-9d0b-5f6f1a2b3c4d', 'x-cloud-trace-context': CLOUD })).toBe('3f1c2a9e-2b0d-4a7e-9d0b-5f6f1a2b3c4d');
+describe('traceContext', () => {
+  const WEB = '3f1c2a9e-2b0d-4a7e-9d0b-5f6f1a2b3c4d';
+
+  it("prefers the client's well-formed X-Trace-Id, keeping Cloud Run's id beside it", () => {
+    expect(traceContext({ 'x-trace-id': WEB, 'x-cloud-trace-context': CLOUD })).toEqual({ traceId: WEB, cloudTraceId: '105445aa7843bc8bf206b12000100000' });
   });
 
-  it("falls back to Cloud Run's id, then a fresh one, for a missing or malformed X-Trace-Id", () => {
+  it("falls back to Cloud Run's id for a missing or malformed X-Trace-Id, with no duplicate cloudTraceId", () => {
     for (const bad of [undefined, '', 'has spaces', 'x'.repeat(129), '<script>', ['a', 'b']]) {
-      expect(requestTraceId({ 'x-trace-id': bad, 'x-cloud-trace-context': CLOUD }), String(bad)).toBe('105445aa7843bc8bf206b12000100000');
+      expect(traceContext({ 'x-trace-id': bad, 'x-cloud-trace-context': CLOUD }), String(bad)).toEqual({ traceId: '105445aa7843bc8bf206b12000100000', cloudTraceId: null });
     }
-    expect(requestTraceId({})).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('never invents a cloudTraceId: none without the header', () => {
+    expect(traceContext({ 'x-trace-id': WEB })).toEqual({ traceId: WEB, cloudTraceId: null });
+    const fresh = traceContext({});
+    expect(fresh.traceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(fresh.cloudTraceId).toBeNull();
   });
 });
 
