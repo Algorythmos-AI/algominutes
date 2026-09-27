@@ -122,6 +122,10 @@ describe('in-app logo', () => {
     expect(fs.readFileSync(`${LOGO}/logo.pdf`).subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(fs.readdirSync(LOGO).sort()).toEqual(['Contents.json', 'logo.pdf']);
   });
+
+  it('carries the tile as an image (Quartz drops gradient transparency in a PDF)', () => {
+    expect(fs.readFileSync(`${LOGO}/logo.pdf`).toString('latin1')).toMatch(/\/Subtype \/Image/);
+  });
 });
 
 describe('brand SVGs', () => {

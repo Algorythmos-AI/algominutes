@@ -395,15 +395,12 @@ write(render(size: 1024, opaque: false, Look(background: .none, fill: .flat(CGCo
 
 do {
     let url = ios.appendingPathComponent("AlgoMinutes/Resources/Assets.xcassets/Logo.imageset/logo.pdf")
-    var box = CGRect(x: 0, y: 0, width: 96, height: 96)   // points; the asset scales as a vector
+    var box = CGRect(x: 0, y: 0, width: 96, height: 96)   // points
     let pdf = CGContext(url as CFURL, mediaBox: &box, nil)!
     pdf.beginPDFPage(nil)
-    flip(pdf, height: box.height)
-    pdf.scaleBy(x: box.width / tile, y: box.height / tile)
-    pdf.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: tile, height: tile),
-                       cornerWidth: Mark.cornerRadius, cornerHeight: Mark.cornerRadius, transform: nil))
-    pdf.clip()
-    draw(pdf, iconLook, icon, unit: box.width / tile)
+    // Quartz drops the gradients' transparency when it writes a PDF, so the
+    // tile goes in as a 512 px image: over 5x at 96 pt, enough for @3x.
+    pdf.draw(render(size: 512, opaque: false, rounded: true, iconLook, icon), in: box)
     pdf.endPDFPage()
     pdf.closePDF()
     print("wrote \(url.path.replacingOccurrences(of: repo.path + "/", with: ""))")
