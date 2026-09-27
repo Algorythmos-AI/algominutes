@@ -4,7 +4,9 @@ import { ApiProvider } from '../app/ApiContext';
 import { AuthProvider } from '../app/auth/AuthContext';
 import { NoticeProvider } from '../app/Notice';
 import { NotesProvider, type NoteWriter } from '../app/notes/NotesContext';
+import { PushProvider } from '../app/push/PushContext';
 import type { AuthAdapter } from '../lib/auth/adapter';
+import type { PushMessaging } from '../lib/push/messaging';
 import type { NoteDoc, NotesFeed } from '../lib/notes/notesFeed';
 import { BASENAME, routes } from '../routes';
 
@@ -33,6 +35,7 @@ export function renderApp(
   fetchImpl: typeof fetch = async () => new Response('{}', { status: 200 }),
   feed: NotesFeed = fakeFeed().feed,
   writer: NoteWriter | null = null,
+  messaging: PushMessaging | null = null,
 ) {
   const router = createMemoryRouter(routes, { basename: BASENAME, initialEntries: [path] });
   render(
@@ -40,7 +43,9 @@ export function renderApp(
       <ApiProvider origins={ORIGINS} fetchImpl={fetchImpl}>
         <NotesProvider feed={feed} writer={writer}>
           <NoticeProvider>
-            <RouterProvider router={router} />
+            <PushProvider messaging={messaging}>
+              <RouterProvider router={router} />
+            </PushProvider>
           </NoticeProvider>
         </NotesProvider>
       </ApiProvider>
