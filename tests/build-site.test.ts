@@ -89,8 +89,11 @@ describe('the web build\'s backends', () => {
     expect(checkAppEnv({ ...STAGING, VITE_FIREBASE_AUTH_DOMAIN: 'algominutes.algorythmos.com' })).toEqual([
       'no /__/auth rewrite in apps/site/vercel.json proxies algominutes.algorythmos.com to algominutes-staging.firebaseapp.com',
     ]);
-    // The project's own domain needs no proxy.
+    // The project's own domain needs no proxy, but /app must be able to frame its sign-in iframe.
     expect(checkAppEnv({ ...STAGING, VITE_FIREBASE_AUTH_DOMAIN: 'algominutes-staging.firebaseapp.com' })).toEqual([]);
+    expect(checkAppEnv({ ...STAGING, VITE_FIREBASE_PROJECT_ID: 'algominutes-prod', VITE_FIREBASE_AUTH_DOMAIN: 'algominutes-prod.firebaseapp.com' })).toEqual([
+      "https://algominutes-prod.firebaseapp.com is not in /app's frame-src in apps/site/vercel.json",
+    ]);
     expect(checkAppEnv({ ...STAGING, VITE_API_ORIGIN: 'https://api.elsewhere.test' })).toEqual([
       "VITE_API_ORIGIN (https://api.elsewhere.test) is not in /app's connect-src in apps/site/vercel.json",
     ]);

@@ -217,7 +217,8 @@ describe('the Firebase auth proxy', () => {
     expect(policy).toMatch(/script-src 'self' https:\/\/apis\.google\.com;/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/identitytoolkit\.googleapis\.com/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/securetoken\.googleapis\.com/);
-    expect(policy).toMatch(/frame-src 'self';/);
+    // Itself, and staging's Firebase auth domain (staging signs in there: docs/runbooks/site.md). Nothing else.
+    expect(policy).toMatch(/frame-src 'self' https:\/\/algominutes-staging\.firebaseapp\.com;/);
   });
 
   it("the app's CSP allows web push: FCM's token registration and Firebase Installations", () => {

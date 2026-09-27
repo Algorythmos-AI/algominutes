@@ -56,11 +56,22 @@ branch** only (so PR previews keep the placeholder and never build the app):
 | `VITE_FIREBASE_PROJECT_ID` | `algominutes-staging` |
 | `VITE_FIREBASE_APP_ID` | `1:627101926311:web:3b656d832081e12b19ac82` ("AlgoMinutes Web") |
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `627101926311` |
-| `VITE_FIREBASE_AUTH_DOMAIN` | `staging.algominutes.algorythmos.com` (where `/__/auth` is proxied) |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `algominutes-staging.firebaseapp.com` (staging only; see **Sign-in on staging** below) |
 | `VITE_FIREBASE_API_KEY` | **owner:** the "AlgoMinutes Web" app's key (Firebase → Project settings → Your apps) |
 | `VITE_FIREBASE_VAPID_KEY` | **owner, optional:** Firebase → Project settings → Cloud Messaging → Web Push certificates → Generate key pair, then the **public** key. Without it the build has no push: no prompt, no Settings section |
 
 Production gets none of these until the launch (plan Phase 3), so it keeps the "coming soon" page.
+
+**Sign-in on staging runs on Firebase's own domain.** Staging is behind Vercel Authentication. Apple returns its
+sign-in result as a cross-site POST (`form_post`) to the auth handler, and a cross-site POST carries no
+`SameSite=Lax` cookie, so Vercel redirected it to its login and the credential was lost (`auth/invalid-credential-or-provider-id`;
+a cookie-less POST to the staging `/__/auth/handler` gets a 302 to vercel.com/sso-api). So staging's
+`VITE_FIREBASE_AUTH_DOMAIN` is `algominutes-staging.firebaseapp.com`. For that:
+- `/app`'s CSP `frame-src` allows it (`scripts/build-site.mjs` refuses a build where it doesn't);
+- the Browser key's website list has `https://algominutes-staging.firebaseapp.com/*` (and `…web.app/*`);
+- Apple's Services ID and Google's OAuth client list its `/__/auth/handler`.
+
+Production has no Vercel Authentication, so it signs in on its own origin, as below.
 
 **Sign-in on the site's own origin.** `/__/auth/*` and `/__/firebase/*` on `staging.algominutes.algorythmos.com`
 are proxied to `algominutes-staging.firebaseapp.com`, so the Firebase popup and iframe are same-origin. Those

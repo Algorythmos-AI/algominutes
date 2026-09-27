@@ -34,6 +34,7 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
   const rule = config.headers.find((r) => r.source === '/app(/.*)?');
   const csp = rule?.headers.find((h) => h.key === 'Content-Security-Policy')?.value ?? '';
   const connect = (/(?:^|;)\s*connect-src ([^;]*)/.exec(csp)?.[1] ?? '').trim().split(/\s+/);
+  const frames = (/(?:^|;)\s*frame-src ([^;]*)/.exec(csp)?.[1] ?? '').trim().split(/\s+/);
   const problems = [];
   for (const name of ['VITE_API_ORIGIN', 'VITE_BILLING_ORIGIN']) {
     const raw = String(env[name] ?? '').trim();
@@ -60,7 +61,11 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
   const project = String(env.VITE_FIREBASE_PROJECT_ID ?? '').trim();
   const authDomain = String(env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim();
   if (!authDomain) problems.push('VITE_FIREBASE_AUTH_DOMAIN is not set');
-  else if (project && authDomain !== `${project}.firebaseapp.com`) {
+  else if (project && authDomain === `${project}.firebaseapp.com`) {
+    // Signing in on Firebase's own domain (staging: Vercel Authentication would intercept Apple's cross-site
+    // POST to our /__/auth proxy). Its sign-in iframe then comes from there, so /app must be able to frame it.
+    if (!frames.includes(`https://${authDomain}`)) problems.push(`https://${authDomain} is not in /app's frame-src in apps/site/vercel.json`);
+  } else if (project) {
     const proxied = (config.rewrites || []).some(
       (r) => r.source === '/__/auth/:path*'
         && r.destination === `https://${project}.firebaseapp.com/__/auth/:path*`
