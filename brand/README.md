@@ -20,7 +20,7 @@ node brand/scripts/social.mjs          # logo PNGs, social images, og.png, the r
 | `icon/` | `icon-rounded.svg` and `icon.svg`: the tile. `app-icon-1024.png` (square), `icon-rounded-1024.png` | Presentations, docs, store art |
 | `icon/ios-*.png` | iOS 26's own renders of the app icon: `light`, `dark`, `clear-*` and `tinted-*` | Showing the real home-screen icon |
 | `logo/` | `mark-*`, `wordmark-*`, `lockup-*` as SVG (text as outlines), plus `png/` | Anything with the name on it |
-| `social/` | Link preview, X header, LinkedIn banner and cover, YouTube banner, avatar, `brand-reveal-*.mp4` | Profiles and posts |
+| `social/` | Link preview, GitHub social preview, X header, LinkedIn banner and cover, YouTube banner, avatar, `brand-reveal-*.mp4` | Profiles and posts |
 | `motion/` | `mark-animated.svg`: the tile with a light sweep and a listening pulse | Site hero, loading states |
 | `fonts/` | Geist Regular, Medium, SemiBold, Bold, with `OFL.txt` | Brand type (the logos don't need it) |
 | `reference/` | The owner's original artwork (2026-09-26) | Provenance |

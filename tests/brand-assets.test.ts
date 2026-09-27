@@ -217,7 +217,7 @@ describe('the brand kit', () => {
 
   it('sizes each social image for its network', () => {
     for (const [file, width, height] of [
-      ['og-1200x630', 1200, 630], ['x-header-1500x500', 1500, 500], ['linkedin-banner-1128x191', 1128, 191],
+      ['og-1200x630', 1200, 630], ['github-social-1280x640', 1280, 640], ['x-header-1500x500', 1500, 500], ['linkedin-banner-1128x191', 1128, 191],
       ['linkedin-cover-1584x396', 1584, 396], ['youtube-banner-2560x1440', 2560, 1440], ['profile-800', 800, 800],
     ] as const) {
       expect({ file, ...png(`brand/social/${file}.png`) }).toMatchObject({ file, width, height });

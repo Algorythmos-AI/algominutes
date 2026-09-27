@@ -97,6 +97,8 @@ function scene({ w, h, u, iconSize, x, y, align = 'left', centre = align === 'ce
 // Where an avatar or a crop sits on each network, the text keeps clear of it.
 const social = [
   { file: 'og-1200x630.png', w: 1200, h: 630, u: 1, iconSize: 260, x: 96, y: 290, wave: { y: 470, h: 160 } },
+  // GitHub's repository social preview (Settings → Social preview; 1280 × 640 is its best size).
+  { file: 'github-social-1280x640.png', w: 1280, h: 640, u: 1.05, iconSize: 270, x: 110, y: 295, wave: { y: 475, h: 165, seed: 6 } },
   // X: the profile photo overlaps the header's bottom-left.
   { file: 'x-header-1500x500.png', w: 1500, h: 500, u: 1.05, iconSize: 220, x: 520, y: 215, wave: { y: 370, h: 130, seed: 2 } },
   // LinkedIn company page: the logo overlaps the left; the banner is shallow.
