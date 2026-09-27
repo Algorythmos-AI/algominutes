@@ -7,6 +7,9 @@ name: codeql-swift
 # (the `changes` job), and weekly.
 on:
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
   push:
     branches: [integration, main]
   schedule:
@@ -32,11 +35,13 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           case "$EVENT" in
             pull_request) base="$PR_BASE" ;;
+            merge_group) base="$QUEUE_BASE" ;;   # the queue's group vs integration
             push) base="$BEFORE" ;;
             *) echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0 ;;   # schedule, manual: always
           esac
