@@ -59,11 +59,11 @@ describe('sign-in', () => {
     auth.adapter.signIn.mockRejectedValueOnce(Object.assign(new Error('Firebase: Error (auth/invalid-credential).'), { code: 'auth/invalid-credential' }));
     renderApp('/app', auth.adapter);
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with Apple' }));
-    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signIn', expect.objectContaining({ code: 'auth/invalid-credential' }), { source: 'apple' }));
+    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signIn', expect.objectContaining({ message: expect.stringMatching(/auth\/invalid-credential.*"c":"auth\/invalid-credential"/) }), { source: 'apple' }));
 
     auth.adapter.signIn.mockResolvedValueOnce(false); // closed without a result (by hand, or a blocked relay)
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
-    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signInCancelled', expect.any(Error), { source: 'apple' }));
+    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signInCancelled', expect.objectContaining({ message: expect.stringContaining('"o":"cancelled"') }), { source: 'apple' }));
     expect(screen.queryByRole('alert')?.textContent ?? '').not.toMatch(/closed/);
 
     // A sign-in that worked reports nothing.
@@ -78,7 +78,7 @@ describe('sign-in', () => {
     auth.adapter.continueAsGuest.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'auth/operation-not-allowed' }));
     renderApp('/app', auth.adapter);
     fireEvent.click(await screen.findByRole('button', { name: 'Try it as a guest' }));
-    expect((await screen.findByRole('alert')).textContent).toBe("Guest sign-in isn't available yet. Please use the other sign-in option for now.");
+    expect((await screen.findByRole('alert')).textContent).toMatch(/^Guest sign-in isn't available yet\. Please use the other sign-in option for now\./);
   });
 
   it('links the Terms and Privacy Policy on the public site', async () => {

@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { AuthAdapter, AuthUser, LinkResult, Provider } from '../../lib/auth/adapter';
 import { signInErrorMessage } from '../../lib/auth/errors';
 import { reportCrash } from '../../lib/crashReport';
+import { codeOf } from '../../lib/auth/adapter';
+import { startTrace, traceMessage, type SignInTrace } from '../../lib/diagnostics/signInTrace';
 
 export type AuthStatus = 'loading' | 'signed-out' | 'signed-in';
 
@@ -23,9 +25,9 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
-/** A sign-in window closed without a result: nothing on screen, but in the crash log with its provider. */
-function reportCancelled(provider: Provider) {
-  reportCrash('auth.signInCancelled', new Error('The sign-in window closed without a result'), { source: provider });
+/** A sign-in window closed without a result: nothing on screen, but in the crash log, with the attempt's trace. */
+function reportCancelled(t: SignInTrace) {
+  reportCrash('auth.signInCancelled', { name: 'SignInCancelled', message: traceMessage(t) }, { source: t.provider });
 }
 
 export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; children: ReactNode }) {
@@ -50,14 +52,23 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
   const idToken = useCallback((force: boolean) => adapter.idToken(force), [adapter]);
 
   const value = useMemo<AuthValue>(() => {
-    const run = async <T,>(provider: Provider | 'guest', fn: () => Promise<T>): Promise<T | undefined> => {
+    // Every attempt is traced (lib/diagnostics/signInTrace.ts): a failure is reported with Firebase's code and the
+    // trace; a window closed without a result (`cancelled`) is reported too, as that's also what a blocked flow
+    // looks like. A success reports nothing; its trace is kept for /app/diagnostics.
+    const run = async <T,>(provider: Provider | 'guest', fn: () => Promise<T>, cancelled: (r: T) => boolean = () => false, flow: SignInTrace['flow'] = 'signIn'): Promise<T | undefined> => {
       setBusy(true);
       setError(null);
+      const t = startTrace(provider, flow, adapter.authDomain ?? '');
       try {
-        return await fn();
+        const result = await fn();
+        if (cancelled(result)) reportCancelled(t.finish('cancelled'));
+        else t.finish('ok');
+        return result;
       } catch (err) {
+        const trace = t.finish('error', codeOf(err) || undefined);
         setError(signInErrorMessage(err, provider));
-        reportCrash('auth.signIn', err, { source: provider });
+        const e = err as { name?: unknown; message?: unknown; stack?: unknown } | null;
+        reportCrash('auth.signIn', { name: e?.name, message: `${String(e?.message ?? err)} ${traceMessage(trace, 300)}`, stack: e?.stack }, { source: provider });
         return undefined;
       } finally {
         setBusy(false);
@@ -68,17 +79,9 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
       user,
       error,
       busy,
-      // A window closed without a result is shown as nothing (people close it on purpose), but it's also what a
-      // blocked or hung flow looks like, so it's reported: a failed sign-in never leaves no trace.
-      signIn: async (p) => {
-        if ((await run(p, () => adapter.signIn(p))) === false) reportCancelled(p);
-      },
+      signIn: async (p) => void (await run(p, () => adapter.signIn(p), (ok) => ok === false)),
       continueAsGuest: async () => void (await run('guest', () => adapter.continueAsGuest())),
-      linkGuest: async (p) => {
-        const result = (await run(p, () => adapter.linkGuest(p))) ?? { outcome: 'cancelled' as const };
-        if (result.outcome === 'cancelled') reportCancelled(p);
-        return result;
-      },
+      linkGuest: async (p) => (await run(p, () => adapter.linkGuest(p), (r) => r.outcome === 'cancelled', 'link')) ?? { outcome: 'cancelled' },
       signOut: async () => {
         try {
           await adapter.signOut();
