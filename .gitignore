@@ -65,3 +65,8 @@ tmp/
 *.swp
 # Lighthouse CI reports (apps/site/lighthouserc.json)
 .lighthouseci/
+
+# The owner's local brand folder: source artwork, partner logos and screenshots that
+# don't belong in a public repo. The kit itself is brand/ (docs/DECISIONS.md, 2026-09-27).
+/LOGO & IDEAS/
+/Algominutes-logo/
