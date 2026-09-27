@@ -28,6 +28,14 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   - The kit is generated from tokens by one renderer (`generate-app-icon.swift`, later `brand/`).
   - The owner's `LOGO & IDEAS` folder stays local and git-ignored: it holds third-party partner logos and
     screenshots that don't belong in a public repo.
+- **Revised the same day, with the owner: a white mark for contrast.** The frosted glyph let the purple through
+  and read lavender-grey at home-screen size, and the three-bloom aurora competed with it.
+  - The glyph and the dot are now one solid white material, on a soft shadow.
+  - The tile is the official blue → violet diagonal, lifted with a violet glow behind the mark and darker at the
+    foot.
+  - On iOS 26 the mark is still glass, with translucency off, so the system adds its light and depth and the
+    mark stays white.
+  - `tests/brand-assets.test.ts` checks white's contrast on both ends of the gradient (AA).
 - **Not in this change.** The app's UI accent (`brand.accent`, `#5B67F0`) stays as it is. Moving it to the brand
   violet is a three-client change, with its own contrast review.
 

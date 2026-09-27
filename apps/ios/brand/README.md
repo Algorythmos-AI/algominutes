@@ -1,6 +1,6 @@
 # AlgoMinutes brand assets
 
-The "ai" mark: a speech-bubble "a" and an "i", in Liquid Glass on an aurora of the Algorythmos gradient
+The "ai" mark: a speech-bubble "a" and an "i", in white on a purple tile of the Algorythmos gradient
 (docs/DECISIONS.md, 2026-09-27).
 
 ## Source of truth
@@ -11,7 +11,7 @@ The "ai" mark: a speech-bubble "a" and an "i", in Liquid Glass on an aurora of t
   - `wordmark-light.png`: the wordmark on white.
 - **Colours**: `packages/tokens/tokens.json`:
   - `brand.algorythmos`: the parent brand's official colours, from its brand sheet.
-  - `brand.mark`: the mark, the aurora and the glass (below).
+  - `brand.mark`: the mark and the tile (below).
 - **Geometry**: measured from `reference/icon-sizes.png` (below), and laid out by
   `apps/ios/scripts/generate-app-icon.swift` (`Mark`, `Layout`).
 
@@ -24,13 +24,13 @@ cd apps/ios && swift scripts/generate-app-icon.swift
 That writes:
 
 - **The app icon, `AlgoMinutes/Resources/AppIcon.icon`**, an Icon Composer document:
-  - `aurora.png` and `aurora-dark.png`: the background, by appearance.
-  - `glyph.svg` and `dot.svg`: in glass, on their own planes, so the dot floats above the "a".
+  - `background.png` and `background-dark.png`: the tile, by appearance.
+  - `glyph.svg` and `dot.svg`: white glass, on their own planes, so the dot floats above the "a".
   - iOS 26 renders it as Liquid Glass, with the system's specular light and shadows. Xcode flattens it for iOS
     17–25 and the App Store, so there's no PNG app icon to keep in step.
 - **The in-app logo**, `Logo.imageset/logo.pdf` (a vector).
 - **Here:**
-  - `icon.svg` and `icon-rounded.svg`: the glass tile.
+  - `icon.svg` and `icon-rounded.svg`: the tile.
   - `mark-on-dark.svg` and `mark-on-light.svg`: the mark alone, flat, for UI.
   - `mark.json`: the laid-out geometry, which `tests/brand-assets.test.ts` checks.
 - **The site** (`apps/site/public/`): `favicon.svg`, `favicon.ico` (16/32/48) and `apple-touch-icon.png`.
@@ -63,20 +63,17 @@ The mark is scaled **×1.75** about its bounding box (dot included) and centred 
 
 ## The look
 
-- **Aurora.** A deep base (`auroraBase`, `#1A0A6E`) with three radial blooms:
-  - `gradientStart` blue from the top-left;
-  - `gradientEnd` violet from the bottom-right;
-  - `auroraMagenta` on the right.
+A white mark on a rich purple tile: the contrast carries it at every size (revised with the owner, 2026-09-27).
 
-  In dark mode the base is `space` (`#07051A`), and the blooms are dimmer.
-- **Glass glyph.**
-  - A white fill that fades from 94% to 66% down the glyph.
-  - A rim that's bright at the top, dim through the middle, and catches the light again at the bottom.
-  - A soft `shadow` below it. The shadow is cleared under the glass.
-- **Sphere dot.** A radial gradient from white through `#E4DCFF` to `dotShade`, lit from the top-left, with a
-  glint.
-- **Specular light** from the top-left over everything.
-- **At 64 px and below** (favicons), the glyph is solid white, so it stays crisp.
+- **Tile.** The official gradient on the diagonal, `gradientStart` blue → `gradientEnd` violet. It's lifted
+  with a soft `lift` violet glow behind the mark, and weighted at the foot with `shadow` (0→30% over the
+  bottom half). A light from the top-left sits over everything.
+- **Mark.** The glyph and the dot are one material: white, with the faintest `glyphShade` at the foot for form.
+  They're raised on a soft `shadow` (offset 18, blur 44, 50%), cleared under the mark.
+- **iOS 26.** The glyph and the dot are glass with translucency **off**, so the system adds its specular
+  highlights and depth while the mark stays solid white. In dark mode the tile is `space` with dimmer blue and
+  violet glows, and the mark stays white.
+- **At 64 px and below** (favicons), there's no shadow, so the edges stay crisp.
 
 ## Colours
 
@@ -85,13 +82,13 @@ The mark is scaled **×1.75** about its bounding box (dot included) and centred 
 | `algorythmos.blue` | `#3715E0` | Algorythmos gradient start; `mark.gradientStart` |
 | `algorythmos.violet` | `#6D00FF` | Algorythmos gradient end; `mark.gradientEnd` |
 | `algorythmos.purple` | `#7658E7` | Algorythmos secondary |
-| `mark.auroraBase` | `#1A0A6E` | The tile's base, under the aurora |
-| `mark.auroraMagenta` | `#C04BFF` | The aurora's right-hand bloom |
+| `mark.lift` | `#9A6BFF` | The glow behind the mark |
+| `mark.auroraMagenta` | `#C04BFF` | A bloom in deep-space marketing art |
 | `mark.space` | `#07051A` | The dark-mode base; deep-space backgrounds |
 | `mark.shadow` | `#12024F` | The glyph's shadow |
-| `mark.glyph` | `#FFFFFF` | The glyph |
-| `mark.dot` | `#D9D1FF` | The "i" dot (flat); dark-mode dot |
-| `mark.dotShade` | `#8B6BFF` | The dot sphere's shaded side |
+| `mark.glyph` | `#FFFFFF` | The mark: glyph and dot |
+| `mark.glyphShade` | `#ECE6FF` | The mark's foot, for form |
+| `mark.dot` | `#D9D1FF` | The "i" dot on dark UI (`mark-on-dark.svg`) |
 | `mark.dotOnLight` | `#6C32F0` | The dot on light backgrounds |
 | `mark.navy` | `#120C33` | The dark wordmark's background |
 | `mark.ink` | `#1B1440` | "Algo" on the light wordmark |

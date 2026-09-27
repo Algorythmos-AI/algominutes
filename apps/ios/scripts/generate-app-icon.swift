@@ -6,10 +6,10 @@
 // Usage (from apps/ios): swift scripts/generate-app-icon.swift
 // Writes:
 //   AlgoMinutes/Resources/AppIcon.icon/         the app icon, an Icon Composer document:
-//     icon.json, Assets/{aurora,aurora-dark}.png, Assets/{glyph,dot}.svg. iOS 26
+//     icon.json, Assets/{background,background-dark}.png, Assets/{glyph,dot}.svg. iOS 26
 //     renders it as Liquid Glass; Xcode flattens it for iOS 17-25 and the App Store.
 //   AlgoMinutes/Resources/Assets.xcassets/Logo.imageset/logo.pdf   the in-app logo, a vector
-//   brand/icon.svg, brand/icon-rounded.svg      the glass tile, square and rounded
+//   brand/icon.svg, brand/icon-rounded.svg      the tile, square and rounded
 //   brand/mark-on-dark.svg, brand/mark-on-light.svg   the mark alone, flat, for UI
 //   brand/mark.json          the laid-out geometry (tests/brand-assets.test.ts checks the size)
 //   ../site/public/          favicon.svg, favicon.ico, apple-touch-icon.png
@@ -120,58 +120,47 @@ func color(_ key: String) -> RGB {
     return RGB(hex)
 }
 let blue = color("gradientStart"), violet = color("gradientEnd")
-let auroraBase = color("auroraBase"), magenta = color("auroraMagenta"), space = color("space")
-let shadowColor = color("shadow"), glyphColor = color("glyph")
-let dotColor = color("dot"), dotShade = color("dotShade"), dotOnLight = color("dotOnLight")
+let lift = color("lift"), space = color("space")
+let shadowColor = color("shadow"), glyphColor = color("glyph"), glyphShade = color("glyphShade")
+let dotColor = color("dot"), dotOnLight = color("dotOnLight")
 let white = RGB("#FFFFFF")
-let sphereMid = RGB("#E4DCFF")
 
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
 // MARK: - The look, one recipe for every renderer
 
-/// Aurora blobs, as (centre, radius) in fractions of the tile, colour, opacity.
-/// Blue from the top-left and violet from the bottom-right carry the official
-/// gradient; a magenta bloom on the right gives it depth.
-struct Blob { let x, y, r: CGFloat; let color: RGB; let alpha: CGFloat }
-func aurora(dark: Bool) -> (base: RGB, blobs: [Blob]) {
-    (dark ? space : auroraBase, [
-        Blob(x: 0.10, y: 0.05, r: 0.80, color: blue, alpha: dark ? 0.70 : 1),
-        Blob(x: 0.95, y: 0.95, r: 0.75, color: violet, alpha: dark ? 0.75 : 1),
-        Blob(x: 0.85, y: 0.35, r: 0.45, color: magenta, alpha: dark ? 0.45 : 0.8),
-    ])
+// A white mark on a rich purple tile: the contrast carries it at every size.
+// The tile is the official gradient on the diagonal, lifted with a lighter
+// violet behind the mark and weighted at the foot; the mark is one white
+// material (glyph and dot alike), raised on a soft shadow.
+struct Glow { let x, y, r: CGFloat; let color: RGB; let alpha: CGFloat }
+struct Tile { let from: RGB; let to: RGB; let glows: [Glow]; let foot: CGFloat }
+func tileLook(dark: Bool) -> Tile {
+    dark
+        ? Tile(from: space, to: space, glows: [
+            Glow(x: 0.10, y: 0.05, r: 0.85, color: blue, alpha: 0.6),
+            Glow(x: 0.95, y: 0.95, r: 0.80, color: violet, alpha: 0.65),
+        ], foot: 0)
+        : Tile(from: blue, to: violet, glows: [Glow(x: 0.5, y: 0.44, r: 0.62, color: lift, alpha: 0.5)], foot: 0.3)
 }
-/// The specular light, from the top-left.
-let highlight = Blob(x: 0.22, y: 0.04, r: 0.80, color: white, alpha: 0.35)
-/// The glyph's soft shadow: offset down, blurred, and only outside the glyph.
-let shadowOffset: CGFloat = 22, shadowBlur: CGFloat = 32, shadowAlpha: CGFloat = 0.55
-/// Frosted glass: the fill fades down the glyph; the rim is bright at the top,
-/// dim through the middle, and catches light again at the bottom.
-let glassFill: [(alpha: CGFloat, at: CGFloat)] = [(0.94, 0), (0.66, 1)]
-let glassRim: [(alpha: CGFloat, at: CGFloat)] = [(1, 0), (0.35, 0.5), (0.8, 1)]
-let rimWidth: CGFloat = 8
-/// The "i" dot, a sphere lit from the top-left, with a specular glint.
-let sphere: [(color: RGB, at: CGFloat)] = [(white, 0), (sphereMid, 0.4), (dotShade, 1)]
-let sphereFocus = CGPoint(x: 0.34, y: 0.28), sphereRadius: CGFloat = 0.85
-func glint(_ d: Circle, scale: CGFloat) -> CGRect {
-    CGRect(x: d.cx - 13.1 * scale - 16 * scale, y: d.cy - 14.9 * scale - 11 * scale, width: 32 * scale, height: 22 * scale)
-}
+/// The light, from the top-left.
+let highlight = Glow(x: 0.2, y: 0.02, r: 0.8, color: white, alpha: 0.24)
+/// The mark's soft shadow: offset down, blurred, and only outside the mark.
+let shadowOffset: CGFloat = 18, shadowBlur: CGFloat = 44, shadowAlpha: CGFloat = 0.5
 
-enum Background { case aurora, auroraDark, none }
-enum GlyphFill { case glass, solid, flat(CGColor) }
-enum DotFill { case sphere, flat(CGColor) }
+enum Background { case tile, tileDark, none }
+enum MarkFill { case white, flat(CGColor) }
 struct Look {
-    var background: Background = .aurora
-    var glyph: GlyphFill = .glass
-    var dot: DotFill = .sphere
+    var background: Background = .tile
+    var fill: MarkFill = .white
     var shadow = true
     var highlight = true
     /// false draws the background alone.
     var mark = true
 }
-let glassLook = Look()
-/// For 64 px and below: a solid glyph reads; frosted glass turns to mush.
-let solidLook = Look(glyph: .solid, shadow: false)
+let iconLook = Look()
+/// For 64 px and below: no shadow, so the edges stay crisp.
+let smallLook = Look(shadow: false)
 
 // MARK: - CoreGraphics
 
@@ -184,94 +173,67 @@ func gradient(_ stops: [(CGColor, CGFloat)]) -> CGGradient {
     CGGradient(colorsSpace: srgb, colors: stops.map { $0.0 } as CFArray, locations: stops.map { $0.1 })!
 }
 
-func fill(_ ctx: CGContext, _ blob: Blob) {
-    let c = CGPoint(x: blob.x * tile, y: blob.y * tile)
-    ctx.drawRadialGradient(gradient([(blob.color.cg(blob.alpha), 0), (blob.color.cg(0), 1)]),
-                           startCenter: c, startRadius: 0, endCenter: c, endRadius: blob.r * tile, options: [])
+func fill(_ ctx: CGContext, _ glow: Glow) {
+    let c = CGPoint(x: glow.x * tile, y: glow.y * tile)
+    ctx.drawRadialGradient(gradient([(glow.color.cg(glow.alpha), 0), (glow.color.cg(0), 1)]),
+                           startCenter: c, startRadius: 0, endCenter: c, endRadius: glow.r * tile, options: [])
 }
 
 func drawBackground(_ ctx: CGContext, dark: Bool) {
-    let a = aurora(dark: dark)
-    ctx.setFillColor(a.base.cg)
-    ctx.fill(CGRect(x: 0, y: 0, width: tile, height: tile))
-    a.blobs.forEach { fill(ctx, $0) }
-}
-
-/// Draws a linear gradient inside `path`, from the top-left of `box` to a point
-/// `dx` of the way across its bottom.
-func fillLinear(_ ctx: CGContext, _ path: CGPath, box: CGRect, dx: CGFloat, _ stops: [(CGColor, CGFloat)]) {
-    ctx.saveGState()
-    ctx.addPath(path)
-    ctx.clip()
-    ctx.drawLinearGradient(gradient(stops), start: CGPoint(x: box.minX, y: box.minY),
-                           end: CGPoint(x: box.minX + dx * box.width, y: box.maxY),
-                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-    ctx.restoreGState()
+    let t = tileLook(dark: dark)
+    let all: CGGradientDrawingOptions = [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+    ctx.drawLinearGradient(gradient([(t.from.cg, 0), (t.to.cg, 1)]), start: .zero, end: CGPoint(x: tile, y: tile), options: all)
+    t.glows.forEach { fill(ctx, $0) }
+    if t.foot > 0 {
+        ctx.drawLinearGradient(gradient([(shadowColor.cg(0), 0.5), (shadowColor.cg(t.foot), 1)]),
+                               start: .zero, end: CGPoint(x: 0, y: tile), options: all)
+    }
 }
 
 /// `unit` is base-space units per tile unit: shadows are specified in base
 /// space, which the tile's scale doesn't reach.
 func draw(_ ctx: CGContext, _ look: Look, _ l: Layout, unit: CGFloat) {
     switch look.background {
-    case .aurora: drawBackground(ctx, dark: false)
-    case .auroraDark: drawBackground(ctx, dark: true)
+    case .tile: drawBackground(ctx, dark: false)
+    case .tileDark: drawBackground(ctx, dark: true)
     case .none: break
     }
     guard look.mark else { return }
-    let dotPath = CGPath(ellipseIn: l.dot.rect, transform: nil)
-    let both = CGMutablePath()
-    both.addPath(l.glyph)
-    both.addPath(dotPath)
+    let mark = CGMutablePath()
+    mark.addPath(l.glyph)
+    mark.addEllipse(in: l.dot.rect)
 
     if look.shadow {
-        // In a layer: the glyph casts its shadow, then the glyph itself is
-        // cleared, so no shadow sits under the glass.
+        // In a layer: the mark casts its shadow, then the mark itself is
+        // cleared, so the shadow never shows through it.
         ctx.saveGState()
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         ctx.setShadow(offset: CGSize(width: 0, height: -shadowOffset * unit), blur: shadowBlur * unit,
                       color: shadowColor.cg(shadowAlpha))
         ctx.setFillColor(shadowColor.cg)
-        ctx.addPath(both)
+        ctx.addPath(mark)
         ctx.fillPath()
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
         ctx.setBlendMode(.clear)
-        ctx.addPath(both)
+        ctx.addPath(mark)
         ctx.fillPath()
         ctx.endTransparencyLayer()
         ctx.restoreGState()
     }
 
-    let box = l.glyph.boundingBoxOfPath
-    switch look.glyph {
-    case .glass:
-        fillLinear(ctx, l.glyph, box: box, dx: 0.3, glassFill.map { (white.cg($0.alpha), $0.at) })
-        let rim = l.glyph.copy(strokingWithWidth: rimWidth, lineCap: .round, lineJoin: .round, miterLimit: 10)
-        fillLinear(ctx, rim, box: box, dx: 0.4, glassRim.map { (white.cg($0.alpha), $0.at) })
-    case .solid:
-        fillLinear(ctx, l.glyph, box: box, dx: 0, [(white.cg, 0), (RGB("#F1EDFF").cg, 1)])
+    ctx.saveGState()
+    ctx.addPath(mark)
+    ctx.clip()
+    switch look.fill {
+    case .white:
+        // White at the top, the faintest violet at the foot: form, not colour.
+        ctx.drawLinearGradient(gradient([(white.cg, 0), (glyphShade.cg, 1)]), start: CGPoint(x: 0, y: l.bounds.minY),
+                               end: CGPoint(x: 0, y: l.bounds.maxY), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
     case .flat(let c):
         ctx.setFillColor(c)
-        ctx.addPath(l.glyph)
-        ctx.fillPath()
+        ctx.fill(l.bounds)
     }
-
-    switch look.dot {
-    case .sphere:
-        ctx.saveGState()
-        ctx.addPath(dotPath)
-        ctx.clip()
-        let d = l.dot.rect
-        let focus = CGPoint(x: d.minX + sphereFocus.x * d.width, y: d.minY + sphereFocus.y * d.height)
-        ctx.drawRadialGradient(gradient(sphere.map { ($0.color.cg, $0.at) }), startCenter: focus, startRadius: 0,
-                               endCenter: focus, endRadius: sphereRadius * d.width, options: [.drawsAfterEndLocation])
-        ctx.restoreGState()
-        ctx.setFillColor(white.cg(0.9))
-        ctx.fillEllipse(in: glint(l.dot, scale: l.scale))
-    case .flat(let c):
-        ctx.setFillColor(c)
-        ctx.addPath(dotPath)
-        ctx.fillPath()
-    }
+    ctx.restoreGState()
 
     if look.highlight { fill(ctx, highlight) }
 }
@@ -334,8 +296,8 @@ func ico(_ sizes: [Int], _ look: Look) -> Data {
 // these layers; the art is flat. Two groups over a background layer, so the dot
 // floats on its own plane above the "a".
 let iconDir = "AlgoMinutes/Resources/AppIcon.icon"
-write(render(size: 1024, opaque: true, Look(background: .aurora, highlight: false, mark: false), icon), "\(iconDir)/Assets/aurora.png")
-write(render(size: 1024, opaque: true, Look(background: .auroraDark, highlight: false, mark: false), icon), "\(iconDir)/Assets/aurora-dark.png")
+write(render(size: 1024, opaque: true, Look(background: .tile, highlight: false, mark: false), icon), "\(iconDir)/Assets/background.png")
+write(render(size: 1024, opaque: true, Look(background: .tileDark, highlight: false, mark: false), icon), "\(iconDir)/Assets/background-dark.png")
 
 func n(_ v: CGFloat) -> String {
     let s = String(format: "%.1f", Double(v))
@@ -367,11 +329,11 @@ func layerSVG(_ body: String) -> String {
     """
 }
 write(layerSVG("<path d=\"\(svgPath(icon.glyph))\" fill=\"\(glyphColor.hex)\"/>"), "\(iconDir)/Assets/glyph.svg")
-write(layerSVG("<circle cx=\"\(n(icon.dot.cx))\" cy=\"\(n(icon.dot.cy))\" r=\"\(n(icon.dot.r))\" fill=\"\(dotColor.hex)\"/>"),
+write(layerSVG("<circle cx=\"\(n(icon.dot.cx))\" cy=\"\(n(icon.dot.cy))\" r=\"\(n(icon.dot.r))\" fill=\"\(glyphColor.hex)\"/>"),
       "\(iconDir)/Assets/dot.svg")
 
-/// In dark mode iOS recolours glass layers from the fill; these pin the glyph
-/// white and the dot lavender on the deep-space aurora.
+/// In dark mode iOS recolours glass layers from the fill; these pin the mark
+/// white. Translucency is off, so the glass stays a solid white.
 func solid(_ c: RGB) -> [String: Any] { ["solid": c.icon] }
 func darkOnly(_ value: Any) -> [[String: Any]] { [["appearance": "dark", "value": value]] }
 let iconJSON: [String: Any] = [
@@ -383,9 +345,9 @@ let iconJSON: [String: Any] = [
     "groups": [
         [
             "name": "Dot",
-            "layers": [["name": "dot", "image-name": "dot.svg", "glass": true, "fill-specializations": darkOnly(solid(dotColor))]],
+            "layers": [["name": "dot", "image-name": "dot.svg", "glass": true, "fill-specializations": darkOnly(solid(glyphColor))]],
             "shadow": ["kind": "neutral", "opacity": 0.5],
-            "translucency": ["enabled": true, "value": 0.2],
+            "translucency": ["enabled": false, "value": 0.2],
             "specular": true,
             "lighting": "combined",
         ],
@@ -393,17 +355,17 @@ let iconJSON: [String: Any] = [
             "name": "Glyph",
             "layers": [["name": "glyph", "image-name": "glyph.svg", "glass": true, "fill-specializations": darkOnly(solid(glyphColor))]],
             "shadow": ["kind": "neutral", "opacity": 0.5],
-            "translucency": ["enabled": true, "value": 0.4],
+            "translucency": ["enabled": false, "value": 0.4],
             "specular": true,
             "lighting": "combined",
         ],
         [
-            "name": "Aurora",
+            "name": "Background",
             "layers": [[
-                "name": "aurora",
+                "name": "background",
                 "image-name-specializations": [
-                    ["value": "aurora.png"],
-                    ["appearance": "dark", "value": "aurora-dark.png"],
+                    ["value": "background.png"],
+                    ["appearance": "dark", "value": "background-dark.png"],
                 ],
                 "glass": false,
             ]],
@@ -427,7 +389,7 @@ do {
     pdf.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: tile, height: tile),
                        cornerWidth: Mark.cornerRadius, cornerHeight: Mark.cornerRadius, transform: nil))
     pdf.clip()
-    draw(pdf, glassLook, icon, unit: box.width / tile)
+    draw(pdf, iconLook, icon, unit: box.width / tile)
     pdf.endPDFPage()
     pdf.closePDF()
     print("wrote \(url.path.replacingOccurrences(of: repo.path + "/", with: ""))")
@@ -438,7 +400,7 @@ do {
 func stop(_ c: RGB, _ at: CGFloat, _ alpha: CGFloat = 1) -> String {
     "<stop offset=\"\(n(at * 100) + "%")\" stop-color=\"\(c.hex)\"" + (alpha < 1 ? " stop-opacity=\"\(String(format: "%.2f", Double(alpha)))\"" : "") + "/>"
 }
-func radialDef(_ id: String, _ b: Blob) -> String {
+func radialDef(_ id: String, _ b: Glow) -> String {
     "<radialGradient id=\"\(id)\" cx=\"\(n(b.x * tile))\" cy=\"\(n(b.y * tile))\" r=\"\(n(b.r * tile))\" gradientUnits=\"userSpaceOnUse\">"
         + stop(b.color, 0, b.alpha) + stop(b.color, 1, 0) + "</radialGradient>"
 }
@@ -460,41 +422,34 @@ func svgDoc(_ title: String, defs: [String], body: [String]) -> String {
     """
 }
 
-/// The tile as SVG: the aurora, the glyph (glass or solid) and the sphere.
-func tileSVG(_ l: Layout, glass: Bool, rounded: Bool) -> String {
-    let a = aurora(dark: false)
-    let box = l.glyph.boundingBoxOfPath
-    let d = l.dot.rect
-    let g = glint(l.dot, scale: l.scale)
+/// The tile as SVG: the purple gradient and the white mark.
+func tileSVG(_ l: Layout, rounded: Bool, shadow: Bool = true) -> String {
+    let p = ""
+    let t = tileLook(dark: false)
     let glyphD = svgPath(l.glyph)
     let dot = "<circle cx=\"\(n(l.dot.cx))\" cy=\"\(n(l.dot.cy))\" r=\"\(n(l.dot.r))\""
-    var defs = a.blobs.enumerated().map { radialDef("aurora\($0.offset)", $0.element) }
-    defs.append(radialDef("light", highlight))
-    defs.append("<radialGradient id=\"sphere\" cx=\"\(n(d.minX + sphereFocus.x * d.width))\" cy=\"\(n(d.minY + sphereFocus.y * d.height))\" r=\"\(n(sphereRadius * d.width))\" gradientUnits=\"userSpaceOnUse\">"
-                + sphere.map { stop($0.color, $0.at) }.joined() + "</radialGradient>")
-    if glass {
-        defs.append(linearDef("glass", box: box, dx: 0.3, glassFill.map { stop(white, $0.at, $0.alpha) }))
-        defs.append(linearDef("rim", box: box, dx: 0.4, glassRim.map { stop(white, $0.at, $0.alpha) }))
-        defs.append("<filter id=\"soft\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"160%\"><feGaussianBlur stdDeviation=\"\(n(shadowBlur / 2))\"/></filter>")
-        defs.append("<mask id=\"outside\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"1024\" height=\"1024\"><rect width=\"1024\" height=\"1024\" fill=\"#fff\"/><path d=\"\(glyphD)\"/>\(dot)/></mask>")
-    } else {
-        defs.append(linearDef("glass", box: box, dx: 0, [stop(white, 0), stop(RGB("#F1EDFF"), 1)]))
+    var defs = ["<linearGradient id=\"\(p)bg\" x1=\"0\" y1=\"0\" x2=\"1024\" y2=\"1024\" gradientUnits=\"userSpaceOnUse\">" + stop(t.from, 0) + stop(t.to, 1) + "</linearGradient>"]
+    defs += t.glows.enumerated().map { radialDef("\(p)glow\($0.offset)", $0.element) }
+    defs.append("<linearGradient id=\"\(p)foot\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1024\" gradientUnits=\"userSpaceOnUse\">" + stop(shadowColor, 0.5, 0) + stop(shadowColor, 1, t.foot) + "</linearGradient>")
+    defs.append(radialDef("\(p)light", highlight))
+    defs.append("<linearGradient id=\"\(p)mark\" x1=\"0\" y1=\"\(n(l.bounds.minY))\" x2=\"0\" y2=\"\(n(l.bounds.maxY))\" gradientUnits=\"userSpaceOnUse\">" + stop(white, 0) + stop(glyphShade, 1) + "</linearGradient>")
+    if shadow {
+        defs.append("<filter id=\"\(p)soft\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"160%\"><feGaussianBlur stdDeviation=\"\(n(shadowBlur / 2))\"/></filter>")
+        defs.append("<mask id=\"\(p)outside\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"1024\" height=\"1024\"><rect width=\"1024\" height=\"1024\" fill=\"#fff\"/><path d=\"\(glyphD)\"/>\(dot)/></mask>")
     }
     if rounded {
-        defs.append("<clipPath id=\"tile\"><rect width=\"1024\" height=\"1024\" rx=\"\(n(Mark.cornerRadius))\"/></clipPath>")
+        defs.append("<clipPath id=\"\(p)tile\"><rect width=\"1024\" height=\"1024\" rx=\"\(n(Mark.cornerRadius))\"/></clipPath>")
     }
-    var body = ["<rect width=\"1024\" height=\"1024\" fill=\"\(a.base.hex)\"/>"]
-    body += a.blobs.indices.map { "<rect width=\"1024\" height=\"1024\" fill=\"url(#aurora\($0))\"/>" }
-    if glass {
-        body.append("<g mask=\"url(#outside)\"><g filter=\"url(#soft)\" transform=\"translate(0 \(n(shadowOffset)))\" fill=\"\(shadowColor.hex)\" fill-opacity=\"\(n(shadowAlpha))\"><path d=\"\(glyphD)\"/>\(dot)/></g></g>")
-        body.append("<path d=\"\(glyphD)\" fill=\"url(#glass)\" stroke=\"url(#rim)\" stroke-width=\"\(n(rimWidth))\" stroke-linejoin=\"round\"/>")
-    } else {
-        body.append("<path d=\"\(glyphD)\" fill=\"url(#glass)\"/>")
+    var body = ["<rect width=\"1024\" height=\"1024\" fill=\"url(#\(p)bg)\"/>"]
+    body += t.glows.indices.map { "<rect width=\"1024\" height=\"1024\" fill=\"url(#\(p)glow\($0))\"/>" }
+    body.append("<rect width=\"1024\" height=\"1024\" fill=\"url(#\(p)foot)\"/>")
+    if shadow {
+        body.append("<g mask=\"url(#\(p)outside)\"><g filter=\"url(#\(p)soft)\" transform=\"translate(0 \(n(shadowOffset)))\" fill=\"\(shadowColor.hex)\" fill-opacity=\"\(n(shadowAlpha))\"><path d=\"\(glyphD)\"/>\(dot)/></g></g>")
     }
-    body.append("\(dot) fill=\"url(#sphere)\"/>")
-    body.append("<ellipse cx=\"\(n(g.midX))\" cy=\"\(n(g.midY))\" rx=\"\(n(g.width / 2))\" ry=\"\(n(g.height / 2))\" fill=\"#FFFFFF\" fill-opacity=\"0.9\"/>")
-    body.append("<rect width=\"1024\" height=\"1024\" fill=\"url(#light)\"/>")
-    if rounded { body = ["<g clip-path=\"url(#tile)\">"] + body.map { "  " + $0 } + ["</g>"] }
+    body.append("<path d=\"\(glyphD)\" fill=\"url(#\(p)mark)\"/>")
+    body.append("\(dot) fill=\"url(#\(p)mark)\"/>")
+    body.append("<rect width=\"1024\" height=\"1024\" fill=\"url(#\(p)light)\"/>")
+    if rounded { body = ["<g clip-path=\"url(#\(p)tile)\">"] + body.map { "  " + $0 } + ["</g>"] }
     return svgDoc("AlgoMinutes", defs: defs, body: body)
 }
 
@@ -506,8 +461,8 @@ func markSVG(_ title: String, glyphFill: String, dotFill: String, defs: [String]
     ])
 }
 
-write(tileSVG(icon, glass: true, rounded: false), "brand/icon.svg")
-write(tileSVG(icon, glass: true, rounded: true), "brand/icon-rounded.svg")
+write(tileSVG(icon, rounded: false), "brand/icon.svg")
+write(tileSVG(icon, rounded: true), "brand/icon-rounded.svg")
 write(markSVG("AlgoMinutes mark (on dark)", glyphFill: glyphColor.hex, dotFill: dotColor.hex), "brand/mark-on-dark.svg")
 write(markSVG("AlgoMinutes mark (on light)", glyphFill: "url(#brand)", dotFill: dotOnLight.hex,
               defs: [linearDef("brand", box: icon.glyph.boundingBoxOfPath, dx: 1, [stop(blue, 0), stop(violet, 1)])]),
@@ -529,23 +484,23 @@ write(try! JSONSerialization.data(withJSONObject: markJSON, options: [.prettyPri
 
 // MARK: - The site and the web app
 
-// Tabs and page logos: the solid glyph, which stays crisp at 16 px.
-let logoSVG = tileSVG(icon, glass: false, rounded: true)
+// Tabs and page logos: no shadow, so the mark stays crisp at 16 px.
+let logoSVG = tileSVG(icon, rounded: true, shadow: false)
 write(logoSVG, "../site/public/favicon.svg")
 write(logoSVG, "../web/public/logo.svg")
-write(ico([16, 32, 48], solidLook), "../site/public/favicon.ico")
+write(ico([16, 32, 48], smallLook), "../site/public/favicon.ico")
 // iOS rounds a touch icon itself, so it's square and opaque.
-write(render(size: 180, opaque: true, glassLook, icon), "../site/public/apple-touch-icon.png")
-write(render(size: 180, opaque: true, glassLook, icon), "../web/public/apple-touch-icon.png")
-write(render(size: 500, opaque: false, rounded: true, glassLook, icon), "../web/public/logo.png")
+write(render(size: 180, opaque: true, iconLook, icon), "../site/public/apple-touch-icon.png")
+write(render(size: 180, opaque: true, iconLook, icon), "../web/public/apple-touch-icon.png")
+write(render(size: 500, opaque: false, rounded: true, iconLook, icon), "../web/public/logo.png")
 for size in [16, 32] {
-    write(render(size: size, opaque: false, rounded: true, solidLook, icon), "../web/public/favicon-\(size).png")
+    write(render(size: size, opaque: false, rounded: true, smallLook, icon), "../web/public/favicon-\(size).png")
 }
 for size in [48, 72, 96, 128, 192, 256, 512] {
-    write(render(size: size, opaque: false, rounded: true, size <= 64 ? solidLook : glassLook, icon), "../web/public/icon-\(size).png")
+    write(render(size: size, opaque: false, rounded: true, size <= 64 ? smallLook : iconLook, icon), "../web/public/icon-\(size).png")
 }
 // A maskable icon is full-bleed; Android crops it to any shape inside the
 // central 80% circle, so the mark is smaller.
 for size in [192, 512] {
-    write(render(size: size, opaque: true, glassLook, maskable), "../web/public/icon-maskable-\(size).png")
+    write(render(size: size, opaque: true, iconLook, maskable), "../web/public/icon-maskable-\(size).png")
 }

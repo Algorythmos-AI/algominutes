@@ -33,7 +33,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "srgb:0.85098,0.81961,1.00000,1.00000"
+                "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
               }
             }
           ],
@@ -50,7 +50,7 @@
       },
       "specular" : true,
       "translucency" : {
-        "enabled" : true,
+        "enabled" : false,
         "value" : 0.20000000000000001
       }
     },
@@ -78,7 +78,7 @@
       },
       "specular" : true,
       "translucency" : {
-        "enabled" : true,
+        "enabled" : false,
         "value" : 0.40000000000000002
       }
     },
@@ -88,17 +88,17 @@
           "glass" : false,
           "image-name-specializations" : [
             {
-              "value" : "aurora.png"
+              "value" : "background.png"
             },
             {
               "appearance" : "dark",
-              "value" : "aurora-dark.png"
+              "value" : "background-dark.png"
             }
           ],
-          "name" : "aurora"
+          "name" : "background"
         }
       ],
-      "name" : "Aurora",
+      "name" : "Background",
       "shadow" : {
         "kind" : "none",
         "opacity" : 0.5

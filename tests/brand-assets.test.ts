@@ -75,12 +75,18 @@ describe('Liquid Glass icon (iOS 26)', () => {
     expect(fs.readdirSync(`${GLASS}/Assets`).sort()).toEqual([...new Set(images)].sort());
   });
 
-  it('puts the glyph and the dot in glass, over an opaque aurora', () => {
+  it('makes the glyph and the dot solid white glass, over an opaque tile', () => {
     const byName = Object.fromEntries(layers.map((l: { name: string }) => [l.name, l]));
-    expect(byName.glyph.glass).toBe(true);
-    expect(byName.dot.glass).toBe(true);
-    expect(byName.aurora.glass).toBe(false);
-    expect(png(`${GLASS}/Assets/aurora.png`)).toEqual({ width: 1024, height: 1024, colourType: 2 });
+    for (const name of ['glyph', 'dot']) {
+      expect(byName[name].glass).toBe(true);
+      expect(fs.readFileSync(`${GLASS}/Assets/${name}.svg`, 'utf8')).toContain(`fill="${mark.glyph}"`);
+    }
+    // Translucent glass lets the purple through, and the mark stops reading white.
+    for (const g of icon.groups.filter((g: { name: string }) => g.name !== 'Background')) {
+      expect(g.translucency.enabled, g.name).toBe(false);
+    }
+    expect(byName.background.glass).toBe(false);
+    expect(png(`${GLASS}/Assets/background.png`)).toEqual({ width: 1024, height: 1024, colourType: 2 });
   });
 
   it('is the only app icon the build can pick', () => {
@@ -106,10 +112,9 @@ describe('brand SVGs', () => {
   it("use the tokens' colours (they were generated from them, not edited)", () => {
     for (const name of ['icon', 'icon-rounded']) {
       const s = svg(name);
-      for (const c of [mark.gradientStart, mark.gradientEnd, mark.auroraMagenta, mark.dotShade]) {
+      for (const c of [mark.gradientStart, mark.gradientEnd, mark.lift, mark.glyph, mark.glyphShade]) {
         expect(s).toContain(`stop-color="${c}"`);
       }
-      expect(s).toContain(`fill="${mark.auroraBase}"`);
     }
     expect(svg('mark-on-dark')).toMatch(new RegExp(`<path d="[^"]+" fill="${mark.glyph}"/>`));
     expect(svg('mark-on-dark')).toContain(`fill="${mark.dot}"`);
@@ -161,6 +166,10 @@ describe('brand contrast (apps/ios/brand/README.md)', () => {
 
   it('lavender is AA text on the dark app background', () => {
     expect(contrast(mark.lavender, appBackground)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('the white mark has AA contrast on both ends of the tile gradient', () => {
+    for (const end of [mark.gradientStart, mark.gradientEnd]) expect(contrast(mark.glyph, end)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('white is AA on the brand purple, for a filled control', () => {
