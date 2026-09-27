@@ -63,6 +63,19 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v7
+      # The same pinned Xcode as ios-test and Xcode Cloud (docs/runbooks/xcode-cloud.md). The runner image's
+      # default (Xcode 16) can't compile Icon Composer's AppIcon.icon, so the app wouldn't build here.
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          XCODE=/Applications/Xcode_26.3.app
+          if [ ! -d "$XCODE" ]; then
+            echo "error: $XCODE is not on this runner image; installed:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
       - name: Generate Xcode project (pinned XcodeGen)
         working-directory: apps/ios
         run: |
