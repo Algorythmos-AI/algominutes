@@ -63,6 +63,21 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v7
+      # The same pinned Xcode as ios.yml and Xcode Cloud, so CodeQL analyses the
+      # toolchain that ships; the runner's default (16.4 on macos-15) can't read
+      # AppIcon.icon. Xcode 26.3 ships Swift 6.2.3, which CodeQL supports from
+      # 2.24.0 (the action's bundle is newer).
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          XCODE=/Applications/Xcode_26.3.app
+          if [ ! -d "$XCODE" ]; then
+            echo "error: $XCODE is not on this runner image; installed:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
       - name: Generate Xcode project (pinned XcodeGen)
         working-directory: apps/ios
         run: |
