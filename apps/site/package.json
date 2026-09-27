@@ -23,7 +23,7 @@
     "@astrojs/check": "^0.9.10",
     "html-validate": "^11.16.0",
     "playwright": "^1.63.0",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "$comment": "cookie: astro's prerender bundle (dist/.prerender) imports it from apps/site, and the repo root hoists express's cookie@0.7; this pins astro's cookie@2 next to the site."
 }
