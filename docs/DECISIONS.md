@@ -3,6 +3,21 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## integration merges through a merge queue (2026-09-28)
+
+- **Why.** `integration`'s protection requires a PR to be up to date. So each merge left every other open PR
+  behind, needing an update and a fresh CI run, and a batch of eight PRs needed a person at every step.
+- **Change.** A merge queue tests each queued PR on top of the ones ahead of it, then merges in order. Every
+  workflow behind a required check also runs on `merge_group`.
+- **The iOS gates** (`ios.yml`, `codeql-swift.yml`) diff the group against `merge_group.base_sha`, so the
+  40-minute Swift analysis still runs only when the group changes the iOS app.
+- **`dependency-review`** skips in the queue, because each PR was reviewed on its own; a skipped job satisfies a
+  required check.
+- **Queue settings (the owner's, in Settings → Branches):**
+  - squash;
+  - "only merge non-failing pull requests";
+  - a 90-minute check timeout (the Swift analysis takes about 40 minutes).
+
 ## The app icon is a Liquid Glass "ai", 85% of the tile, in the official Algorythmos gradient (2026-09-27)
 
 - **Context.** On a home screen the icon read as small and flat. The "ai" filled 49% of the tile's height, and
