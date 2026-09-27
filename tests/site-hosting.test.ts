@@ -217,6 +217,8 @@ describe('the Firebase auth proxy', () => {
     expect(policy).toMatch(/script-src 'self' https:\/\/apis\.google\.com;/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/identitytoolkit\.googleapis\.com/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/securetoken\.googleapis\.com/);
+    // Google's sign-in script (apis.google.com, allowed in script-src) also pings its own origin (/js/gen_204).
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/apis\.google\.com/);
     // Itself, and staging's Firebase auth domain (staging signs in there: docs/runbooks/site.md). Nothing else.
     expect(policy).toMatch(/frame-src 'self' https:\/\/algominutes-staging\.firebaseapp\.com;/);
   });
