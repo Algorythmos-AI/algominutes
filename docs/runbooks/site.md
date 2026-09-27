@@ -174,6 +174,42 @@ Two records, both **DNS only** (grey cloud), like the zone's other Vercel record
 
 Check: `dig +short algominutes.algorythmos.com CNAME` and `curl -sI https://algominutes.algorythmos.com/privacy`.
 
+## The web app, end to end (`web-e2e`)
+
+`scripts/e2e-web.mjs` walks one guest's life on staging in headless Chromium:
+- sign in as a guest;
+- import `tests/fixtures/e2e-speech.ogg` (ten seconds of synthetic speech), and it gets a summary;
+- search, then ask a question;
+- record in the browser, with a fake microphone playing the same speech;
+- delete the account.
+
+The deletion runs even after a failed step. Any console or page error fails the run, including a CSP refusal.
+`.github/workflows/web-e2e.yml` runs it nightly, on demand, and once integration's head is fully deployed. Its gate
+job (`scripts/e2e-web-gate.mjs`) wakes when deploy-staging finishes or Vercel deploys, and runs the journey only if:
+- Vercel's deployment of integration's head succeeded;
+- no deploy-staging run is queued or running;
+- head's own deploy-staging run, if it has one, succeeded; if head changed no backend path, integration's last
+  finished deploy-staging run succeeded.
+
+The last deploy to finish starts the run. If both finish within about a minute of each other, it can run twice
+in a row, which is harmless: one extra guest, created and deleted. The gate's log line says why it ran or skipped. Vercel reports each branch,
+PR previews included, as a "Preview" deployment keyed by commit, so a deployment whose commit isn't integration's
+head is skipped. The journey has a 20-minute budget (`E2E_BUDGET_MS`), and the account deletion always runs after
+it. Each FAIL line says why its wait gave up.
+
+**Owner, once:** Vercel → algominutes-site → Settings → Deployment Protection → **Protection Bypass for
+Automation** → create a secret, then add it to GitHub as the Actions secret `VERCEL_AUTOMATION_BYPASS_SECRET`.
+Until then, the job warns and stops. The staging sign-in settings and the api's `allowed_origins` are already in
+place (2026-09-27).
+
+To run it by hand:
+
+```bash
+VERCEL_BYPASS=… node scripts/e2e-web.mjs
+```
+
+It needs Playwright's Chromium (`npx playwright install chromium`) and ffmpeg.
+
 ## Check a deploy
 
 ```bash
