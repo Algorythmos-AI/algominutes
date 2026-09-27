@@ -3,6 +3,34 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A false positive in git history is exempted by fingerprint in `.gitleaksignore` (2026-09-27, #212)
+
+- **Context.** gitleaks 8.30.x's `generic-api-key` rule matches `"api_latency_p95"` in the `dash_order`
+  list of `infra/terraform/modules/environment/monitoring.tf` (added in cf1a581, #133). It's a list of
+  dashboard tile names, not a secret. The pinned 8.21.2 doesn't flag it, so the finding would turn
+  the `gitleaks` check red as soon as CI's version is bumped.
+- **Why an inline allow isn't enough.** `# gitleaks:allow` on today's line clears the working tree and
+  every later commit. But `gitleaks detect --log-opts=--all` scans each commit's own patch, and the
+  patch in cf1a581 has no comment, so the finding is still reported.
+- **Decision.** Keep the inline allow on the current line. Add one fingerprint
+  (`<commit>:<file>:<rule>:<line>`) to `.gitleaksignore` for the historical patch. The fingerprint is
+  pinned to that commit, file, rule and line, so it can't hide any other finding. A wrong fingerprint
+  suppresses nothing (checked). `.gitleaks.toml` keeps its empty allowlist (§4.2, CLAUDE.md §6).
+- **Rules for `.gitleaksignore`.**
+  - It holds full fingerprints only, and only for a false positive in history that an inline allow
+    can't reach.
+  - Each entry has a comment saying why it's not a secret, and a line in this log.
+  - A real secret is never fingerprinted. It is an incident: rotate it, then purge history.
+- **Rejected.**
+  - A rule allowlist or stopword in `.gitleaks.toml`: it widens the allowlist.
+  - Scanning only the PR/push range: it drops coverage of every other historical commit.
+  - Rewriting history: a force-push to `integration` and `main` for something that isn't a secret.
+  - Staying on 8.21.2: it only defers the problem.
+- **Evidence.** Across the full history (277 commits, all branches, `--redact`), 8.30.1 reports this
+  one finding and 8.21.2 reports none. With the fingerprint, `detect --log-opts=--all` exits 0 on both
+  versions.
+- **Operating cost:** $0, one file.
+
 ## The web app is rebuilt on a clean shell at /app, not split in place (2026-09-26, plan W1)
 
 - **Context.** `apps/web` was a Capacitor-era app in one 2,865-line `App.tsx`. It calls seven `/api/*` routes

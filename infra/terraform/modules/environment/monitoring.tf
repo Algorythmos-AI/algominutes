@@ -143,7 +143,7 @@ locals {
       }
     } : k => t
   }
-  dash_order = ["api_requests", "api_latency_p95", "worker_requests", "queue_depth", "notes_failed", "dead_letters", "sql_cpu", "sql_connections"]
+  dash_order = ["api_requests", "api_latency_p95", "worker_requests", "queue_depth", "notes_failed", "dead_letters", "sql_cpu", "sql_connections"] # gitleaks:allow -- dashboard tile names, not a secret
 }
 
 # The public site (apps/site on Vercel): each page the apps and the stores
