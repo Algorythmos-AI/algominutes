@@ -22,6 +22,8 @@ const page = <K extends string>(load: () => Promise<Record<K, React.ComponentTyp
 /** The app's routes, under the router's basename (/app). Each feature PR (plan W2–W11) adds its own. */
 export const routes: RouteObject[] = [
   { path: 'sign-in', element: <SignInPage /> },
+  // Public, so it works when sign-in doesn't: a self-test of the sign-in chain (docs/runbooks/site.md).
+  { path: 'diagnostics', HydrateFallback: Loading, lazy: page(() => import('./app/diagnostics/DiagnosticsPage'), 'DiagnosticsPage') },
   // Public (no sign-in), and not linked yet: shares are off, as on iOS (SHARE_LINKS_ENABLED=NO).
   { path: 's/:token', HydrateFallback: Loading, lazy: page(() => import('./app/share/SharedNotePage'), 'SharedNotePage') },
   {
