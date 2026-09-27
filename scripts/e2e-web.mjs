@@ -17,6 +17,8 @@
 //                  staging is behind Vercel Authentication. It's sent only to the
 //                  site's own origin, never to Google or the api.
 //   E2E_READY_MS   how long a note may take to be ready (default 8 minutes)
+//   E2E_BUDGET_MS  how long the journey may take in all, before the deletion (default 20 minutes);
+//                  every wait is cut to what's left, so the deletion always runs inside the job's timeout
 // Needs Playwright's Chromium and ffmpeg (the fake microphone plays a WAV).
 // Exit 1 on any failure.
 import { execFileSync } from 'node:child_process';
@@ -34,8 +36,8 @@ export function e2eConfig(env = process.env) {
   const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
   if (url.protocol !== 'https:' && !local) throw new Error(`e2e-web: SITE_URL must be https (got ${url.protocol})`);
   if (url.pathname !== '/' || url.search || url.hash) throw new Error('e2e-web: SITE_URL is an origin, with no path');
-  const readyMs = Number(env.E2E_READY_MS);
-  return { siteUrl: url.origin, bypass: (env.VERCEL_BYPASS || '').trim(), readyMs: Number.isFinite(readyMs) && readyMs > 0 ? readyMs : 8 * 60_000 };
+  const ms = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback);
+  return { siteUrl: url.origin, bypass: (env.VERCEL_BYPASS || '').trim(), readyMs: ms(env.E2E_READY_MS, 8 * 60_000), budgetMs: ms(env.E2E_BUDGET_MS, 20 * 60_000) };
 }
 
 /** Whether a request goes to the site itself: only those carry the bypass secret. */
@@ -58,16 +60,27 @@ export function fixtureWav(fixture = FIXTURE, run = execFileSync) {
   return out;
 }
 
-const within = (p) => p.then(
-  () => true,
-  () => false,
-);
-
-export async function runWebE2E({ siteUrl, bypass, readyMs, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, write = (s) => process.stdout.write(s) }) {
+export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_000, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, longMs = 180_000, write = (s) => process.stdout.write(s) }) {
+  // Every wait is cut to what's left of the budget, and the fixed ones (not a note's summary, which waits
+  // readyMs) also to longMs, so a test can bound the whole run. The deletion has its own waits, below.
+  const deadline = Date.now() + budgetMs;
+  const left = () => Math.max(1_000, deadline - Date.now());
+  const wait = (ms) => Math.min(ms, longMs, left());
   const results = [];
+  // Why the last wait gave up (a timeout, a selector), for the FAIL line that follows it.
+  let lastWait = '';
+  const within = (p) => p.then(
+    () => true,
+    (err) => {
+      lastWait = String(err?.message ?? err).split('\n')[0].slice(0, 160);
+      return false;
+    },
+  );
   const check = (name, ok, detail) => {
+    const why = [detail, ok ? '' : lastWait].filter(Boolean).join('; ');
+    lastWait = '';
     results.push({ name, ok: Boolean(ok) });
-    write(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}\n`);
+    write(`${ok ? 'ok  ' : 'FAIL'} ${name}${why ? ` (${why})` : ''}\n`);
     return Boolean(ok);
   };
   const browser = await chromium.launch({
@@ -95,38 +108,39 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, chromium, micWav, fi
   const problems = [];
   page.on('console', (m) => m.type() === 'error' && problems.push(m.text().slice(0, 200)));
   page.on('pageerror', (e) => problems.push(`pageerror: ${e.message.slice(0, 200)}`));
-  const heading = (name, timeout = 30_000) => within(page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout }));
-  const toNote = () => within(page.waitForURL(/\/app\/notes\/[^/?#]+/, { timeout: 180_000 }));
+  const heading = (name, timeout = wait(30_000)) => within(page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout }));
+  const toNote = () => within(page.waitForURL(/\/app\/notes\/[^/?#]+/, { timeout: wait(180_000) }));
 
   let guest = false;
   const journey = async () => {
     const res = await page.goto(`${siteUrl}/app`);
     if (!check('/app opens, signed out', res?.status() === 200 && (await heading('Sign in to AlgoMinutes')), `HTTP ${res?.status()}`)) return;
     await page.getByRole('button', { name: 'Try it as a guest' }).click();
-    guest = check('a guest gets their notes', await heading('Your notes'));
-    if (!guest) return;
+    // A guest may exist from here, even if the notes never show: the deletion runs whatever happens next.
+    guest = true;
+    if (!check('a guest gets their notes', await heading('Your notes'))) return;
 
     await page.getByRole('link', { name: 'Import a recording' }).first().click();
     await page.getByLabel('Audio file').setInputFiles(fixture);
-    const imported = (await toNote()) && (await heading('Summary', readyMs));
+    const imported = (await toNote()) && (await heading('Summary', Math.min(readyMs, left())));
     check('an imported recording becomes a note with a summary', imported, page.url().replace(siteUrl, ''));
 
     await page.goto(`${siteUrl}/app/search`);
     await page.getByLabel('Search your notes').fill('budget');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
-    check('search finds a moment in it', await within(page.locator('main a[href*="/app/notes/"]').first().waitFor({ timeout: 60_000 })));
+    check('search finds a moment in it', await within(page.locator('main a[href*="/app/notes/"]').first().waitFor({ timeout: wait(60_000) })));
     await page.getByRole('tab', { name: 'Ask your notes' }).click();
     await page.getByLabel('Ask a question about your notes').fill('When is the website launch?');
     await page.getByRole('button', { name: 'Ask', exact: true }).click();
-    check('a question about it gets an answer', await within(page.getByText('Answer ready.').waitFor({ state: 'attached', timeout: 120_000 })));
+    check('a question about it gets an answer', await within(page.getByText('Answer ready.').waitFor({ state: 'attached', timeout: wait(120_000) })));
 
     await page.goto(`${siteUrl}/app/record`);
     await page.getByRole('checkbox', { name: /I have permission/ }).check();
     await page.getByRole('button', { name: 'Start recording' }).click();
-    if (check('the browser records', await within(page.getByText('● RECORDING').waitFor({ timeout: 30_000 })))) {
+    if (check('the browser records', await within(page.getByText('● RECORDING').waitFor({ timeout: wait(30_000) })))) {
       await page.waitForTimeout(recordMs);
       await page.getByRole('button', { name: 'Stop and save' }).click();
-      check('a browser recording becomes a note with a summary', (await toNote()) && (await heading('Summary', readyMs)), page.url().replace(siteUrl, ''));
+      check('a browser recording becomes a note with a summary', (await toNote()) && (await heading('Summary', Math.min(readyMs, left()))), page.url().replace(siteUrl, ''));
     }
   };
   try {
@@ -138,7 +152,8 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, chromium, micWav, fi
         await page.getByRole('button', { name: 'Delete my account' }).click();
         await page.getByLabel(/Type DELETE to confirm/).fill('DELETE');
         await page.getByRole('button', { name: 'Delete account', exact: true }).click();
-        return heading('Sign in to AlgoMinutes', 60_000);
+        // Not cut to the budget: the deletion must get its full time even when the journey used it all.
+        return heading('Sign in to AlgoMinutes', Math.min(60_000, longMs));
       })().catch((err) => {
         write(`     deletion: ${err?.message?.slice(0, 200)}\n`);
         return false;

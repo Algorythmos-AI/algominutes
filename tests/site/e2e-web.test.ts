@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import fs from 'node:fs';
 import http, { type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
@@ -12,8 +13,9 @@ import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, runWebE2E } from '
 
 describe('its settings', () => {
   it('defaults to staging, and takes only an https origin', () => {
-    expect(e2eConfig({})).toMatchObject({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000 });
-    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000 });
+    expect(e2eConfig({})).toEqual({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000, budgetMs: 1_200_000 });
+    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000', E2E_BUDGET_MS: '2000' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000, budgetMs: 2000 });
+    expect(e2eConfig({ E2E_READY_MS: 'soon', E2E_BUDGET_MS: '-1' })).toMatchObject({ readyMs: 480_000, budgetMs: 1_200_000 });
     expect(() => e2eConfig({ SITE_URL: 'http://example.test' })).toThrow(/https/);
     expect(() => e2eConfig({ SITE_URL: 'https://example.test/app' })).toThrow(/origin/);
   });
@@ -33,6 +35,33 @@ describe('its settings', () => {
     const out = fixtureWav('/f.ogg', (_cmd: string, args: string[]) => calls.push(args));
     expect(out).toMatch(/speech\.wav$/);
     expect(calls[0]).toEqual(expect.arrayContaining(['-i', '/f.ogg', out]));
+  });
+});
+
+// When it runs (the decision itself: tests/e2e-web-gate.test.ts).
+describe('its workflow', () => {
+  const wf = fs.readFileSync('.github/workflows/web-e2e.yml', 'utf8');
+
+  it('wakes when deploy-staging finishes or Vercel deploys, and lets the gate decide', () => {
+    expect(wf).toMatch(/workflow_run:\s*\n\s*workflows: \[deploy-staging\]\s*\n\s*types: \[completed\]\s*\n\s*branches: \[integration\]/);
+    expect(wf).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(wf).toContain("github.event.deployment.creator.login == 'vercel[bot]'");
+    // Vercel's ref is the commit SHA: this never matched a site deploy.
+    expect(wf).not.toMatch(/deployment\.ref == 'integration'/);
+    expect(wf).toContain('run: node scripts/e2e-web-gate.mjs');
+    expect(wf).toContain("if: needs.gate.outputs.run == 'true'");
+  });
+
+  it('queues journeys only after the gate, so a skipped event never cancels a real run', () => {
+    // A workflow-level group applies before any `if:`, and a newer pending run replaces an older one.
+    expect(wf).not.toMatch(/^concurrency:/m);
+    expect(wf).toMatch(/\n  e2e:\n(?:    .*\n)*?    concurrency:\n      group: web-e2e\n      cancel-in-progress: false\n/);
+  });
+
+  it('gives the bypass secret to the journey step only', () => {
+    expect(wf.match(/secrets\.VERCEL_AUTOMATION_BYPASS_SECRET/g)).toHaveLength(2);
+    expect(wf).toContain("HAS_BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}");
+    expect(wf).toMatch(/- name: The journey\n(?:        .*\n)*?          VERCEL_BYPASS: \$\{\{ secrets\.VERCEL_AUTOMATION_BYPASS_SECRET \}\}\n/);
   });
 });
 
@@ -91,7 +120,7 @@ beforeEach(() => {
   broken = new Set();
 });
 
-const run = (lines: string[]) => runWebE2E({ siteUrl, bypass: 'the-secret', readyMs: 5000, chromium, recordMs: 50, actionMs: 3000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) });
+const run = (lines: string[]) => runWebE2E({ siteUrl, bypass: 'the-secret', readyMs: 5000, chromium, recordMs: 50, actionMs: 3000, longMs: 4000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) });
 
 describe('the journey, in a real browser', () => {
   it('walks every step, sends the bypass to the site only, and deletes the account', async () => {
@@ -115,6 +144,49 @@ describe('the journey, in a real browser', () => {
     expect(lines.some((l) => l.startsWith('FAIL'))).toBe(true);
     expect(seen.some((r) => r.path === '/deleted')).toBe(true);
     expect(lines.some((l) => l.startsWith('ok   the account is deleted from Settings'))).toBe(true);
+  }, 60_000);
+
+  it("a guest whose notes never show is still deleted", async () => {
+    broken = new Set(['/app/notes-list']);
+    const lines: string[] = [];
+    expect(await run(lines)).toBe(false);
+    expect(lines.some((l) => l.startsWith('FAIL a guest gets their notes'))).toBe(true);
+    expect(seen.some((r) => r.path === '/deleted')).toBe(true);
+  }, 60_000);
+
+  it('a step that never finishes fails within longMs, and the account is still deleted', async () => {
+    const saved = PAGES['/app/search'];
+    // The search and the question never answer: without the cap, those waits are 60 s and 120 s.
+    PAGES['/app/search'] = saved.replace(/onclick="document\.getElementById\('(hits|st)'\)[^"]*"/g, '');
+    try {
+      const lines: string[] = [];
+      const started = Date.now();
+      expect(await run(lines)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(30_000);
+      const fails = lines.filter((l) => l.startsWith('FAIL'));
+      expect(fails.map((l) => l.slice(5).split(' (')[0].trim())).toEqual(['search finds a moment in it', 'a question about it gets an answer']);
+      // Each says why it gave up.
+      for (const l of fails) expect(l).toMatch(/\(.*Timeout 4000ms exceeded/);
+      expect(seen.some((r) => r.path === '/deleted')).toBe(true);
+    } finally {
+      PAGES['/app/search'] = saved;
+    }
+  }, 60_000);
+
+  it('the whole journey keeps to its budget, and the account is still deleted', async () => {
+    const saved = PAGES['/app/search'];
+    PAGES['/app/search'] = saved.replace(/onclick="document\.getElementById\('(hits|st)'\)[^"]*"/g, '');
+    try {
+      const lines: string[] = [];
+      const started = Date.now();
+      // Long waits allowed (60 s, 120 s), but a 3-second budget for everything.
+      expect(await runWebE2E({ siteUrl, bypass: '', readyMs: 60_000, budgetMs: 3000, chromium, recordMs: 50, actionMs: 3000, longMs: 180_000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) })).toBe(false);
+      expect(Date.now() - started).toBeLessThan(30_000);
+      expect(seen.some((r) => r.path === '/deleted')).toBe(true);
+      expect(lines.some((l) => l.startsWith('ok   the account is deleted from Settings'))).toBe(true);
+    } finally {
+      PAGES['/app/search'] = saved;
+    }
   }, 60_000);
 
   it('a page error fails the run, even when every step passed', async () => {
