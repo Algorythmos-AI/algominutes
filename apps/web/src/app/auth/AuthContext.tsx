@@ -23,6 +23,11 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
+/** A sign-in window closed without a result: nothing on screen, but in the crash log with its provider. */
+function reportCancelled(provider: Provider) {
+  reportCrash('auth.signInCancelled', new Error('The sign-in window closed without a result'), { source: provider });
+}
+
 export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
@@ -63,9 +68,17 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
       user,
       error,
       busy,
-      signIn: async (p) => void (await run(p, () => adapter.signIn(p))),
+      // A window closed without a result is shown as nothing (people close it on purpose), but it's also what a
+      // blocked or hung flow looks like, so it's reported: a failed sign-in never leaves no trace.
+      signIn: async (p) => {
+        if ((await run(p, () => adapter.signIn(p))) === false) reportCancelled(p);
+      },
       continueAsGuest: async () => void (await run('guest', () => adapter.continueAsGuest())),
-      linkGuest: async (p) => (await run(p, () => adapter.linkGuest(p))) ?? { outcome: 'cancelled' },
+      linkGuest: async (p) => {
+        const result = (await run(p, () => adapter.linkGuest(p))) ?? { outcome: 'cancelled' as const };
+        if (result.outcome === 'cancelled') reportCancelled(p);
+        return result;
+      },
       signOut: async () => {
         try {
           await adapter.signOut();

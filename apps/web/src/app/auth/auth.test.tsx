@@ -5,10 +5,14 @@ import { fakeAuth, GUEST, PERMANENT } from '../../test/fakeAuth';
 import { renderApp } from '../../test/renderApp';
 import { safeNext } from './SignInPage';
 import { recordTermsAcceptanceIfNeeded } from './terms';
+import { reportCrash } from '../../lib/crashReport';
+
+vi.mock('../../lib/crashReport', () => ({ reportCrash: vi.fn(), installGlobalCrashHandlers: vi.fn() }));
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.mocked(reportCrash).mockClear();
 });
 
 const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
@@ -48,6 +52,25 @@ describe('sign-in', () => {
     auth.adapter.signIn.mockResolvedValueOnce(false); // the user closed the popup
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('every failed or unfinished sign-in leaves a trace: the Firebase error, or a window closed without a result', async () => {
+    const auth = fakeAuth(null);
+    auth.adapter.signIn.mockRejectedValueOnce(Object.assign(new Error('Firebase: Error (auth/invalid-credential).'), { code: 'auth/invalid-credential' }));
+    renderApp('/app', auth.adapter);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with Apple' }));
+    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signIn', expect.objectContaining({ code: 'auth/invalid-credential' }), { source: 'apple' }));
+
+    auth.adapter.signIn.mockResolvedValueOnce(false); // closed without a result (by hand, or a blocked relay)
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+    await waitFor(() => expect(reportCrash).toHaveBeenCalledWith('auth.signInCancelled', expect.any(Error), { source: 'apple' }));
+    expect(screen.queryByRole('alert')?.textContent ?? '').not.toMatch(/closed/);
+
+    // A sign-in that worked reports nothing.
+    vi.mocked(reportCrash).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    await heading('Your notes');
+    expect(vi.mocked(reportCrash).mock.calls.filter(([kind]) => kind.startsWith('auth.'))).toEqual([]);
   });
 
   it("a failed guest start doesn't blame Google", async () => {
