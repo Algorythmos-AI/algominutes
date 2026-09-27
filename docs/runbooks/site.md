@@ -186,6 +186,23 @@ For staging, export the project's automation bypass secret as `VERCEL_AUTOMATION
 Add the same secret to the repository's Actions secrets to smoke preview deploys too; without it they're
 skipped.
 
+**The sign-in chain, with admin access** (read-only; gcloud signed in as `algorythmos.france@gmail.com`):
+
+```bash
+node scripts/check-signin-chain.mjs --env staging
+```
+
+It checks, printing each failing link with its fix and exiting 1:
+- the Browser key's referrers and APIs;
+- Firebase's authorized domains;
+- the Apple provider (Services ID, team, key, private key) and the Google provider;
+- the api's CORS;
+- the auth handler and iframe;
+- when sign-in runs on the site itself, that a cross-site POST (Apple's reply) isn't swallowed by the host's login
+  protection.
+
+Nothing secret is printed. Add a `prod` entry to its `ENVS` at the launch.
+
 ## Roll back
 
 | Broken | Fix | Time |
