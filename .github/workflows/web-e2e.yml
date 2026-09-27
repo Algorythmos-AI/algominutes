@@ -1,0 +1,90 @@
+name: web-e2e
+
+# The web app end to end, in a real browser, against staging
+# (scripts/e2e-web.mjs): a guest imports a recording, it's summarised, search
+# and chat find it, a browser recording becomes a note, and the account is
+# deleted. Nightly, on demand, and once integration's head is fully deployed:
+# the site (a Vercel deployment) and the backend (deploy-staging) each start the
+# gate when they finish, and the last to finish starts the run
+# (scripts/e2e-web-gate.mjs says why it did or didn't).
+#
+# Staging is behind Vercel Authentication: the run needs the project's
+# "Protection Bypass for Automation" secret as VERCEL_AUTOMATION_BYPASS_SECRET.
+# Until the owner adds it (docs/runbooks/site.md), the gate says so and stops.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 18 * * *' # nightly, 04:17 Sydney
+  workflow_run:
+    workflows: [deploy-staging]
+    types: [completed]
+    branches: [integration]
+  deployment_status:
+
+permissions:
+  contents: read
+
+jobs:
+  # No concurrency here: most events are skipped, and a skipped run must never displace a real one
+  # (a workflow-level group would, since it applies before any `if:`).
+  gate:
+    # A finished backend deploy only if it succeeded; a site deployment only if it's Vercel's and succeeded
+    # (whether it's integration's head is the gate's first question).
+    if: >-
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') &&
+      (github.event_name != 'deployment_status' || (github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Preview' && github.event.deployment.creator.login == 'vercel[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/e2e-web-gate.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Is staging integration's head, site and backend?
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.event.deployment.sha }}
+          HAS_BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
+        run: node scripts/e2e-web-gate.mjs
+
+  e2e:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    # One journey at a time; a second waits rather than cancelling the first.
+    concurrency:
+      group: web-e2e
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    # Setup (about 4 minutes) + the journey's budget (E2E_BUDGET_MS, 20 minutes) + the deletion (at most 3).
+    timeout-minutes: 40
+    env:
+      SITE_URL: https://staging.algominutes.algorythmos.com
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium and ffmpeg (the fake microphone)
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: The journey
+        timeout-minutes: 30
+        env:
+          # Only this step sees the secret (not npm's or apt's install scripts).
+          VERCEL_BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node scripts/e2e-web.mjs
