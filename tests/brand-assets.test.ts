@@ -6,11 +6,12 @@ import fs from 'node:fs';
 // - the mark's size (85% of the tile, centred, clear of the rounded corners), so
 //   the icon can't quietly shrink again (docs/DECISIONS.md, 2026-09-27);
 // - the official Algorythmos gradient;
-// - the Liquid Glass icon's layers (Xcode flattens it for older iOS and the
-//   App Store, so there's no separate PNG app icon to drift);
+// - the Liquid Glass icon's layers, and the flattened set an Xcode before 26
+//   builds from (App Store validation refuses alpha on its primary);
 // - the web and site icons their manifests name;
 // - the contrast rules apps/ios/brand/README.md states.
 const GLASS = 'apps/ios/AlgoMinutes/Resources/AppIcon.icon';
+const ICONS = 'apps/ios/AlgoMinutes/Resources/Assets.xcassets/AppIcon.appiconset';
 const LOGO = 'apps/ios/AlgoMinutes/Resources/Assets.xcassets/Logo.imageset';
 const tokens = JSON.parse(fs.readFileSync('packages/tokens/tokens.json', 'utf8'));
 const mark: Record<string, string> = tokens.brand.mark;
@@ -89,10 +90,27 @@ describe('Liquid Glass icon (iOS 26)', () => {
     expect(png(`${GLASS}/Assets/background.png`)).toEqual({ width: 1024, height: 1024, colourType: 2 });
   });
 
-  it('is the only app icon the build can pick', () => {
-    // XcodeGen adds every file under AlgoMinutes/, and the build takes the icon by name.
+  it('is the icon the build takes by name', () => {
+    // XcodeGen adds every file under AlgoMinutes/; Xcode 26 prefers the .icon.
     expect(fs.readFileSync('apps/ios/project.yml', 'utf8')).toContain('ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon');
-    expect(fs.existsSync('apps/ios/AlgoMinutes/Resources/Assets.xcassets/AppIcon.appiconset')).toBe(false);
+  });
+});
+
+describe('app icon, flattened (an Xcode before 26 builds only this)', () => {
+  it('the primary icon is 1024 x 1024 with no alpha channel', () => {
+    expect(png(`${ICONS}/AppIcon-1024.png`)).toEqual({ width: 1024, height: 1024, colourType: 2 });
+  });
+
+  it('the dark and tinted variants are 1024 x 1024 with alpha (iOS composites them)', () => {
+    for (const v of ['dark', 'tinted']) {
+      expect(png(`${ICONS}/AppIcon-1024-${v}.png`)).toEqual({ width: 1024, height: 1024, colourType: 6 });
+    }
+  });
+
+  it('the asset catalog names exactly those three files', () => {
+    const contents = JSON.parse(fs.readFileSync(`${ICONS}/Contents.json`, 'utf8'));
+    expect(contents.images.map((i: { filename: string }) => i.filename).sort())
+      .toEqual(['AppIcon-1024-dark.png', 'AppIcon-1024-tinted.png', 'AppIcon-1024.png']);
   });
 });
 

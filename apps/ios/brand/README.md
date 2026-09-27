@@ -26,8 +26,10 @@ That writes:
 - **The app icon, `AlgoMinutes/Resources/AppIcon.icon`**, an Icon Composer document:
   - `background.png` and `background-dark.png`: the tile, by appearance.
   - `glyph.svg` and `dot.svg`: white glass, on their own planes, so the dot floats above the "a".
-  - iOS 26 renders it as Liquid Glass, with the system's specular light and shadows. Xcode flattens it for iOS
-    17–25 and the App Store, so there's no PNG app icon to keep in step.
+  - iOS 26 renders it as Liquid Glass, with the system's specular light and shadows. Xcode 26 flattens it for
+    iOS 17–25 and the App Store.
+- **`Assets.xcassets/AppIcon.appiconset`**: the same icon, flattened (an opaque primary, plus dark and tinted).
+  An Xcode before 26 can't read `.icon` and builds only this set; Xcode 26 passes it over.
 - **The in-app logo**, `Logo.imageset/logo.pdf` (a vector).
 - **Here:**
   - `icon.svg` and `icon-rounded.svg`: the tile.

@@ -7,7 +7,9 @@
 // Writes:
 //   AlgoMinutes/Resources/AppIcon.icon/         the app icon, an Icon Composer document:
 //     icon.json, Assets/{background,background-dark}.png, Assets/{glyph,dot}.svg. iOS 26
-//     renders it as Liquid Glass; Xcode flattens it for iOS 17-25 and the App Store.
+//     renders it as Liquid Glass; Xcode 26 flattens it for iOS 17-25 and the App Store.
+//   AlgoMinutes/Resources/Assets.xcassets/AppIcon.appiconset/   the same icon, flattened,
+//     for an Xcode before 26 (which can't read .icon)
 //   AlgoMinutes/Resources/Assets.xcassets/Logo.imageset/logo.pdf   the in-app logo, a vector
 //   brand/icon.svg, brand/icon-rounded.svg      the tile, square and rounded
 //   brand/mark-on-dark.svg, brand/mark-on-light.svg   the mark alone, flat, for UI
@@ -376,6 +378,18 @@ let iconJSON: [String: Any] = [
     "supported-platforms": ["squares": ["iOS"]],
 ]
 write(try! JSONSerialization.data(withJSONObject: iconJSON, options: [.prettyPrinted, .sortedKeys]), "\(iconDir)/icon.json")
+
+// MARK: - iOS before Xcode 26: the flattened icon
+
+// Xcode 26 builds AppIcon.icon and passes this set over; an older Xcode (a CI
+// runner's default, say) knows only this one, and fails the build without it.
+// The same recipe draws both, so they can't drift.
+let appIconSet = "AlgoMinutes/Resources/Assets.xcassets/AppIcon.appiconset"
+write(render(size: 1024, opaque: true, iconLook, icon), "\(appIconSet)/AppIcon-1024.png")
+// Dark and tinted: the mark alone; iOS supplies the tile.
+write(render(size: 1024, opaque: false, Look(background: .none, highlight: false), icon), "\(appIconSet)/AppIcon-1024-dark.png")
+write(render(size: 1024, opaque: false, Look(background: .none, fill: .flat(CGColor(gray: 1, alpha: 1)), shadow: false, highlight: false), icon),
+      "\(appIconSet)/AppIcon-1024-tinted.png")
 
 // MARK: - iOS: the in-app logo
 
