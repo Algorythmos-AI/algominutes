@@ -3,6 +3,34 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The app icon is a Liquid Glass "ai", 85% of the tile, in the official Algorythmos gradient (2026-09-27)
+
+- **Context.** On a home screen the icon read as small and flat. The "ai" filled 49% of the tile's height, and
+  its colours were sampled off a raster (`#3716DF → #6A2DF2`), not taken from the parent brand.
+- **Colours.** The official Algorythmos gradient, from the owner's `Brand_Colors` sheet and cover art: blue
+  `#3715E0` → violet `#6D00FF`, with deep purple `#7658E7` as the secondary. They live in `tokens.json` as
+  `brand.algorythmos`, and `brand.mark` uses them.
+- **Size.** The measured mark is scaled ×1.75 about its bounding box and centred in the tile: 85% of the height,
+  76 px clear at the top and bottom of a 1024 tile. The dot and the bubble's tail stay inside the squircle's
+  corner arcs. `tests/brand-assets.test.ts` holds this as an invariant, so the icon can't quietly shrink again.
+- **Treatment: Liquid Glass.** The owner chose it from rendered previews over "extruded" and "listening orb".
+  - A frosted-glass glyph with a light rim, over an aurora of the brand blue, violet and a magenta accent
+    (`#C04BFF`) on a deep base (`#1A0A6E`).
+  - On iOS 26 it ships as an Icon Composer `.icon`, so the system renders the glass and its moving specular
+    light; older iOS gets flattened fallbacks.
+  - At 64 px and below (favicons), the glyph is solid white so it stays legible.
+- **Wordmark: Geist** (OFL). It's outlined to vector paths, so no font ships with an asset.
+- **Visual language** for social and marketing images:
+  - deep-space navy `#07051A`, the aurora glows, a faint grid;
+  - an audio waveform as the secondary motif (minutes are voice);
+  - glass chips such as "BY ALGORYTHMOS".
+- **Where it lives.**
+  - The kit is generated from tokens by one renderer (`generate-app-icon.swift`, later `brand/`).
+  - The owner's `LOGO & IDEAS` folder stays local and git-ignored: it holds third-party partner logos and
+    screenshots that don't belong in a public repo.
+- **Not in this change.** The app's UI accent (`brand.accent`, `#5B67F0`) stays as it is. Moving it to the brand
+  violet is a three-client change, with its own contrast review.
+
 ## A false positive in git history is exempted by fingerprint in `.gitleaksignore` (2026-09-27, #212)
 
 - **Context.** gitleaks 8.30.x's `generic-api-key` rule matches `"api_latency_p95"` in the `dash_order`
