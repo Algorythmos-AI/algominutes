@@ -16,6 +16,8 @@ export interface AuthUser {
 export type LinkResult = { outcome: 'linked' } | { outcome: 'cancelled' } | { outcome: 'conflict'; switchToExisting: () => Promise<void> };
 
 export interface AuthAdapter {
+  /** Where sign-in runs (Firebase's authDomain), for the sign-in trace; '' when not known. */
+  readonly authDomain?: string;
   /** Calls back with the user now and on every change; returns the unsubscribe. */
   onChange(cb: (user: AuthUser | null) => void): () => void;
   /** Finishes a redirect sign-in the page came back from, if any. */

@@ -8,6 +8,7 @@
  * origins without a CORS preflight, which beacons don't make.
  */
 import { CLIENT_HEADER_VALUE, originsFromEnv } from './api/config';
+import { recordViolation } from './diagnostics/signInTrace';
 
 /** Never let reporting a crash cause one. */
 let sent = 0;
@@ -85,5 +86,16 @@ export function installGlobalCrashHandlers(): void {
 
   window.addEventListener('unhandledrejection', (event) => {
     reportCrash('unhandledrejection', (event as PromiseRejectionEvent).reason);
+  });
+
+  // Anything the page's own CSP refuses: a missing origin fails silently otherwise (a sign-in iframe, an api
+  // host). Reported once per directive and origin per session; never the full URL, which could carry a token.
+  const seen = new Set<string>();
+  document.addEventListener('securitypolicyviolation', (event) => {
+    const v = recordViolation(event.effectiveDirective || event.violatedDirective, event.blockedURI);
+    const key = `${v.directive} ${v.blocked}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    reportCrash('csp.violation', { name: 'CSPViolation', message: key }, { source: event.disposition });
   });
 }

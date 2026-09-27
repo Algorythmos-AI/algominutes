@@ -103,6 +103,66 @@ whatever deep link the notifier sent (iOS's `algominutes://note/<id>`). The brow
 card shown once the user has a note, or from Settings; sign-out deletes the browser's FCM token first. To check: turn
 notifications on, upload a short file, switch to another tab, and wait for "ready"; tapping it opens the note.
 
+## Sign-in troubleshooting (staging and production)
+
+Sign-in crosses five systems, and a missing setting in any of them can fail silently. So the web app traces every
+attempt, and anyone can run a self-test from their own browser.
+
+**1. Ask for the sign-in check.** `https://<site>/app/diagnostics` is public, and it's linked from the sign-in error
+("Run a sign-in check"). From that browser it checks:
+- the page's CSP (`script-src`, `connect-src`, and `frame-src` when sign-in runs on another domain);
+- that the Browser API key accepts the site, and that the site and auth domain are Firebase authorized domains
+  (one real request);
+- that the sign-in handler answers (our `/__/auth` proxy, or Firebase's domain in a frame);
+- the api's CORS;
+- whether popups are allowed;
+- the last attempt's trace.
+
+Every failing check names its fix. **Copy report** gives one paste with the API key masked and no personal details.
+
+**2. Read the traces in the api's logs.** Every failed or unfinished attempt is reported through `/v1/client-error`:
+
+| Log event (`jsonPayload.msg`) | `kind` | Severity | Means |
+|---|---|---|---|
+| `web_client_crash` | `auth.signIn` | ERROR | Firebase refused the attempt; the message holds its code and the trace |
+| `web_client_diagnostic` | `auth.signInCancelled` | WARNING | the window closed without a result: by hand, or a blocked relay |
+| `web_client_diagnostic` | `csp.violation` | WARNING | the page's CSP refused an origin (`<directive> <origin>`, never a full URL) |
+
+A trace (the message's JSON) holds:
+- `id` (the attempt), `p` (provider), `f` (sign-in or guest link);
+- `d` (auth domain), `h` (page host);
+- `o` (outcome), `c` (Firebase's code);
+- `s` (timed steps, in ms);
+- `csp` (violations during the attempt).
+
+```bash
+gcloud logging read 'resource.labels.service_name="api" AND jsonPayload.kind:"auth." AND timestamp>="2026-09-27T00:00:00Z"' --project algominutes-staging --account algorythmos.france@gmail.com --limit 20 --format="value(timestamp,jsonPayload.kind,jsonPayload.message)"
+```
+
+```bash
+gcloud logging read 'resource.labels.service_name="api" AND jsonPayload.kind="csp.violation"' --project algominutes-staging --account algorythmos.france@gmail.com --limit 20 --format="value(timestamp,jsonPayload.message,jsonPayload.url)"
+```
+
+`kind` is set by the (anonymous) client, so a caller could label a crash as a diagnostic. It's still logged, with its
+`traceId`, just at WARNING. Don't build a security decision on it.
+
+**3. The chain, and what each failure means:**
+
+| Link | Check | Symptom when it breaks | Fix |
+|---|---|---|---|
+| Page CSP | the sign-in check; `csp.violation` | "Framing … violates frame-src", "Refused to connect" | add the origin to `/app`'s CSP (`apps/site/vercel.json`); `scripts/build-site.mjs` refuses an auth domain the CSP can't frame |
+| Browser API key | the sign-in check ("key") | 403 `API_KEY_HTTP_REFERRER_BLOCKED` | add `https://<site>/*` (and `https://<authDomain>/*`) to the key's website restrictions |
+| Firebase authorized domains | the sign-in check ("domain") | `auth/unauthorized-domain`, "This site isn't authorised for sign-in" | Firebase → Authentication → Settings → Authorized domains |
+| Apple Services ID | Apple's page shows `invalid_request` / `invalid_client` | the Apple window errors | add the domain and `https://<authDomain>/__/auth/handler` return URL |
+| Apple code exchange | `auth.signIn` with `auth/invalid-credential…` | "Apple sign-in didn't complete" | the Apple provider's key (YMZ3K33U6D, team NY9MS8GSBK) and its `.p8` in Firebase |
+| Google OAuth client | Google's page shows `redirect_uri_mismatch` | the Google window errors | add the origin and `…/__/auth/handler` redirect URI |
+| Relay back to the page | `auth.signInCancelled` right after the user approved | the window closes, nothing happens | frame-src, or third-party storage for the auth domain; staging signs in on Firebase's domain (see above) |
+| api CORS | the sign-in check ("api") | signed in, then every call fails | `allowed_origins` (Terraform), then apply, then redeploy the services |
+
+**4. Staging only:** it's behind Vercel Authentication, so incognito, or anyone outside the Vercel team, gets
+Vercel's login; that's by design. After a header change, use a freshly loaded tab: a tab loaded earlier keeps the old
+policy.
+
 ## DNS (Cloudflare, zone `algorythmos.com`)
 
 Two records, both **DNS only** (grey cloud), like the zone's other Vercel records. Vercel issues the certificates.
