@@ -1,0 +1,117 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.21569,0.08235,0.87843,1.00000",
+          "srgb:0.42745,0.00000,1.00000,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 1,
+            "y" : 1
+          }
+        }
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "solid" : "srgb:0.02745,0.01961,0.10196,1.00000"
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:0.85098,0.81961,1.00000,1.00000"
+              }
+            }
+          ],
+          "glass" : true,
+          "image-name" : "dot.svg",
+          "name" : "dot"
+        }
+      ],
+      "lighting" : "combined",
+      "name" : "Dot",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.20000000000000001
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ],
+          "glass" : true,
+          "image-name" : "glyph.svg",
+          "name" : "glyph"
+        }
+      ],
+      "lighting" : "combined",
+      "name" : "Glyph",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.40000000000000002
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "aurora.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "aurora-dark.png"
+            }
+          ],
+          "name" : "aurora"
+        }
+      ],
+      "name" : "Aurora",
+      "shadow" : {
+        "kind" : "none",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "iOS"
+    ]
+  }
+}
