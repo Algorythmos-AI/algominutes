@@ -499,6 +499,36 @@ export function buildRegistry(): OpenAPIRegistry {
     },
   });
 
+  // ── online meetings (docs/plans/MEETINGS.md) ──────────────────────────
+  // Behind GET /v1/config `notetaker.bot`: 503 feature_disabled while it's off.
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/meetings/bots`, tags: ['meetings'], security: authed, parameters: commonHeaders,
+    summary: 'Send the notetaker to a meeting now. The same requestId returns the same bot (idempotent).',
+    request: { body: json(S.CreateMeetingBotRequest) },
+    responses: {
+      202: { description: 'The notetaker is on its way; its note is created in the recording state.', ...json(S.MeetingBotResponse) },
+      400: errorResponse('Invalid or unsupported meeting link.'),
+      401: errorResponse('Missing or invalid token.'),
+      402: errorResponse('No notetaker minutes left.'),
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many notetakers at once.'),
+      503: { description: 'The notetaker is switched off.', ...json(S.FeatureDisabledError) },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/meetings/bots/{botId}/cancel`, tags: ['meetings'], security: authed, parameters: commonHeaders,
+    summary: 'Cancel a notetaker, or make it leave the meeting. Idempotent.',
+    request: { params: z.object({ botId: S.Id }) },
+    responses: {
+      200: { description: 'Cancelled, or already finished.', ...json(S.CancelMeetingBotResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('No such notetaker (or not yours).'),
+      426: errorResponse('Client too old — please update.'),
+      503: { description: 'The notetaker is switched off.', ...json(S.FeatureDisabledError) },
+    },
+  });
+
   registry.registerPath({
     method: 'post', path: `${API_BASE_PATH}/events`, tags: ['billing'], security: authed, parameters: commonHeaders,
     summary: 'Record a conversion-funnel event (best-effort; a storage failure still answers 202).',

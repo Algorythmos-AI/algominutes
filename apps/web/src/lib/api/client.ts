@@ -59,6 +59,9 @@ import {
   UpdateNoteRequest,
   UpdateNoteResponse,
   UploadSessionStatus,
+  CreateMeetingBotRequest,
+  MeetingBotResponse,
+  CancelMeetingBotResponse,
 } from '@algominutes/contracts';
 import { CLIENT_HEADER_VALUE, type ApiOrigins } from './config';
 import { ApiError, errorFor } from './errors';
@@ -209,6 +212,12 @@ export function createApiClient(opts: ApiClientOptions) {
       const name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1] ?? /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? null;
       return { blob: await res.blob(), fileName: name ? safeDecode(name) : null };
     },
+
+    // Online meetings (the notetaker). 503 feature_disabled while GET /v1/config
+    // notetaker.bot is off, which surfaces as an ApiError like any other 5xx.
+    createMeetingBot: (body: CreateMeetingBotRequest) => post('/v1/meetings/bots', body, MeetingBotResponse),
+    cancelMeetingBot: (botId: string) =>
+      post(`/v1/meetings/bots/${encodeURIComponent(botId)}/cancel`, {}, CancelMeetingBotResponse),
 
     // Recording and import
     createUpload: (body: CreateUploadSessionRequest) => post('/v1/uploads', body, CreateUploadSessionResponse),

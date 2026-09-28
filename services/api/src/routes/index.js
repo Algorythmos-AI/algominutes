@@ -32,6 +32,7 @@ import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } f
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
 import { appConfigRoute } from './app-config.js';
+import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
 import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
@@ -218,6 +219,10 @@ export function buildRouter() {
   router.get('/entitlement', authed, wrap(entitlementRoute));
   // Server-side feature switches (broadcast capture's kill switch).
   router.get('/config', authed, wrap(appConfigRoute));
+  // ── online meetings (docs/plans/MEETINGS.md) ── meetings.js ─────────────
+  // 503 feature_disabled until the notetaker is built and switched on.
+  router.post('/meetings/bots', authed, wrap(createMeetingBotRoute));
+  router.post('/meetings/bots/:botId/cancel', authed, wrap(cancelMeetingBotRoute));
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
   router.post('/events', authed, wrap(trackEventRoute));
   // ── A10 compliance ── compliance.js ────────────────────────────────────

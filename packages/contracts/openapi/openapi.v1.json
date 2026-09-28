@@ -277,6 +277,12 @@
           },
           "lastProgressAt": {
             "type": "string"
+          },
+          "sourceKind": {
+            "$ref": "#/components/schemas/NoteSourceKind"
+          },
+          "notetaker": {
+            "$ref": "#/components/schemas/NoteNotetaker"
           }
         },
         "required": [
@@ -289,6 +295,56 @@
           "createdAt",
           "updatedAt"
         ]
+      },
+      "NoteSourceKind": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "device | upload | bot | extension | cloud_import. Clients must accept values they do not know.",
+        "example": "bot"
+      },
+      "NoteNotetaker": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          },
+          "failureReason": {
+            "$ref": "#/components/schemas/NotetakerFailureReason"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/MeetingPlatform"
+          }
+        },
+        "required": [
+          "botId",
+          "status",
+          "platform"
+        ]
+      },
+      "NotetakerStatus": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "scheduled | joining | waiting_room | in_call | recording | processing | done | failed | cancelled. Clients must accept values they do not know (show them as \"in progress\").",
+        "example": "recording"
+      },
+      "NotetakerFailureReason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 40,
+        "description": "not_admitted | permission_denied | bot_blocked | meeting_not_found | busy | quota_exhausted | too_long | cancelled | error. Clients must accept values they do not know.",
+        "example": "not_admitted"
+      },
+      "MeetingPlatform": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "google_meet | zoom | teams | webex | other. Clients must accept values they do not know.",
+        "example": "google_meet"
       },
       "TranscriptLine": {
         "type": "object",
@@ -1868,10 +1924,121 @@
         "properties": {
           "broadcastCapture": {
             "type": "boolean"
+          },
+          "notetaker": {
+            "$ref": "#/components/schemas/NotetakerSwitches"
           }
         },
         "required": [
           "broadcastCapture"
+        ]
+      },
+      "NotetakerSwitches": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "boolean"
+          },
+          "calendar": {
+            "type": "boolean"
+          },
+          "zoomImport": {
+            "type": "boolean"
+          },
+          "extension": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bot",
+          "calendar",
+          "zoomImport",
+          "extension"
+        ]
+      },
+      "MeetingBotResponse": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "noteId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          }
+        },
+        "required": [
+          "botId",
+          "noteId",
+          "status"
+        ]
+      },
+      "FeatureDisabledError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "feature_disabled"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ],
+        "example": {
+          "error": "The notetaker isn't available yet.",
+          "code": "feature_disabled"
+        }
+      },
+      "CreateMeetingBotRequest": {
+        "type": "object",
+        "properties": {
+          "meetingUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "meetingUrl",
+          "requestId"
+        ],
+        "example": {
+          "meetingUrl": "https://meet.google.com/abc-defg-hij",
+          "title": "Weekly sync",
+          "requestId": "6f1c2d3e-4b5a-6978-8a9b-0c1d2e3f4a5b"
+        }
+      },
+      "CancelMeetingBotResponse": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          }
+        },
+        "required": [
+          "botId",
+          "status"
         ]
       },
       "OkResponse": {
@@ -4031,6 +4198,183 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/bots": {
+      "post": {
+        "tags": [
+          "meetings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Send the notetaker to a meeting now. The same requestId returns the same bot (idempotent).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMeetingBotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The notetaker is on its way; its note is created in the recording state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingBotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported meeting link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "No notetaker minutes left.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many notetakers at once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The notetaker is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureDisabledError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/bots/{botId}/cancel": {
+      "post": {
+        "tags": [
+          "meetings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "required": true,
+            "name": "botId",
+            "in": "path"
+          }
+        ],
+        "summary": "Cancel a notetaker, or make it leave the meeting. Idempotent.",
+        "responses": {
+          "200": {
+            "description": "Cancelled, or already finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelMeetingBotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such notetaker (or not yours).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The notetaker is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureDisabledError"
                 }
               }
             }
