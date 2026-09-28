@@ -57,6 +57,7 @@ locals {
     SUMMARIZE_QUEUE                = "summarize"
     EMBED_QUEUE                    = "embed"
     EXTRACT_QUEUE                  = "extract"
+    MEETINGS_QUEUE                 = "meetings"
     NOTIFY_QUEUE                   = "notify"
     TRANSCODER_URL                 = local.service_url["transcoder"]
     SUMMARIZER_URL                 = local.service_url["summarizer"]
@@ -106,7 +107,11 @@ locals {
     billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
     notifier   = local.db_env
     # Its own URL: /tasks/* checks that each OIDC token was minted for it.
-    meetings = merge(local.db_env, { MEETINGS_URL = local.service_url["meetings"] })
+    meetings = merge(local.db_env, {
+      MEETINGS_URL        = local.service_url["meetings"]
+      RECALL_REGION       = var.recall_region
+      MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
+    })
   }
 
   # Which services connect to Postgres (get the db-password secret). Every
@@ -289,7 +294,7 @@ resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
 }
 
 resource "google_service_account_iam_member" "act_as_jobs" {
-  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep"])
+  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep", "run-meetings"])
 
   service_account_id = google_service_account.runtime["run-jobs"].name
   role               = "roles/iam.serviceAccountUser"

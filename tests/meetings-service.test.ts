@@ -238,6 +238,22 @@ describe('the app, over HTTP', () => {
     }
   });
 
+  it('a failed task is always a 500 to Cloud Tasks: a passed-through 429 or 503 would throttle the whole queue', async () => {
+    const boom = (status: number) => async () => { throw Object.assign(new Error('recall said no'), { status }); };
+    const app = buildApp({ env: {}, readSecret: async () => null, taskAuth: (_req: any, _res: any, next: () => void) => next(), tasks: { rate: boom(429), busy: boom(503), plain: async () => { throw new Error('x'); } } });
+    const s = await serve(app);
+    try {
+      for (const k of ['rate', 'busy', 'plain']) {
+        const r = await fetch(`${s.url}/tasks/${k}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        expect(r.status, k).toBe(500);
+      }
+      // A body that isn't JSON is still the client's fault.
+      expect((await fetch(`${s.url}/tasks/plain`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' })).status).toBe(400);
+    } finally {
+      await s.close();
+    }
+  });
+
   it('an authorised task with no handler yet is a 404, not a crash', async () => {
     const app = buildApp({ env: {}, readSecret: async () => null, taskAuth: (_req: any, _res: any, next: () => void) => next() });
     const s = await serve(app);

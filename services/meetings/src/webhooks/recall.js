@@ -27,13 +27,14 @@ export function eventFields(body) {
     event: typeof body?.event === 'string' ? body.event : 'unknown',
     recallBotId: typeof bot.id === 'string' ? bot.id : null,
     meetingBotId: typeof metadata.meeting_bot_id === 'string' ? metadata.meeting_bot_id : null,
+    workspaceId: typeof metadata.workspace_id === 'string' && /^[\w-]{1,128}$/.test(metadata.workspace_id) ? metadata.workspace_id : null,
     env: typeof metadata.env === 'string' ? metadata.env : null,
     subCode: typeof inner.sub_code === 'string' ? inner.sub_code : null,
     occurredAt: at && !Number.isNaN(at.getTime()) ? at : null,
   };
 }
 
-export function createRecallWebhookRoute({ readSecret, env = process.env, record = recordRecallEvent, now = Date.now }) {
+export function createRecallWebhookRoute({ readSecret, enqueue, env = process.env, record = recordRecallEvent, now = Date.now }) {
   return async function recallWebhookRoute(req, res) {
     const log = req.log;
     let secrets;
@@ -62,7 +63,7 @@ export function createRecallWebhookRoute({ readSecret, env = process.env, record
       return res.status(200).json({ ok: true });
     }
     const f = eventFields(body);
-    const fields = { webhookId: verdict.id, event: f.event, recallBotId: f.recallBotId, meetingBotId: f.meetingBotId };
+    const fields = { webhookId: verdict.id, event: f.event, recallBotId: f.recallBotId, meetingBotId: f.meetingBotId, workspaceId: f.workspaceId };
     const ours = String(env.ALGOMINUTES_ENV || '');
     if (f.env && ours && f.env !== ours) {
       log.warn({ ...fields, eventEnv: f.env }, 'recall_webhook_other_env');
@@ -78,6 +79,17 @@ export function createRecallWebhookRoute({ readSecret, env = process.env, record
       payload: body,
     });
     log.info({ ...fields, duplicate: !stored.inserted }, 'recall_webhook_received');
+    // A new event, or a redelivery of one never processed: its work runs as a
+    // task (named after the event, so a duplicate enqueue is dropped). If the
+    // enqueue fails, answer 503 so Recall redelivers and this runs again.
+    if (enqueue && stored.id != null && (stored.inserted || !stored.processed)) {
+      try {
+        await enqueue({ recallEventId: stored.id, traceId: req.traceId, log });
+      } catch (err) {
+        log.error({ err, ...fields, recallEventId: stored.id }, 'recall_event_enqueue_failed');
+        return res.status(503).json({ error: 'Try again' });
+      }
+    }
     return res.status(200).json({ ok: true });
   };
 }
