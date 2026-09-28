@@ -351,7 +351,7 @@ resource "google_cloud_tasks_queue" "queues" {
 
   rate_limits {
     max_dispatches_per_second = 100
-    max_concurrent_dispatches = 50
+    max_concurrent_dispatches = local.queue_capacity[each.value]
   }
 
   retry_config {
@@ -367,6 +367,26 @@ resource "google_cloud_tasks_queue" "queues" {
   }
 
   depends_on = [google_project_service.apis]
+}
+
+locals {
+  # The service each queue delivers to (its enqueuers' target URLs: api and the
+  # transcoder's tasks-client.js, regenerate-summary.js, notify.cjs).
+  queue_service = {
+    transcode = "transcoder"
+    summarize = "summarizer"
+    embed     = "embedder"
+    extract   = "extractor"
+    notify    = "notifier"
+  }
+  # Never dispatch more at once than the service can serve. Past max instances x
+  # request concurrency Cloud Run answers 429, which Cloud Tasks counts as a
+  # failed attempt, so a burst used to burn retries and dead-letter notes (every
+  # queue allowed 50; prod runs at most 4 single-request transcoders). Extra
+  # tasks now wait in the queue instead.
+  queue_capacity = {
+    for q, svc in local.queue_service : q => var.connection_budget.services[svc].max_instances * local.service_config[svc].concurrency
+  }
 }
 
 # ---------------------------------------------------------------------------
