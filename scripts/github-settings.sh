@@ -83,7 +83,12 @@ call() { # method path [json]
 }
 
 get() { # path jq-filter: read live state; a 404 reads as nothing
-  if gh api "$1" --jq "$2" 2>"$ERR"; then return 0; fi
+  # gh prints an error's JSON body to stdout too, so print only a success.
+  local out
+  if out=$(gh api "$1" --jq "$2" 2>"$ERR"); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
   grep -q '(HTTP 404)' "$ERR" && return 0
   cat "$ERR" >&2
   return 1
