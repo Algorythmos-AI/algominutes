@@ -11,7 +11,7 @@
     "@algominutes/ai": "*",
     "@algominutes/db": "*",
     "firebase-admin": "^14.5.0",
-    "google-auth-library": "^9.15.0",
+    "google-auth-library": "^11.1.0",
     "pg": "^8.20.0",
     "tsx": "^4.23.15"
   },
