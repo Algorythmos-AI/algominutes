@@ -91,6 +91,9 @@ const EMBED_BATCH = 20;
 // blip used to fail the whole note's embedding, and the task's retry redid it
 // all from the first chunk.
 const EMBED_MAX_ATTEMPTS = 4;
+// Each batch request is aborted after this long and retried like a dropped
+// connection, so a hung call can't hold the embedder until its request timeout.
+const EMBED_TIMEOUT_MS = 60_000;
 
 async function adcToken() {
   const { GoogleAuth } = require('google-auth-library');
@@ -105,6 +108,7 @@ const retryable = (status) => status === 429 || status >= 500;
 async function embedChunks({
   chunks, log, project, location,
   fetchImpl = globalThis.fetch, getToken = adcToken, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  timeoutMs = EMBED_TIMEOUT_MS,
 }) {
   const loc = location || process.env.AIPLATFORM_LOCATION || 'us-central1';
   const { token, projectId } = await getToken();
@@ -132,6 +136,7 @@ async function embedChunks({
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body,
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (err) {
         if (attempt >= EMBED_MAX_ATTEMPTS) throw err;
@@ -172,6 +177,7 @@ async function embedChunks({
 module.exports = {
   EMBED_BATCH,
   EMBED_MAX_ATTEMPTS,
+  EMBED_TIMEOUT_MS,
   TARGET_CHARS,
   OVERLAP_CHARS,
   EMBED_MODEL,

@@ -97,4 +97,22 @@ describe('callGeminiWithLadder', () => {
     }));
     expect(urls[0]).toMatch(/^https:\/\/australia-southeast1-aiplatform\.googleapis\.com\/v1\/projects\/p\/locations\/australia-southeast1\//);
   });
+
+  it('aborts a call that hangs past the budget, instead of holding the worker until Cloud Run times out', async () => {
+    const { log, events } = logSpy();
+    let signalSeen: AbortSignal | undefined;
+    // Never answers; only the abort signal can end it.
+    const hang = (_url: string, init: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+      signalSeen = init.signal;
+      init.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const started = Date.now();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a', 'model-b'], fetchImpl: hang, log, deadlineMs: 150 }));
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(signalSeen).toBeDefined();
+    expect(out).toMatchObject({ rawText: null, model: null });
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    // It gives up rather than moving on to the next rung with no budget left.
+    expect(events.find((e) => e.msg === 'gemini_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1 });
+  });
 });

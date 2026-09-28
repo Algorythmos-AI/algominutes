@@ -102,6 +102,10 @@ async function callGeminiWithLadder({
         const token = await getToken();
         if (!token) throw new Error('callGeminiWithLadder: failed to mint ADC token');
 
+        // The budget was only checked between attempts, so one hung call could
+        // hold a worker until Cloud Run's request timeout. Each attempt is now
+        // aborted when the ladder's budget runs out; the signal also covers
+        // reading the body.
         const resp = await fetchImpl(url, {
           method: 'POST',
           headers: {
@@ -109,6 +113,7 @@ async function callGeminiWithLadder({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
         });
 
         if (!resp.ok) {
@@ -142,6 +147,12 @@ async function callGeminiWithLadder({
         log.info({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs, finishReason }, 'gemini_ok');
         return { rawText, model: modelName, finishReason, error: null };
       } catch (err) {
+        if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+          // Out of budget mid-call: the same outcome as running out between
+          // attempts. The caller fails the task and Cloud Tasks retries it.
+          log.warn({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs }, 'gemini_timeout');
+          return { rawText: null, model: null, error: new Error('TIME_BUDGET') };
+        }
         lastErr = err;
         if (!isTransientError(err)) {
           log.error({ err, model: modelName }, 'gemini_non_retryable');
