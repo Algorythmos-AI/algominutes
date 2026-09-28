@@ -20,7 +20,7 @@ locals {
   region_bucket = { for s in local.bucket_suffixes : s => "algominutes-${var.env}-${s}" }
 
   # Deterministic Cloud Run URLs (see header).
-  service_names = ["api", "transcoder", "summarizer", "embedder", "extractor", "billing", "notifier"]
+  service_names = ["api", "transcoder", "summarizer", "embedder", "extractor", "billing", "notifier", "meetings"]
   service_url   = { for s in local.service_names : s => "https://${s}-${var.project_number}.${var.region}.run.app" }
 
   # Per-service runtime sizing. Long-audio transcode gets the most head-room and
@@ -33,6 +33,9 @@ locals {
     extractor  = { cpu = "1", memory = "1Gi", timeout = 900, concurrency = 4, sa = "run-extractor" }
     billing    = { cpu = "1", memory = "512Mi", timeout = 60, concurrency = 80, sa = "run-billing" }
     notifier   = { cpu = "1", memory = "256Mi", timeout = 60, concurrency = 20, sa = "run-notifier" }
+    # The Recall.ai notetaker (docs/plans/MEETINGS.md): webhooks, and tasks that
+    # stream a meeting's audio into GCS (so a longer timeout than the api's).
+    meetings = { cpu = "1", memory = "512Mi", timeout = 900, concurrency = 20, sa = "run-meetings" }
   }
 
   # Env every service shares.
@@ -102,21 +105,24 @@ locals {
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
     billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
     notifier   = local.db_env
+    # Its own URL: /tasks/* checks that each OIDC token was minted for it.
+    meetings = merge(local.db_env, { MEETINGS_URL = local.service_url["meetings"] })
   }
 
   # Which services connect to Postgres (get the db-password secret). Every
   # service that imports @algominutes/db belongs here — api (repo layer),
   # billing (subscriptions repo), notifier (push-tokens repo) included.
-  db_services = ["api", "billing", "notifier", "transcoder", "summarizer", "embedder"]
+  db_services = ["api", "billing", "notifier", "transcoder", "summarizer", "embedder", "meetings"]
 
   # Services end users / third parties call directly. They authenticate at the
   # application layer (api: Firebase ID token; billing: store/Stripe webhook
-  # signatures), so Cloud Run must admit unauthenticated requests. That is done
+  # signatures; meetings: Recall's webhook signatures, and the Cloud Tasks OIDC
+  # token checked in the app), so Cloud Run must admit unauthenticated requests. That is done
   # by turning off the invoker IAM check (invoker_iam_disabled), not by granting
   # run.invoker to allUsers: the organization's iam.allowedPolicyMemberDomains
   # policy refuses any allUsers binding, so the apply would fail. Every other
   # service keeps the check on (only run-jobs may invoke).
-  public_services = ["api", "billing"]
+  public_services = ["api", "billing", "meetings"]
 }
 
 resource "google_cloud_run_v2_service" "services" {

@@ -1,0 +1,24 @@
+{
+  "name": "@algominutes/meetings",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoMinutes meetings service (docs/plans/MEETINGS.md): the only code that talks to Recall.ai. Verifies and stores Recall's webhooks, and runs the notetaker's Cloud Tasks (create, ingest, purge, reconcile). Public, like billing, so webhook traffic never shares a scaling pool with the api.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "tsx src/index.js",
+    "dev": "tsx watch src/index.js"
+  },
+  "dependencies": {
+    "@algominutes/ai": "*",
+    "@algominutes/db": "*",
+    "express": "^4.21.2",
+    "google-auth-library": "^9.15.0",
+    "helmet": "^8.1.0",
+    "tsx": "^4.21.0"
+  }
+}

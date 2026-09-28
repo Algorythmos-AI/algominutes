@@ -255,6 +255,27 @@ resource "google_secret_manager_secret" "db_password" {
   depends_on = [google_project_service.apis]
 }
 
+# Recall.ai's API key and webhook signing secret (docs/plans/MEETINGS.md), one
+# Recall account per environment. Terraform creates the empty secrets; the owner
+# adds each value (docs/BLOCKERS.md, "Online meetings"), so no secret value is
+# ever in the plan or the state. services/meetings reads them at run time, not
+# through the Cloud Run env, so a deploy never waits for them.
+resource "google_secret_manager_secret" "recall" {
+  for_each  = toset(["recall-api-key", "recall-webhook-secret"])
+  project   = var.project_id
+  secret_id = each.key
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_secret_manager_secret_version" "db_password" {
   secret      = google_secret_manager_secret.db_password.id
   secret_data = random_password.db.result
@@ -327,7 +348,7 @@ resource "google_storage_bucket" "buckets" {
 # Retry config is sane-default; tune per queue later if a stage needs it.
 # ---------------------------------------------------------------------------
 locals {
-  queues = ["transcode", "summarize", "embed", "extract", "notify"]
+  queues = ["transcode", "summarize", "embed", "extract", "notify", "meetings"]
 
   # Per-queue retry budget. summarize alone gets a longer window: from
   # gemini-2.5-flash's retirement the ladder has one Sydney model, and a Gemini
@@ -379,6 +400,7 @@ locals {
     embed     = "embedder"
     extract   = "extractor"
     notify    = "notifier"
+    meetings  = "meetings"
   }
   # Never dispatch more at once than the service can serve. Past max instances x
   # request concurrency Cloud Run answers 429, which Cloud Tasks counts as a
@@ -431,6 +453,7 @@ locals {
     "run-extractor"  = "AlgoMinutes Extractor (Cloud Run runtime SA)"
     "run-billing"    = "AlgoMinutes Billing (Cloud Run runtime SA)"
     "run-notifier"   = "AlgoMinutes Notifier (Cloud Run runtime SA)"
+    "run-meetings"   = "AlgoMinutes Meetings: the Recall.ai notetaker (Cloud Run runtime SA)"
     "run-db-job"     = "AlgoMinutes db-job (Cloud Run Job runtime SA)"
     # Identity that Cloud Tasks HTTP tasks carry (OIDC) and that invokes the
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
@@ -507,6 +530,12 @@ locals {
       # via the FCM v1 API. Alternative narrower role: roles/firebasenotifications
       # is console-only; sdkAdminServiceAgent is the correct programmatic grant.
       "roles/firebase.sdkAdminServiceAgent",
+    ])
+    # Grows with the notetaker's PRs (Firestore mirror, Cloud Tasks, Storage),
+    # each role with the code that needs it (tests/tf-iam-contract.test.ts).
+    "run-meetings" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor", # the db password, and recall-api-key / recall-webhook-secret
     ])
     "run-db-job" = concat(local.common_roles, [
       "roles/cloudsql.client",

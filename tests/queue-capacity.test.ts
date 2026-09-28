@@ -12,7 +12,7 @@ const run = read('infra/terraform/modules/environment/cloud-run.tf');
 const budget = (env: string) => JSON.parse(read(`infra/terraform/envs/${env}/connection-budget.json`));
 
 const QUEUE_SERVICE: Record<string, string> = {
-  transcode: 'transcoder', summarize: 'summarizer', embed: 'embedder', extract: 'extractor', notify: 'notifier',
+  transcode: 'transcoder', summarize: 'summarizer', embed: 'embedder', extract: 'extractor', notify: 'notifier', meetings: 'meetings',
 };
 const concurrencyOf = (svc: string) => {
   const m = new RegExp(`\\n\\s*${svc}\\s*=\\s*\\{[^}]*concurrency\\s*=\\s*(\\d+)`).exec(run);
