@@ -3,6 +3,84 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Online meetings are captured by a Recall.ai notetaker bot first (2026-09-28)
+
+- **Context.**
+  - The owner wants notes from Zoom, Google Meet and Teams meetings.
+  - Today a meeting can only be captured three ways:
+    - the iOS ReplayKit broadcast, which picks up another app's audio;
+    - web tab capture, desktop Chromium only (#206);
+    - a recording imported afterwards.
+  - None of these hears a Zoom desktop call. None gives real participant names: diarisation is off on long
+    recordings, and fast-path lines carry no speaker tag.
+  - BUILD-PLAN "Later" listed the server-side meeting bot and the Mac as out of scope. **This entry reverses both.**
+- **Decision (owner).**
+  - First, a visible notetaker bot through Recall.ai, starting with Google Meet.
+  - Then calendar auto-join, a Chrome/Edge extension, and cloud-recording import (Zoom first).
+  - Later, a Mac app that captures system audio with Core Audio process taps (macOS 14.2+).
+  - Robustness hardening runs in parallel. The design and the PR train are in `docs/plans/MEETINGS.md`.
+- **Why a vendor bot, not our own.**
+  - Recall joins Zoom, Meet, Teams, Webex and more through one API, and absorbs each platform's bot and SDK churn.
+  - It returns mixed audio plus a speaker timeline with participant names.
+  - Aligning that timeline with our STT word times gives real names from **one** STT pass. Per-participant tracks
+    would multiply STT cost by the number of participants.
+  - Price: US$0.50 per recording hour, US$0.25 at the startup rate for the first 10k hours
+    (https://www.recall.ai/pricing).
+- **Rules that must hold** (each has a test in the PR train):
+  - **One bot gives one note in one workspace**, owned by the user who asked for it.
+    - The dedup key includes the workspace id.
+    - A second workspace in the same meeting gets its own bot, charge and notice.
+    - A recording is never shared across workspaces (CLAUDE.md multi-tenancy).
+  - **Creating a bot is adopt-or-create.**
+    - Recall's `Idempotency-Key` lasts one hour (https://docs.recall.ai/reference/idempotency.md).
+    - So every retry or replay first looks up the bot by our `metadata.meeting_bot_id`.
+  - **Webhooks:**
+    - verified over the raw body (every signature, two secrets during rotation, ±5 min);
+    - matched on our metadata;
+    - stored and answered 2xx, never 4xx for an unknown bot, because Svix disables an endpoint after 5 days of
+      failures.
+  - **Ingest starts only after both** `audio_mixed.done` and `participant_events.done`.
+  - **Server-created notes use only existing values** (`status: recording`, `type: online_meeting`). The web drops
+    a note with an unknown status or type, and iOS maps unknown values to defaults.
+- **Region and privacy.**
+  - Recall has no Australian region; data stays in the chosen region (https://docs.recall.ai/docs/regions.md).
+  - We use **ap-northeast-1 (Tokyo)**, the closest, with one account per environment.
+  - The media is deleted through `delete_media` as soon as it's in our GCS bucket, with a 72-hour retention as a
+    backstop.
+  - `apps/site/src/data/processing.json` and the privacy page disclose Recall as an overseas processor (APP 5,
+    APP 8) before any tester uses it. The site-facts test pins the entry to the code.
+  - Meeting URLs are encrypted at rest and never logged. Non-users' participant data is limited to display names.
+- **Consent.**
+  - The bot is named "{First name}'s notetaker (AlgoMinutes)" and posts a pinned chat notice on joining.
+  - Calendar auto-join is off by default.
+  - The notetaker stays with allowlisted testers until the written legal opinion in `docs/CONSENT.md` §4 is
+    received. NSW requires the consent of all parties.
+- **Operating cost of the new service** (CLAUDE.md §2):
+  - `services/meetings`: public like billing, so third-party webhooks stay off the api's pool; scale-to-zero;
+    about 1×1×1 in the connection budget.
+  - One `meetings` queue with Postgres dead letters and replay.
+  - Two Recall secrets per environment.
+  - One dashboard.
+  - Alerts:
+    - fatal and not-admitted rates;
+    - ingest older than 45 minutes;
+    - webhook signature failures;
+    - Recall 5xx and 429 rates;
+    - Recall's "endpoint disabled" email;
+    - Recall spend drifting from our meter.
+  - One SLO: p95 of 5 minutes or less from media ready to `queued`.
+  - Recall's usage fees.
+- **Cost gate.**
+  - With Google STT, a 1-hour bot meeting costs about US$1.45, so 600 notetaker minutes would cost more than Pro's
+    price.
+  - Notetaker minutes go only to allowlisted and trial users until diarisation moves off Google STT and the
+    measured cost per minute (`usage_events.cost_usd`) sets the quota.
+- **Rejected.**
+  - **Building our own bots:** a separate integration and review for each platform, and Meet has no official API
+    for a bot to join, so a Meet bot has to drive a browser client.
+  - **Only bot-free capture:** it can't hear a Zoom desktop call.
+  - **Recall's own transcription:** it would add a second transcript path that skips our PII redaction.
+
 ## integration's protection is a ruleset, so the merge queue is reviewed code (2026-09-28)
 
 - **Context.** The owner turned on four settings in the UI: a merge queue in integration's classic protection
