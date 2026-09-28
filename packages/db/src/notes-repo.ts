@@ -25,6 +25,7 @@ const { reverseNoteUsage } = ledgerReversal as {
 };
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
+import { advanceBotStatus, toNotetakerStatus, type BotStatus, type MeetingBot } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { ownedStoragePath } = noteStorage as {
@@ -900,12 +901,25 @@ export async function deleteNote(
       );
       if (!member.rowCount) return { allowed: false };
       const manager = ['owner', 'admin'].includes(member.rows[0]!.role);
+      // A notetaker's note: its bot must remember the deletion, because the
+      // row's delete sets meeting_bots.note_id to NULL and the tombstones are
+      // pruned in 30 days (createServerNote checks note_deleted_at).
+      const bots = await client.query<{ id: string }>(
+        'SELECT id FROM meeting_bots WHERE note_id = $1 AND workspace_id = $2 FOR UPDATE',
+        [input.noteId, input.workspaceId],
+      );
       const gone = await client.query<{ storage_path: string | null }>(
         `DELETE FROM notes WHERE id = $1 AND workspace_id = $2 AND ($3::boolean OR author_uid = $4)
          RETURNING storage_path`,
         [input.noteId, input.workspaceId, manager, input.uid],
       );
       const deleted = (gone.rowCount ?? 0) > 0;
+      if (deleted && bots.rowCount) {
+        await client.query(
+          'UPDATE meeting_bots SET note_deleted_at = COALESCE(note_deleted_at, NOW()), updated_at = NOW() WHERE id = ANY($1::uuid[])',
+          [bots.rows.map((b) => b.id)],
+        );
+      }
       // Nothing deleted: either the note is someone else's and the caller
       // doesn't manage the workspace, or there's no Postgres row (a retry, or
       // a note never processed). Only a manager may clean up the latter, since
@@ -1081,6 +1095,8 @@ export async function failStuckNote(
 // ── Server-created notes (the online-meeting notetaker, docs/plans/MEETINGS.md) ──
 
 export interface CreateServerNoteInput {
+  /** The bot whose recording this note is. The note's id is noteIdForBot(botId). */
+  botId: string;
   noteId: string;
   workspaceId: string;
   uid: string;
@@ -1092,94 +1108,144 @@ export interface CreateServerNoteInput {
   sourceKind: 'bot';
   platform: string;
   /** The Firestore mirror's notetaker field (NoteNotetaker). */
-  notetaker: { botId: string; status: string; platform: string; failureReason?: string };
+  notetaker: { botId: string; status: string; platform: string };
   meetingAt?: Date | null;
 }
 
+function isFirestoreAlreadyExists(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  return !!e && (e.code === 6 || e.code === 'already-exists' || /\bALREADY_EXISTS\b/.test(String(e.message ?? '')));
+}
+
 /**
- * Create a note the server owns (a notetaker's recording), which no client
- * wrote first. Postgres first: the row, in status 'recording', under the note
- * lock, refused for a deleted note and for an id another workspace owns. Then
- * the Firestore mirror doc, with the fields a client's own note has, so the
- * apps list it like any other (status 'recording', type 'online_meeting':
- * values every build in the field accepts).
+ * Create the note a notetaker's recording becomes, which no client wrote first.
  *
- * Idempotent: a replay finds the row and the doc and changes nothing. A note
- * deleted between the commit and the doc write can't come back as an orphan:
- * the row is re-read after the write, and a doc this call created for a note
- * that is gone is removed again.
+ * Postgres first, under the note lock: the bot must exist, belong to this user
+ * and workspace, and not have had its note deleted (meeting_bots.note_deleted_at,
+ * which outlives the deletion tombstones, so a task replayed weeks later can't
+ * bring it back). The row is created in 'recording' and linked to the bot in
+ * the same transaction. Then the Firestore mirror doc, with the fields a
+ * client's own note has (status 'recording', type 'online_meeting': values
+ * every build in the field accepts), created only if absent.
+ *
+ * Safe to repeat, and meant to be: a replayed create or ingest task calls it
+ * first, which also writes a mirror doc a failed earlier attempt left missing.
+ * A note deleted meanwhile never keeps a doc: on 'deleted' the doc is removed,
+ * and a failure to remove it throws, so the task retries.
  */
 export async function createServerNote(
   firestore: Firestore,
   input: CreateServerNoteInput,
-  log: { error: (o: any, m?: string) => void; warn?: (o: any, m?: string) => void },
+  log: { error: (o: any, m?: string) => void },
 ): Promise<{ created: boolean; deleted?: true }> {
   if (!isPostgresEnabled()) throw new Error('createServerNote: Postgres is not enabled');
   const fields = { noteId: input.noteId, workspaceId: input.workspaceId, userId: input.uid };
+  const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
   const outcome = await withTx(async (client): Promise<{ created: boolean; deleted?: true }> => {
     await lockNoteId(client, input.noteId);
+    const { rows: [bot] } = await client.query(
+      'SELECT uid, workspace_id, note_id, note_deleted_at FROM meeting_bots WHERE id = $1 FOR UPDATE',
+      [input.botId],
+    );
+    // No bot: its account was deleted (the rows cascade). Nothing to create.
+    if (!bot) return { created: false, deleted: true };
+    if (bot.uid !== input.uid || bot.workspace_id !== input.workspaceId || (bot.note_id && bot.note_id !== input.noteId)) {
+      throw new WorkspaceBoundaryError(`bot ${input.botId} is not ${input.uid}'s in ${input.workspaceId}`);
+    }
+    if (bot.note_deleted_at) return { created: false, deleted: true };
+
     const existing = await client.query('SELECT workspace_id FROM notes WHERE id = $1', [input.noteId]);
+    let created = false;
     if (existing.rowCount) {
       if (existing.rows[0].workspace_id !== input.workspaceId) {
         throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
       }
-      return { created: false };
+    } else {
+      if (await isNoteDeleted(client, input)) return { created: false, deleted: true };
+      // The user row, then the workspace, then the note: the order account
+      // deletion locks them in. ensureUser also refuses a deleted account.
+      await ensureUser(client, { uid: input.uid, email: input.email, name: input.name });
+      await ensureWorkspaceAccess(client, input.workspaceId, input.uid, input.name ? `${input.name}'s Workspace` : 'My Workspace');
+      await client.query(
+        `INSERT INTO notes (id, workspace_id, author_uid, title, status, source_type, source_kind, platform, meeting_at)
+           VALUES ($1, $2, $3, $4, 'recording', $5, $6, $7, $8)`,
+        [input.noteId, input.workspaceId, input.uid, input.title, input.sourceType, input.sourceKind, input.platform, input.meetingAt ?? null],
+      );
+      created = true;
     }
-    if (await isNoteDeleted(client, input)) return { created: false, deleted: true };
-    // The user row, then the workspace, then the note: the order account
-    // deletion locks them in. ensureUser also refuses a deleted account.
-    await ensureUser(client, { uid: input.uid, email: input.email, name: input.name });
-    await ensureWorkspaceAccess(client, input.workspaceId, input.uid, input.name ? `${input.name}'s Workspace` : 'My Workspace');
     await client.query(
-      `INSERT INTO notes (id, workspace_id, author_uid, title, status, source_type, source_kind, platform, meeting_at)
-         VALUES ($1, $2, $3, $4, 'recording', $5, $6, $7, $8)`,
-      [input.noteId, input.workspaceId, input.uid, input.title, input.sourceType, input.sourceKind, input.platform, input.meetingAt ?? null],
+      'UPDATE meeting_bots SET note_id = $2, updated_at = NOW() WHERE id = $1 AND (note_id IS NULL OR note_id = $2)',
+      [input.botId, input.noteId],
     );
-    return { created: true };
+    return { created };
   }, { log, fields });
-  if (outcome.deleted) return outcome;
 
-  const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
-  const snap = await noteDoc.get();
-  if (snap.exists) return { created: false };
+  if (outcome.deleted) {
+    // A doc left by an earlier attempt goes too. Deleting a missing doc succeeds.
+    await noteDoc.delete();
+    return outcome;
+  }
   const now = ISO_NOW();
-  await noteDoc.set({
-    title: input.title,
-    workspaceId: input.workspaceId,
-    authorId: input.uid,
-    status: 'recording',
-    type: input.sourceType,
-    sourceKind: input.sourceKind,
-    notetaker: input.notetaker,
-    createdAt: now,
-    updatedAt: now,
-  });
-  // Deleted between the commit and the write? Then the doc just written is an
-  // orphan: take it back out.
+  try {
+    await noteDoc.create({
+      title: input.title,
+      workspaceId: input.workspaceId,
+      authorId: input.uid,
+      status: 'recording',
+      type: input.sourceType,
+      sourceKind: input.sourceKind,
+      notetaker: { ...input.notetaker, rank: 0 },
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (err) {
+    if (!isFirestoreAlreadyExists(err)) throw err;
+  }
+  // Deleted between the commit and the write? Then the doc is an orphan: take it
+  // back out (a failure throws, so the task retries).
   const live = await getPool().query('SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2', [input.noteId, input.workspaceId]);
   if (!live.rowCount) {
-    await noteDoc.delete().catch((err: unknown) => log.error({ err, ...fields }, 'server_note_orphan_cleanup_failed'));
+    await noteDoc.delete();
     return { created: false, deleted: true };
   }
   return { created: outcome.created };
 }
 
 /**
- * Mirror a notetaker's state onto its note's doc. update(), never set(): a note
- * deleted meanwhile stays deleted. Postgres (meeting_bots) is the truth; a
- * missing doc is logged, not thrown.
+ * Move a notetaker's status forward (advanceBotStatus: Postgres, the truth) and
+ * mirror what Postgres now holds onto its note's doc. The mirror carries the
+ * status's rank, and a Firestore transaction refuses to write a lower one, so
+ * two handlers finishing out of order can't move the doc backwards. A missing
+ * doc for a live note throws (the task retries, and createServerNote restores
+ * it); for a deleted note it's expected and logged.
  */
-export async function mirrorNotetaker(
+export async function advanceNotetaker(
   firestore: Firestore,
-  input: { noteId: string; workspaceId: string; notetaker: { botId: string; status: string; platform: string; failureReason?: string | null } },
-  log: { error: (o: any, m?: string) => void },
-): Promise<void> {
-  const notetaker: Record<string, string> = { botId: input.notetaker.botId, status: input.notetaker.status, platform: input.notetaker.platform };
-  if (input.notetaker.failureReason) notetaker.failureReason = input.notetaker.failureReason;
+  input: { botId: string; status: BotStatus; failureReason?: string | null; recordingStartedAt?: Date; recordingEndedAt?: Date },
+  log: { error: (o: any, m?: string) => void; info?: (o: any, m?: string) => void },
+): Promise<{ changed: boolean; bot: MeetingBot | null }> {
+  const { status, botId, ...opts } = input;
+  const result = await advanceBotStatus(botId, status, opts);
+  const bot = result.bot;
+  if (!bot || !bot.noteId) return result;
+  const ref = firestore.doc(`workspaces/${bot.workspaceId}/notes/${bot.noteId}`);
+  const notetaker: Record<string, unknown> = {
+    botId: bot.id, status: toNotetakerStatus(bot.status), platform: bot.platform, rank: bot.statusRank,
+  };
+  if (bot.failureReason) notetaker.failureReason = bot.failureReason;
   try {
-    await firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`).update({ notetaker, updatedAt: ISO_NOW() });
+    await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw Object.assign(new Error(`5 NOT_FOUND: ${ref.path}`), { code: 5 });
+      const current = (snap.data()?.notetaker ?? {}) as { rank?: unknown };
+      if (typeof current.rank === 'number' && current.rank > bot.statusRank) return; // a later status is already there
+      tx.update(ref, { notetaker, updatedAt: ISO_NOW() });
+    });
   } catch (err) {
     if (!isFirestoreNotFound(err)) throw err;
-    log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'notetaker_mirror_note_gone');
+    const live = await getPool().query('SELECT 1 FROM notes WHERE id = $1', [bot.noteId]);
+    if (live.rowCount) throw err;
+    log.error({ err, noteId: bot.noteId, workspaceId: bot.workspaceId, userId: bot.uid }, 'notetaker_mirror_note_gone');
   }
+  return result;
 }

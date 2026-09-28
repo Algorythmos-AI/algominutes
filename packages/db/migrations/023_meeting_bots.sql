@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS meeting_bots (
   -- The note the recording becomes. A deleted note leaves the bot row (its
   -- Recall media purge still has to run); it just points nowhere.
   note_id              TEXT UNIQUE REFERENCES notes(id) ON DELETE SET NULL,
+  -- Set by deleteNote in its transaction, before the row goes (and note_id with
+  -- it): the bot's note was deleted, so a replayed task must never create it
+  -- again, even after the deletion tombstones are pruned.
+  note_deleted_at      TIMESTAMPTZ,
   recall_bot_id        TEXT UNIQUE,
   -- The client's idempotency key for a pasted link, or the calendar event (M2).
   client_request_id    TEXT,
