@@ -19,6 +19,12 @@ updates:
     commit-message:
       prefix: chore(deps)
     ignore:
+      # google-auth-library mints the Vertex AI token for every Gemini, embedding
+      # and chat call (packages/ai, api, db-job). Its majors change the request
+      # layer, and only staging exercises Cloud Run's metadata server, so they move
+      # as one staging-verified migration (BLOCKERS), not a weekly bump.
+      - dependency-name: google-auth-library
+        update-types: ['version-update:semver-major']
       # Express 5 changes routing syntax, promise handling and req/res APIs across
       # all 7 services. It is a planned migration (BLOCKERS), not a weekly bump.
       - dependency-name: express

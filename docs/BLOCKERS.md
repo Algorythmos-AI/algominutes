@@ -431,6 +431,28 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   Our own code already type-checks on 7 (6.0.3 needed the same one-line `sse.ts` fix). Next step: when
   `typescript-eslint` and `@astrojs/check` support 7, lift the Dependabot ignore. Keep the gates on the
   stable API by adding `typescript` 6 under an npm alias for them, not by porting them to the unstable one.
+- [ ] **`google-auth-library` 9 → 11** (#231 declined, 2026-09-28). It mints the Vertex AI bearer token for
+  every Gemini, embedding and chat call:
+  - `packages/ai/src/gemini-call.cjs`: the summarizer's and the transcoder's fast path (audit it first, per
+    CLAUDE.md);
+  - `packages/ai/src/embeddings.cjs`;
+  - `services/api/src/routes/search-and-chat.cjs`;
+  - `services/db-job/src/handlers/eval-recall.js`.
+
+  **What we call:** only `new GoogleAuth({ scopes }).getClient()`, then `client.getAccessToken()`. None of
+  `client.request()`, `Transporter` or `gaxios`, which is where 10.0's breaking changes are ("`Request`
+  revamp", "Remove `Transporter`"). 11.x requires Node ≥22; we run 24.
+
+  **Checked on 11.1.0, locally:**
+  - the CommonJS `require` works;
+  - `GoogleAuth`, `getClient()`, `getAccessToken()` and `Compute` (Cloud Run's client) all exist;
+  - `getClient()` returned a client from local credentials.
+
+  **Not checkable locally:** getting a token from Cloud Run's metadata server.
+
+  **Next step:** one PR bumping `packages/ai` and every service that declares it, deployed to staging. It
+  closes with evidence: a summary, an embedding and a chat answer produced on staging (`smoke-staging.sh`,
+  plus the log lines showing a token was fetched). Then lift the Dependabot hold.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
