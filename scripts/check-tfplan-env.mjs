@@ -26,7 +26,7 @@ if (!planPath) {
 }
 const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
 
-const PUBLIC = new Set(['api', 'billing']);
+const PUBLIC = new Set(['api', 'billing', 'meetings']);
 // Which env spec a job runs under: both jobs run the db-job image.
 const specFor = (kind, name) => (kind === 'job' ? 'db-job' : name);
 const spec = (svc) => require(path.join(repo, 'services', svc, 'src', 'env-spec.cjs'));

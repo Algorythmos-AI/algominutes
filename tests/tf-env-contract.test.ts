@@ -102,7 +102,7 @@ const show = (r: Resolved) => (r.kind === 'literal' ? JSON.stringify(r.value) : 
 
 describe.each(ENVS)('%s: Terraform sets every env a service requires', (env: Env) => {
   it('covers every service with an env-spec.cjs', () => {
-    expect(services.sort()).toEqual(['api', 'billing', 'embedder', 'extractor', 'notifier', 'summarizer', 'transcoder']);
+    expect(services.sort()).toEqual(['api', 'billing', 'embedder', 'extractor', 'meetings', 'notifier', 'summarizer', 'transcoder']);
   });
 
   it.each(targets)('$name', ({ specOf, env: envOf }) => {

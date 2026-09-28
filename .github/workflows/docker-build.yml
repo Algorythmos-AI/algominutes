@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, billing, db-job, embedder, extractor, notifier, summarizer, transcoder]
+        service: [api, billing, db-job, embedder, extractor, meetings, notifier, summarizer, transcoder]
     steps:
       - uses: actions/checkout@v7
       - name: Set up Docker Buildx

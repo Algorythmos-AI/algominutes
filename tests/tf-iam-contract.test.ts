@@ -50,7 +50,7 @@ const code = Object.fromEntries(
 
 describe('every service can do what its code does', () => {
   it('reads a runtime account and its roles for every service', () => {
-    expect(services.sort()).toEqual(['api', 'billing', 'db-job', 'db-sweep', 'embedder', 'extractor', 'notifier', 'summarizer', 'transcoder']);
+    expect(services.sort()).toEqual(['api', 'billing', 'db-job', 'db-sweep', 'embedder', 'extractor', 'meetings', 'notifier', 'summarizer', 'transcoder']);
     for (const s of services) expect(rolesOf[saOf[s]], `${s} (${saOf[s]}) has no sa_project_roles entry`).toBeDefined();
   });
 
@@ -92,6 +92,6 @@ describe('public access', () => {
 
   it('turns the invoker check off for exactly the public services', () => {
     expect(cloudRun).toMatch(/invoker_iam_disabled\s*=\s*contains\(local\.public_services,\s*each\.key\)/);
-    expect(JSON.parse(/public_services\s*=\s*(\[[^\]]*\])/.exec(cloudRun)![1])).toEqual(['api', 'billing']);
+    expect(JSON.parse(/public_services\s*=\s*(\[[^\]]*\])/.exec(cloudRun)![1])).toEqual(['api', 'billing', 'meetings']);
   });
 });
