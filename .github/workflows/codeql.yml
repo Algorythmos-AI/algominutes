@@ -7,6 +7,9 @@ name: codeql
 # the default suite, still low-noise.
 on:
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
   push:
     branches: [integration, main]
   schedule:
@@ -29,11 +32,11 @@ jobs:
         language: [javascript-typescript, actions]
     steps:
       - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-extended
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}

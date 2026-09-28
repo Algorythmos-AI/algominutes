@@ -6,12 +6,17 @@ name: dependency-review
 # required check.
 on:
   pull_request:
+  # The merge queue on integration needs this check to report on the queue's
+  # commit; the job skips there (a skipped job satisfies a required check),
+  # because each PR in the group was already reviewed on its own.
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
   dependency-review:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

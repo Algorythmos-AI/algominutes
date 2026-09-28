@@ -8,6 +8,9 @@ on:
   push:
     branches: [integration, main]
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
 
 permissions:
   contents: read
