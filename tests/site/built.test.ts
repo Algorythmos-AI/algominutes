@@ -25,6 +25,7 @@ const status = (p: string) => {
 const LINKED_FROM_OUTSIDE = [
   '/privacy', '/terms', '/support', // iOS LegalLinks, App Store Connect
   '/delete-account', // Google Play "Data deletion"
+  '/notetaker', // the notetaker's chat notice in every meeting it joins (services/meetings notice.js)
   '/s/a-share-token', // api shares.js
   '/billing', '/billing/success', '/billing/cancel', // billing checkout.js, portal.js
   '/app', '/app/notes/123', // the web app's mount
@@ -38,7 +39,7 @@ describe('the built site', () => {
 
   it('builds exactly the expected pages', () => {
     expect(pages.map((p) => p.route).sort()).toEqual(
-      ['/', '/404', ...(APP ? [] : ['/app']), '/billing', '/billing/cancel', '/billing/success', '/delete-account', '/privacy', '/s', '/support', '/terms'].sort(),
+      ['/', '/404', ...(APP ? [] : ['/app']), '/billing', '/billing/cancel', '/billing/success', '/delete-account', '/notetaker', '/privacy', '/s', '/support', '/terms'].sort(),
     );
   });
 
