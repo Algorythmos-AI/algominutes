@@ -158,6 +158,15 @@ describe('/tasks/* OIDC', () => {
     expect(audience).toBe('https://meetings.example.run.app/tasks/ingest');
   });
 
+  it('reads the token whatever the case of "Bearer", and treats a bare or padded header as no token', async () => {
+    const mw = auth(() => ({ email: JOBS, email_verified: true }));
+    expect(await run(mw, 'bearer tok')).toEqual({ status: 0, nexted: true });
+    expect(await run(mw, 'BEARER tok')).toEqual({ status: 0, nexted: true });
+    expect(await run(mw, 'Bearer ')).toEqual({ status: 401, nexted: false });
+    expect(await run(mw, `Bearer${' '.repeat(10000)}`)).toEqual({ status: 401, nexted: false });
+    expect(await run(mw, 'Basic abc')).toEqual({ status: 401, nexted: false });
+  });
+
   it('refuses no token (401), another identity or an unverified email (403), and a bad token (401)', async () => {
     expect(await run(auth(() => ({ email: JOBS, email_verified: true })))).toEqual({ status: 401, nexted: false });
     expect(await run(auth(() => ({ email: 'someone@else.iam.gserviceaccount.com', email_verified: true })), 'Bearer t')).toEqual({ status: 403, nexted: false });
@@ -212,6 +221,18 @@ describe('the app, over HTTP', () => {
       expect((await fetch(`${s.url}/tasks/ingest`, { method: 'POST' })).status).toBe(401);
       expect((await fetch(`${s.url}/health`)).status).toBe(200);
       expect((await fetch(`${s.url}/nope`)).status).toBe(404);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('a task name from the path can only reach a handler it was given (never an inherited property)', async () => {
+    const app = buildApp({ env: {}, readSecret: async () => null, taskAuth: (_req: any, _res: any, next: () => void) => next(), tasks: { ping: async (_req: any, res: any) => res.status(200).json({ ok: true }) } });
+    const s = await serve(app);
+    try {
+      const post = (k: string) => fetch(`${s.url}/tasks/${k}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      expect((await post('ping')).status).toBe(200);
+      for (const k of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) expect((await post(k)).status, k).toBe(404);
     } finally {
       await s.close();
     }

@@ -10,18 +10,20 @@ import { OAuth2Client } from 'google-auth-library';
 export function createTaskAuth({ baseUrl, serviceAccountEmail, client = new OAuth2Client() }) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   return async function taskAuth(req, res, next) {
-    const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''));
+    // Parsed without a regex over the header (no backtracking on crafted input).
+    const header = String(req.headers.authorization || '');
+    const token = header.slice(0, 7).toLowerCase() === 'bearer ' ? header.slice(7).trim() : '';
     if (!base || !serviceAccountEmail) {
       req.log.error({ baseUrl: !!base, serviceAccountEmail: !!serviceAccountEmail }, 'task_auth_misconfigured');
       return res.status(503).json({ error: 'Not configured' });
     }
-    if (!m) {
+    if (!token) {
       req.log.warn({}, 'task_auth_missing_token');
       return res.status(401).json({ error: 'Unauthorized' });
     }
     const audience = `${base}${req.originalUrl.split('?')[0]}`;
     try {
-      const ticket = await client.verifyIdToken({ idToken: m[1], audience });
+      const ticket = await client.verifyIdToken({ idToken: token, audience });
       const p = ticket.getPayload() || {};
       if (p.email !== serviceAccountEmail || p.email_verified !== true) {
         req.log.warn({ email: p.email || null }, 'task_auth_wrong_identity');

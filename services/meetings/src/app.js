@@ -33,6 +33,9 @@ export function buildApp({
   taskAuth = createTaskAuth({ baseUrl: env.MEETINGS_URL, serviceAccountEmail: env.JOBS_SA_EMAIL }),
   tasks = {},
 } = {}) {
+  // Looked up by a name from the request path: own entries only, so a name like
+  // "constructor" or "__proto__" can never dispatch anywhere.
+  const handlers = new Map(Object.entries(tasks).filter(([, fn]) => typeof fn === 'function'));
   const app = express();
   app.disable('x-powered-by');
   // JSON only, never HTML: the strictest CSP costs nothing.
@@ -67,7 +70,7 @@ export function buildApp({
   // Cloud Tasks handlers, added by the PRs that build them (create, ingest,
   // purge, reconcile). Each is idempotent: Cloud Tasks replay is normal.
   app.post('/tasks/:kind', taskAuth, wrap(async (req, res) => {
-    const handler = tasks[req.params.kind];
+    const handler = handlers.get(req.params.kind);
     if (!handler) return res.status(404).json({ error: 'Unknown task' });
     return handler(req, res);
   }));
