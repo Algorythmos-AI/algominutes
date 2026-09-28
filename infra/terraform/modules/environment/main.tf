@@ -64,6 +64,7 @@ locals {
     "logging.googleapis.com",              # Cloud Logging
     "monitoring.googleapis.com",           # Cloud Monitoring
     "cloudresourcemanager.googleapis.com", # Resource Manager (IAM bindings)
+    "cloudkms.googleapis.com",             # Cloud KMS: the notetaker's meeting-link key (kms.tf)
     "billingbudgets.googleapis.com",       # Budgets + alerts (budget.tf)
     "iap.googleapis.com",                  # IAP TCP forwarding (SSH to the proof VM, bastion.tf)
   ]

@@ -91,6 +91,8 @@ locals {
       ALLOWED_ORIGINS   = var.allowed_origins
       PUBLIC_SITE_URL   = var.public_site_url
       BROADCAST_CAPTURE = var.broadcast_capture
+      # The key the api encrypts a notetaker's meeting link with (kms.tf).
+      MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
     })
     transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     # Must equal the summarize queue's max_attempts (main.tf queue_retry), so the
