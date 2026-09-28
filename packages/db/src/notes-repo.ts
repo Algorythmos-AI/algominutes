@@ -108,6 +108,12 @@ export interface MarkQueuedInput {
    * actually queues. A duplicate or refused kickoff debits nothing.
    */
   meter?: { minutes: number; idempotencyKey: string };
+  /**
+   * A note still 'recording' (a notetaker in its meeting) is queued only by the
+   * notetaker's own ingest, which ends the recording. Checked under the note's
+   * lock, so a client kickoff can never race it.
+   */
+  allowRecording?: boolean;
 }
 
 export interface NoteEditSummary {
@@ -337,6 +343,9 @@ export async function markQueued(
         const state = queueStateOf(existing.rows[0], input.workspaceId, now);
         if (state.foreign) {
           throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
+        }
+        if (state.status === 'recording' && !input.allowRecording) {
+          return { queued: false, status: 'recording' };
         }
         if (state.inFlight) {
           // Idempotent: a duplicate kickoff (e.g. a client retry after a

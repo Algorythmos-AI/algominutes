@@ -253,5 +253,13 @@ describe('a note still recording', () => {
     expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec3' AND entry_type = 'debit'`)).toBe(1);
     expect(enqueued).toHaveLength(1);
   });
+
+  it('markQueued itself refuses a recording note under the lock unless the caller is its ingest', async () => {
+    await recordingNote('alice', 'rec4');
+    const base = { noteId: 'rec4', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'online_meeting' };
+    expect(await markQueued(fakeDb as never, base, quietLog)).toEqual({ queued: false, status: 'recording' });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec4' AND status = 'recording'`)).toBe(1);
+    expect(await markQueued(fakeDb as never, { ...base, allowRecording: true }, quietLog)).toEqual({ queued: true, status: 'queued' });
+  });
 });
 

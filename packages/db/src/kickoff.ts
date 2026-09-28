@@ -218,6 +218,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       authorUid: uid, authorEmail: input.email, authorName: input.name,
       sourceType: type, storagePath: input.storagePath, sourceUrl: input.sourceUrl, mimeType: input.mimeType,
       meter: { minutes, idempotencyKey: `${noteId}:ingest` },
+      allowRecording: input.allowRecording,
     }, log);
   } catch (err: any) {
     if (isAccountDeleted(err)) {
@@ -239,6 +240,11 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     // Deleted while this ran: it stays deleted, and nothing is queued.
     log.info({}, 'process_note_deleted');
     return { kind: 'not_found' };
+  }
+  if (!queued.queued && queued.status === 'recording') {
+    // Became a notetaker's note between the pre-check and the lock.
+    log.info({}, 'process_note_still_recording');
+    return { kind: 'recording' };
   }
   if (!queued.queued) {
     // Lost the race to a concurrent duplicate that queued first: that run owns
