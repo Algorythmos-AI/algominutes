@@ -93,7 +93,9 @@ locals {
       BROADCAST_CAPTURE = var.broadcast_capture
     })
     transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
-    summarizer = local.db_env
+    # Must equal the summarize queue's max_attempts (main.tf queue_retry), so the
+    # summarizer's dead-letter write fires on that queue's true last attempt.
+    summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
     billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })

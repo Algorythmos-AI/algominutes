@@ -327,6 +327,19 @@ resource "google_storage_bucket" "buckets" {
 # ---------------------------------------------------------------------------
 locals {
   queues = ["transcode", "summarize", "embed", "extract", "notify"]
+
+  # Per-queue retry budget. summarize alone gets a longer window: from
+  # gemini-2.5-flash's retirement the ladder has one Sydney model, and a Gemini
+  # overload is ridden out by the queue rather than failing the note (DECISIONS
+  # 2026-09-28). 10 attempts with backoffs 5,10,20,40,80,160,240,320,400s is about
+  # 21 min of waiting plus up to 10 x the ladder's 240s budget: about an hour.
+  # transcode keeps 5: a transcode retry can re-run paid speech-to-text.
+  queue_retry = {
+    for q in local.queues : q => {
+      max_attempts = q == "summarize" ? var.summarize_max_attempts : var.task_max_attempts
+      max_backoff  = q == "summarize" ? "600s" : "300s"
+    }
+  }
 }
 
 resource "google_cloud_tasks_queue" "queues" {
@@ -346,9 +359,9 @@ resource "google_cloud_tasks_queue" "queues" {
     # with MAX_TASK_ATTEMPTS set to this SAME value so the terminal-failure/DLQ
     # write (packages/db/note-terminal.cjs isFinalAttempt) fires on the queue's
     # genuine last attempt — not before, not after.
-    max_attempts       = var.task_max_attempts
+    max_attempts       = local.queue_retry[each.value].max_attempts
     min_backoff        = "5s"
-    max_backoff        = "300s"
+    max_backoff        = local.queue_retry[each.value].max_backoff
     max_doublings      = 4
     max_retry_duration = "0s" # 0 = retry up to max_attempts with no time cap
   }

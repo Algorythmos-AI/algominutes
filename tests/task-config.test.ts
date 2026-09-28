@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { resolveDispatchDeadline } = require('@algominutes/ai/cloud-tasks.cjs') as typeof import('../packages/ai/src/cloud-tasks.cjs');
@@ -50,5 +51,30 @@ describe('isFinalAttempt', () => {
   it('an explicit argument still overrides the env', () => {
     process.env.MAX_TASK_ATTEMPTS = '10';
     expect(isFinalAttempt(headers(2), 3)).toBe(true); // 3rd of 3
+  });
+});
+
+// The dead-letter write fires on a queue's true last attempt only if the worker's
+// MAX_TASK_ATTEMPTS equals that queue's max_attempts. summarize has its own,
+// longer budget (single Sydney Gemini rung from 2026-10-20), so pin the pairing.
+describe('attempt budgets in Terraform', () => {
+  const tf = (f: string) => readFileSync(`infra/terraform/modules/environment/${f}`, 'utf8');
+  const main = tf('main.tf');
+  const run = tf('cloud-run.tf');
+
+  it('every queue takes its attempts and max backoff from queue_retry', () => {
+    expect(main).toMatch(/max_attempts\s*=\s*local\.queue_retry\[each\.value\]\.max_attempts/);
+    expect(main).toMatch(/max_backoff\s*=\s*local\.queue_retry\[each\.value\]\.max_backoff/);
+  });
+
+  it('summarize alone uses summarize_max_attempts; the rest keep task_max_attempts', () => {
+    expect(main).toMatch(/max_attempts\s*=\s*q == "summarize" \? var\.summarize_max_attempts : var\.task_max_attempts/);
+  });
+
+  it('the summarizer is deployed with the same summarize_max_attempts, every other service with task_max_attempts', () => {
+    expect(run).toMatch(/summarizer\s*=\s*merge\(local\.db_env,\s*\{\s*MAX_TASK_ATTEMPTS\s*=\s*tostring\(var\.summarize_max_attempts\)\s*\}\)/);
+    expect(run).toMatch(/MAX_TASK_ATTEMPTS\s*=\s*tostring\(var\.task_max_attempts\)/);
+    // No other service overrides it.
+    expect(run.match(/MAX_TASK_ATTEMPTS/g)).toHaveLength(2); // common_env, and the summarizer override
   });
 });
