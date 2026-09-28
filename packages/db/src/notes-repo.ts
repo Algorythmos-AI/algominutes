@@ -739,15 +739,24 @@ export async function markReady(
   return { pgWritten };
 }
 
+/**
+ * Mark a note `error`: Postgres (with the refund, if any), then the Firestore
+ * mirror. As in markReady, a Postgres failure is NOT swallowed: it is logged
+ * and rethrown before the mirror, so the Firestore cache never says `error`
+ * for a note Postgres still has in another state. A note with no Postgres row
+ * yet matches nothing and gets the mirror only.
+ */
 export async function markError(
   firestore: Firestore,
   input: MarkErrorInput & {
     /** Written in the same transaction, under the note's row lock (ledger-reversal.cjs). */
     refund?: { reason: string; idempotencyKey: string };
+    traceId?: string | null;
   },
   log: { error: (o: any, m?: string) => void },
 ): Promise<void> {
   if (isPostgresEnabled()) {
+    const fields = { noteId: input.noteId, workspaceId: input.workspaceId, traceId: input.traceId ?? undefined };
     try {
       await withTx(async (client) => {
         const { rowCount } = await client.query(
@@ -760,9 +769,13 @@ export async function markError(
         if (rowCount && input.refund) {
           await reverseNoteUsage(client, { noteId: input.noteId, ...input.refund });
         }
-      }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
+      }, { log, fields });
     } catch (err) {
-      log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId }, 'pg_mark_error_failed');
+      log.error({ err, ...fields }, 'pg_mark_error_failed');
+      // Postgres is the system of record (CLAUDE.md §1): never mirror 'error'
+      // for a note Postgres did not mark. (Previously this was swallowed and
+      // Firestore flipped to 'error' anyway, and the caller returned normally.)
+      throw err;
     }
   }
   await firestore

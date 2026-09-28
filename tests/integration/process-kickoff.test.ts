@@ -129,6 +129,28 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(await ledger()).toEqual(['debit 3 ingest', 'reversal -3 refund:enqueue_failed', 'debit 3 ingest']);
   });
 
+  it("an enqueue that fails while Postgres can't take the failure: a 500, and neither store says 'error'", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    enqueueFails = true;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_kickoff_fail_outage() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.status = 'error' THEN RAISE EXCEPTION 'simulated outage'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_kickoff_fail_outage BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION test_kickoff_fail_outage();`);
+    try {
+      // failNote logs and swallows markError's throw: the route still answers.
+      expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(500);
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS test_kickoff_fail_outage ON notes; DROP FUNCTION IF EXISTS test_kickoff_fail_outage();`);
+    }
+    // Postgres keeps the queued, charged note (the sweep fails and refunds it
+    // later), and the mirror is not flipped to 'error' ahead of it.
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('queued');
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1' AND entry_type = 'reversal'`)).toBe(0);
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'queued' });
+  });
+
   it('a duplicate kickoff of the in-flight note neither re-queues nor debits again', async () => {
     await seedUser('alice');
     await seedWorkspace('workspace_alice', 'alice');
