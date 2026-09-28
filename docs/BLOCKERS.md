@@ -5,19 +5,27 @@ run; each item has a safe reversible default already applied. Grouped by type.
 
 ## 1. Needs your action before/at A4 (repo & infra)
 
-- [ ] **Enable branch protection (yours).** `main` and `integration` are pushed and in use (PRs into
-      `integration`, promotions to `main`). Neither branch is protected yet: the GitHub API answers "Branch not
-      protected". Run `scripts/github-settings.sh --apply` (required checks, no direct pushes, the approval-gated
-      `production` Environment).
+- [x] **Branch protection (checked 2026-09-28).** Both branches are protected by active rulesets
+      (`gh api repos/Algorythmos-AI/algominutes/rulesets`).
+      - `integration`: merge queue, pull requests only, no deletion or force-push, and 22 required checks,
+        including `site-build`, `ios-test` and `analyze (swift)`.
+      - `main`: `protect-main`.
+      - Kept as reviewed code in `scripts/github-settings.sh` (DECISIONS 2026-09-28).
 - [ ] **Rotate the exposed Gemini API key + purge source history** (EXTRACTION-AUDIT §5). Source-side,
       in `~/src/wasssup-meeting`; not touched by this run.
 
 ## 2. A4 provisioning
 
-**Staging: paused since 2026-08-27** (Cloud SQL `activation_policy` NEVER, no Cloud Run services). Firebase
-is enabled (Blaze), Google sign-in on, Web, Android and iOS apps registered (the configs are git-ignored).
-Resuming it is one reviewed `terraform apply` (runbook `resume-staging-and-deploy.md`), then the first
-deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both). **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
+**Staging: up since 2026-09-26.** The owner applied `reviewed-f8ba5fc` on 2026-09-26, then `reviewed-195bb02`,
+then `reviewed-5e1a3fb` on 2026-09-27. The first deploy (run 36217054635) passed migrate, vertex-smoke, rollout
+and both smokes, and `deploy-staging` has been green since.
+- Firebase sign-in on staging (checked 2026-09-28 through the Identity Toolkit admin API): **Anonymous**,
+  **Apple** and **Google** are enabled.
+- The web app signs in end to end at `staging.algominutes.algorythmos.com/app`, and a recording became a
+  ready note (2026-09-28). `node scripts/check-signin-chain.mjs --env staging` passes 12/12.
+- Paused 2026-08-27 to 2026-09-26 for cost (Cloud SQL `activation_policy` NEVER).
+
+**Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
 
 - [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
       `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).
@@ -34,9 +42,13 @@ deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both).
       server moved in #170, the iOS app in its "nothing to trip on" PR. The web's `apiUrl.ts` still names
       `api.algominutes.com`; the web isn't deployed, and it moves with its `/v1` migration.
 - [ ] **Owner:** turn on auto-renew for `algorythmos.com` (expires 2026-12-06); add the Zoho aliases.
-- [ ] Staging's **Browser** API key (auto-created by Firebase) allows the referrers `localhost` and
-      `https://algominutes.com/*`. Set it to the real site before any web deploy. Referrers can be
-      spoofed by non-browser callers, so this is hygiene, not access control.
+- [x] Staging's **Browser** API key allows the staging site's referrers (2026-09-27).
+      `check-signin-chain.mjs` checks both referrers, and its 25 APIs, on every run. Referrers can be spoofed
+      by non-browser callers, so this is hygiene, not access control.
+- [ ] **Owner: rotate the staging Browser key.** A copy was committed in eb49c4c, which was force-pushed away
+      but is still reachable on GitHub. The zero-downtime steps are in `docs/runbooks/site.md` and the
+      2026-09-27 plan.
+      - Blast radius, checked by hash: the web app only. iOS and the deploy smoke use the separate iOS key.
 - ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
   `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
   `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).
@@ -1212,11 +1224,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Before App Store submission:** a server-side kill switch for broadcast (the top App Review risk),
   and review notes that explain the feature.
   - [x] **Server side (api-broadcast-kill-switch PR):** `GET /v1/config` answers `{ broadcastCapture }`
-    (contract `AppConfigResponse`); `BROADCAST_CAPTURE=off` on the api turns it off, anything else leaves it
-    on. To flip it, add the variable to the api's env in `infra/terraform/modules/environment/cloud-run.tf`
-    (one line, then plan and apply); it isn't wired yet, to keep the saved staging plan current.
-  - [ ] **iOS:** read `/v1/config` at launch and on foreground, and hide *Capture audio from another app*
-    when it's off (keep the last answer; hidden until the first one).
+    (contract `AppConfigResponse`). `BROADCAST_CAPTURE=off` on the api turns it off; anything else leaves it on.
+    - It's wired: `var.broadcast_capture` reaches the api's env (`cloud-run.tf`), and staging sets it `"on"`
+      (`envs/staging/main.tf`).
+    - To flip it, change that variable, then plan and apply.
+  - [x] **iOS reads it** (checked 2026-09-28): `APIClient.swift` fetches `v1/config`, `AppSwitches.swift`
+    keeps the answer, and `RecorderFlow.swift` shows *Capture audio from another app* only when
+    `broadcastCapture` is on.
+  - [x] **Web reads it too:** `RecordPage.tsx` offers call capture only when `/v1/config` says so (#206).
 - [ ] **Queued:** the extension writes `.m4a` with AVAssetWriter, so if iOS kills it (a 50 MB memory
   limit) mid-capture, the capture is lost. AVAudioFile can write ADTS, but the two sources run on
   different clocks. Measure how often it happens before redesigning.
@@ -1398,8 +1413,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   The superseded `reviewed-2026-09-25d.tfplan` is deleted.
 - [x] **Checked 2026-09-26:** `run.managed.requireInvokerIam` is not enforced at the organization, so
   `invoker_iam_disabled` is allowed (runbook §1).
-- [ ] **Yours:** apply that plan (the runbook's "plan is current" check first) and run the first deploy in
-  the same sitting (§3), by 2026-10-10.
+- [x] **Applied** (2026-09-26), and the first deploy passed in the same sitting (run 36217054635). Staging is
+  up (§2).
 - [ ] **Yours, after your first sign-in:** re-plan with `TF_VAR_admin_uids` (runbook §5), so the
   dead-letter view answers you.
 
@@ -1407,7 +1422,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
 - [x] `apps/site` built: pages, legal copy with the true facts (L21), `vercel.json` headers and CSP, the
       `site-build` CI job, `site-smoke`, uptime checks, and the runbook (`docs/runbooks/site.md`).
-- [ ] **Owner:** re-apply `bash scripts/github-settings.sh --apply`, so `site-build` becomes a required check.
+- [x] `site-build` is a required check on `integration`'s ruleset (checked 2026-09-28).
 - [ ] **Owner:** `terraform apply` staging: the five site uptime checks and alert, and
       `staging.algominutes.algorythmos.com` in the api's `allowed_origins` (for the Phase 2 web app).
 - [ ] **Owner:** create the Zoho aliases `support@` and `privacy@algorythmos.com`. The published pages name
@@ -1623,3 +1638,30 @@ identifier … Stop and ask. Never invent one"). Provide each and A4 can proceed
 | 11 | **Domain(s)** | web, API, CORS | ✅ Site `algominutes.algorythmos.com`; api on `run.app` (DECISIONS, 2026-09-26). |
 | 12 | **GCP billing budget + daily spend cap figures** (§4.6) | cost circuit breaker | Needed before first load test. |
 | 13 | **Stripe / App Store Connect / Play Console accounts** | billing (A9) | Enrol both small-business programmes before first sale. |
+
+## Online meetings (`docs/plans/MEETINGS.md`, 2026-09-28)
+
+The notetaker ships behind a `/v1/config` switch that defaults to off. Until the items below are done it's built
+and tested, but no bot joins a real meeting.
+
+- [ ] **Owner, M0: two Recall.ai accounts in ap-northeast-1 (Tokyo),** one for staging and one for prod.
+  - Recall has no Australian region, and a pay-as-you-go account is tied to its region.
+  - Apply for Recall's startup rate (US$0.25/h for the first 10k hours).
+  - Put each account's API key and webhook secret (`whsec_…`) into that project's Secret Manager. They are never
+    typed into a page or a file by an agent.
+- [ ] **Owner, M0: Recall's DPA and a no-training confirmation.** Required before any tester's meeting goes to
+  Recall (privacy page, APP 8).
+- [ ] **Owner, M0 lead times:**
+  - Google OAuth consent-screen verification for the Calendar scope (weeks).
+  - A Zoom Marketplace app (4–6 weeks of review).
+  - Chrome Web Store and Edge Add-ons developer accounts.
+- [ ] **Owner: a written legal opinion on recording meetings** (`docs/CONSENT.md` §2.4 and §4). NSW requires
+  the consent of all parties. Until it arrives, the notetaker stays with allowlisted testers.
+- [ ] **Owner, only if the M0 spike shows guest bots are refused too often:** a dedicated paid Google Workspace
+  with SAML for a signed-in Meet bot. Its account name replaces the bot name, so call it "AlgoMinutes Notetaker".
+- [ ] **Owner: apply the staging plans** for #236 (the summarize retry window and the `gemini_transient` alert)
+  and #238 (queue dispatch capacity) once they merge. Re-plan first, and redeploy after (a saved plan resets
+  Cloud Run images).
+- [ ] **Before 2026-10-20: prove gemini-3.5-flash on a long recording.** It becomes the only Sydney model then
+  (DECISIONS 2026-09-28). Upload a meeting of 45–60 minutes on staging; the check is the summarizer's
+  `gemini_ok` with `finishReason: STOP` and chapters present, with no `gemini_output_truncated`.
