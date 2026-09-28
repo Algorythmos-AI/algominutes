@@ -418,6 +418,17 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     the test caught `pdf.destroy is not a function` (and `web-build` the same in `documentText.ts`): pdf.js 5
     removed `PDFDocumentProxy.destroy()`. Both now call `loadingTask.destroy()`, which works on 4 and 6
     (pdfjs-destroy PR). Then rebase #107.
+- [ ] **TypeScript 6 → 7** (#221 declined, 2026-09-28; the repo moved from 5.8/5.9 to 6.0.3, the newest
+  version the toolchain supports). TypeScript 7 is the native (Go) compiler: its package exports only a version,
+  and the parser is under `typescript/unstable/*`. Three things can't run on it yet:
+  - `typescript-eslint` accepts TypeScript `>=4.8.4 <6.1.0` ("does not support TS 7.0");
+  - `@astrojs/check` (the site's `astro check`) accepts `^5 || ^6`;
+  - our AST gates use the compiler API (`scripts/check-no-silent-catch.mjs`, `check-no-direct-firestore.mjs`,
+    `check-no-direct-pg-writes.mjs`, `tests/trace-propagation.test.ts`).
+
+  Our own code already type-checks on 7 (6.0.3 needed the same one-line `sse.ts` fix). Next step: when
+  `typescript-eslint` and `@astrojs/check` support 7, lift the Dependabot ignore. Keep the gates on the
+  stable API by adding `typescript` 6 under an npm alias for them, not by porting them to the unstable one.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
