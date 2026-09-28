@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { getPool, markQueued, deleteAccountData } from '@algominutes/db';
+import { getPool, markQueued, deleteAccountData, queueNoteRun } from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
 
 // POST /v1/process end to end against real Postgres. Only the network edges are
@@ -203,3 +203,63 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(enqueued).toHaveLength(0);
   });
 });
+
+// A notetaker's note is created 'recording' while its bot is in the meeting
+// (docs/plans/MEETINGS.md). Nothing can process it until its own ingest ends
+// the recording, through the same queueNoteRun the api uses.
+describe('a note still recording', () => {
+  async function recordingNote(uid: string, noteId: string) {
+    await seedUser(uid);
+    await seedWorkspace(`workspace_${uid}`, uid);
+    await seedNote(noteId, `workspace_${uid}`, uid);
+    await pool.query(`UPDATE notes SET status = 'recording' WHERE id = $1`, [noteId]);
+    noteDoc(uid, noteId);
+  }
+
+  it('POST /v1/process refuses it with 409, and charges and queues nothing', async () => {
+    await recordingNote('alice', 'rec1');
+    const out = await kickoff('alice', upload('alice', 'rec1'));
+    expect(out).toMatchObject({ status: 409, body: { error: 'This note is still recording.' } });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec1' AND status = 'recording'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec1'`)).toBe(0);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it("the notetaker's ingest queues it through the same kickoff, without the quota gate", async () => {
+    await recordingNote('alice', 'rec2');
+    const r = await queueNoteRun({
+      firestore: fakeDb as never,
+      noteId: 'rec2', workspaceId: 'workspace_alice', uid: 'alice',
+      type: 'online_meeting', storagePath: 'recordings/workspace_alice/rec2.mp3', mimeType: 'audio/mpeg',
+      durationSec: 1800, allowRecording: true, quota: false, usageBudget: false,
+      traceId: 'trace-2', log: quietLog,
+    });
+    expect(r.kind).toBe('queued');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec2' AND status = 'queued'`)).toBe(1);
+    const debits = await pool.query(`SELECT minutes::int AS minutes FROM usage_ledger WHERE note_id = 'rec2' AND entry_type = 'debit'`);
+    expect(debits.rows).toEqual([{ minutes: 30 }]);
+    expect(enqueued).toEqual([expect.objectContaining({ kind: 'kickoff', noteId: 'rec2', uid: 'alice', type: 'online_meeting' })]);
+  });
+
+  it('a duplicate ingest (a replayed task) queues it once and charges once', async () => {
+    await recordingNote('alice', 'rec3');
+    const input = {
+      firestore: fakeDb as never, noteId: 'rec3', workspaceId: 'workspace_alice', uid: 'alice',
+      type: 'online_meeting', storagePath: 'recordings/workspace_alice/rec3.mp3', durationSec: 600,
+      allowRecording: true, quota: false, usageBudget: false, log: quietLog,
+    };
+    expect((await queueNoteRun(input)).kind).toBe('queued');
+    expect((await queueNoteRun(input)).kind).toBe('in_flight');
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec3' AND entry_type = 'debit'`)).toBe(1);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('markQueued itself refuses a recording note under the lock unless the caller is its ingest', async () => {
+    await recordingNote('alice', 'rec4');
+    const base = { noteId: 'rec4', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'online_meeting' };
+    expect(await markQueued(fakeDb as never, base, quietLog)).toEqual({ queued: false, status: 'recording' });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec4' AND status = 'recording'`)).toBe(1);
+    expect(await markQueued(fakeDb as never, { ...base, allowRecording: true }, quietLog)).toEqual({ queued: true, status: 'queued' });
+  });
+});
+
