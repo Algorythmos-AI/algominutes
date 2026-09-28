@@ -3,6 +3,52 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## integration's protection is a ruleset, so the merge queue is reviewed code (2026-09-28)
+
+- **Context.** The owner turned on four settings in the UI: a merge queue in integration's classic protection
+  rule, auto-merge, "Always suggest updating pull request branches", and rebase merging.
+  `scripts/github-settings.sh` set none of them.
+- **The classic API can't hold a queue.**
+  - `PUT /repos/{owner}/{repo}/branches/{branch}/protection` has no merge-queue field (REST reference,
+    "Update branch protection"), and its GET doesn't report one
+    ([community #50893](https://github.com/orgs/community/discussions/50893)).
+  - GitHub doesn't document whether that PUT keeps a queue made in the UI, and nothing in the API could
+    restore one. So `--apply` must not depend on it.
+- **Rulesets can hold one.** A repository ruleset's `merge_queue` rule takes all seven queue settings
+  (`POST /repos/{owner}/{repo}/rulesets`). Rulesets and branch protection "work alongside each other, and all
+  applicable rules are enforced" ("About rulesets").
+- **Change: integration's protection moves into one ruleset, `integration`.**
+  - It holds PR-only, squash only, no force-push or deletion, conversations resolved, the same 22 checks, no
+    bypass actors (admins included) and the queue.
+  - Why all of it, not only the queue: a classic rule plus a ruleset could carry two queues that disagree, and
+    rule layering applies "the most restrictive version", which means nothing for a merge method.
+  - `--apply` writes the ruleset (a PUT by id when it exists, else a POST), then deletes integration's classic
+    rule, and the UI's queue with it. If GitHub refuses the ruleset, the script stops before the delete.
+- **Queue settings.**
+  - Squash: feature PRs squash, and the live queue said MERGE.
+  - A 90-minute check timeout: the live queue said 60, and the Swift CodeQL job takes about 40.
+  - "Only merge non-failing pull requests" (ALLGREEN).
+  - Build 5 at once; merge 1–5 per group; wait up to 5 minutes to fill a group.
+- **Not strict.** The queue "provides the same benefits as the **Require branches to be up to date before
+  merging** branch protection, but does not require a pull request author to update their pull request branch"
+  ("Managing a merge queue").
+- **Repo settings.** `allow_auto_merge` and `allow_update_branch` are now set by the script. `allow_rebase_merge`
+  stays false, so `--apply` unticks the rebase box.
+- **main is unchanged:** classic protection, strict, `guard` required, no queue.
+- **Required checks.**
+  - The script's 22 are exactly the names #225's CI reported, and each runs on `merge_group`.
+  - The live list couldn't be read where this was written (no `gh`, no API access). BLOCKERS still has
+    `site-build` waiting on a re-apply, so the owner's dry run should show `+ site-build`.
+  - The dry run now prints how each branch's live required checks (classic and rulesets) differ from the
+    script's.
+- **Not verified.**
+  - The docs' rulesets page shows "Require merge queue" for GHEC and GHES only
+    (`data/features/repo-rules-merge-queue.yml`), while the github.com REST reference lists the rule. If
+    github.com refuses it, the script stops before the delete, and integration keeps its classic rule and
+    queue.
+  - Apply with the queue empty. For a moment the classic queue and the ruleset's both apply, and the docs don't
+    say what that does to queued PRs.
+
 ## integration merges through a merge queue (2026-09-28)
 
 - **Why.** `integration`'s protection requires a PR to be up to date. So each merge left every other open PR
@@ -13,10 +59,8 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   40-minute Swift analysis still runs only when the group changes the iOS app.
 - **`dependency-review`** skips in the queue, because each PR was reviewed on its own; a skipped job satisfies a
   required check.
-- **Queue settings (the owner's, in Settings → Branches):**
-  - squash;
-  - "only merge non-failing pull requests";
-  - a 90-minute check timeout (the Swift analysis takes about 40 minutes).
+- **Queue settings:** first set by hand in Settings → Branches; now reviewed code in
+  `scripts/github-settings.sh` (the entry above).
 
 ## The app icon is a Liquid Glass "ai", 85% of the tile, in the official Algorythmos gradient (2026-09-27)
 
