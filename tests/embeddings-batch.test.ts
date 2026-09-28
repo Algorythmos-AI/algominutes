@@ -66,4 +66,19 @@ describe('embedChunks', () => {
     await expect(embedChunks({ chunks: chunks(3), log, project: 'p', location: 'l', fetchImpl: impl, getToken, sleep: async () => {} }))
       .rejects.toThrow('embedding_missing_values');
   });
+
+  it('aborts a hung request after its timeout and retries it, then gives up', async () => {
+    let calls = 0;
+    // Answers only via the abort signal: a hung connection.
+    const hang = (_url: string, init: { signal?: AbortSignal }) => {
+      calls++;
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const started = Date.now();
+    await expect(embedChunks({ chunks: chunks(1), log, project: 'p', location: 'l', fetchImpl: hang, getToken, sleep: async () => {}, timeoutMs: 50 }))
+      .rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(calls).toBe(EMBED_MAX_ATTEMPTS);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
 });
+
