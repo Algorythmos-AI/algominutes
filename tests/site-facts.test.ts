@@ -46,6 +46,34 @@ describe('where data is processed', () => {
     expect(byId['speech-to-text'].where).toMatch(/outside Australia/);
   });
 
+  it('Recall.ai (the notetaker) is disclosed in the region the service is configured for, outside Australia', () => {
+    // RECALL_REGION's default, and any environment's override, must be the region the policy names.
+    const tfDefault = /variable "recall_region"\s*\{[^}]*default\s*=\s*"([\w-]+)"/.exec(variables)![1];
+    const overrides = ['staging', 'prod'].map((env) => /^recall_region\s*=\s*"([\w-]+)"/m.exec(read(`infra/terraform/envs/${env}/terraform.tfvars`))?.[1] ?? tfDefault);
+    expect(overrides).toEqual([tfDefault, tfDefault]);
+    expect(byId['recall-ai'].region).toBe(tfDefault);
+    // The client's own fallback agrees, and it calls that region's API.
+    const index = read('services/meetings/src/index.js');
+    expect(/RECALL_REGION \|\| '([\w-]+)'/.exec(index)![1]).toBe(tfDefault);
+    expect(read('services/meetings/src/lib/recall-client.js')).toMatch(/https:\/\/\$\{region\}\.recall\.ai/);
+    expect(byId['recall-ai'].region).not.toBe(regionDefault);
+  });
+
+  it('what the notetaker page promises is what the bot is configured to do', () => {
+    const params = read('services/meetings/src/lib/recall-client.js');
+    // "Not video": video is on by default at Recall, so it's turned off explicitly.
+    expect(params).toMatch(/video_mixed_mp4:\s*null/);
+    // "deleted automatically after N hours".
+    expect(Number(/retentionHours = (\d+)/.exec(params)![1])).toBe(processing.notetakerRetentionHours);
+    expect(byId['recall-ai'].data).toContain(`${processing.notetakerRetentionHours} hours`);
+    // "leaves after N minutes" if nobody admits it.
+    expect(Number(/waiting_room_timeout:\s*(\d+)/.exec(params)![1])).toBe(processing.notetakerWaitMinutes * 60);
+    // "and again for anyone who joins later".
+    expect(params).toMatch(/on_participant_join:/);
+    // The notice links the page, on the public site.
+    expect(read('services/meetings/src/lib/notice.js')).toContain("NOTETAKER_PAGE = 'https://algominutes.algorythmos.com/notetaker'");
+  });
+
   it('names no provider the code no longer uses', () => {
     const site = [JSON.stringify(processing), ...fs.readdirSync('apps/site/src/pages', { recursive: true })
       .filter((f) => String(f).endsWith('.astro'))
@@ -139,6 +167,18 @@ describe('every link the apps and server build has a page', () => {
     const paths = [...billing.matchAll(/\$\{publicSiteUrl\(\)\}(\/[\w/-]+)/g)].map((m) => m[1]);
     expect(paths.sort()).toEqual(['/billing', '/billing/cancel', '/billing/success']);
     for (const p of paths) expect(has(p), p).toBe(true);
+  });
+
+  it('the notetaker\'s chat notice (the page a meeting is sent to)', () => {
+    const notice = read('services/meetings/src/lib/notice.js');
+    const url = /NOTETAKER_PAGE = '([^']+)'/.exec(notice)![1];
+    expect(url.startsWith('https://algominutes.algorythmos.com/')).toBe(true);
+    expect(has(new URL(url).pathname)).toBe(true);
+    // The page names the processor from the same facts the policy renders.
+    const page = read('apps/site/src/pages/notetaker.astro');
+    expect(page).toMatch(/processors\.find\(\(p\) => p\.id === 'recall-ai'\)/);
+    expect(page).toMatch(/facts\.notetakerRetentionHours/);
+    expect(page).toMatch(/facts\.notetakerWaitMinutes/);
   });
 
   it('the store listings (Play\'s account-deletion URL)', () => {

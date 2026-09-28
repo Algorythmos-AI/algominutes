@@ -1,0 +1,65 @@
+---
+import Base from '../layouts/Base.astro';
+import { facts, operator, processors } from '../lib/site';
+
+// The page the notetaker's chat notice links to (services/meetings/src/lib/notice.js
+// NOTETAKER_PAGE). Its readers are mostly people in someone else's meeting, not
+// AlgoMinutes users: what the notetaker is, who sent it, what it records, where
+// that goes, and what they can do about it. It never claims recording is lawful
+// anywhere (docs/CONSENT.md §3).
+const recall = processors.find((p) => p.id === 'recall-ai')!;
+---
+<Base
+  title="The AlgoMinutes notetaker"
+  description="Why an AlgoMinutes notetaker is in your meeting, what it records, where that goes, and what you can do."
+>
+  <div class="prose">
+    <h1>The AlgoMinutes notetaker</h1>
+    <p>
+      If a participant called "<em>Name</em>'s notetaker (AlgoMinutes)" joined your meeting, someone in the meeting
+      sent it: an AlgoMinutes user who wants a transcript and summary of the meeting. It joins as a visible
+      participant, posts a notice in the meeting chat when it joins (and again for anyone who joins later), and
+      records only while it's in the meeting.
+    </p>
+
+    <h2 id="what">What it records</h2>
+    <ul>
+      <li>The meeting's audio, while the notetaker is in the meeting. Not video.</li>
+      <li>The names participants show in the meeting, and when each person spoke, so the transcript says who said what.</li>
+      <li>We don't keep email addresses or the meeting chat.</li>
+    </ul>
+    <p>
+      The recording becomes a note in the AlgoMinutes account of the person who sent the notetaker: a transcript, a
+      summary, action items and decisions. It isn't shared with anyone else, and nobody else's account gets a copy.
+    </p>
+
+    <h2 id="control">What you can do</h2>
+    <ul>
+      <li><strong>Remove it.</strong> The meeting's host can remove the notetaker at any time, like any participant. It then stops recording and leaves.</li>
+      <li><strong>Don't let it in.</strong> In Google Meet, the notetaker waits to be admitted, like a guest. If nobody admits it, it leaves after {facts.notetakerWaitMinutes} minutes without recording anything.</li>
+      <li><strong>Ask for the recording to be deleted.</strong> Ask the person who sent the notetaker: they can delete the note, and its recording, from AlgoMinutes at any time. You can also contact us at <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>.</li>
+    </ul>
+
+    <h2 id="where">Where the recording goes</h2>
+    <p>
+      The notetaker is run for us by {recall.service}, in {recall.where}. Recall.ai holds the recording only until
+      AlgoMinutes has its copy, then it's deleted there; anything left is deleted automatically after {facts.notetakerRetentionHours} hours.
+      AlgoMinutes then stores and processes it in Sydney, Australia, as our
+      <a href="/privacy#processors">Privacy Policy</a> describes. We don't use recordings to train AI models.
+    </p>
+
+    <h2 id="consent">Consent</h2>
+    <p>
+      Recording laws differ between places, and many require everyone's consent. The person who sends the notetaker
+      is responsible for telling the meeting and getting any consent the law requires; our
+      <a href="/terms">Terms</a> require it. The notetaker's visible name and its chat notice are there so nobody is
+      recorded without knowing.
+    </p>
+
+    <h2 id="contact">Questions</h2>
+    <p>
+      Contact us at <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>. {operator.name} runs AlgoMinutes;
+      see our <a href="/privacy">Privacy Policy</a> for your rights and how to complain.
+    </p>
+  </div>
+</Base>
