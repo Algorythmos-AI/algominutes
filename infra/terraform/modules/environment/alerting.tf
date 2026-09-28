@@ -48,6 +48,12 @@ locals {
       severity  = "WARNING"
       doc       = "More than two notes failed in 30 minutes. See note_failed (noteId, reason) and the transcoder/summarizer logs under the same traceId."
     }
+    gemini_transient = {
+      threshold = 20
+      window    = "900s"
+      severity  = "WARNING"
+      doc       = "Gemini answered overloaded (429/503) more than 20 times in 15 minutes. From 2026-10-20 the ladder has one Sydney model, so the summarize queue retries for about an hour before a note fails. Check Vertex status for australia-southeast1 and the gemini_transient lines (model, attempt); if it persists, consider Provisioned Throughput (DECISIONS 2026-09-28)."
+    }
     gemini_model_unavailable = {
       threshold = 0
       window    = "3600s"

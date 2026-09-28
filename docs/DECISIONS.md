@@ -3,6 +3,34 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## After gemini-2.5-flash retires, summaries run on one Sydney model (2026-09-28)
+
+- **Context.**
+  - The ladder is gemini-3.5-flash, then gemini-2.5-flash. 2.5-flash retires on **2026-10-20**.
+  - A free `countTokens` probe of the Sydney endpoint on staging (`scripts/probe-vertex-models.mjs`) found that of
+    16 Gemini ids, **only 3.5-flash and 2.5-flash are served in australia-southeast1**. Every 3.x pro,
+    3.1/3.6/3.7/3.8-flash, 2.5-pro and all flash-lite returned 404.
+  - So from 2026-10-20 there's no in-region second rung.
+- **Decision (owner).**
+  - Keep every Gemini call in Sydney (residency, DECISIONS A4) and run on one rung.
+  - Ride out an overload with a longer retry window on the **summarize** queue only: 10 attempts, backoff up to
+    600 s.
+  - That's about 21 minutes of backoff plus up to 10 × the ladder's 240 s budget, so about an hour before a note
+    fails.
+  - The summarizer is deployed with the same `MAX_TASK_ATTEMPTS` (`summarize_max_attempts`), so its dead-letter
+    write still fires on the true last attempt. `tests/task-config.test.ts` pins the pairing.
+  - transcode keeps 5 attempts, because a transcode retry can re-run paid speech-to-text.
+- **Visibility.**
+  - A new log alert, `gemini_transient`: more than 20 overloads in 15 minutes.
+  - The model tripwire now requires, 45 days out, either a live second rung or this recorded decision
+    (`SINGLE_RUNG_DECISION` in `models.cjs`). Losing the fallback can't happen silently again.
+- **Rejected.**
+  - **Falling back to another region:** summaries rarely wait, but transcripts would be processed outside
+    Australia, so the privacy page would have to change.
+  - **Provisioned Throughput in Sydney:** guaranteed capacity, but a monthly commitment that isn't worth it before
+    real traffic. Revisit if `gemini_transient` fires in production.
+- **Owner step:** the queue and env change is Terraform, so the owner applies the next reviewed staging plan.
+
 ## Online meetings are captured by a Recall.ai notetaker bot first (2026-09-28)
 
 - **Context.**

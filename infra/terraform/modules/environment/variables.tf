@@ -78,6 +78,12 @@ variable "task_max_attempts" {
   default     = 5
 }
 
+variable "summarize_max_attempts" {
+  description = "Max delivery attempts for the summarize queue alone, with a 600s max backoff: about an hour to ride out a Gemini overload, because from gemini-2.5-flash's retirement (2026-10-20) the ladder has one Sydney model (DECISIONS 2026-09-28). The summarizer is deployed with MAX_TASK_ATTEMPTS set to this same value."
+  type        = number
+  default     = 10
+}
+
 # --- Cloud Run ---------------------------------------------------------------
 
 variable "connection_budget" {
