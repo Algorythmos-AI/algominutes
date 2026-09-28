@@ -94,11 +94,16 @@ const TRY_AGAIN = "We couldn't queue your audio. Please try again.";
 
 // Past markQueued the run was charged and never started: fail the note and
 // refund in the failure's own transaction (net-guarded, so a note never charged
-// gets nothing back). Never throws: the caller is already on an error path.
+// gets nothing back). Never throws: the caller is already on an error path and
+// answers the client with a typed failure (no Cloud Task retries this). If
+// Postgres can't take the failure, markError throws before its mirror, so
+// neither store says 'error': the note stays as Postgres has it. Once queued
+// and charged, a client retry re-queues it after IN_FLIGHT_STALE_MS, and the
+// sweep fails and refunds it after STUCK_NOTE_MS.
 async function failNote(input: KickoffInput, userMsg: string, event: string): Promise<void> {
-  const { firestore, noteId, workspaceId, log } = input;
+  const { firestore, noteId, workspaceId, log, traceId } = input;
   const refund = { reason: 'refund:enqueue_failed', idempotencyKey: `${noteId}:refund:enqueue` };
-  await markError(firestore, { noteId, workspaceId, errorMessage: userMsg, refund }, log).catch((err: unknown) =>
+  await markError(firestore, { noteId, workspaceId, errorMessage: userMsg, refund, traceId }, log).catch((err: unknown) =>
     log.error({ err, event }, 'mark_error_failed'),
   );
 }
