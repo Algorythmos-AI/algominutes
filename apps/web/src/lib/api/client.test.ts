@@ -64,6 +64,8 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'updateNote', run: (c) => c.updateNote({ noteId: 'n1', workspaceId: 'w1', title: 'T' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/update`, body: { noteId: 'n1', workspaceId: 'w1', title: 'T' } },
   { name: 'deleteNote', run: (c) => c.deleteNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/delete`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'noteAudioUrl', run: (c) => c.noteAudioUrl({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/audio-url`, body: { noteId: 'n1', workspaceId: 'w1' } },
+  { name: 'createMeetingBot', run: (c) => c.createMeetingBot({ meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' }), method: 'POST', url: `${ORIGINS.api}/v1/meetings/bots`, body: { meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' } },
+  { name: 'cancelMeetingBot', run: (c) => c.cancelMeetingBot('b/1'), method: 'POST', url: `${ORIGINS.api}/v1/meetings/bots/b%2F1/cancel`, body: {} },
   { name: 'setSpeakers', run: (c) => c.setSpeakers('n/1', { workspaceId: 'w1', speakers: [] }), method: 'POST', url: `${ORIGINS.api}/v1/notes/n%2F1/speakers`, body: { workspaceId: 'w1', speakers: [] } },
   { name: 'regenerateSummary', run: (c) => c.regenerateSummary({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/regenerate-summary`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'noteFeedback', run: (c) => c.noteFeedback({ noteId: 'n1', workspaceId: 'w1', rating: 4 }), method: 'POST', url: `${ORIGINS.api}/v1/notes/feedback`, body: { noteId: 'n1', workspaceId: 'w1', rating: 4 } },
@@ -105,7 +107,7 @@ describe('every call sends the right request', () => {
       .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
       .sort();
     const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
-      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1')}`)
+      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)
       .sort();
     expect(covered).toEqual(operations);
   });

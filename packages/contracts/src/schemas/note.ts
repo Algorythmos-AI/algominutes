@@ -12,6 +12,7 @@
 // a subset of these fields — where they diverge, a `// TODO(contracts):` note
 // records it.
 import { z } from './zod';
+import { NoteNotetaker, NoteSourceKind } from './meetings';
 
 /**
  * `processing` is retained for back-compat with notes created pre-Phase-3.
@@ -127,6 +128,11 @@ export const Note = z
     progress: NoteProgress.optional(),
     retryAttempt: z.number().int().optional(),
     lastProgressAt: z.string().optional(),
+    // Online meetings (schemas/meetings.ts): how the audio arrived, and the
+    // notetaker's state on a bot note. Optional, open-string values, so builds
+    // in the field keep reading notes that carry them.
+    sourceKind: NoteSourceKind.optional(),
+    notetaker: NoteNotetaker.optional(),
   })
   .openapi('Note');
 
