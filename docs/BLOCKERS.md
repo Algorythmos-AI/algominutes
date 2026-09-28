@@ -379,7 +379,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Node 24 → 26 (base images + `engines`).** Node 26 enters LTS around late
   October 2026. Move all 8 service images together, run the boot smoke plus a staging
   deploy, and update `engines`. Never move to an odd major: Dependabot proposed
-  `node:25`, which is already EOL (#20, declined).
+  `node:25`, which is already EOL (#20, declined). Move `@types/node` to 26 in the same PR: Dependabot holds
+  its majors (it proposed 26 while production ran Node 24, #229, declined), and every workspace pins it to the
+  runtime's major (`^24`).
 - [x] **Done (web-vite-8 PR):** vite 8.3, `@vitejs/plugin-react` 6.1 and `@tailwindcss/vite` 4.3. The build
   passes (and the `web-build` CI job keeps it so). `vite.config.ts` uses `import.meta.dirname`, ready for
   vite's native config loader. Was: **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6

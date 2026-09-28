@@ -37,6 +37,11 @@ updates:
       # invariant gates can't run on it. Held at 6 until they support 7 (BLOCKERS).
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
+      # Node's types follow the Node runtime (node:24 images, CI node-version 24),
+      # so a newer major would type APIs production doesn't have. They move with
+      # the Node 26 upgrade (BLOCKERS), not on their own.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       dev-tooling:
         dependency-type: development
