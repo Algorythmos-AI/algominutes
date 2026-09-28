@@ -1128,8 +1128,10 @@ function isFirestoreAlreadyExists(err: unknown): boolean {
  * client's own note has (status 'recording', type 'online_meeting': values
  * every build in the field accepts), created only if absent.
  *
- * Safe to repeat, and meant to be: a replayed create or ingest task calls it
- * first, which also writes a mirror doc a failed earlier attempt left missing.
+ * Safe to repeat, and meant to be: the api calls it on every attempt of a
+ * notetaker request, before it queues create_bot (so no bot is sent without
+ * its note), which also writes a mirror doc a failed earlier attempt left
+ * missing. Ingest calls it again before it queues the run.
  * A note deleted meanwhile never keeps a doc: on 'deleted' the doc is removed,
  * and a failure to remove it throws, so the task retries.
  */

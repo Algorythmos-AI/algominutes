@@ -41,9 +41,10 @@ function world(over: Partial<{ status: Status; recallBotId: string | null; cance
     getRecallEvent: async (id: number) => events.find((e) => e.id === id) ?? null,
     markRecallEventProcessed: async (id: number) => { calls.push(`processed:${id}`); const e = events.find((x) => x.id === id); if (e) e.processed = true; },
     attachRecallBot: async (_id: string, rid: string) => {
-      if (bot.recallBotId && bot.recallBotId !== rid) return { attached: false, recallBotId: bot.recallBotId };
+      if (RANK[bot.status as Status] >= 100) return { attached: false, recallBotId: bot.recallBotId, terminal: true };
+      if (bot.recallBotId && bot.recallBotId !== rid) return { attached: false, recallBotId: bot.recallBotId, terminal: false };
       bot.recallBotId = rid; bot.status = 'scheduled'; bot.statusRank = RANK.scheduled; calls.push(`attach:${rid}`);
-      return { attached: true, recallBotId: rid };
+      return { attached: true, recallBotId: rid, terminal: false };
     },
     advanceNotetaker: async (_fs: unknown, { status, failureReason }: { status: Status; failureReason?: string }) => {
       if (RANK[bot.status as Status] >= 100 || RANK[status] <= bot.statusRank) return { changed: false, bot };
@@ -431,5 +432,36 @@ describe('what the notetaker logs', () => {
     // A malformed carried trace is never taken.
     await u.run('cancel_bot', { meetingBotId: 'x', traceId: 'bad trace\n' });
     expect(u.lines.find((l) => l.msg === 'cancel_bot_unknown')?.traceId).not.toBe('bad trace\n');
+  });
+});
+
+describe('a bot never joins a meeting it has no business in', () => {
+  it('a cancel that lands while Recall makes the bot: the new Recall bot is removed, not attached', async () => {
+    const w = world();
+    w.recall.createBot = async (_p: any, key: string) => {
+      w.calls.push(`create:${key}`);
+      // The user cancels meanwhile: cancel_bot finds no Recall bot yet and ends ours.
+      w.bot.status = 'cancelled'; w.bot.statusRank = 100;
+      return { id: 'recall-late' };
+    };
+    expect(await w.run('create_bot', { meetingBotId: w.bot.id })).toBe(200);
+    expect(w.calls).toEqual(expect.arrayContaining(['delete:recall-late']));
+    expect(w.calls.some((c) => c.startsWith('attach:'))).toBe(false);
+    expect(w.lines.some((l) => l.msg === 'create_bot_ended_meanwhile')).toBe(true);
+  });
+
+  it('a replay of an ended bot finds and removes any Recall bot a crashed attempt made', async () => {
+    const w = world({ status: 'cancelled' });
+    w.recall.found = [{ id: 'recall-orphan' }];
+    await w.run('create_bot', { meetingBotId: w.bot.id });
+    expect(w.calls).toEqual(expect.arrayContaining(['find:meeting_bot_id=' + w.bot.id, 'delete:recall-orphan']));
+  });
+
+  it('a bot whose note was deleted is never sent', async () => {
+    const w = world();
+    w.bot.noteId = null;
+    await w.run('create_bot', { meetingBotId: w.bot.id });
+    expect(w.calls.some((c) => c.startsWith('create:'))).toBe(false);
+    expect(w.calls).toContain('status:cancelled');
   });
 });

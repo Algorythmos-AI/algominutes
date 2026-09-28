@@ -141,7 +141,7 @@ describe('reserving a notetaker', () => {
 describe('a bot\'s status', () => {
   it('only moves forward, a terminal status is final, and the meeting link is forgotten once in the call', async () => {
     const id = botOf(await reserve({ meetingUrlCiphertext: Buffer.from('secret') })).id;
-    expect(await attachRecallBot(id, 'recall-1')).toEqual({ attached: true, recallBotId: 'recall-1' });
+    expect(await attachRecallBot(id, 'recall-1')).toEqual({ attached: true, recallBotId: 'recall-1', terminal: false });
     expect((await advanceBotStatus(id, 'recording')).changed).toBe(true);
     expect((await advanceBotStatus(id, 'joining')).changed).toBe(false); // a late webhook
     expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND meeting_url_ciphertext IS NULL`, [id])).toBe(1);
@@ -150,11 +150,18 @@ describe('a bot\'s status', () => {
     expect((await getMeetingBotById(id))?.status).toBe('done');
   });
 
+  it('a Recall bot is never attached to a bot that has ended (a cancel that landed while Recall made it)', async () => {
+    const bot = botOf(await reserve());
+    await advanceBotStatus(bot.id, 'cancelled');
+    expect(await attachRecallBot(bot.id, 'recall-late')).toEqual({ attached: false, recallBotId: null, terminal: true });
+    expect((await getMeetingBotById(bot.id))?.recallBotId).toBeNull();
+  });
+
   it('a second Recall bot is never silently attached (the caller must remove it)', async () => {
     const id = botOf(await reserve()).id;
     await attachRecallBot(id, 'recall-1');
-    expect(await attachRecallBot(id, 'recall-2')).toEqual({ attached: false, recallBotId: 'recall-1' });
-    expect(await attachRecallBot(id, 'recall-1')).toEqual({ attached: true, recallBotId: 'recall-1' });
+    expect(await attachRecallBot(id, 'recall-2')).toEqual({ attached: false, recallBotId: 'recall-1', terminal: false });
+    expect(await attachRecallBot(id, 'recall-1')).toEqual({ attached: true, recallBotId: 'recall-1', terminal: false });
   });
 
   it('cancel: the sender, or a workspace owner or admin, and only on a live bot', async () => {

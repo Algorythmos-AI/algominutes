@@ -258,19 +258,21 @@ export async function getMeetingBotById(botId: string): Promise<MeetingBot | nul
  * finds). attached=false means the bot already has a DIFFERENT Recall bot: the
  * caller must remove the extra one (it would join the meeting untracked).
  */
-export async function attachRecallBot(botId: string, recallBotId: string): Promise<{ attached: boolean; recallBotId: string | null }> {
+export async function attachRecallBot(botId: string, recallBotId: string): Promise<{ attached: boolean; recallBotId: string | null; terminal: boolean }> {
+  // Never to a bot that has ended (a cancel that landed while Recall made
+  // this one): the caller removes the Recall bot instead.
   const { rows } = await getPool().query(
     `UPDATE meeting_bots SET recall_bot_id = $2, updated_at = NOW()
-      WHERE id = $1 AND (recall_bot_id IS NULL OR recall_bot_id = $2)
+      WHERE id = $1 AND (recall_bot_id IS NULL OR recall_bot_id = $2) AND status NOT IN ${TERMINAL_SQL}
       RETURNING recall_bot_id`,
     [botId, recallBotId],
   );
   if (!rows[0]) {
     const current = await getMeetingBotById(botId);
-    return { attached: false, recallBotId: current?.recallBotId ?? null };
+    return { attached: false, recallBotId: current?.recallBotId ?? null, terminal: !current || ['done', 'failed', 'cancelled'].includes(current.status) };
   }
   await advanceBotStatus(botId, 'scheduled');
-  return { attached: true, recallBotId };
+  return { attached: true, recallBotId, terminal: false };
 }
 
 /**

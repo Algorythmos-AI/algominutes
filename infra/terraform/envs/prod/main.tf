@@ -67,6 +67,14 @@ variable "broadcast_capture" {
   default = "on"
 }
 
+# The online-meeting notetaker's surfaces (GET /v1/config). Off unless named;
+# for testers in notetaker_testers only. To switch the bot on for them: plan
+# with TF_VAR_notetaker_surfaces=bot and apply.
+variable "notetaker_surfaces" {
+  type    = string
+  default = ""
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -125,10 +133,11 @@ module "environment" {
 
   # The api's CORS allowlist (the public site) and its operator/kill-switch
   # settings. A blank allowed_origins fails the plan (the api can't boot on it).
-  allowed_origins   = "https://algominutes.algorythmos.com"
-  admin_uids        = var.admin_uids
-  broadcast_capture = var.broadcast_capture
-  monthly_budget    = 300
+  allowed_origins    = "https://algominutes.algorythmos.com"
+  admin_uids         = var.admin_uids
+  broadcast_capture  = var.broadcast_capture
+  notetaker_surfaces = var.notetaker_surfaces
+  monthly_budget     = 300
 }
 
 # Re-export module outputs at the root for convenience.
