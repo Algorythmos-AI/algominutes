@@ -5,6 +5,7 @@ import {
   reserveMeetingBot, advanceBotStatus, attachRecallBot, requestBotCancel, recordRecallEvent,
   markRecallEventProcessed, listUnprocessedRecallEvents,
   markBotMediaReady, saveMeetingSpeakers, markBotIngested, getMeetingBot, getMeetingBotById,
+  getMeetingBotByRecallId, getRecallEvent, getBotOwnerName, getBotMeetingUrlCiphertext, failNotetaker, recordConsentEvent,
   enqueueRecallPurge, listPendingRecallPurges, listExhaustedRecallPurges, recordRecallPurgeAttempt, confirmRecallPurge,
   createServerNote, advanceNotetaker, deleteNote, noteIdForBot, meetingUrlHash, toNotetakerStatus, getSpeakerSegments,
   WorkspaceBoundaryError,
@@ -318,6 +319,108 @@ describe('the notetaker\'s note', () => {
     await createServerNote(fakeDb, noteInput(botId), quietLog);
     await deleteNote(fakeDb, { noteId: noteIdForBot(botId), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
     expect(await saveMeetingSpeakers({ botId, noteId: noteIdForBot(botId), participants: [], segments: [] }, quietLog)).toEqual({ gone: true });
+  });
+});
+
+describe('a notetaker that ended without a recording', () => {
+  const messageFor = (status: string, reason: string | null) => (status === 'cancelled' ? 'You cancelled.' : `Failed: ${reason}`);
+  async function liveBot(status = 'waiting_room') {
+    const bot = botOf(await reserve({ meetingUrlCiphertext: Buffer.from('sealed') }));
+    await createServerNote(fakeDb, noteInput(bot.id), quietLog);
+    await attachRecallBot(bot.id, `recall-${bot.id}`);
+    if (status !== 'scheduled') await advanceBotStatus(bot.id, status as never);
+    return bot;
+  }
+  const row = async (id: string) => (await pool.query('SELECT b.status, b.failure_reason, b.meeting_url_ciphertext, n.status AS note_status, n.error_message FROM meeting_bots b LEFT JOIN notes n ON n.id = b.note_id WHERE b.id = $1', [id])).rows[0];
+  const purge = async (id: string) => (await pool.query('SELECT leave_call, attempts FROM recall_purges WHERE recall_bot_id = $1', [`recall-${id}`])).rows;
+
+  it('in one transaction: the bot ends, its note fails with the words for it, the link is forgotten, and Recall\'s copy is queued (leaving first)', async () => {
+    const bot = await liveBot();
+    const out = await failNotetaker(fakeDb, { botId: bot.id, status: 'failed', failureReason: 'not_admitted', messageFor }, quietLog);
+    expect(out.changed).toBe(true);
+    expect(await row(bot.id)).toMatchObject({ status: 'failed', failure_reason: 'not_admitted', meeting_url_ciphertext: null, note_status: 'error', error_message: 'Failed: not_admitted' });
+    expect(await purge(bot.id)).toEqual([{ leave_call: true, attempts: 0 }]);
+    expect(docOf(bot.id)).toMatchObject({ status: 'error', errorMessage: 'Failed: not_admitted', notetaker: { status: 'failed', failureReason: 'not_admitted' } });
+  });
+
+  it('the first ending wins: a later one (or a replay) writes the same words everywhere, and never re-arms the purge', async () => {
+    const bot = await liveBot();
+    await failNotetaker(fakeDb, { botId: bot.id, status: 'cancelled', messageFor }, quietLog);
+    await pool.query('UPDATE recall_purges SET attempts = 3 WHERE recall_bot_id = $1', [`recall-${bot.id}`]);
+    docs.set(`workspaces/workspace_alice/notes/${noteIdForBot(bot.id)}`, { ...docOf(bot.id), status: 'recording', errorMessage: null });
+    const again = await failNotetaker(fakeDb, { botId: bot.id, status: 'failed', failureReason: 'error', messageFor }, quietLog);
+    expect(again.changed).toBe(false);
+    expect(await row(bot.id)).toMatchObject({ status: 'cancelled', failure_reason: null, error_message: 'You cancelled.' });
+    // The mirror an earlier attempt lost is rebuilt from Postgres.
+    expect(docOf(bot.id)).toMatchObject({ status: 'error', errorMessage: 'You cancelled.', notetaker: { status: 'cancelled' } });
+    expect(await purge(bot.id)).toEqual([{ leave_call: true, attempts: 3 }]);
+  });
+
+  it('a bot that recorded never fails its note, and a note already being processed is never failed here', async () => {
+    const done = await liveBot('recording');
+    await advanceBotStatus(done.id, 'done');
+    expect((await failNotetaker(fakeDb, { botId: done.id, status: 'failed', failureReason: 'error', messageFor }, quietLog)).changed).toBe(false);
+    expect(await row(done.id)).toMatchObject({ status: 'done', note_status: 'recording' });
+    const busy = await liveBot();
+    await pool.query("UPDATE notes SET status = 'transcribing' WHERE id = $1", [noteIdForBot(busy.id)]);
+    await failNotetaker(fakeDb, { botId: busy.id, status: 'failed', failureReason: 'error', messageFor }, quietLog);
+    expect(await row(busy.id)).toMatchObject({ status: 'failed', note_status: 'transcribing' });
+    expect(docOf(busy.id).status).not.toBe('error');
+  });
+
+  it('a live note with no mirror doc throws (the task retries); a deleted note does not', async () => {
+    const live = await liveBot();
+    docs.delete(`workspaces/workspace_alice/notes/${noteIdForBot(live.id)}`);
+    await expect(failNotetaker(fakeDb, { botId: live.id, status: 'failed', failureReason: 'error', messageFor }, quietLog)).rejects.toThrow(/NOT_FOUND/);
+    // Postgres already holds the ending; the retry finishes it once the doc is back.
+    expect(await row(live.id)).toMatchObject({ status: 'failed', note_status: 'error' });
+    const gone = await liveBot();
+    await deleteNote(fakeDb, { noteId: noteIdForBot(gone.id), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
+    await expect(failNotetaker(fakeDb, { botId: gone.id, status: 'failed', failureReason: 'error', messageFor }, quietLog)).resolves.toMatchObject({ changed: true });
+  });
+
+  it('a bot already past the call is not asked to leave again; one never sent to Recall has nothing to purge', async () => {
+    const ended = await liveBot('call_ended');
+    await failNotetaker(fakeDb, { botId: ended.id, status: 'failed', failureReason: 'error', messageFor }, quietLog);
+    expect(await purge(ended.id)).toEqual([{ leave_call: false, attempts: 0 }]);
+    const unsent = botOf(await reserve());
+    await createServerNote(fakeDb, noteInput(unsent.id), quietLog);
+    await failNotetaker(fakeDb, { botId: unsent.id, status: 'cancelled', messageFor }, quietLog);
+    expect(await count('SELECT 1 FROM recall_purges')).toBe(1);
+  });
+
+  it('a host\'s "no" to recording is final: a late "allowed" does not undo it', async () => {
+    const bot = botOf(await reserve());
+    await recordConsentEvent(bot.id, { recordingPermission: 'denied' });
+    await recordConsentEvent(bot.id, { recordingPermission: 'allowed' });
+    expect((await pool.query('SELECT recording_permission FROM meeting_consents WHERE meeting_bot_id = $1', [bot.id])).rows[0].recording_permission).toBe('denied');
+  });
+});
+
+describe('what the meetings service reads', () => {
+  it('a bot by Recall\'s id, a stored event, the sender\'s name and the sealed link; malformed ids are "none", never a query error', async () => {
+    await pool.query("UPDATE users SET display_name = 'Alice Example' WHERE uid = 'alice'");
+    const bot = botOf(await reserve({ meetingUrlCiphertext: Buffer.from('sealed') }));
+    await attachRecallBot(bot.id, 'recall-read-1');
+    expect((await getMeetingBotByRecallId('recall-read-1'))?.id).toBe(bot.id);
+    expect(await getMeetingBotByRecallId('recall-unknown')).toBeNull();
+
+    const stored = await recordRecallEvent({ webhookId: 'msg_read_1', meetingBotId: bot.id, recallBotId: 'recall-read-1', event: 'bot.in_call_recording', subCode: null, occurredAt: new Date('2026-09-28T10:00:00Z'), payload: { x: 1 } });
+    const ev = await getRecallEvent(stored.id);
+    expect(ev).toMatchObject({ id: stored.id, meetingBotId: bot.id, recallBotId: 'recall-read-1', event: 'bot.in_call_recording', processed: false });
+    expect(ev?.occurredAt?.toISOString()).toBe('2026-09-28T10:00:00.000Z');
+    await markRecallEventProcessed(stored.id);
+    expect((await getRecallEvent(stored.id))?.processed).toBe(true);
+
+    expect(await getBotOwnerName(bot.id)).toBe('Alice Example');
+    expect((await getBotMeetingUrlCiphertext(bot.id))?.toString()).toBe('sealed');
+
+    for (const bad of ['', 'x', "1' OR '1'='1", '7f0e0c1a-0000-4000-8000']) {
+      expect(await getMeetingBotById(bad), bad).toBeNull();
+      expect(await getBotOwnerName(bad), bad).toBeNull();
+      expect(await getBotMeetingUrlCiphertext(bad), bad).toBeNull();
+    }
+    for (const bad of [Number.NaN, 0, -1, 1.5]) expect(await getRecallEvent(bad), String(bad)).toBeNull();
   });
 });
 

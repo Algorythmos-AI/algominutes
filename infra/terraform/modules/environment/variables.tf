@@ -333,3 +333,11 @@ variable "sweep_schedule" {
   type        = string
   default     = "*/15 * * * *"
 }
+
+# --- Online meetings -----------------------------------------------------------
+
+variable "recall_region" {
+  description = "The Recall.ai region of this environment's Recall account (docs/plans/MEETINGS.md). Recall has no Australian region; ap-northeast-1 (Tokyo) is the closest. Disclosed as an overseas processor in apps/site/src/data/processing.json."
+  type        = string
+  default     = "ap-northeast-1"
+}

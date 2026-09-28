@@ -72,6 +72,11 @@ export interface MeetingBot {
   traceId: string | null;
 }
 
+/** A meeting_bots row as a MeetingBot (for the repo's own transactions). */
+export function botFromRow(r: any): MeetingBot {
+  return toBot(r);
+}
+
 function toBot(r: any): MeetingBot {
   return {
     id: r.id,
@@ -241,7 +246,9 @@ export async function getMeetingBot(botId: string, workspaceId: string, uid: str
 
 /** The bot by our id alone: for workers, which carry it in their task. */
 export async function getMeetingBotById(botId: string): Promise<MeetingBot | null> {
-  if (!isPostgresEnabled()) return null;
+  // A task body is ours, but a malformed id is "no such bot", not a type error
+  // that retries into the dead letters.
+  if (!isPostgresEnabled() || !UUID_RE.test(botId)) return null;
   const { rows } = await getPool().query('SELECT * FROM meeting_bots WHERE id = $1', [botId]);
   return rows[0] ? toBot(rows[0]) : null;
 }
@@ -477,7 +484,9 @@ export async function recordConsentEvent(
     `UPDATE meeting_consents
         SET notice_sent_at = COALESCE(notice_sent_at, $2),
             admitted_at = COALESCE(admitted_at, $3),
-            recording_permission = COALESCE($4, recording_permission)
+            -- Denied is final: the bot leaves 30 s later, so a late "allowed" can't undo it.
+            recording_permission = CASE WHEN recording_permission = 'denied' THEN 'denied'
+                                        ELSE COALESCE($4, recording_permission) END
       WHERE meeting_bot_id = $1`,
     [botId, event.noticeSentAt ?? null, event.admittedAt ?? null, event.recordingPermission ?? null],
   );
@@ -546,4 +555,52 @@ export async function confirmRecallPurge(recallBotId: string): Promise<void> {
       WHERE recall_bot_id = $1`,
     [recallBotId],
   );
+}
+
+/** The bot Recall knows by this id (a webhook that didn't carry our metadata). */
+export async function getMeetingBotByRecallId(recallBotId: string): Promise<MeetingBot | null> {
+  if (!isPostgresEnabled() || typeof recallBotId !== 'string' || !recallBotId) return null;
+  const { rows } = await getPool().query('SELECT * FROM meeting_bots WHERE recall_bot_id = $1', [recallBotId]);
+  return rows[0] ? toBot(rows[0]) : null;
+}
+
+export interface StoredRecallEvent {
+  id: number;
+  meetingBotId: string | null;
+  recallBotId: string | null;
+  event: string;
+  subCode: string | null;
+  occurredAt: Date | null;
+  processed: boolean;
+}
+
+/** A stored webhook, for the task that acts on it. */
+export async function getRecallEvent(id: number): Promise<StoredRecallEvent | null> {
+  if (!isPostgresEnabled() || !Number.isSafeInteger(id) || id <= 0) return null;
+  const { rows: [r] } = await getPool().query(
+    'SELECT id, meeting_bot_id, recall_bot_id, event, sub_code, occurred_at, processed_at FROM recall_events WHERE id = $1',
+    [id],
+  );
+  if (!r) return null;
+  return {
+    id: Number(r.id), meetingBotId: r.meeting_bot_id, recallBotId: r.recall_bot_id, event: r.event,
+    subCode: r.sub_code, occurredAt: r.occurred_at ? new Date(r.occurred_at) : null, processed: r.processed_at != null,
+  };
+}
+
+/** The display name of the user who sent the bot: its name and its notice use their first name. */
+export async function getBotOwnerName(botId: string): Promise<string | null> {
+  if (!isPostgresEnabled() || !UUID_RE.test(botId)) return null;
+  const { rows: [r] } = await getPool().query(
+    'SELECT u.display_name FROM meeting_bots b JOIN users u ON u.uid = b.uid WHERE b.id = $1',
+    [botId],
+  );
+  return r?.display_name ?? null;
+}
+
+/** The meeting link's KMS ciphertext, until the bot is in the call (then it's cleared). */
+export async function getBotMeetingUrlCiphertext(botId: string): Promise<Buffer | null> {
+  if (!isPostgresEnabled() || !UUID_RE.test(botId)) return null;
+  const { rows: [r] } = await getPool().query('SELECT meeting_url_ciphertext FROM meeting_bots WHERE id = $1', [botId]);
+  return r?.meeting_url_ciphertext ?? null;
 }

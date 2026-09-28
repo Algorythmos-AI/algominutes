@@ -29,6 +29,12 @@ resource "google_kms_crypto_key" "meeting_url" {
   }
 }
 
+resource "google_kms_crypto_key_iam_member" "meeting_url_decrypter_meetings" {
+  crypto_key_id = google_kms_crypto_key.meeting_url.id
+  role          = "roles/cloudkms.cryptoKeyDecrypter"
+  member        = "serviceAccount:${google_service_account.runtime["run-meetings"].email}"
+}
+
 resource "google_kms_crypto_key_iam_member" "meeting_url_encrypter_api" {
   crypto_key_id = google_kms_crypto_key.meeting_url.id
   role          = "roles/cloudkms.cryptoKeyEncrypter"

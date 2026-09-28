@@ -25,7 +25,7 @@ const { reverseNoteUsage } = ledgerReversal as {
 };
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
-import { advanceBotStatus, toNotetakerStatus, type BotStatus, type MeetingBot } from './meetings-repo';
+import { advanceBotStatus, botFromRow, enqueueRecallPurge, toNotetakerStatus, BOT_STATUS_RANK, type BotStatus, type MeetingBot } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { ownedStoragePath } = noteStorage as {
@@ -1209,6 +1209,98 @@ export async function createServerNote(
     return { created: false, deleted: true };
   }
   return { created: outcome.created };
+}
+
+/**
+ * A notetaker that ended without a recording (docs/plans/MEETINGS.md). In one
+ * transaction, under the bot's row lock:
+ *   - the bot becomes terminal, unless it already is (then its own status and
+ *     reason stand: the first ending wins, and every writer writes the same);
+ *   - its note fails with the words for that ending, only while the note is
+ *     still 'recording' (a note that went on to be processed never fails here);
+ *   - Recall's copy of anything it captured is queued for deletion, asking the
+ *     bot to leave first if it may still be in the call.
+ * Nothing is charged: a notetaker's minutes are only charged at ingest, and a
+ * bot that ended without a recording releases its reservation.
+ * Then the mirror, rebuilt from what Postgres now says. Safe to run again, and
+ * meant to be: a task that finds a failed bot runs this to finish a mirror an
+ * earlier attempt couldn't write.
+ */
+export async function failNotetaker(
+  firestore: Firestore,
+  input: {
+    botId: string;
+    status: 'failed' | 'cancelled';
+    failureReason?: string | null;
+    /** The words on the note for a bot's final status and reason. */
+    messageFor: (status: string, reason: string | null) => string;
+  },
+  log: { error: (o: any, m?: string) => void; info?: (o: any, m?: string) => void },
+): Promise<{ changed: boolean; bot: MeetingBot | null }> {
+  if (!isPostgresEnabled()) return { changed: false, bot: null };
+  const outcome = await withTx(async (client) => {
+    const { rows: [row] } = await client.query('SELECT * FROM meeting_bots WHERE id = $1 FOR UPDATE', [input.botId]);
+    if (!row) return null;
+    const rankBefore = Number(row.status_rank);
+    let final = row;
+    let changed = false;
+    if (!['done', 'failed', 'cancelled'].includes(row.status)) {
+      const { rows: [updated] } = await client.query(
+        `UPDATE meeting_bots
+            SET status = $2, status_rank = $3, failure_reason = $4, meeting_url_ciphertext = NULL, updated_at = NOW()
+          WHERE id = $1
+          RETURNING *`,
+        [input.botId, input.status, BOT_STATUS_RANK[input.status], input.status === 'failed' ? (input.failureReason ?? 'error') : null],
+      );
+      final = updated;
+      changed = true;
+    }
+    // A bot that recorded (done) never fails its note.
+    if (final.status !== 'failed' && final.status !== 'cancelled') return { final, changed, message: null, noteMarked: false };
+    const message = input.messageFor(final.status, final.failure_reason ?? null);
+    let noteMarked = false;
+    if (final.note_id) {
+      const marked = await client.query(
+        `UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
+          WHERE id = $1 AND workspace_id = $2 AND status IN ('recording', 'error')`,
+        [final.note_id, final.workspace_id, message],
+      );
+      noteMarked = Boolean(marked.rowCount);
+    }
+    if (final.recall_bot_id) {
+      // Once only: a replay mustn't reset a pending purge's attempts.
+      const queued = changed || !(await client.query('SELECT 1 FROM recall_purges WHERE recall_bot_id = $1', [final.recall_bot_id])).rowCount;
+      if (queued) {
+        await enqueueRecallPurge(client, {
+          recallBotId: final.recall_bot_id,
+          reason: 'failed',
+          leaveCall: rankBefore < BOT_STATUS_RANK.call_ended,
+          traceId: final.trace_id ?? undefined,
+        });
+      }
+    }
+    return { final, changed, message, noteMarked };
+  }, { log, fields: { meetingBotId: input.botId } });
+  if (!outcome) return { changed: false, bot: null };
+  const bot = botFromRow(outcome.final);
+  if (!bot.noteId || outcome.message == null) return { changed: outcome.changed, bot };
+
+  const notetaker: Record<string, unknown> = {
+    botId: bot.id, status: toNotetakerStatus(bot.status), platform: bot.platform, rank: bot.statusRank,
+  };
+  if (bot.failureReason) notetaker.failureReason = bot.failureReason;
+  const update: Record<string, unknown> = { notetaker, updatedAt: ISO_NOW() };
+  if (outcome.noteMarked) Object.assign(update, { status: 'error', errorMessage: outcome.message });
+  try {
+    await firestore.doc(`workspaces/${bot.workspaceId}/notes/${bot.noteId}`).update(update);
+  } catch (err) {
+    if (!isFirestoreNotFound(err)) throw err;
+    // No doc: fine for a note deleted meanwhile; a fault (retried) for a live one.
+    const live = await getPool().query('SELECT 1 FROM notes WHERE id = $1', [bot.noteId]);
+    if (live.rowCount) throw err;
+    log.info?.({ noteId: bot.noteId, workspaceId: bot.workspaceId, userId: bot.uid }, 'notetaker_fail_note_gone');
+  }
+  return { changed: outcome.changed, bot };
 }
 
 /**

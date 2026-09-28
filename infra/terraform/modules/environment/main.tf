@@ -536,6 +536,8 @@ locals {
     "run-meetings" = concat(local.common_roles, [
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor", # the db password, and recall-api-key / recall-webhook-secret
+      "roles/datastore.user",               # the notetaker's note mirror (through the repo layer)
+      "roles/cloudtasks.enqueuer",          # its own tasks: process each webhook, create and cancel bots
     ])
     "run-db-job" = concat(local.common_roles, [
       "roles/cloudsql.client",
