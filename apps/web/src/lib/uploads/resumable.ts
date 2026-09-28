@@ -105,9 +105,8 @@ export async function uploadResumable(opts: ResumableOptions): Promise<void> {
     try {
       offset = await opts.receivedBytes();
       opts.onProgress?.(offset, total);
-    } catch (err) {
-      // The status probe failed too: keep the offset we had; the next PUT's answer corrects it.
-      cause = err;
+    } catch {
+      // silent-catch-ok: the status probe failed too; keep the offset we had, and the next PUT's answer corrects it (if that PUT fails, its own error is the cause)
     }
   }
 }

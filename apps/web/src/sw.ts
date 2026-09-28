@@ -23,7 +23,7 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 const appWindows = async () => (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter((w) => inApp(w.url, self.registration.scope));
 
 self.addEventListener('push', (event) => {
-  let json: unknown = null;
+  let json: unknown;
   try {
     json = event.data?.json() ?? null;
   } catch {
