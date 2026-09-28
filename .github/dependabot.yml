@@ -32,6 +32,11 @@ updates:
         update-types: ['version-update:semver-major']
       - dependency-name: '@tailwindcss/vite'
         update-types: ['version-update:semver-major']
+      # TypeScript 7 is the native (Go) compiler and ships no compiler API, so
+      # typescript-eslint (peer <6.1), @astrojs/check (^5 || ^6) and our AST
+      # invariant gates can't run on it. Held at 6 until they support 7 (BLOCKERS).
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     groups:
       dev-tooling:
         dependency-type: development
