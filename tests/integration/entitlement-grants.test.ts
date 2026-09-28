@@ -8,10 +8,11 @@ import { pool, resetDb, seedUser, count, quietLog } from './helpers';
 // every metered action, which is what a TestFlight build with no trial hit.
 const {
   getPool, resolveEntitlement, assertCanMeter, grantEntitlement, revokeEntitlement, deleteAccountData,
-  currentBillingPeriod, ensureTrial,
+  currentBillingPeriod, ensureTrial, grantNotetaker, revokeNotetaker, isNotetakerTester,
 } = repo;
 const require = createRequire(import.meta.url);
 const grantTester = require('../../services/db-job/src/handlers/grant-tester.js');
+const grantNotetakerJob = require('../../services/db-job/src/handlers/grant-notetaker.js');
 
 const DAY = 24 * 60 * 60 * 1000;
 const debit = (uid: string, minutes: number) =>
@@ -126,5 +127,47 @@ describe('db-job grant-tester', () => {
   it('the table refuses a non-Pro or non-positive grant, even inserted by hand', async () => {
     await expect(pool.query(`INSERT INTO entitlement_grants (uid, plan, reason) VALUES ('alice', 'team', 'x')`)).rejects.toMatchObject({ code: '23514' });
     await expect(pool.query(`INSERT INTO entitlement_grants (uid, plan, included_minutes, reason) VALUES ('alice', 'pro', 0, 'x')`)).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+// The notetaker's testers (migration 024): allowlisted until the legal opinion
+// (docs/CONSENT.md §2.4), granted by the owner, never in git.
+describe('notetaker testers', () => {
+  it('only a live grant counts, for that user only; revoking ends it', async () => {
+    expect(await isNotetakerTester('alice')).toBe(false);
+    expect(await grantNotetaker({ email: 'ALICE@test.invalid', reason: 'notetaker_tester' })).toBe('alice');
+    expect(await isNotetakerTester('alice')).toBe(true);
+    expect(await isNotetakerTester('bob')).toBe(false);
+    await grantNotetaker({ uid: 'bob', reason: 'notetaker_tester', expiresAt: new Date(Date.now() - DAY) });
+    expect(await isNotetakerTester('bob')).toBe(false);
+    expect(await revokeNotetaker({ uid: 'alice' })).toEqual({ uid: 'alice', revoked: true });
+    expect(await isNotetakerTester('alice')).toBe(false);
+    expect(await revokeNotetaker({ uid: 'alice' })).toEqual({ uid: 'alice', revoked: false });
+    for (const none of ['', null, undefined, 'nobody']) expect(await isNotetakerTester(none as never)).toBe(false);
+  });
+
+  it('is independent of a Pro grant, both ways', async () => {
+    await grantEntitlement({ uid: 'alice', reason: 'internal_tester' });
+    expect(await isNotetakerTester('alice')).toBe(false);
+    await grantNotetaker({ uid: 'bob', reason: 'notetaker_tester' });
+    expect(await resolveEntitlement('bob')).toMatchObject({ state: 'free_floor' });
+  });
+
+  it('the db-job: 30 days by default, 0 = no expiry, a blank never means forever, and revoke', async () => {
+    const log = { info() {}, error() {} };
+    const now = new Date('2026-09-29T00:00:00Z');
+    const { expiresAt } = await grantNotetakerJob.run({ log, repo, env: { GRANT_UID: 'alice', GRANT_DAYS: ' ' }, now });
+    expect(expiresAt.toISOString()).toBe('2026-10-29T00:00:00.000Z');
+    expect((await grantNotetakerJob.run({ log, repo, env: { GRANT_UID: 'alice', GRANT_DAYS: '0' }, now })).expiresAt).toBeNull();
+    await expect(grantNotetakerJob.run({ log, repo, env: { GRANT_UID: 'alice', GRANT_DAYS: '-1' }, now })).rejects.toThrow(/GRANT_DAYS/);
+    await expect(grantNotetakerJob.run({ log, repo, env: {}, now })).rejects.toThrow(/GRANT_EMAIL or GRANT_UID/);
+    await expect(grantNotetakerJob.run({ log, repo, env: { GRANT_UID: 'nobody' }, now })).rejects.toThrow();
+    expect(await grantNotetakerJob.run({ log, repo, env: { GRANT_UID: 'alice', MODE: 'revoke' }, now })).toEqual({ uid: 'alice', revoked: true });
+  });
+
+  it('goes with the account', async () => {
+    await grantNotetaker({ uid: 'alice', reason: 'notetaker_tester' });
+    await pool.query("DELETE FROM users WHERE uid = 'alice'");
+    expect(await count('SELECT 1 FROM notetaker_testers')).toBe(0);
   });
 });

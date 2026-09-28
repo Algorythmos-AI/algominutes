@@ -111,6 +111,14 @@ async function removeRecallBot({ recall, repo, recallBotId, traceId, log, purge 
 const attemptOf = (req) => Number(req.headers?.['x-cloudtasks-taskretrycount'] ?? 0);
 
 export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, env = process.env, repo = db }) {
+  // Recall bots made for one of ours that we never attached (found by our id).
+  async function removeStrays({ bot, log }) {
+    const recall = await getRecall(log);
+    for (const stray of await recall.findBotsByMetadata('meeting_bot_id', bot.id)) {
+      await removeRecallBot({ recall, repo, recallBotId: stray.id, traceId: bot.traceId, log });
+    }
+  }
+
   // ── create_bot: adopt-or-create, because Recall's Idempotency-Key only lasts an hour ──
   async function createBot(req, res) {
     const bot = await repo.getMeetingBotById(String(req.body?.meetingBotId || ''));
@@ -122,8 +130,21 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, env =
     const firestore = getFirestore();
     if (TERMINAL.has(bot.status)) {
       log.info({ status: bot.status }, 'create_bot_already_terminal');
-      // An earlier attempt may have ended it without finishing the mirror.
-      if (ENDED_WITHOUT_RECORDING.has(bot.status)) await failBot({ repo, firestore, bot, reason: bot.failureReason || bot.status, log });
+      if (ENDED_WITHOUT_RECORDING.has(bot.status)) {
+        // An earlier attempt may have ended it without finishing the mirror,
+        // or made a Recall bot and crashed before attaching it: find and
+        // remove any, so nothing joins a meeting for a bot that has ended.
+        await failBot({ repo, firestore, bot, reason: bot.failureReason || bot.status, log });
+        if (!bot.recallBotId) await removeStrays({ bot, log });
+      }
+      return res.status(200).json({ ok: true });
+    }
+    if (!bot.noteId) {
+      // The api creates the note before it queues this task, so no note here
+      // means it was deleted: nothing may record into it.
+      log.warn({}, 'create_bot_note_gone');
+      if (bot.recallBotId) await cancelWithRecall({ recall: await getRecall(log), bot, firestore, log });
+      else await failBot({ repo, firestore, bot, reason: 'cancelled', log });
       return res.status(200).json({ ok: true });
     }
     try {
@@ -181,9 +202,15 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, env =
         }
       }
       const attach = await repo.attachRecallBot(bot.id, recallBotId);
-      if (!attach.attached) {
-        // Ours already has a different Recall bot: this one would join untracked.
+      if (!attach.attached && attach.recallBotId !== recallBotId) {
+        // Ours already has a different Recall bot, or ended while Recall made
+        // this one (a cancel): this one would join untracked. Remove it, and
+        // anything it recorded.
         await removeRecallBot({ recall, repo, recallBotId, traceId: bot.traceId, log });
+      }
+      if (attach.terminal) {
+        log.info({ recallBotId }, 'create_bot_ended_meanwhile');
+        return res.status(200).json({ ok: true });
       }
       await repo.advanceNotetaker(firestore, { botId: bot.id, status: 'scheduled' }, log);
       // A cancel that arrived while this ran.

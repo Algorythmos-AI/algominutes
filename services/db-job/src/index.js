@@ -33,6 +33,7 @@ const HANDLERS = {
   'eval-recall':    () => require('./handlers/eval-recall.js'),
   'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
   'grant-tester':   () => require('./handlers/grant-tester.js'),
+  'grant-notetaker': () => require('./handlers/grant-notetaker.js'),
 };
 
 async function main() {

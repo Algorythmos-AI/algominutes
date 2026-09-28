@@ -66,6 +66,14 @@ variable "broadcast_capture" {
   default = "on"
 }
 
+# The online-meeting notetaker's surfaces (GET /v1/config). Off unless named;
+# for testers in notetaker_testers only. To switch the bot on for them: plan
+# with TF_VAR_notetaker_surfaces=bot and apply.
+variable "notetaker_surfaces" {
+  type    = string
+  default = ""
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -131,9 +139,10 @@ module "environment" {
   allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com"
   admin_uids      = var.admin_uids
   # The public site's uptime checks live here until prod exists (S3-PR4).
-  site_uptime_host  = "algominutes.algorythmos.com"
-  broadcast_capture = var.broadcast_capture
-  monthly_budget    = 100
+  site_uptime_host   = "algominutes.algorythmos.com"
+  broadcast_capture  = var.broadcast_capture
+  notetaker_surfaces = var.notetaker_surfaces
+  monthly_budget     = 100
 
   # In-VPC proof VM for proving staging (docs/runbooks/staging-proof.md).
   # About US$15/month while on; set false and apply to remove it.

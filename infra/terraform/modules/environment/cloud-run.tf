@@ -95,6 +95,9 @@ locals {
       ALLOWED_ORIGINS   = var.allowed_origins
       PUBLIC_SITE_URL   = var.public_site_url
       BROADCAST_CAPTURE = var.broadcast_capture
+      # The notetaker's surfaces (off unless named) and where its tasks go.
+      NOTETAKER    = var.notetaker_surfaces
+      MEETINGS_URL = local.service_url["meetings"]
       # The key the api encrypts a notetaker's meeting link with (kms.tf).
       MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
     })

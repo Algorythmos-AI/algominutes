@@ -143,6 +143,17 @@ variable "broadcast_capture" {
   }
 }
 
+variable "notetaker_surfaces" {
+  description = "The online-meeting notetaker surfaces switched on (NOTETAKER, served by GET /v1/config): comma-separated, from bot, calendar, zoomImport, extension. Empty (the default) is off everywhere. Even on, a surface is only reported for a caller in notetaker_testers (migration 024) and only once it is built (services/api/src/routes/app-config.js)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = alltrue([for s in compact([for v in split(",", var.notetaker_surfaces) : trimspace(v)]) : contains(["bot", "calendar", "zoomImport", "extension"], s)])
+    error_message = "notetaker_surfaces must be empty or a comma-separated list of bot, calendar, zoomImport, extension."
+  }
+}
+
 variable "admin_uids" {
   description = "Firebase uids allowed on the api's operator routes (/v1/admin/*, ADMIN_UIDS). Passed at plan time as TF_VAR_admin_uids, never committed. Empty leaves ADMIN_UIDS unset, so every admin route answers 403."
   type        = list(string)
