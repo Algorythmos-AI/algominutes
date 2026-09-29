@@ -11,6 +11,7 @@ import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 import { SITE_URL } from '../site';
 import { usePush } from '../push/PushContext';
+import { InviteCodeForm } from '../billing/InviteCodeForm';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
 
@@ -132,8 +133,14 @@ function PlanCard() {
             {plan} plan{ent.state === 'trialing' ? ' (trial)' : ''}.{' '}
             {ent.includedMinutes == null ? 'Unmetered.' : `${Math.round(ent.usedMinutes)} of ${Math.round(ent.includedMinutes)} minutes used this month.`}
           </p>
-          {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month.</p>}
+          {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month, or an invite code adds more.</p>}
         </>
+      )}
+      {/* Beta testers' minutes come from the code in their invitation (RELEASE.md PR 9). */}
+      {!failed && (
+        <div className="mt-4 border-t border-border pt-4">
+          <InviteCodeForm onRedeemed={(r) => setEnt(r.entitlement)} />
+        </div>
       )}
     </Card>
   );

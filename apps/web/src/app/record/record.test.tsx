@@ -74,6 +74,23 @@ describe('recording in the browser', () => {
     expect(env.getUserMedia).not.toHaveBeenCalled();
   });
 
+  it('with no minutes left, asks for the invite code before recording, and starts once it is redeemed', async () => {
+    const none = { ...ENT, usedMinutes: 0, includedMinutes: 0, remainingMinutes: 0, overQuota: true };
+    const redeemed = { entitlement: { ...ENT, plan: 'pro', includedMinutes: 600, usedMinutes: 0, remainingMinutes: 600 }, grantEndsAt: '2026-10-29T00:00:00.000Z', notetaker: false };
+    const { env, calls } = setup({}, { broadcastCapture: false }, {
+      '/v1/entitlement': () => new Response(JSON.stringify(none), { status: 200 }),
+      '/v1/beta/redeem': () => new Response(JSON.stringify(redeemed), { status: 200 }),
+    });
+    fireEvent.click(await screen.findByRole('checkbox'));
+    const start = await screen.findByRole('button', { name: 'Enter your invite code first' });
+    expect((start as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Invite code'), { target: { value: ' beta-7k2qx-m9d4r-tw8hn ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add minutes' }));
+    expect(await screen.findByRole('button', { name: 'Start recording' })).toBeTruthy();
+    expect(calls).toContain('/v1/beta/redeem');
+    expect(env.getUserMedia).not.toHaveBeenCalled();
+  });
+
   it('records, and Stop and save uploads it as a recording note, then opens it', async () => {
     const { store, stopped, writer, router } = setup();
     fireEvent.click(await screen.findByRole('checkbox'));
