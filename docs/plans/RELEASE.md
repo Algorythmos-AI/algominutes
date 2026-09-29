@@ -70,6 +70,10 @@ Out-of-date BLOCKERS entries get fixed in PR 1: 55–58, 139–142, 213–217, 2
 
 ### PRs (in order)
 
+**Order change (2026-09-29):** PR 6 moved ahead of PR 5, and PR 5 moves after PR 11. Apply A is the owner's
+longest wait on the path to testers, so its PR goes first. PR 5 (dead letters once, the sweep re-drives lost work)
+is rare-path robustness, and was scoped as two PRs, 5a and 5b.
+
 | # | PR | What it does | Done when |
 |---|---|---|---|
 | 2 | `feat(db,api,contracts)` invite codes | See "Invite codes" below | The integration tests below pass, mutation-checked |
@@ -77,7 +81,7 @@ Out-of-date BLOCKERS entries get fixed in PR 1: 55–58, 139–142, 213–217, 2
 | 3b | `fix(transcoder,db)` the ledger follows the measured length | • imports (and every recording) metered on the transcoder's ffprobe duration, with the ledger corrected when it differs<br>• the length cap enforced on the measured duration | A 0-minute import is charged its real length; tested on Postgres |
 | 4 | `fix(notifier,api)` S2-PR1 | • ack only permanent errors<br>• prune a token only on `not-registered`<br>• the 426 minimum comes from contracts | Tests per error class |
 | 5 | `fix(workers,db-job)` S2-PR6a + 6b | • one dead letter per note (Q2–Q4, Q7)<br>• the sweep re-drives lost work (Q9–Q12, Q30) | A killed task is re-driven once, with no duplicate rows |
-| 6 | `feat(infra)` staging becomes the beta (**Apply A**) | • deletion protection and PITR<br>• `trial_on_first_use=false`<br>• an explicit `DAILY_SPEND_CAP_AUD`: yours, I suggest A$50<br>• `monthly_budget`: yours, I suggest 250<br>• `ALLOWED_ORIGINS` gains the beta web origin<br>• `TF_VAR_admin_uids` with your uid<br>• also carries #236, #238, #243, #245 | `gcloud sql instances describe` shows PITR and protection on; preflight from the beta origin answers 204 |
+| 6 | `feat(infra)` staging becomes the beta (**Apply A**) | • deletion protection and PITR (enabling PITR restarts Cloud SQL once)<br>• recordings kept (no 7-day lifecycle), buckets and Firestore not destroyed with the stack<br>• `trial_on_first_use=false`<br>• an explicit `DAILY_SPEND_CAP_AUD`: yours, I suggest A$50<br>• `monthly_budget`: yours, I suggest 250<br>• `ALLOWED_ORIGINS` gains the beta web origin<br>• `TF_VAR_admin_uids` with your uid<br>• also carries #236, #238, #243, #245 | `gcloud sql instances describe` shows PITR and protection on; preflight from the beta origin answers 204 |
 | 7 | `feat(site,web)` the beta host | • `vercel.json` gets a `/__/auth` rewrite and a CSP for `beta.algominutes.algorythmos.com`<br>• the build script accepts the beta project<br>• sign-in on the domain's own `/__/auth`, like prod will | `site-build` builds the beta shape; `check-signin-chain.mjs --env beta` passes |
 | 8 | `feat(ios)` minutes in the beta | • a Settings **Invite code** row<br>• with the paywall off, a quota hit opens the code sheet (not a silent no-op, `BillingService.swift:111`)<br>• the record screen says up front when there are no minutes<br>• a refused note offers **Try again** after redeeming<br>• What to Test updated | XCTest for each |
 | 9 | `feat(web)` minutes in the beta | The same, in web Settings and on a 402 | vitest |

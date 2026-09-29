@@ -36,6 +36,21 @@ checks is recorded here, under the wave.
     every recipient's working token.
   - The api's 426 floors are the contract's `MIN_SUPPORTED_CLIENT`, one list.
   - Unit-tested (`tests/notifier-handler.test.ts`, `tests/client-version.test.ts`), each change mutation-checked.
+- [ ] **Owner: Apply A (RELEASE.md PR 6), staging becomes the beta.** After PR 6 merges I re-plan read-only as
+  `reviewed-<sha>.tfplan` in `~/algominutes-apply`, with `check-tfplan-env.mjs`. You apply it; I redeploy
+  `services=all` (a saved plan resets Cloud Run images) and check every image.
+  - A sanity plan on the PR branch showed 20 to add, 21 to change, 0 to destroy, nothing replaced.
+    - Adds: the meetings service (placeholder image), KMS and Recall secrets from #243 and #245, and the
+      `gemini_transient` alert from #236.
+    - Changes: Cloud SQL (PITR, deletion protection), the buckets, Firestore, the queue caps (#236, #238), the
+      services' env and the budget.
+  - **Enabling PITR restarts Cloud SQL once**; open connections are closed and the pools reconnect. Harmless before
+    testers.
+  - Plan with `TF_VAR_admin_uids` set to your uid, which turns on the dead-letter admin view.
+  - The figures in the PR are my suggestions and yours to change before the plan: `daily_spend_cap_aud = 50`,
+    `monthly_budget = 250`.
+  - Known: `db-f1-micro` is shared-core and outside the Cloud SQL SLA. The dashboard's Cloud SQL CPU and connections
+    decide a bump.
 - [ ] **Owner, start today (long lead times):**
   - send the Terms, the Privacy Policy and `docs/CONSENT.md` for legal review, including recording consent (NSW is
     all-party), bots in meetings and APP 8 cross-border;
