@@ -17,6 +17,7 @@ export * from './storage-purges-repo.js';
 export * from './account-repo.js';
 export * from './entitlement-grants-repo.js';
 export * from './beta-invites-repo.js';
+export * from './measured-length.js';
 export * from './mirror-repair.js';
 export * from './kickoff.js';
 export * from './meetings-repo.js';

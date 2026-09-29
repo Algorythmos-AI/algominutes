@@ -36,6 +36,9 @@ const mirror = require('./firestore-mirror');
 const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
+// The run's charge follows the measured length (packages/db measured-length.ts,
+// through tsx like the summarizer's markSummaryReady).
+const { settleMeasuredLength } = require('@algominutes/db');
 const { spendGate } = require('./spend-gate');
 const { onLastAttempt } = require('./last-attempt');
 
@@ -98,7 +101,7 @@ app.post('/', async (req, res) => {
   // traceId is threaded into deps so the in-handler terminal paths (STT
   // exhaustion / errors, YouTube permanent failures) can propagate it across
   // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
-  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env, traceId, terminalHooks };
+  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env, traceId, terminalHooks, meter: { settleMeasuredLength } };
 
   try {
     await handler.handle(req.body || {}, deps);

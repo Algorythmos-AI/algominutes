@@ -200,6 +200,42 @@ async function handleKickoff(payload, deps) {
       });
       return;
     }
+    // The charge follows the measured length, before any paid work: the kickoff
+    // charged what the client claimed (an import may claim nothing). A replay
+    // finds it already settled. Refused (longer than the plan allows, or than
+    // the user's minutes left): the note fails, with a full refund.
+    const settled = await deps.meter.settleMeasuredLength({ noteId, workspaceId, measuredSec: durationSec, log });
+    if (settled.kind === 'not_found') throw new NoteGoneError('postgres');
+    if (settled.kind === 'moved_on') {
+      // Another attempt failed or finished the run meanwhile: acknowledged by
+      // handle(), with nothing written, like the status write's own check.
+      throw Object.assign(new Error(`note_moved_on:${noteId}`), { code: 'NOTE_MOVED_ON' });
+    }
+    if (settled.kind === 'too_long' || settled.kind === 'over_quota') {
+      const message = settled.kind === 'too_long'
+        ? `This recording is longer than ${settled.maxSec / 3600} hours, the longest a note can be.`
+        : "This recording is longer than the minutes you have left this month.";
+      log.warn({ noteId, workspaceId, durationSec, reason: settled.kind }, 'measured_length_refused');
+      // The user's recording, not a pipeline fault: no dead letter. markNoteFailed
+      // writes the refund and the "failed" notice in the failure's transaction.
+      await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId, `refund:${settled.kind}`),
+        traceId: deps.traceId,
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        message,
+        log,
+        event: 'measured_length_refused',
+        retryOnPgError: true,
+      });
+      return;
+    }
+    if (settled.deltaMinutes !== 0) {
+      log.info({ noteId, workspaceId, durationSec, chargedMinutes: settled.chargedMinutes, deltaMinutes: settled.deltaMinutes }, 'charge_settled_to_measured');
+    }
+
     const decision = route.routeForDuration(durationSec);
     log.info({ noteId, durationSec, decision }, 'transcoder_routed');
 

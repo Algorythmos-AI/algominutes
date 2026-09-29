@@ -107,6 +107,8 @@ describe('transcoder kickoff for a deleted note', () => {
         stt: {},
         youtube: {},
         traceId: 't',
+        // The charge-settling step (measured-length.ts) has its own Postgres tests.
+        meter: { settleMeasuredLength: async () => ({ kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 }) },
       },
     };
   }

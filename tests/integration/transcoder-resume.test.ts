@@ -52,6 +52,8 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
     fastPath: { run: async () => { throw new Error('fast path must not run for a long recording'); } },
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => { terminal.push(a); } },
+    // The charge-settling step has its own tests (measured-length.test.ts).
+    meter: { settleMeasuredLength: async () => ({ kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 }) },
   };
   return { d, extracted, started, enqueued, terminal, progress };
 }

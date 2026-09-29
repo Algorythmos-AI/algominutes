@@ -57,6 +57,8 @@ function transcoderDeps({ probe = async (): Promise<number> => 1500, op = { done
     fastPath: { run: async () => { throw new Error('fast path must not run'); } },
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => { terminal.push(a); } },
+    // The charge-settling step has its own tests (measured-length.test.ts).
+    meter: { settleMeasuredLength: async () => ({ kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 }) },
   };
   return { d, terminal };
 }
