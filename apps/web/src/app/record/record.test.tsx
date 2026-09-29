@@ -136,6 +136,9 @@ describe('recording in the browser', () => {
     fireEvent.click(await screen.findByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
     await screen.findByText('● RECORDING');
+    // react-router registers the blocker in an effect after that render: let it run before leaving (a busy CI
+    // runner once clicked first, and the navigation went through unblocked).
+    await act(async () => {});
     fireEvent.click(screen.getByRole('link', { name: '← Your notes' }));
     expect(await screen.findByRole('dialog', { name: 'You’re recording' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Keep recording' }));
