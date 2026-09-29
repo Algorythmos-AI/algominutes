@@ -2058,8 +2058,7 @@
           "noteId",
           "workspaceId",
           "fileName",
-          "contentType",
-          "totalBytes"
+          "contentType"
         ]
       },
       "UploadSessionStatus": {
