@@ -194,6 +194,16 @@ struct RecordingView: View {
             }
         }
         .onAppear { pulse = true }
+        // Asked while recording (it carries on underneath); "Turn on" shows iOS's prompt.
+        .alert(RecordingNotifier.prePromptTitle, isPresented: Binding(
+            get: { env.isNotificationPrePromptPending },
+            set: { env.isNotificationPrePromptPending = $0 }
+        )) {
+            Button("Turn on") { Task { await RecordingNotifier.requestAuthorizationIfNeeded() } }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text(RecordingNotifier.prePromptMessage)
+        }
         .interactiveDismissDisabled()
         .sensoryFeedback(.impact(weight: .medium), trigger: env.recorder.isRecording)
         .sheet(item: $pendingSave) { result in
@@ -214,6 +224,10 @@ struct RecordingView: View {
     private func startRecording() async {
         do {
             try await env.startRecordingCapture()
+        } catch RecorderService.RecorderError.permissionDenied {
+            // Refused (or turned off since the consent sheet checked): offer Settings.
+            env.micPermissionDenied = true
+            dismiss()
         } catch {
             env.alertMessage = (error as? LocalizedError)?.errorDescription ?? "Could not start recording."
             dismiss()
