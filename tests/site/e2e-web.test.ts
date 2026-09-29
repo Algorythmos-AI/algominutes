@@ -76,14 +76,21 @@ const PAGES: Record<string, string> = {
   '/app/notes/n1': `<main><h1>Note</h1><h2>Summary</h2></main>`,
   '/app/notes/n2': `<main><h1>Note</h1><h2>Summary</h2></main>`,
   '/app/notes/n3': `<main><p><a href="/app/notes-list">← Your notes</a></p><h1>Note</h1><h2>Summary</h2></main>`,
+  '/app/notes/n4': `<main><h1>Note</h1><h2>Summary</h2></main>`,
   '/app/search': `<main><h1>Search</h1><div role="tablist"><button role="tab">Search transcripts</button><button role="tab" onclick="document.getElementById('ask').hidden=false">Ask your notes</button></div>
     <label>Search your notes <input></label><button onclick="document.getElementById('hits').innerHTML='<a href=&quot;/app/notes/n1&quot;>n1</a>'">Search</button><div id="hits"></div>
     <div id="ask" hidden><label>Ask a question about your notes <input></label><button onclick="document.getElementById('st').textContent='Answer ready.'">Ask</button><p id="st" role="status"></p></div>
     <script>fetch(window.PROBE).catch(() => {})</script></main>`,
-  // Recording asks before the page goes, as the app does; Stop takes the guard down first.
-  '/app/record': `<p><a href="/app/notes-list">← Your notes</a></p><h1>Record a meeting</h1><label><input type="checkbox"> I have permission from anyone whose voice may be captured.</label>
+  // Recording asks before the page goes, as the app does; Stop takes the guard down first. A call (the radio)
+  // shows the call's meter, which hears it a moment after it starts.
+  '/app/record': `<p><a href="/app/notes-list">← Your notes</a></p><h1>Record a meeting</h1>
+    <label><input type="radio" name="source" onchange="window.call = true"> A call in another tab, with my microphone</label>
+    <label><input type="checkbox"> I have permission from anyone whose voice may be captured.</label>
+    <label><input type="checkbox"> Everyone on the call has agreed to be recorded.</label>
     <button onclick="localStorage.setItem('cut', '1'); onbeforeunload = (e) => { e.preventDefault(); e.returnValue = ''; }; document.getElementById('r').hidden=false">Start recording</button>
-    <div id="r" hidden><p>● RECORDING</p><button onclick="onbeforeunload = null; localStorage.removeItem('cut'); location='/app/notes/n2'">Stop and save</button></div>
+    <button onclick="document.getElementById('r').hidden=false; document.getElementById('m').hidden=false; setTimeout(() => document.getElementById('m').setAttribute('aria-valuenow', window.METER ?? '60'), 200)">Choose the call’s tab</button>
+    <div id="r" hidden><p>● RECORDING</p><div id="m" hidden role="meter" aria-label="The call" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+      <button onclick="onbeforeunload = null; localStorage.removeItem('cut'); location = window.call ? '/app/notes/n4' : '/app/notes/n2'">Stop and save</button></div>
     <div id="left" hidden><button onclick="localStorage.removeItem('cut'); localStorage.setItem('uploaded', '1'); location='/app/notes/n3'">Upload it</button></div>
     <script>document.getElementById('left').hidden = !localStorage.getItem('cut');</script>`,
   '/app/settings': `<h1>Settings</h1><button onclick="document.getElementById('d').hidden=false">Delete my account</button>
@@ -137,8 +144,8 @@ describe('the journey, in a real browser', () => {
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
     expect(ok).toBe(true);
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
-    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(14);
-    for (const step of ['reloading mid-recording asks first', 'the cut-off recording is kept, and shown on the notes list', 'uploaded once: three notes, and nothing left to upload']) {
+    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(18);
+    for (const step of ['reloading mid-recording asks first', 'the cut-off recording is kept, and shown on the notes list', 'uploaded once: three notes, and nothing left to upload', "the call's meter hears it", 'a recorded call becomes a note with a summary']) {
       expect(lines.some((l) => l.startsWith(`ok   ${step}`)), step).toBe(true);
     }
     expect(seen.length).toBeGreaterThan(8);
@@ -218,6 +225,23 @@ describe('the journey, in a real browser', () => {
       expect(lines.find((l) => l.includes('uploaded once'))).toMatch(/^FAIL.*4 notes/);
     } finally {
       PAGES['/app/notes-list'] = list;
+    }
+  }, 120_000);
+
+  it("a call whose meter never moves fails the run, and one that isn't offered says so", async () => {
+    const saved = PAGES['/app/record'];
+    PAGES['/app/record'] = saved.replace('<p><a href="/app/notes-list">', '<script>window.METER = "0"</script><p><a href="/app/notes-list">');
+    try {
+      const lines: string[] = [];
+      expect(await run(lines)).toBe(false);
+      expect(lines.some((l) => l.startsWith("FAIL the call's meter hears it"))).toBe(true);
+      PAGES['/app/record'] = saved.replace(/<label><input type="radio"[^]*?<\/label>/, '');
+      lines.length = 0;
+      expect(await run(lines)).toBe(false);
+      expect(lines.some((l) => l.startsWith('FAIL a call in another tab is offered'))).toBe(true);
+      expect(lines.some((l) => l.startsWith('ok   the account is deleted from Settings'))).toBe(true);
+    } finally {
+      PAGES['/app/record'] = saved;
     }
   }, 120_000);
 

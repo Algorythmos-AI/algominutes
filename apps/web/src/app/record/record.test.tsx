@@ -11,7 +11,8 @@ import { RecordingStore } from '../../lib/recorder/store';
 import { FakeRecorder, fakeLocks, fakeStream } from '../../test/fakeRecorder';
 import { fakeAuth, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, ORIGINS } from '../../test/renderApp';
-import { RecordPage, type RecorderEnv } from './RecordPage';
+import { CALL_SILENT_WARN_MS, meterPercent, RecordPage, type RecorderEnv } from './RecordPage';
+import type { CaptureEnv } from '../../lib/recorder/callCapture';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -63,6 +64,15 @@ function setup(over: Partial<RecorderEnv> = {}, config = { broadcastCapture: fal
   );
   return { env, store, stopped, calls, writer, router, mic };
 }
+
+describe('the level meters', () => {
+  it('fill on a decibel scale: a quiet room empty, speech about half, full scale full', () => {
+    expect(meterPercent(0)).toBe(0);
+    expect(meterPercent(0.001)).toBe(0);
+    expect(Math.round(meterPercent(0.05))).toBe(57);
+    expect(meterPercent(1)).toBe(100);
+  });
+});
 
 describe('recording in the browser', () => {
   it("won't start until the permission box is ticked, as on iOS", async () => {
@@ -176,9 +186,24 @@ describe('recording in the browser', () => {
     const captureEnv = () => {
       const tab = track();
       const mixed = { getTracks: () => [track()] } as unknown as MediaStream;
-      class Ctx { createMediaStreamDestination() { return { stream: mixed }; } createMediaStreamSource() { return { connect() {} }; } async close() {} }
+      // What each source's meter reads (RMS), and the microphone's mute.
+      const level = { call: 0.1, mic: 0.1 };
+      const gains: Array<{ gain: { value: number } }> = [];
+      class Ctx extends EventTarget {
+        state = 'running';
+        private analysers = 0;
+        createMediaStreamDestination() { return { stream: mixed }; }
+        createMediaStreamSource() { return { connect() {} }; }
+        // The call's meter is made first, then the microphone's.
+        createAnalyser() { const which = this.analysers++ === 0 ? 'call' : 'mic'; return { fftSize: 4, connect() {}, getFloatTimeDomainData: (a: Float32Array) => a.fill(level[which]) }; }
+        createGain() { const g = { gain: { value: 1 }, connect() {} }; gains.push(g); return g; }
+        async resume() {}
+        async close() {}
+      }
       vi.stubGlobal('MediaStream', class { constructor(readonly tracks: unknown[]) {} });
       return {
+        level,
+        gains,
         tab,
         capture: {
           getDisplayMedia: vi.fn(async () => ({ getTracks: () => [tab], getAudioTracks: () => [tab] }) as unknown as MediaStream),
@@ -227,6 +252,53 @@ describe('recording in the browser', () => {
       fireEvent.click(screen.getByLabelText('Everyone on the call has agreed to be recorded.'));
       fireEvent.click(screen.getByRole('button', { name: 'Choose the call’s tab' }));
       expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    });
+
+    const recordCall = async (capture: CaptureEnv) => {
+      setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: true });
+      fireEvent.click(await screen.findByLabelText('A call in another tab, with my microphone'));
+      fireEvent.click(screen.getByLabelText(/I have permission from anyone/));
+      fireEvent.click(screen.getByLabelText('Everyone on the call has agreed to be recorded.'));
+      fireEvent.click(screen.getByRole('button', { name: 'Choose the call’s tab' }));
+      await screen.findByText('● RECORDING');
+    };
+
+    it('says the desktop apps on a Mac need the iPhone app', async () => {
+      const { capture } = captureEnv();
+      setup({ capture, canCaptureCalls: () => true }, { broadcastCapture: true });
+      fireEvent.click(await screen.findByLabelText('A call in another tab, with my microphone'));
+      expect(screen.getByText(/Zoom or Teams desktop apps on a Mac, record the call with the AlgoMinutes iPhone app/)).toBeTruthy();
+    });
+
+    it('meters the call and the microphone, and mutes the microphone in the recording', async () => {
+      const { capture, gains, level } = captureEnv();
+      level.call = 0.1;
+      level.mic = 0.001;
+      await recordCall(capture);
+      const call = await screen.findByRole('meter', { name: 'The call' });
+      expect(Number(call.getAttribute('aria-valuenow'))).toBeGreaterThan(50);
+      expect(screen.getByRole('meter', { name: 'You' }).getAttribute('aria-valuenow')).toBe('0');
+      fireEvent.click(screen.getByRole('button', { name: 'Mute my microphone' }));
+      expect(gains[0].gain.value).toBe(0);
+      expect(screen.getByRole('button', { name: 'Unmute my microphone' }).getAttribute('aria-pressed')).toBe('true');
+      expect(await screen.findByRole('meter', { name: 'You (muted)' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Unmute my microphone' }));
+      expect(gains[0].gain.value).toBe(1);
+    });
+
+    it('a call silent for a while is said to be, and the warning goes when it is heard', async () => {
+      // Only the clock is faked: IndexedDB's own scheduling stays real.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const t0 = Date.now();
+      const { capture, level } = captureEnv();
+      level.call = 0;
+      await recordCall(capture);
+      await screen.findByRole('meter', { name: 'The call' });
+      expect(screen.queryByText(/No sound from the call/)).toBeNull();
+      vi.setSystemTime(t0 + CALL_SILENT_WARN_MS + 2000);
+      expect(await screen.findByText(/No sound from the call for a while/, undefined, { timeout: 3000 })).toBeTruthy();
+      level.call = 0.1;
+      await waitFor(() => expect(screen.queryByText(/No sound from the call/)).toBeNull(), { timeout: 3000 });
     });
 
     it('a share without the tab’s sound says how to share it', async () => {

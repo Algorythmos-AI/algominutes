@@ -10,7 +10,10 @@
 //   5. a recording cut off by a reload (as a crash or a closed tab leaves one)
 //      is asked about first, kept, shown on the notes list, and uploads as one
 //      note: the list then holds three;
-//   6. the account is deleted from Settings, back to the sign-in page.
+//   6. a call in another tab (Chrome's fake tab share, playing the same speech)
+//      is recorded with the microphone: its meter hears it, and it becomes a
+//      note with a summary. Needs the api's broadcastCapture switch on;
+//   7. the account is deleted from Settings, back to the sign-in page.
 // The deletion runs whatever failed before it, so no test user is left behind.
 // Any console error or page error (a CSP refusal is one) fails the run.
 //
@@ -22,7 +25,8 @@
 //   E2E_READY_MS   how long a note may take to be ready (default 8 minutes)
 //   E2E_BUDGET_MS  how long the journey may take in all, before the deletion (default 20 minutes);
 //                  every wait is cut to what's left, so the deletion always runs inside the job's timeout
-// Needs Playwright's Chromium and ffmpeg (the fake microphone plays a WAV).
+// Needs Playwright's Chromium and ffmpeg (the fake microphone, and the fake tab's
+// sound, play a WAV).
 // Exit 1 on any failure.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -87,7 +91,8 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_0
     return Boolean(ok);
   };
   const browser = await chromium.launch({
-    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', ...(micWav ? [`--use-file-for-fake-audio-capture=${micWav}`] : [])],
+    // A fake microphone, and a fake share that says it's a browser tab: both play micWav.
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream=display-media-type=browser', ...(micWav ? [`--use-file-for-fake-audio-capture=${micWav}`] : [])],
   });
   const context = await browser.newContext();
   await context.grantPermissions(['microphone'], { origin: siteUrl });
@@ -170,6 +175,21 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_0
     const three = await within(notes.nth(2).waitFor({ timeout: wait(30_000) }));
     const count = await notes.count();
     check('uploaded once: three notes, and nothing left to upload', three && count === 3 && !(await page.getByText('A recording wasn’t uploaded').isVisible()), `${count} notes`);
+
+    // RELEASE.md PR 13: a call in another tab, mixed with the microphone.
+    await page.goto(`${siteUrl}/app/record`);
+    const callOption = page.getByLabel('A call in another tab, with my microphone');
+    if (!check('a call in another tab is offered (the broadcastCapture switch is on)', await within(callOption.waitFor({ timeout: wait(15_000) })))) return;
+    await callOption.check();
+    await page.getByRole('checkbox', { name: /I have permission/ }).check();
+    await page.getByRole('checkbox', { name: 'Everyone on the call has agreed to be recorded.' }).check();
+    await page.getByRole('button', { name: 'Choose the call’s tab' }).click();
+    if (!check('the call records', await within(page.getByText('● RECORDING').waitFor({ timeout: wait(30_000) })))) return;
+    const heard = page.waitForFunction(() => Number(document.querySelector('[role="meter"][aria-label="The call"]')?.getAttribute('aria-valuenow')) > 0, undefined, { timeout: wait(15_000) });
+    check("the call's meter hears it", await within(heard));
+    await page.waitForTimeout(recordMs);
+    await page.getByRole('button', { name: 'Stop and save' }).click();
+    check('a recorded call becomes a note with a summary', (await toNote()) && (await heading('Summary', Math.min(readyMs, left()))), page.url().replace(siteUrl, ''));
   };
   try {
     await journey().catch((err) => check('the journey ran to the end', false, err?.message?.slice(0, 200)));
