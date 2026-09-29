@@ -19,6 +19,15 @@ struct FilesView: View {
     @State private var isSearching = false
     @State private var searchError: String?
 
+    // The example note, until there's a real one (SampleNote; RELEASE.md PR 10b).
+    @State private var showingSample = false
+    @AppStorage("sample_note_hidden") private var sampleHidden = false
+    private var showsSample: Bool {
+        SampleNote.shouldShow(notesEmpty: env.notes.notes.isEmpty, query: query,
+                              hasLoaded: env.notes.receivedFirstSnapshot, hidden: sampleHidden,
+                              filterMatches: filter.matches(SampleNote.note))
+    }
+
     enum SourceFilter: String, CaseIterable, Identifiable {
         case all = "All"
         case voiceNote = "Voice Note"
@@ -60,6 +69,7 @@ struct FilesView: View {
             .background(AlgoMinutesBackground())
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.large)
+            .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
             .navigationDestination(item: $selectedNoteId) { noteId in
                 NoteDetailView(noteId: noteId)
             }
@@ -179,6 +189,35 @@ struct FilesView: View {
                 )
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
+            }
+
+            if showsSample {
+                Button {
+                    showingSample = true
+                } label: {
+                    fileCard(SampleNote.note)
+                        .overlay(alignment: .topTrailing) {
+                            Text("EXAMPLE")
+                                .font(Typography.eyebrow())
+                                .tracking(1.2)
+                                .foregroundStyle(Theme.onInverse)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Theme.inverse))
+                                .padding(Theme.Spacing.md)
+                        }
+                }
+                .buttonStyle(CardButtonStyle())
+                .accessibilityLabel("Example note: \(SampleNote.note.title)")
+                .listRowInsets(EdgeInsets(
+                    top: 6, leading: Theme.Spacing.xl, bottom: 6, trailing: Theme.Spacing.xl
+                ))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button("Hide") { sampleHidden = true }
+                        .tint(Theme.surfaceElevated)
+                }
             }
 
             ForEach(filteredNotes) { note in
