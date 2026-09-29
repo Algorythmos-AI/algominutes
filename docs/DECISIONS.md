@@ -3,6 +3,39 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The external beta runs on staging, with minutes from invite codes and the trial off (2026-09-29)
+
+- **Context.**
+  - The owner wants external testers as soon as possible, on staging, before prod exists
+    (`docs/plans/RELEASE.md`, rev 10).
+  - The free floor is 0 minutes (`FREE_FLOOR_MINUTES` unset), so a tester needs a trial or a grant.
+  - Today's trial is keyed to a SHA-256 of the app's DeviceCheck token. That token differs on every call, and
+    nothing checks it with Apple, so each reinstall gets a fresh 7-day, 1,500-minute trial. On an external beta
+    that's spend anyone with the build can reset, up to the daily cap.
+  - Granting each tester by hand (`grant-tester`) doesn't scale past a few people.
+- **Decision (owner).**
+  - **Invite codes.** Each code (`BETA-XXXXX-XXXXX-XXXXX`, 75 random bits) gives a time-limited Pro grant, and
+    the notetaker too when the invite says so.
+    - Redeeming is `POST /v1/beta/redeem`, one transaction in `beta-invites-repo.ts`: the invite row is locked, a
+      replay is idempotent, and a live grant is never shortened or shrunk.
+    - Only a code's SHA-256 ever leaves the owner's machine. `scripts/new-invite-code.sh` prints the code (for the
+      tester) and its hash, and the db-job `beta-invite` handler takes only the hash (it refuses a plaintext
+      code). So a code is never in the job's env overrides, the audit log, the application logs or Postgres.
+    - No code is logged: the route logs the invite id, and a malformed request body is now logged without its
+      contents (`services/api/src/app.js`), since body-parser's error message quotes part of the body.
+    - A redemption never takes from a live grant. The invite replaces it only when it's as good on both counts
+      (ends no sooner, no fewer minutes); otherwise the live grant stays exactly as it is, and two grants are
+      never mixed into one bigger than either.
+  - **The trial switch.** `TRIAL_ON_FIRST_USE` (default on) is turned off on staging for the beta. A new user
+    opens on the free floor and gets minutes from a code. Existing users keep what they have.
+  - The trial comes back on in Wave 2, once the server checks DeviceCheck with Apple (RELEASE.md PR 22).
+- **Rejected.**
+  - **Everyone gets beta minutes automatically:** the easiest for testers, but anyone with a public link could
+    spend the budget.
+  - **Manual grants only:** each tester waits for the owner.
+  - **HMAC with a server pepper instead of SHA-256:** a 75-bit code can't be guessed from its hash, and a pepper
+    would be one more secret to rotate.
+
 ## After gemini-2.5-flash retires, summaries run on one Sydney model (2026-09-28)
 
 - **Context.**

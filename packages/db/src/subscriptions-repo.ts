@@ -31,6 +31,18 @@ export async function getSubscription(uid: string): Promise<SubscriptionRow | nu
   return (rows[0] as SubscriptionRow) ?? null;
 }
 
+/**
+ * Whether a brand-new user starts the reverse trial (TRIAL_ON_FIRST_USE, default
+ * on). The beta on staging turns it off (docs/plans/RELEASE.md, Wave 1): the
+ * DeviceCheck hash isn't checked with Apple yet, so each reinstall would get a
+ * fresh trial. Off, a new user opens on the free floor, and an invite code is how
+ * they get minutes. A user who already has a row is never changed.
+ */
+export function trialOnFirstUse(env: Record<string, string | undefined> = process.env): boolean {
+  const v = String(env.TRIAL_ON_FIRST_USE ?? '').trim().toLowerCase();
+  return !['off', 'false', '0', 'no'].includes(v);
+}
+
 /** Has this device already consumed a reverse trial (under any uid)? (A10 #7) */
 export async function deviceHasPriorTrial(deviceHash: string): Promise<boolean> {
   if (!isPostgresEnabled() || !deviceHash) return false;
@@ -77,11 +89,11 @@ export async function ensureTrial(
   const existing = await getSubscription(uid);
   if (existing) return existing; // never restart on same uid
 
-  // Eligibility gate for a FRESH trial.
-  let eligible = true;
-  if (opts.platform === 'web') {
+  // Eligibility gate for a FRESH trial. Switched off, nobody new gets one.
+  let eligible = trialOnFirstUse();
+  if (eligible && opts.platform === 'web') {
     eligible = opts.emailPresent === true; // web requires an email
-  } else if (opts.platform === 'ios' || opts.platform === 'android') {
+  } else if (eligible && (opts.platform === 'ios' || opts.platform === 'android')) {
     eligible = !!opts.deviceHash && !(await deviceHasPriorTrial(opts.deviceHash)); // require + unused device
   }
   // Unknown platform (server-to-server / tests): default to eligible.
