@@ -25,9 +25,12 @@ export interface SubscriptionRow {
   stripe_customer_id: string | null;
 }
 
-export async function getSubscription(uid: string): Promise<SubscriptionRow | null> {
+export async function getSubscription(
+  uid: string,
+  db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } = getPool(),
+): Promise<SubscriptionRow | null> {
   if (!isPostgresEnabled()) return null;
-  const { rows } = await getPool().query(`SELECT * FROM subscriptions WHERE uid = $1`, [uid]);
+  const { rows } = await db.query(`SELECT * FROM subscriptions WHERE uid = $1`, [uid]);
   return (rows[0] as SubscriptionRow) ?? null;
 }
 

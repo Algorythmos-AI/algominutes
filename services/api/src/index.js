@@ -7,6 +7,9 @@ import { initFirebase } from './firebase.js';
 import { buildApp } from './app.js';
 import { rootLogger } from './middleware/trace.js';
 import requireEnvMod from '@algominutes/ai/require-env.cjs';
+import spendGuardMod from '@algominutes/ai/spend-guard.cjs';
+import spendRepoMod from '@algominutes/db/spend-repo.cjs';
+import { getPool } from '@algominutes/db';
 import envSpec from './env-spec.cjs';
 
 const { requireEnv } = requireEnvMod;
@@ -24,6 +27,11 @@ requireEnv(
 );
 
 initFirebase();
+
+// §4.6: a kickoff at the daily spend cap is refused before anything is queued
+// or charged (packages/db kickoff.ts). It reads the same paid-work minutes as
+// the transcoder's gate, cached for a minute per instance.
+spendGuardMod.setDailySpendReader(spendRepoMod.createPaidWorkSpendReader({ pool: () => getPool() }));
 
 const app = buildApp();
 

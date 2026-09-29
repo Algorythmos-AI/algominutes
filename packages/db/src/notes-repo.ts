@@ -14,6 +14,7 @@ import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { getPool, isPostgresEnabled, withTx } from './db';
 import { ensureUser, ensureWorkspaceAccess, WorkspaceBoundaryError } from './workspace-access';
 import { insertDebit } from './ledger';
+import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import ledgerReversal from '@algominutes/db/ledger-reversal.cjs';
 
 // The one copy of the refund SQL, written in a failure's own transaction.
@@ -107,8 +108,13 @@ export interface MarkQueuedInput {
    * The ingest debit, written in the queue transaction: after the note row
    * exists (usage_ledger.note_id is a foreign key), and only when this call
    * actually queues. A duplicate or refused kickoff debits nothing.
+   *
+   * `enforceQuota`: check the user's minutes in the same transaction, right
+   * before the debit, and throw QuotaExceededError (nothing written) if it
+   * wouldn't fit. The notetaker's ingest passes false: its minutes were
+   * reserved when the bot was sent.
    */
-  meter?: { minutes: number; idempotencyKey: string };
+  meter?: { minutes: number; idempotencyKey: string; enforceQuota?: boolean };
   /**
    * A note still 'recording' (a notetaker in its meeting) is queued only by the
    * notetaker's own ingest, which ends the recording. Checked under the note's
@@ -412,6 +418,19 @@ export async function markQueued(
             [input.noteId],
           );
           if (Number(led.net) <= 0) {
+            if (input.meter.enforceQuota) {
+              // The quota check and the debit it guards, in one transaction under
+              // a per-user lock: two kickoffs of different notes can't both see
+              // the same headroom and both debit it. (ensureUser's upsert above
+              // also locks the user's row; this lock doesn't depend on that.)
+              // A run whose charge still stands never gets here, so its retry
+              // needs no headroom.
+              await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`meter:${input.authorUid}`]);
+              const ent = await resolveEntitlement(input.authorUid, { db: client });
+              if (ent.includedMinutes != null && ent.usedMinutes + input.meter.minutes > ent.includedMinutes) {
+                throw new QuotaExceededError(ent, input.meter.minutes);
+              }
+            }
             const idempotencyKey = led.debits === 0 ? input.meter.idempotencyKey : `${input.meter.idempotencyKey}:${led.debits}`;
             const debit = await insertDebit(client, {
               uid: input.authorUid,
@@ -784,14 +803,17 @@ export async function markError(
 }
 
 /**
- * A kickoff refused before it queued (too large, over the rate limit): the
- * note is marked `error`, Postgres then the mirror, unless it is in flight. Two
- * duplicate kickoffs (a client retry after a timeout) can both pass the
- * route's pre-check; if one queues the note and the other is then refused, the
- * refusal must not fail the run the first one started. The guard is in the
- * UPDATE's own WHERE, so it is re-checked against a duplicate's just-committed
- * row. A note with no Postgres row yet gets the mirror only, as markError does.
- * Returns whether the note was marked.
+ * A kickoff refused before it queued (too large, too long, over the rate limit
+ * or the daily spend cap): the note is marked `error`, Postgres then the
+ * mirror, unless it is in flight. Two duplicate kickoffs (a client retry after
+ * a timeout) can both pass the route's pre-check; if one queues the note and
+ * the other is then refused, the refusal must not fail the run the first one
+ * started. A STALE in-flight note (a client retry after IN_FLIGHT_STALE_MS) is
+ * left alone too: its run was charged, and marking it `error` here, with no
+ * refund, would take it out of the stuck-note sweep that fails and refunds it.
+ * The guard is in the UPDATE's own WHERE, so it is re-checked against a
+ * duplicate's just-committed row. A note with no Postgres row yet gets the
+ * mirror only, as markError does. Returns whether the note was marked.
  */
 export async function markKickoffRejected(
   firestore: Firestore,
@@ -803,12 +825,12 @@ export async function markKickoffRejected(
       `WITH upd AS (
          UPDATE notes SET status = 'error', error_message = $3, updated_at = NOW()
           WHERE id = $1 AND workspace_id = $2
-            AND NOT (status = ANY($4::text[]) AND updated_at > NOW() - ($5::bigint * INTERVAL '1 millisecond'))
+            AND NOT (status = ANY($4::text[]))
          RETURNING 1
        )
        SELECT (SELECT count(*) FROM upd)::int AS updated,
               (SELECT count(*) FROM notes WHERE id = $1 AND workspace_id = $2)::int AS present`,
-      [input.noteId, input.workspaceId, input.errorMessage, IN_FLIGHT_STATUSES as unknown as string[], IN_FLIGHT_STALE_MS],
+      [input.noteId, input.workspaceId, input.errorMessage, IN_FLIGHT_STATUSES as unknown as string[]],
     );
     const { updated, present } = rows[0]!;
     if (present && !updated) return { marked: false };
