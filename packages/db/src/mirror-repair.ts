@@ -28,7 +28,11 @@
 
 import type { Firestore } from 'firebase-admin/firestore';
 import redaction from '@algominutes/ai/redaction.cjs';
+import loggerModule from '@algominutes/ai/logger.cjs';
 import { getPool } from './db';
+
+type Log = { error: (o: unknown, m?: string) => void };
+const defaultLog = (loggerModule as { logger: Log }).logger;
 
 const { redactLines } = redaction as {
   redactLines: (texts: string[]) => { texts: string[]; counts: Record<string, number> };
@@ -68,7 +72,7 @@ type Postgres = {
  * One snapshot of the note. Its content is read only if `docStatus` disagrees
  * with a 'ready' note: most candidates are in step, and cost one query.
  */
-async function readPostgres(noteId: string, workspaceId: string, docStatus: unknown): Promise<Postgres | null> {
+async function readPostgres(noteId: string, workspaceId: string, docStatus: unknown, log: Log): Promise<Postgres | null> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -123,8 +127,9 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
     await client.query('COMMIT');
     return out;
   } catch (err: any) {
-    // silent-catch-ok: the sweep logs the thrown error (mirror_repair_failed); a failed rollback rides along on it.
-    await client.query('ROLLBACK').catch((rollbackErr) => { if (err && typeof err === 'object') err.rollbackError = rollbackErr; });
+    // The sweep logs the thrown error; a failed rollback is logged here.
+    await client.query('ROLLBACK')
+      .catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'mirror_repair_rollback_failed'));
     throw err;
   } finally {
     client.release();
@@ -136,7 +141,7 @@ export type RepairOutcome = 'in_step' | 'repaired' | 'moved' | 'gone' | 'not_fin
 export async function repairNoteMirror(
   firestore: Firestore,
   input: { noteId: string; workspaceId: string },
-  opts: { settledMs?: number; now?: number } = {},
+  opts: { settledMs?: number; now?: number; log?: Log } = {},
 ): Promise<RepairOutcome> {
   const settledMs = opts.settledMs ?? 10 * 60 * 1000;
   const ref = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
@@ -145,7 +150,7 @@ export async function repairNoteMirror(
   // A client's Retry writes the doc before Postgres; give it time to land.
   if (snap.updateTime && (opts.now ?? Date.now()) - snap.updateTime.toMillis() < settledMs) return 'doc_recent';
   const doc = snap.data() || {};
-  const pg = await readPostgres(input.noteId, input.workspaceId, doc.status);
+  const pg = await readPostgres(input.noteId, input.workspaceId, doc.status, opts.log ?? defaultLog);
   if (!pg) return 'gone';
   if (pg.status !== 'ready' && pg.status !== 'error') return 'not_finished';
   if (doc.status === pg.status) return 'in_step';

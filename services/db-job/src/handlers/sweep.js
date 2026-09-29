@@ -237,7 +237,7 @@ async function run({
       for (const n of notes) {
         const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
         try {
-          const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS });
+          const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
           if (outcome === 'repaired') {
             repaired += 1;
             log.warn({ ...fields, status: n.status }, 'mirror_repaired');

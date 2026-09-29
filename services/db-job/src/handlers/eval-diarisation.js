@@ -80,7 +80,7 @@ function liveHypothesis(dir, fixtureId, engine) {
   try {
     raw = fs.readFileSync(p, 'utf8');
   } catch (err) {
-    // silent-catch-ok: no override file (ENOENT) means the synthetic hypothesis; anything else fails the eval
+    // silent-catch-ok: no override file (ENOENT) means the fixture's synthetic hypothesis, and run() warns eval_diarisation_live_hypothesis_missing; anything else fails the eval
     if (err.code === 'ENOENT') return null;
     throw err;
   }
@@ -99,8 +99,15 @@ async function run({ log, traceId, env }) {
   for (const { file, fixture } of fixtures) {
     const id = fixture.id || file;
 
-    const primaryHyp = liveHypothesis(liveDir, id, PRIMARY_HYP) || (fixture.hypotheses && fixture.hypotheses[PRIMARY_HYP]);
-    const shadowHyp = liveHypothesis(liveDir, id, SHADOW_HYP) || (fixture.hypotheses && fixture.hypotheses[SHADOW_HYP]);
+    const livePrimary = liveHypothesis(liveDir, id, PRIMARY_HYP);
+    const liveShadow = liveHypothesis(liveDir, id, SHADOW_HYP);
+    // A live run that falls back to the fixture's synthetic hypothesis must say
+    // so: the summary still reads mode 'live-shadow'.
+    if (liveDir && (!livePrimary || !liveShadow)) {
+      log.warn({ traceId, fixture: id, primaryLive: !!livePrimary, shadowLive: !!liveShadow }, 'eval_diarisation_live_hypothesis_missing');
+    }
+    const primaryHyp = livePrimary || (fixture.hypotheses && fixture.hypotheses[PRIMARY_HYP]);
+    const shadowHyp = liveShadow || (fixture.hypotheses && fixture.hypotheses[SHADOW_HYP]);
 
     if (!primaryHyp) {
       log.warn({ traceId, fixture: id }, 'eval_diarisation_no_primary_hypothesis');

@@ -306,11 +306,12 @@ export async function finishAccountDeletion(
   try {
     await deps.auth.deleteUser(uid);
   } catch (err) {
-    // silent-catch-ok: auth/user-not-found means an earlier attempt already deleted the user
     if ((err as { code?: string })?.code !== 'auth/user-not-found') {
       log.error({ err, userId: uid }, 'delete_account_auth_failed');
       return { complete: false, errors: 0, authDeleted: false, authFailed: true };
     }
+    // An earlier attempt already did it (or Auth is pointed at the wrong project: say so either way).
+    log.info({ userId: uid }, 'delete_account_auth_already_gone');
   }
   // The account is gone. Failing to mark the tombstone complete must not
   // turn that into a 500 for the user: log it, and the sweeper (which re-runs
