@@ -254,6 +254,23 @@ describe('the app, over HTTP', () => {
     }
   });
 
+  it('the service\'s own tasks are all routed: create, cancel, process an event, ingest, purge', async () => {
+    const app = buildApp({
+      env: {}, readSecret: async () => null, enqueue: async () => {},
+      taskAuth: (_req: any, _res: any, next: () => void) => next(),
+      // An empty repo: each handler fails on its first call, and nothing reaches a database.
+      taskDeps: { getRecall: async () => { throw new Error('no recall here'); }, getCrypto: () => ({}), getFirestore: () => ({}), repo: {} },
+    });
+    const s = await serve(app);
+    try {
+      const post = (k: string) => fetch(`${s.url}/tasks/${k}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      // Routed (a handler ran and failed on its fake), never "Unknown task".
+      for (const k of ['create_bot', 'cancel_bot', 'process_event', 'ingest', 'purge_media']) expect((await post(k)).status, k).not.toBe(404);
+    } finally {
+      await s.close();
+    }
+  });
+
   it('an authorised task with no handler yet is a 404, not a crash', async () => {
     const app = buildApp({ env: {}, readSecret: async () => null, taskAuth: (_req: any, _res: any, next: () => void) => next() });
     const s = await serve(app);

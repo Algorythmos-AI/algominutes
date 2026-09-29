@@ -69,6 +69,8 @@ export interface MeetingBot {
   audioReady: boolean;
   participantsReady: boolean;
   ingestedAt: string | null;
+  /** When its note's run was queued (markQueued, once per bot). */
+  runQueuedAt: string | null;
   traceId: string | null;
 }
 
@@ -94,6 +96,7 @@ function toBot(r: any): MeetingBot {
     audioReady: r.audio_ready_at != null,
     participantsReady: r.participants_ready_at != null,
     ingestedAt: r.ingested_at ? new Date(r.ingested_at).toISOString() : null,
+    runQueuedAt: r.run_queued_at ? new Date(r.run_queued_at).toISOString() : null,
     traceId: r.trace_id ?? null,
   };
 }
@@ -548,12 +551,12 @@ export async function recordRecallPurgeAttempt(id: number, lastError: string | n
 
 /** Recall confirmed the media is gone (recording.deleted). */
 export async function confirmRecallPurge(recallBotId: string): Promise<void> {
+  // One statement, so the purge is never confirmed without the bot saying its media is gone.
   await getPool().query(
-    `UPDATE recall_purges SET confirmed_at = COALESCE(confirmed_at, NOW()), updated_at = NOW() WHERE recall_bot_id = $1`,
-    [recallBotId],
-  );
-  await getPool().query(
-    `UPDATE meeting_bots SET recall_media_deleted_at = COALESCE(recall_media_deleted_at, NOW()), updated_at = NOW()
+    `WITH purge AS (
+       UPDATE recall_purges SET confirmed_at = COALESCE(confirmed_at, NOW()), updated_at = NOW() WHERE recall_bot_id = $1
+     )
+     UPDATE meeting_bots SET recall_media_deleted_at = COALESCE(recall_media_deleted_at, NOW()), updated_at = NOW()
       WHERE recall_bot_id = $1`,
     [recallBotId],
   );

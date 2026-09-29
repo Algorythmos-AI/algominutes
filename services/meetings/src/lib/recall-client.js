@@ -67,7 +67,14 @@ export function createRecallClient({ apiKey, region, fetchImpl = globalThis.fetc
         body: text.slice(0, 300),
       });
     }
-    return text ? JSON.parse(text) : null;
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      // Not JSON.parse's own message: it quotes the text, and a bot's body holds presigned media URLs.
+      if (err instanceof SyntaxError) throw new RecallError(`recall ${method} ${path}: HTTP ${res.status} body is not JSON`, { status: 0 });
+      throw err;
+    }
   }
 
   return {

@@ -111,7 +111,10 @@ async function removeRecallBot({ recall, repo, recallBotId, traceId, log, purge 
 
 const attemptOf = (req) => Number(req.headers?.['x-cloudtasks-taskretrycount'] ?? 0);
 
-export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, env = process.env, repo = db }) {
+/** One ingest per bot: a second event (or a replay) that finds both media ready is dropped by the task's name. */
+export const ingestTaskId = (botId) => `ingest-${botId}`;
+
+export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, enqueue, env = process.env, repo = db }) {
   // Recall bots made for one of ours that we never attached (found by our id).
   async function removeStrays({ bot, log }) {
     const recall = await getRecall(log);
@@ -311,8 +314,13 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, env =
           break;
         case 'media_ready': {
           const now = await repo.markBotMediaReady(bot.id, action.what);
-          // Ingest (the next PR) starts once both are ready; until then it's recorded here.
           log.info({ what: action.what, audioReady: now?.audioReady, participantsReady: now?.participantsReady }, 'notetaker_media_ready');
+          // Ingest starts once both are ready (tasks/ingest.js). The two events can be processed at once; each
+          // one's update waits for the other's, so the later always sees both.
+          if (now?.audioReady && now?.participantsReady && !now.ingestedAt) {
+            await enqueue('ingest', { meetingBotId: bot.id }, { traceId: bot.traceId || undefined, log, taskId: ingestTaskId(bot.id) });
+            log.info({}, 'notetaker_ingest_enqueued');
+          }
           break;
         }
         case 'media_failed':

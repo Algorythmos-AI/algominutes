@@ -123,6 +123,17 @@ describe.each(ENVS)('%s: Terraform sets every env a service requires', (env: Env
   });
 });
 
+describe('the meetings env', () => {
+  it('gives ingest the recordings bucket (read at use, not at boot, so it isn\'t in the env spec)', () => {
+    expect(envOfService('meetings')).toMatchObject({ GCS_BUCKET: 'local.region_bucket["recordings"]' });
+    expect(spec('meetings').required).not.toContain('GCS_BUCKET');
+  });
+
+  it('won\'t boot without where ingest queues a note\'s run (queueNoteRun would fail the note)', () => {
+    expect(spec('meetings').required).toEqual(expect.arrayContaining(['TRANSCODER_URL', 'TASKS_PROJECT']));
+  });
+});
+
 describe('the api env', () => {
   it('carries the broadcast kill switch, and the public site for the api and billing', () => {
     expect(envOfService('api')).toMatchObject({ BROADCAST_CAPTURE: 'var.broadcast_capture', PUBLIC_SITE_URL: 'var.public_site_url' });

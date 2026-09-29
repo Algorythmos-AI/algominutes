@@ -24,6 +24,26 @@ locals {
       severity  = "ERROR"
       doc       = "A note or account purge failed 10 times and is no longer retried: a deleted note's doc or audio still exists. See the sweep's storage_purge_stuck log line (purgeId, noteId, lastError) and runbook 'Deletion'."
     }
+    # The notetaker (RELEASE.md PR 19). The purge worker re-logs an exhausted purge every 30 minutes, so the
+    # alert stays open until a person acts.
+    recall_purge_exhausted = {
+      threshold = 0
+      window    = "1800s"
+      severity  = "ERROR"
+      doc       = "Recall's copy of a notetaker recording wasn't confirmed deleted after 10 attempts. See recall_purge_exhausted (recallBotId, reason, traceId) and the recall_media_delete_failed lines under the same traceId. Recall's 72-hour retention deletes it regardless; delete it by hand (POST /api/v1/bot/{id}/delete_media/) and confirm the recall_purges row."
+    }
+    notetaker_ingest_gave_up = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recording couldn't be made ours in 5 attempts: its note failed (or, if its run was already queued, only Recall's copy was left to the purge worker). See notetaker_ingest_gave_up (noteId, meetingBotId, err) and the notetaker_ingest_attempt_failed lines under the same traceId."
+    }
+    notetaker_ingested_audio_missing = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recording was ingested but its audio object is gone from the recordings bucket, so its note can't run. See notetaker_ingested_audio_missing (noteId, storagePath) and the ingest's traceId."
+    }
     delete_account_incomplete = {
       threshold = 0
       window    = "900s"

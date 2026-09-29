@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import crypto from 'node:crypto';
 import { getPool, markQueued, deleteAccountData, queueNoteRun } from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
 
@@ -277,6 +278,100 @@ describe('a note still recording', () => {
     expect((await queueNoteRun(input)).kind).toBe('in_flight');
     expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec3' AND entry_type = 'debit'`)).toBe(1);
     expect(enqueued).toHaveLength(1);
+  });
+
+  // RELEASE.md PR 19: a notetaker's run is queued once per bot, decided under the note's lock. An ingest
+  // replayed after the run finished (a Postgres blip after the kickoff, a duplicate delivery) must not run a
+  // meeting again.
+  async function botFor(uid: string, noteId: string) {
+    const id = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO meeting_bots (id, uid, workspace_id, note_id, platform, meeting_url_hash, status, status_rank)
+         VALUES ($1, $2, $3, $4, 'google_meet', 'h', 'call_ended', 60)`,
+      [id, uid, `workspace_${uid}`, noteId],
+    );
+    return id;
+  }
+  const ingestInput = (noteId: string, meetingBotId: string) => ({
+    firestore: fakeDb as never, noteId, workspaceId: 'workspace_alice', uid: 'alice',
+    type: 'online_meeting', storagePath: `recordings/workspace_alice/${noteId}.mp3`, durationSec: 600,
+    allowRecording: true, quota: false, usageBudget: false, meetingBotId, log: quietLog,
+  });
+
+  it('a notetaker ingest replayed after its run finished is told it was queued, and runs nothing again', async () => {
+    await recordingNote('alice', 'rec5');
+    const botId = await botFor('alice', 'rec5');
+    expect((await queueNoteRun(ingestInput('rec5', botId))).kind).toBe('queued');
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NOT NULL`, [botId])).toBe(1);
+    // The run finishes; the replay arrives afterwards.
+    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'rec5'`);
+    const runSeq = (await pool.query(`SELECT run_seq FROM notes WHERE id = 'rec5'`)).rows[0].run_seq;
+    expect((await queueNoteRun(ingestInput('rec5', botId))).kind).toBe('in_flight');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec5' AND status = 'ready' AND run_seq = $1`, [runSeq])).toBe(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec5' AND entry_type = 'debit'`)).toBe(1);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('a notetaker kickoff that failed after queuing reopens its run, so the retry queues it once', async () => {
+    await recordingNote('alice', 'rec6');
+    const botId = await botFor('alice', 'rec6');
+    enqueueFails = true;
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('failed');
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NULL`, [botId])).toBe(1);
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec6' AND status = 'error'`)).toBe(1);
+    enqueueFails = false;
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('queued');
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('in_flight');
+    expect(enqueued).toHaveLength(1);
+    // Charged once for the run that went: the failed one was refunded.
+    const net = await pool.query(`SELECT COALESCE(SUM(minutes), 0)::int AS net FROM usage_ledger WHERE note_id = 'rec6'`);
+    expect(net.rows[0].net).toBe(10);
+  });
+
+  it('a replay whose queue transaction fails leaves a finished run alone: nothing failed, refunded or run again', async () => {
+    await recordingNote('alice', 'rec9');
+    const botId = await botFor('alice', 'rec9');
+    expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('queued');
+    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'rec9'`);
+    // The replay's transaction throws before it reaches the bot's row (a dropped connection, a deadlock victim).
+    await pool.query(`CREATE OR REPLACE FUNCTION fail_user_upsert() RETURNS trigger LANGUAGE plpgsql AS $$
+                        BEGIN RAISE EXCEPTION 'connection dropped'; END $$`);
+    await pool.query(`CREATE TRIGGER fail_user_upsert BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION fail_user_upsert()`);
+    try {
+      expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('failed');
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS fail_user_upsert ON users`);
+      await pool.query(`DROP FUNCTION IF EXISTS fail_user_upsert()`);
+    }
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec9' AND status = 'ready'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NOT NULL`, [botId])).toBe(1);
+    const net = await pool.query(`SELECT COALESCE(SUM(minutes), 0)::int AS net FROM usage_ledger WHERE note_id = 'rec9'`);
+    expect(net.rows[0].net).toBe(10);
+    expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('in_flight');
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('a notetaker kickoff that queued in Postgres but found its doc gone fails the note and reopens the run', async () => {
+    await recordingNote('alice', 'rec10');
+    const botId = await botFor('alice', 'rec10');
+    docs.delete('workspaces/workspace_alice/notes/rec10');
+    expect((await queueNoteRun(ingestInput('rec10', botId))).kind).toBe('failed');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec10' AND status = 'error'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NULL`, [botId])).toBe(1);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('a bot whose note was deleted (or another note\'s bot) queues nothing', async () => {
+    await recordingNote('alice', 'rec7');
+    await seedNote('rec8', 'workspace_alice', 'alice');
+    await pool.query(`UPDATE notes SET status = 'recording' WHERE id = 'rec8'`);
+    noteDoc('alice', 'rec8');
+    const botId = await botFor('alice', 'rec8');
+    expect((await queueNoteRun(ingestInput('rec7', botId))).kind).toBe('not_found');
+    await pool.query(`UPDATE meeting_bots SET note_id = NULL WHERE id = $1`, [botId]);
+    expect((await queueNoteRun(ingestInput('rec8', botId))).kind).toBe('not_found');
+    expect(await count(`SELECT 1 FROM notes WHERE id IN ('rec7', 'rec8') AND status = 'recording'`)).toBe(2);
+    expect(enqueued).toHaveLength(0);
   });
 
   it('markQueued itself refuses a recording note under the lock unless the caller is its ingest', async () => {

@@ -21,6 +21,7 @@ import { createRecallWebhookRoute } from './webhooks/recall.js';
 import { createTaskAuth } from './lib/task-auth.js';
 import { createSecretReader } from './lib/secrets.js';
 import { createNotetakerTasks } from './tasks/notetaker.js';
+import { createIngestTasks } from './tasks/ingest.js';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 
 const { enqueueTask } = cloudTasksModule;
@@ -69,7 +70,9 @@ export function buildApp({
   taskDeps,
 } = {}) {
   // The notetaker's handlers, unless a test gives its own.
-  tasks = tasks ?? (taskDeps ? createNotetakerTasks({ env, ...taskDeps }) : {});
+  tasks = tasks ?? (taskDeps
+    ? { ...createNotetakerTasks({ env, enqueue, ...taskDeps }), ...createIngestTasks({ env, ...taskDeps }) }
+    : {});
   // One fixed route per task, registered at startup: nothing from the request
   // path ever picks the function that runs.
   const handlers = Object.entries(tasks).filter(([kind, fn]) => /^[a-z_]+$/.test(kind) && typeof fn === 'function');

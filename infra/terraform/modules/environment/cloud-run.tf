@@ -120,10 +120,13 @@ locals {
     })
     notifier = local.db_env
     # Its own URL: /tasks/* checks that each OIDC token was minted for it.
+    # Ingest writes a recording to the recordings bucket, then queues its note's
+    # run on the transcode queue (common_env's TRANSCODER_URL and TASKS_PROJECT).
     meetings = merge(local.db_env, {
       MEETINGS_URL        = local.service_url["meetings"]
       RECALL_REGION       = var.recall_region
       MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
+      GCS_BUCKET          = local.region_bucket["recordings"]
     })
   }
 
