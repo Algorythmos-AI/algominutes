@@ -1477,10 +1477,20 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       `recordTermsAcceptanceIfNeeded` posts the new acceptance without showing the documents. The pages
       promise to announce a significant change in the app or by email, and don't claim the app asks. Before
       any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
-- [ ] **Imported audio is metered on the client's estimate.** `/v1/process` charges `ceil(durationSec/60)` from the
-      number the client sends. iOS imports send none, so they're charged 0 minutes; the web sends the length the browser
-      read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs. **RELEASE.md
-      PR 3b**, with the measured-length limit (PR 3 refuses a claimed length over the plan's longest recording).
+- [x] ~~**Imported audio is metered on the client's estimate.**~~ **Fixed (RELEASE.md PR 3b):** once the transcoder has
+      measured the audio (ffprobe), before any paid work, `settleMeasuredLength` (packages/db) settles the run's
+      charge to the measured minutes, under the note's row lock.
+      - Longer than charged: the difference is debited (`ingest:measured`) if the user's minutes cover it.
+      - Shorter: the difference is refunded (`refund:measured`).
+      - Over the user's minutes, or longer than the plan's longest recording: the note fails with a full refund and
+        a reason (`refund:over_quota` / `refund:too_long`), with no dead letter, since it's not a pipeline fault.
+      - A notetaker's meeting is settled but never refused.
+      - A replay writes nothing, and a length already accepted isn't refused after a plan change.
+      - A run another attempt already failed (and refunded) or finished is left alone (`moved_on`).
+      - The quota check takes markQueued's per-user meter lock, and checks the run's own billing month.
+      - Each adjustment has its own key, so a second measurement (a YouTube re-download) doesn't collide.
+      - Tested on Postgres (18 cases, including deterministic races for replays and the meter lock); every
+        branch mutation-checked.
 - [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
       `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
       api's allowlist (`ALLOWED_ORIGINS`) before web checkout (RELEASE.md PR 17 and PR 28).
