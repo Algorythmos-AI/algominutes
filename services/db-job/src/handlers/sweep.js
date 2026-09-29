@@ -44,6 +44,13 @@
 //                        name drops it if the first task is still live. After
 //                        NOTICE_MAX_AGE_H it's given up and logged. Notices done
 //                        with for TOMBSTONE_DAYS are pruned.
+//  11. redrive           lost pipeline work (RELEASE.md PR 5c; audit Q9–Q11): a
+//                        summary claimed REDRIVE_AFTER_MS ago whose note hasn't
+//                        moved since, and an embed claimed REDRIVE_AFTER_MS to
+//                        EMBED_REDRIVE_WITHIN_MS ago that left no embeddings, get
+//                        their task again (packages/db redrive-repo.ts: the claim
+//                        re-stamps, so once per window). Runs after stuck_notes,
+//                        so a note that's failed isn't re-driven.
 
 'use strict';
 
@@ -52,6 +59,7 @@
 const loadRepo = () => require('@algominutes/db');
 const loadNoteTerminal = () => require('@algominutes/db/note-terminal.cjs');
 const loadNotify = () => require('@algominutes/ai/notify.cjs');
+const loadCloudTasks = () => require('@algominutes/ai/cloud-tasks.cjs');
 
 const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000; // notes-repo IN_FLIGHT_STALE_MS (asserted equal in tests)
 const PURGE_GRACE_MS = 5 * 60 * 1000; // the api runs a new purge inline; leave it that long
@@ -66,6 +74,37 @@ const MIRROR_REPAIR_LIMIT = 200;
 const NOTICE_RETRY_AFTER_S = 5 * 60; // the writer's own enqueue goes first
 const NOTICE_MAX_AGE_H = 24; // a push about yesterday's recording helps nobody
 const LOCK_KEY = 'algominutes:sweep';
+// Past the summarize and embed queues' own retries (about an hour), so a task still retrying isn't doubled; the
+// stuck-note sweep fails a summary that's still lost at STUCK_NOTE_MS.
+const REDRIVE_AFTER_MS = 90 * 60 * 1000;
+const EMBED_REDRIVE_WITHIN_MS = 6 * 60 * 60 * 1000;
+const REDRIVE_LIMIT = 50;
+
+/**
+ * Enqueues a worker's task as its enqueuer does (the transcoder: tasks-client.js), from the job's env. Without
+ * a target configured (local runs, tests) it says 'skipped'.
+ */
+function workerEnqueuer(env, cloudTasks) {
+  const targets = {
+    summarizer: [env.SUMMARIZER_URL, env.SUMMARIZE_QUEUE || 'summarize'],
+    embedder: [env.EMBEDDER_URL, env.EMBED_QUEUE || 'embed'],
+  };
+  return async (worker, payload, { traceId, log }) => {
+    const [targetUrl, queue] = targets[worker];
+    if (!targetUrl || !env.TASKS_PROJECT || !env.JOBS_SA_EMAIL) return 'skipped';
+    await (cloudTasks || loadCloudTasks()).enqueueTask({
+      projectId: env.TASKS_PROJECT,
+      location: env.TASKS_LOCATION || 'us-central1',
+      queue,
+      targetUrl,
+      oidcServiceAccount: env.JOBS_SA_EMAIL,
+      payload,
+      traceId,
+      log,
+    });
+    return 'enqueued';
+  };
+}
 
 function firebaseDeps(env) {
   const { getApps, initializeApp } = require('firebase-admin/app');
@@ -87,7 +126,7 @@ async function openLockClient() {
 
 async function run({
   log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal(),
-  connectLockClient = null, notify = loadNotify(),
+  connectLockClient = null, notify = loadNotify(), enqueueWorker = null,
 }) {
   const deps = injected || firebaseDeps(env);
   const {
@@ -95,8 +134,9 @@ async function run({
     recordDeadLetter, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
-    listUnsentNotices, abandonStaleNotices, pruneOldNotices,
+    listUnsentNotices, abandonStaleNotices, pruneOldNotices, claimLostSummaries, claimLostEmbeds,
   } = repo;
+  const enqueue = enqueueWorker || workerEnqueuer(env || process.env);
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
   // One sweep at a time: a session-level advisory lock, released when the run
@@ -229,6 +269,29 @@ async function run({
       return failed;
     });
 
+    // Lost pipeline work: claimed, then its task again, under the note's user.
+    await step('redrive', async () => {
+      const summaries = await claimLostSummaries({ olderThanMs: REDRIVE_AFTER_MS, limit: REDRIVE_LIMIT });
+      const embeds = await claimLostEmbeds({ olderThanMs: REDRIVE_AFTER_MS, withinMs: EMBED_REDRIVE_WITHIN_MS, limit: REDRIVE_LIMIT });
+      let failedEnqueues = 0;
+      for (const [worker, runs] of [['summarizer', summaries], ['embedder', embeds]]) {
+        for (const r of runs) {
+          const fields = { noteId: r.noteId, workspaceId: r.workspaceId, userId: r.uid, runSeq: r.runSeq, worker };
+          try {
+            const outcome = await enqueue(worker, { noteId: r.noteId, workspaceId: r.workspaceId, uid: r.uid }, { traceId, log });
+            // A warning: work was lost, and this is its recovery.
+            log.warn(fields, outcome === 'skipped' ? 'redrive_skipped_no_config' : 'lost_work_redriven');
+          } catch (err) {
+            // Still claimed: the next window tries it again.
+            failedEnqueues += 1;
+            log.error({ err, ...fields }, 'redrive_enqueue_failed');
+          }
+        }
+      }
+      if (failedEnqueues) throw new Error(`${failedEnqueues} re-drive enqueue(s) failed`);
+      return { summaries: summaries.length, embeds: embeds.length };
+    });
+
     // A finished note whose doc missed its mirror write (packages/db
     // mirror-repair.ts): checked twice while 10-40 minutes old, repaired only
     // if Postgres says finished and the doc hasn't moved since it was read.
@@ -314,4 +377,4 @@ async function run({
   }
 }
 
-module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS, NOTICE_RETRY_AFTER_S, NOTICE_MAX_AGE_H };
+module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS, NOTICE_RETRY_AFTER_S, NOTICE_MAX_AGE_H, REDRIVE_AFTER_MS, EMBED_REDRIVE_WITHIN_MS };

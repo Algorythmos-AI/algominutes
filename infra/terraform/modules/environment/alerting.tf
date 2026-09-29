@@ -121,6 +121,14 @@ locals {
       severity  = "ERROR"
       doc       = "The daily spend cap was reached: recordings are refused, with their minutes refunded, until the day turns. See spend_cap_tripped (spent, cap). Raise daily_spend_cap_aud and apply if it's real use; look for a runaway if it isn't."
     }
+    # The sweep found pipeline work lost after its claim and enqueued it again (RELEASE.md PR 5c): recovered,
+    # but something lost it.
+    lost_work_redriven = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "The sweep re-drove a summary or an embed whose task was lost after its claim (lost_work_redriven: noteId, worker). The note recovers; find why the task was lost (redrive_enqueue_failed, chunk_complete_enqueue_failed, a crash) under the note's traceId."
+    }
     # Someone asked for help in the app (Settings → Help & Support, or a bad transcript/summary report).
     support_request_created = {
       threshold = 0
