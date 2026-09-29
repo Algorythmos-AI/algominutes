@@ -55,8 +55,10 @@ settings:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
-      # No paywall until the products exist and purchases verify (PR-32).
-      PAYWALL_ENABLED: "NO"
+      # The beta sells Pro in Apple's sandbox (RELEASE.md PR 27; TestFlight buys
+      # there, nobody is charged). Until the products exist in App Store Connect
+      # the paywall offers the invite code instead of a dead end.
+      PAYWALL_ENABLED: "YES"
     Release:
       # TODO(prod): the production Cloud Run origins, once prod is applied
       # (https://api-<prod project number>.australia-southeast1.run.app). Until
@@ -218,6 +220,10 @@ schemes:
         BroadcastExtension: all
     run:
       config: Debug
+      # Debug runs from Xcode buy from the local StoreKit configuration (the
+      # beta's products, placeholder prices). Kept out of every target: it never
+      # ships.
+      storeKitConfiguration: StoreKit/AlgoMinutes.storekit
     test:
       config: Debug
       targets:

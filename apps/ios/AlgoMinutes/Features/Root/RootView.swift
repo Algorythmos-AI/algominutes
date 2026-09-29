@@ -30,7 +30,7 @@ struct RootView: View {
         }
         // A9.5 paywall — presented from billing state (quota hit, metered gate,
         // trial banner, Settings), never at launch.
-        .sheet(isPresented: $billing.isPaywallPresented) {
+        .sheet(isPresented: $billing.isPaywallPresented, onDismiss: { billing.paywallDismissed() }) {
             PaywallView()
                 .environment(env)
                 .algoMinutesSheet([.large])

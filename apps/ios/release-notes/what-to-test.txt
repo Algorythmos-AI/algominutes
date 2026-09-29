@@ -12,6 +12,8 @@ Then please try:
 2. Open the note: read the summary, the action items and the transcript.
 3. Search for a word you said, and ask the note a question in chat.
 4. Settings, then Create account, to keep your notes with Apple or Google.
+5. Settings, then Go Pro. If plans show, buy one: TestFlight purchases are
+   Apple's test purchases, and you're never charged. Then Restore Purchases.
 
 Your notes are kept for the whole beta, and backed up. The public release
 starts fresh: you'll be told before then, with time to export your notes.

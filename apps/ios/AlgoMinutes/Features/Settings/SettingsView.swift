@@ -210,7 +210,8 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.heading)
                     }
                     Spacer()
-                    if env.billing.entitlement?.state != .active, AppConfig.paywallEnabled {
+                    // Anyone without a subscription, beta minutes included (RELEASE.md PR 27).
+                    if env.billing.entitlement?.isSubscription != true, AppConfig.paywallEnabled {
                         Button("Go Pro") { env.billing.presentPaywall(.manual) }
                             .font(Typography.label(14))
                             .foregroundStyle(Theme.onInverse)

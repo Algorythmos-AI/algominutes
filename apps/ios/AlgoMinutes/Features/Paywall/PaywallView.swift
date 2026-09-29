@@ -20,6 +20,8 @@ struct PaywallView: View {
     @State private var showPendingApproval = false
     @State private var isRestoring = false
     @State private var inGracePeriod = false
+    /// The pre-purchase check found a subscription already (RELEASE.md PR 27).
+    @State private var alreadySubscribed: BillingService.PurchaseGate?
 
     private var store: StoreKitService { env.billing.store }
 
@@ -30,6 +32,7 @@ struct PaywallView: View {
                     headline
                     if inGracePeriod { gracePeriodNotice }
                     if showPendingApproval { pendingApprovalNotice }
+                    if case .alreadySubscribed(let inAppStore)? = alreadySubscribed { alreadySubscribedNotice(inAppStore: inAppStore) }
                     productList
                     if let purchaseError { errorRow(purchaseError) }
                     purchaseButton
@@ -152,11 +155,14 @@ struct PaywallView: View {
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.muted)
             } else {
-                // TODO(A4-apple): products not configured in App Store Connect yet.
-                Text("Plans are unavailable right now. Please try again shortly.")
+                // No products (none in App Store Connect yet, or the App Store
+                // unreachable): the beta's invite code is the other way to minutes.
+                Text("Plans are unavailable right now. Please try again shortly, or add minutes with an invite code.")
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
+                Button("Enter an invite code") { env.billing.switchToInviteSheet() }
+                    .buttonStyle(SecondaryButtonStyle())
             }
         }
         .frame(maxWidth: .infinity)
@@ -188,7 +194,15 @@ struct PaywallView: View {
         isPurchasing = true
         purchaseError = nil
         showPendingApproval = false
+        alreadySubscribed = nil
         defer { isPurchasing = false }
+
+        // Never a second subscription: the entitlement is read again first.
+        let gate = await env.billing.purchaseGate()
+        guard gate == .allowed else {
+            alreadySubscribed = gate
+            return
+        }
 
         switch await store.purchase(product) {
         case .success:
@@ -202,6 +216,19 @@ struct PaywallView: View {
         case .failed(let message):
             purchaseError = message
         }
+    }
+
+    /// Already subscribed: nothing to buy. An App Store subscription is managed
+    /// there; one billed on the web is managed where it was bought (no link out:
+    /// App Review 3.1.3).
+    private func alreadySubscribedNotice(inAppStore: Bool) -> some View {
+        noticeBanner(
+            icon: "checkmark.seal",
+            title: "You already have Pro",
+            message: inAppStore
+                ? "Your subscription is active. To change or cancel it, use Manage or Cancel Subscription below."
+                : "Your subscription is active, billed where you bought it."
+        )
     }
 
     // MARK: - Restore + manage

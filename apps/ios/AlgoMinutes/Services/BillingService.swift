@@ -137,6 +137,46 @@ final class BillingService {
         isInviteSheetPresented = true
     }
 
+    /// Set while the paywall closes to make way for the invite code sheet: one
+    /// sheet can't present while another is still dismissing, so the paywall's
+    /// `onDismiss` opens it (`paywallDismissed()`).
+    private(set) var inviteAfterPaywall = false
+
+    /// From a paywall with nothing to sell (no products in App Store Connect yet,
+    /// or the App Store unreachable) to the beta's other way to minutes, an
+    /// invite code (RELEASE.md PR 27), rather than a dead end.
+    func switchToInviteSheet() {
+        inviteAfterPaywall = true
+        isPaywallPresented = false
+    }
+
+    /// The paywall sheet's `onDismiss`.
+    func paywallDismissed() {
+        guard inviteAfterPaywall else { return }
+        inviteAfterPaywall = false
+        presentInviteSheet()
+    }
+
+    // MARK: - Pre-purchase check
+
+    /// Whether a purchase may start. StoreKit buys on the device, where the server
+    /// can't refuse it, and a store's charge can't be refunded from our side, so
+    /// the entitlement is read again first: anyone already subscribed, on any
+    /// store, isn't sold a second subscription (RELEASE.md PR 26b's check, on iOS).
+    /// A grant or the trial isn't a subscription, and can buy.
+    enum PurchaseGate: Equatable {
+        case allowed
+        /// Managed in the App Store (so the paywall offers Manage), or billed on the web.
+        case alreadySubscribed(managedInAppStore: Bool)
+    }
+
+    func purchaseGate() async -> PurchaseGate {
+        await refresh()
+        guard let e = entitlement, e.isSubscription else { return .allowed }
+        AppLog.info("purchase_refused_subscribed rail=\(e.rail ?? "unknown")")
+        return .alreadySubscribed(managedInAppStore: e.isManagedInAppStore)
+    }
+
     /// Redeem an invite code; the entitlement it produced becomes the current
     /// one. Throws the api's error (see `APIClient.redeemInvite`).
     @discardableResult
