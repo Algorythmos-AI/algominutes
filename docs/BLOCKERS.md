@@ -3,6 +3,27 @@
 Batched list of everything that needs a human decision or credential. Nothing here stopped the A2/A3
 run; each item has a safe reversible default already applied. Grouped by type.
 
+## 0. The release plan (rev 10, 2026-09-29)
+
+The order of work to the beta and production is `docs/plans/RELEASE.md`: three beta waves (iPhone and Chrome;
+the notetaker and Pro; the Chrome extension), then prod-ready. It supersedes rev 9. Evidence for each wave's
+checks is recorded here, under the wave.
+
+- [x] **Staging deploys were stuck from 2026-09-28 08:23 UTC to 2026-09-29.** Run 36397066772 (13acfc2) sat
+  "waiting" at `migrate` for the `staging` environment, which has only a branch policy and no reviewers. It held
+  the `deploy-staging` concurrency group, so every later deploy was cancelled while pending, and #236–#248 never
+  reached staging. Cancelled on 2026-09-29; the run for 41ec920 took its place. If a run waits at an environment
+  again, cancel it and check the environment's protection rules
+  (`gh api repos/Algorythmos-AI/algominutes/environments/staging`).
+- [ ] **Owner, start today (long lead times):**
+  - send the Terms, the Privacy Policy and `docs/CONSENT.md` for legal review, including recording consent (NSW is
+    all-party), bots in meetings and APP 8 cross-border;
+  - Recall.ai: two accounts in Tokyo (staging, prod), the startup-rate application, and the DPA with a
+    no-training confirmation;
+  - Apple: the Paid Apps agreement and the Small Business Program;
+  - Chrome Web Store and Edge Add-ons developer accounts;
+  - auto-renew for `algorythmos.com` (expires 2026-12-06) and the Zoho aliases `support@` and `privacy@`.
+
 ## 1. Needs your action before/at A4 (repo & infra)
 
 - [x] **Branch protection (checked 2026-09-28).** Both branches are protected by active rulesets
@@ -39,8 +60,9 @@ and both smokes, and `deploy-staging` has been green since.
 - [x] **Domain decided (2026-09-26):** `algorythmos.com` (owned; Cloudflare DNS, Zoho mail). The site is
       `algominutes.algorythmos.com`, mail is `support@` / `privacy@algorythmos.com`, and the api keeps its
       `run.app` URLs (DECISIONS). `algominutes.com` is **not registered**, so nothing may point at it: the
-      server moved in #170, the iOS app in its "nothing to trip on" PR. The web's `apiUrl.ts` still names
-      `api.algominutes.com`; the web isn't deployed, and it moves with its `/v1` migration.
+      server moved in #170, the iOS app in its "nothing to trip on" PR. The web app names no origin in code:
+      `apiUrl.ts` is gone, and it reads `VITE_API_ORIGIN` / `VITE_BILLING_ORIGIN` with no fallback
+      (`apps/web/src/lib/api/config.ts`, checked 2026-09-29).
 - [ ] **Owner:** turn on auto-renew for `algorythmos.com` (expires 2026-12-06); add the Zoho aliases.
 - [x] Staging's **Browser** API key allows the staging site's referrers (2026-09-27).
       `check-signin-chain.mjs` checks both referrers, and its 25 APIs, on every run. Referrers can be spoofed
@@ -52,10 +74,9 @@ and both smokes, and `deploy-staging` has been green since.
 - ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
   `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
   `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).
-- Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes the prod API origin
-  (now `https://api.algominutes.com`, an unregistered domain), and the web ignores `VITE_API_BASE_URL` on
-  local/capacitor hosts in favour of it. The web isn't deployed; fix it with the web's `/v1` migration,
-  before any web deploy, so no ID token is ever sent to a domain we don't own.
+- ~~Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes the prod API origin~~
+  **Resolved (checked 2026-09-29):** the new web app (#190, #191) deleted `apiUrl.ts`; its origins come only from
+  the build's env, so no ID token can go to a domain we don't own.
 
 See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
@@ -136,10 +157,9 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
       chip tappable → rename alert → call `setNoteSpeaker` → refresh the transcript (TranscriptRepository is
       idempotent-per-note, so it needs a forced reload or an optimistic in-place label update keyed on the
       new `TranscriptLine.speakerTag`). Compile + device-test all iOS edits before ship.
-- [ ] **Web rename is blocked by architecture.** The web renders the Firestore mirror preview
-      (`{speaker, time, text}`, no `speakerTag`), so it ships raw "Speaker N". To add a web chip, either
-      carry `speakerTag` through the mirror or move the web onto the API transcript read (iOS's `/api/note`),
-      then add the chip + `authedFetch('/v1/notes/:id/speakers')`.
+- [x] ~~**Web rename is blocked by architecture.**~~ **Resolved (checked 2026-09-29):** the new web app reads the
+      transcript through the api and renames speakers on the note page (`apps/web/src/app/notes/NoteDetailPage.tsx`,
+      #193). The iOS chip above is still open (`docs/plans/RELEASE.md`, PR 25).
 
 **Cannot verify without the above:**
 - [ ] **Shadow eval old-Google vs AssemblyAI on a real 2-speaker >30-min file** (harness built —
@@ -210,11 +230,9 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
      `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
      can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
      support. Consider a server pre-purchase entitlement check.
-  5. **Client billing endpoint wiring (TODO(A9-infra)).** The iOS client uses provisional paths
-     (`api/verify-purchase`, `api/entitlement`) that must be reconciled with the deployed routes: verify
-     lives on **services/billing** `POST /v1/purchases/verify` (a separate service base URL, not the api),
-     entitlement is **api** `GET /v1/entitlement`, events is api `POST /v1/events`. The web client already
-     uses the correct paths. Reconcile the iOS APIClient base URLs/paths when the services deploy (A11).
+  5. ~~**Client billing endpoint wiring (TODO(A9-infra)).**~~ **Resolved (checked 2026-09-29):** iOS verifies
+     purchases on billing's own host (`v1/purchases/verify`, `APIClient.swift:663`) and reads `v1/entitlement` and
+     posts `v1/events` on the api (`:672`).
   6. **Android Play Billing CLIENT is B2.** The Play *server* side (verify + RTDN webhook) is built in
      services/billing; the Android in-app Play Billing Library flow (products, purchase, restore) ships in
      Track B, calling `POST /v1/purchases/verify` with `{purchaseToken, productId}`.
@@ -234,7 +252,7 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   - [x] **Owner:** Push enabled on the App ID `com.algorythmos.algominutes` (2026-09-26).
   - [x] **Owner:** APNs auth key (`.p8`) uploaded in Firebase → Project settings → Cloud Messaging for staging,
     development and production (2026-09-26).
-  - [ ] **Owner:** the same for the prod Firebase project, when it exists (S3-PR4).
+  - [ ] **Owner:** the same for the prod Firebase project, when it exists (RELEASE.md, Apply P).
   - [x] **Done (push-end-to-end PR):** `aps-environment` is in `AlgoMinutes.entitlements` (Xcode's signing
     makes it `production` for TestFlight), guarded by `tests/ios-entitlements.test.ts`. A tapped push opens
     its note from any tab: `MainTabView` brings Home to the front on every link (`DeepLinkRouter.arrivals`),
@@ -245,11 +263,11 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   (ios-m0-readiness PR):** one 500 MB cap in the api and the app (see "one upload cap" above).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
   the palette is a provisional, accessible v1. Full light-mode wiring across the (dark-first) UI is a follow-up.
-- **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
-  triggers it and its only permission copy is mic-only; App Review will question an unexplained
-  system-capture extension. Decide before the iOS submission build: **wire it** (RPSystemBroadcastPickerView
-  + honest capture copy + the A4 App Group) **or exclude it** from that build. Needs the A4 App Group either
-  way. Default applied: left re-homed in the repo, unwired.
+- ~~**iOS broadcast extension — wire or exclude before submission (A6.6 N1).**~~ **Wired (checked 2026-09-29):**
+  `BroadcastPickerView.swift` sits behind the consent step in `RecorderFlow.swift`, shown only while `/v1/config`
+  says `broadcastCapture` (#134, #163, #184), and both targets carry the App Group. Still before external review:
+  the microphone text must mention capturing another app's call (RELEASE.md PR 11), the review notes must explain
+  it (PR 16), and it must be proven on a device (Wave 1 check 5).
 - **A6.4 onboarding deliverables still to BUILD** (audit only so far): permission *explainer* + Settings
   deep-link on denial, and a **sample note** (missing on both platforms — the biggest named gap). Web Home
   has no first-run/empty state; iOS notes-listener failure is silent (`NotesRepository.swift:74`). See
@@ -575,8 +593,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [x] **Done for M1 (note-deletion-path, account-deletion-path, workers-note-gone, ios-delete-via-v1,
   deleted-note-tombstone PRs):** a note is deleted through `POST /v1/notes/delete` (iOS since #114),
   Postgres first, then the doc, then the audio, and a tombstone keeps a stale client from uploading into
-  it. Account deletion is one idempotent Postgres-first path. Open below, not on the M1 path: the web
-  client's `setDoc` merge writes (R2, the web `/v1` migration), and shared workspaces on account deletion.
+  it. Account deletion is one idempotent Postgres-first path. Open below: shared workspaces on account deletion
+  (RELEASE.md PR 40). The web's `setDoc` merge writes (R2) are gone.
   Was: **⚠️ M1: deletion doesn't work on the new backend. A deleted note stays in Postgres, stays
   searchable, and its audio stays in GCS.** (Verified 2026-09-25.)
   - **Deleting a note:** the clients delete the Firestore doc (`NotesRepository.swift deleteNote`) and rely
@@ -627,9 +645,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           its ingest debit, and nothing can refund it afterwards (`usage_ledger.note_id` is SET NULL on
           delete). If that should be refunded, `deleteNote` would write the reversal in its own transaction
           for a note still `queued`.
-      - **R2:** the web client's `setDoc(…, { merge: true })` writes (`apps/web/src/lib/noteStatus.ts:4`,
-        `App.tsx`) can re-create a doc deleted from another device. That's fixed by the web's `/v1`
-        migration.
+      - ~~**R2:** the web client's `setDoc(…, { merge: true })` writes can re-create a doc deleted from another
+        device.~~ **Fixed by the new web app (checked 2026-09-29):** `noteStatus.ts` and `App.tsx` are gone. Its
+        only Firestore writes are in `apps/web/src/lib/notes/noteCache.ts`: `setDoc` without merge on a new id,
+        and `updateDoc`, which can't re-create a deleted doc. `check-no-direct-firestore.mjs` gates them.
       - **R3:** ~~a YouTube permanent failure mirrors `error` to Firestore only~~ **fixed
         (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
         retry isn't refused for 3 h. ~~Still open: `chunking` and `summarizing` are mirrored with no matching
@@ -845,7 +864,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     mirror write throws out of `markQueued` after its commit and reaches `failNote` too
     (`process-intelligence.js`, the `mark_queued_failed`, `kickoff_misconfig` and `enqueue` events).
     - [ ] Only the enqueue failure has a Postgres test (`process-kickoff.test.ts`). Tests for the mirror
-      failure and the misconfigured kickoff land with the metering PR (plan S2-PR6c).
+      failure and the misconfigured kickoff land with the metering PR (RELEASE.md PR 3, rev 9's S2-PR6c).
   - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
     free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
     the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
@@ -1205,8 +1224,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - A failed revocation doesn't block deletion (logged `apple_token_revoke_failed`): removing the data
     comes first.
   - Accounts without Apple sign-in, including anonymous ones, are unaffected.
-- [ ] **Yours:** configure the Firebase Apple provider (Services ID, Key ID, `.p8`) in `algominutes-staging`.
-  Without it the revocation fails and is logged.
+- [x] ~~**Yours:** configure the Firebase Apple provider (Services ID, Key ID, `.p8`) in `algominutes-staging`.~~
+  **Done:** Apple sign-in is enabled on staging (§2, checked 2026-09-28 through the Identity Toolkit admin API).
 - [ ] **Verify on a real iPhone (M1):** delete an Apple-linked test account, and the app disappears from
   Settings → Apple ID → Sign in with Apple.
 
@@ -1375,7 +1394,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   out of Search and Chat. It now throws, after rolling back the write: the embedder answers 5xx, the last
   attempt dead-letters (and alerts, #90), and a deleted note's foreign-key error is still acknowledged. A
   vector count that doesn't match the chunks is an error too. Tested on Postgres; mutation-checked.
-- [ ] **Xcode Cloud → TestFlight (plan PR-30), repo side done (xcode-cloud-scripts PR).**
+- [x] **Xcode Cloud → TestFlight (plan PR-30), repo side done (xcode-cloud-scripts PR).** **Owner side done
+  (2026-09-26):** the App Store Connect record, the internal group and the "Staging → Internal" workflow exist, and
+  build 1.0.0 (7) is installed from TestFlight. External testers need a second workflow, "Staging → Beta"
+  (RELEASE.md, Wave 1).
   `apps/ios/ci_scripts/ci_post_clone.sh` stamps `CI_BUILD_NUMBER`, writes the plist from the secret
   `GOOGLE_SERVICE_INFO_PLIST_B64`, and generates the project (dry-run tested, including a bad secret failing
   fast). **Yours:** the App Store Connect record, testers and agreements, connecting the repo, and creating
@@ -1440,10 +1462,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs.
 - [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
       `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
-      api's allowlist (`ALLOWED_ORIGINS`) before web checkout (S3-PR10).
-- [ ] **The api ignores the web's `X-Trace-Id`.** `traceIdFrom` reads only `X-Cloud-Trace-Context`, which a
-      browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
-      api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
+      api's allowlist (`ALLOWED_ORIGINS`) before web checkout (RELEASE.md PR 17 and PR 28).
+- [x] ~~**The api ignores the web's `X-Trace-Id`.**~~ **Fixed (#188):** the trace middleware prefers a
+      well-formed `X-Trace-Id` and sends it back (`services/api/src/middleware/trace.js`).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
 - [ ] **Owner, for the web e2e (`web-e2e`):** create Vercel's Protection Bypass for Automation secret and add it to
       GitHub as `VERCEL_AUTOMATION_BYPASS_SECRET` (`docs/runbooks/site.md`). The journey has been run only against a
@@ -1476,9 +1497,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
-- [ ] **The web app still calls the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
-  `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so the web doesn't work
-  against the deployed backend (it isn't deployed). **The iOS app moved in full** (A–E below).
+- [x] ~~**The web app still calls the pre-`/v1` API**~~ **Resolved (#190, #191):** the new web app calls only
+  `/v1`, through the typed client `apps/web/src/lib/api/client.ts`. **The iOS app moved in full** (A–E below).
   - **iOS (plan PR-17), in five PRs** (scoped 2026-09-25; every api call also lacked the required
     `X-AlgoMinutes-Client` header, so each would get a 400):
     - [x] **A, build config (ios-staging-config PR):** Debug, Staging and Release configurations, each
@@ -1526,8 +1546,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       (#157).
     - ~~Recording cap~~ **done:** the api caps `/v1/uploads` at 500 MB (#97), and the app checks the same cap
       first (ios-m0-readiness PR).
-  - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
-    (`POST /v1/uploads` + `/v1/process`, then Firestore status), and `lib/*` to the `/v1` paths.
+  - ~~**Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow~~ Done by
+    the new web app (#190–#199).
 
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
@@ -1661,7 +1681,8 @@ and tested, but no bot joins a real meeting.
   with SAML for a signed-in Meet bot. Its account name replaces the bot name, so call it "AlgoMinutes Notetaker".
 - [ ] **Owner: apply the staging plans** for #236 (the summarize retry window and the `gemini_transient` alert)
   and #238 (queue dispatch capacity) once they merge. Re-plan first, and redeploy after (a saved plan resets
-  Cloud Run images).
+  Cloud Run images). **2026-09-29:** `reviewed-7fd70b6.tfplan` is stale, because #243 and #245 changed Terraform
+  after it. Don't apply it. These changes ride in Apply A (RELEASE.md PR 6), re-planned when that PR merges.
 - [ ] **Before 2026-10-20: prove gemini-3.5-flash on a long recording.** It becomes the only Sydney model then
   (DECISIONS 2026-09-28). Upload a meeting of 45–60 minutes on staging; the check is the summarizer's
   `gemini_ok` with `finishReason: STOP` and chapters present, with no `gemini_output_truncated`.
