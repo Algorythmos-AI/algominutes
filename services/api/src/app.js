@@ -81,7 +81,15 @@ export function buildApp() {
   // otherwise return HTML stack traces) and any unhandled route rejection
   // forwarded by the router's async wrapper.
   app.use((err, req, res, _next) => {
-    (req?.log || rootLogger).error({ err }, 'unhandled_error');
+    const log = req?.log || rootLogger;
+    if (err?.type === 'entity.parse.failed') {
+      // A body that isn't JSON. body-parser's message quotes part of it, and
+      // that can be a secret (an invite code) or someone's words, so log that
+      // it happened, never what it said.
+      log.warn({ errType: err.type, status: 400 }, 'request_body_unparseable');
+    } else {
+      log.error({ err }, 'unhandled_error');
+    }
     if (res.headersSent) return;
     const status =
       err?.status || err?.statusCode ||

@@ -15,6 +15,19 @@ checks is recorded here, under the wave.
   reached staging. Cancelled on 2026-09-29; the run for 41ec920 took its place. If a run waits at an environment
   again, cancel it and check the environment's protection rules
   (`gh api repos/Algorythmos-AI/algominutes/environments/staging`).
+- [x] **Invite codes built (RELEASE.md PR 2):** migration 025, `beta-invites-repo.ts`, `POST /v1/beta/redeem`, the
+  db-job `beta-invite` handler and `scripts/new-invite-code.sh`, plus the `TRIAL_ON_FIRST_USE` switch (DECISIONS
+  2026-09-29).
+  - Tested on Postgres (26 cases), each safeguard mutation-checked:
+    - replay, expired, revoked, used up, and a deterministic race for the last use;
+    - a live grant never reduced or mixed, including an owner's grant committed mid-redemption;
+    - the notetaker window, account deletion, a deleted account;
+    - no code in any log line, or in a malformed request body's log line;
+    - a 402, then redeem, then a queued retry with the trial off.
+  - The real script's hash is checked against the server's (`tests/new-invite-code.test.ts`).
+  - [ ] **Owner, after Apply A** (which turns the trial off on staging): make the reviewer's code and each cohort's
+    codes with `scripts/new-invite-code.sh`, which prints the code for the tester and the exact command to register
+    its hash. The clients' code entry lands in PR 8 (iOS) and PR 9 (web).
 - [ ] **Owner, start today (long lead times):**
   - send the Terms, the Privacy Policy and `docs/CONSENT.md` for legal review, including recording consent (NSW is
     all-party), bots in meetings and APP 8 cross-border;

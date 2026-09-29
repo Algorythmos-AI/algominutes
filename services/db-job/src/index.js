@@ -34,6 +34,7 @@ const HANDLERS = {
   'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
   'grant-tester':   () => require('./handlers/grant-tester.js'),
   'grant-notetaker': () => require('./handlers/grant-notetaker.js'),
+  'beta-invite':    () => require('./handlers/beta-invite.js'),
 };
 
 async function main() {

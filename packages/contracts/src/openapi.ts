@@ -491,6 +491,21 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/beta/redeem`, tags: ['billing'], security: authed, parameters: commonHeaders,
+    summary: 'Redeem a beta invite code for time-limited Pro minutes (and the notetaker, when the invite includes it). Redeeming the same code again returns the same answer and uses nothing.',
+    request: { body: json(S.RedeemInviteRequest) },
+    responses: {
+      200: { description: 'Redeemed (or already redeemed by this user).', ...json(S.RedeemInviteResponse) },
+      400: { description: 'Not a valid code (unknown or revoked).', ...json(S.RedeemInviteError) },
+      401: errorResponse('Missing or invalid token, or the account was deleted.'),
+      409: { description: 'Every use of this code is taken.', ...json(S.RedeemInviteError) },
+      410: { description: 'The code has expired.', ...json(S.RedeemInviteError) },
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many attempts; try again later.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'get', path: `${API_BASE_PATH}/config`, tags: ['config'], security: authed, parameters: commonHeaders,
     summary: 'Server-side feature switches the apps read at launch (e.g. broadcast capture).',
     responses: {

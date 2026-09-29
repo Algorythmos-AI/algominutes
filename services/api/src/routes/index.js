@@ -31,6 +31,7 @@ import { clientErrorRoute } from './client-error.js';
 import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
+import { redeemInviteRoute } from './beta.js';
 import { appConfigRoute } from './app-config.js';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
@@ -217,6 +218,16 @@ export function buildRouter() {
 
   // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
   router.get('/entitlement', authed, wrap(entitlementRoute));
+
+  // Beta invite codes (docs/plans/RELEASE.md PR 2). Codes carry 75 random bits,
+  // so guessing is hopeless; this per-user budget (10 an hour) keeps a script
+  // from hammering Postgres with attempts anyway.
+  router.post(
+    '/beta/redeem',
+    authed,
+    userRateLimit({ limit: 10, windowMs: 60 * 60_000, event: 'rate_limited_redeem' }),
+    wrap(redeemInviteRoute),
+  );
   // Server-side feature switches (broadcast capture's kill switch).
   router.get('/config', authed, wrap(appConfigRoute));
   // ── online meetings (docs/plans/MEETINGS.md) ── meetings.js ─────────────

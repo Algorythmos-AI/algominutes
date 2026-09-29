@@ -20,3 +20,4 @@ export * from './compliance';
 export * from './actions';
 export * from './appConfig';
 export * from './meetings';
+export * from './beta';

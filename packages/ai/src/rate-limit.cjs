@@ -52,15 +52,23 @@ function clientRateLimit({ limit = envLimit('RATE_LIMIT_IP_PER_MIN', 300) } = {}
   });
 }
 
-/** Per verified user. Mount after the auth middleware (it sets req.uid). */
-function userRateLimit({ limit = envLimit('RATE_LIMIT_USER_PER_MIN', 120) } = {}) {
+/**
+ * Per verified user. Mount after the auth middleware (it sets req.uid). A route
+ * that needs a tighter budget (e.g. redeeming invite codes) mounts its own, with
+ * a longer window and its own event name.
+ */
+function userRateLimit({
+  limit = envLimit('RATE_LIMIT_USER_PER_MIN', 120),
+  windowMs = WINDOW_MS,
+  event = 'rate_limited_user',
+} = {}) {
   return rateLimit({
-    windowMs: WINDOW_MS,
+    windowMs,
     limit,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     keyGenerator: (req) => `uid:${req.uid}`,
-    handler: onLimited('rate_limited_user'),
+    handler: onLimited(event),
   });
 }
 

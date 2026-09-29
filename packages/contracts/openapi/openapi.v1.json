@@ -1919,6 +1919,62 @@
           "complete"
         ]
       },
+      "RedeemInviteResponse": {
+        "type": "object",
+        "properties": {
+          "entitlement": {
+            "$ref": "#/components/schemas/EntitlementResponse"
+          },
+          "grantEndsAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "notetaker": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entitlement",
+          "grantEndsAt",
+          "notetaker"
+        ]
+      },
+      "RedeemInviteError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "invite_invalid",
+              "invite_expired",
+              "invite_used_up"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "RedeemInviteRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "example": "BETA-7K2QX-M9D4R-TW8HN"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
       "AppConfigResponse": {
         "type": "object",
         "properties": {
@@ -4154,6 +4210,105 @@
           },
           "500": {
             "description": "Internal error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/beta/redeem": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Redeem a beta invite code for time-limited Pro minutes (and the notetaker, when the invite includes it). Redeeming the same code again returns the same answer and uses nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemInviteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redeemed (or already redeemed by this user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid code (unknown or revoked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token, or the account was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Every use of this code is taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The code has expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts; try again later.",
             "content": {
               "application/json": {
                 "schema": {

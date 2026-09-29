@@ -20,7 +20,7 @@ import {
   freeFloorMinutes,
 } from '@algominutes/contracts';
 import { usedMinutes, currentBillingPeriod } from './usage-repo.js';
-import { getSubscription, deriveState } from './subscriptions-repo.js';
+import { getSubscription, deriveState, trialOnFirstUse } from './subscriptions-repo.js';
 import { getActiveGrant } from './entitlement-grants-repo.js';
 
 export interface Entitlement {
@@ -38,7 +38,8 @@ export interface Entitlement {
 export async function resolveEntitlement(uid: string): Promise<Entitlement> {
   const period = currentBillingPeriod();
   const sub = await getSubscription(uid);
-  const derived = deriveState(sub);
+  // A user with no row yet starts the trial at first use, unless it's switched off.
+  const derived = sub || trialOnFirstUse() ? deriveState(sub) : 'free_floor';
   const grant = derived === 'active' ? null : await getActiveGrant(uid);
   const state: EntitlementState = grant ? 'active' : derived;
 
