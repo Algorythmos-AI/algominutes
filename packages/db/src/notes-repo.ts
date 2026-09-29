@@ -238,17 +238,17 @@ async function upsertCoreToPostgres(
       );
     }
     await client.query('DELETE FROM action_items WHERE note_id = $1', [input.noteId]);
-    for (const text of input.summary.actionItems || []) {
+    for (const [position, text] of (input.summary.actionItems || []).entries()) {
       await client.query(
-        `INSERT INTO action_items (note_id, text) VALUES ($1, $2)`,
-        [input.noteId, text],
+        `INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)`,
+        [input.noteId, text, position],
       );
     }
     await client.query('DELETE FROM key_decisions WHERE note_id = $1', [input.noteId]);
-    for (const text of input.summary.keyDecisions || []) {
+    for (const [position, text] of (input.summary.keyDecisions || []).entries()) {
       await client.query(
-        `INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)`,
-        [input.noteId, text],
+        `INSERT INTO key_decisions (note_id, text, position) VALUES ($1, $2, $3)`,
+        [input.noteId, text, position],
       );
     }
     await client.query('COMMIT');
@@ -758,12 +758,12 @@ export async function markSummaryReady(
         ],
       );
       await client.query('DELETE FROM action_items WHERE note_id = $1', [input.noteId]);
-      for (const text of input.summary.actionItems || []) {
-        await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
+      for (const [position, text] of (input.summary.actionItems || []).entries()) {
+        await client.query('INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)', [input.noteId, text, position]);
       }
       await client.query('DELETE FROM key_decisions WHERE note_id = $1', [input.noteId]);
-      for (const text of input.summary.keyDecisions || []) {
-        await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [input.noteId, text]);
+      for (const [position, text] of (input.summary.keyDecisions || []).entries()) {
+        await client.query('INSERT INTO key_decisions (note_id, text, position) VALUES ($1, $2, $3)', [input.noteId, text, position]);
       }
       const notice = await recordNotice(client, {
         noteId: input.noteId, workspaceId: input.workspaceId, kind: 'note_ready', traceId: trace,

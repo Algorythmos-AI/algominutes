@@ -184,12 +184,12 @@ async function fetchShareView({ noteId, scope, log }) {
       }),
       withQueryTimeout({
         timeoutMs: TIMEOUT_MS,
-        text: `SELECT text FROM action_items WHERE note_id = $1 ORDER BY created_at ASC, id ASC`,
+        text: `SELECT text FROM action_items WHERE note_id = $1 ORDER BY position ASC NULLS LAST, created_at ASC, id ASC`,
         values: [noteId], log, op: 'share_items',
       }),
       withQueryTimeout({
         timeoutMs: TIMEOUT_MS,
-        text: `SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY created_at ASC, id ASC`,
+        text: `SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY position ASC NULLS LAST, created_at ASC, id ASC`,
         values: [noteId], log, op: 'share_decisions',
       }),
     ]);
