@@ -19,7 +19,8 @@ describe('publicSiteUrl', () => {
   it('is what share links and the billing return pages are built on', async () => {
     const fs = await import('node:fs');
     const shares = fs.readFileSync('services/api/src/routes/shares.js', 'utf8');
-    expect(shares).toMatch(/`\$\{publicSiteUrl\(\)\}\/s\/\$\{raw\}`/);
+    // A share link opens the web app's viewer, on the viewer's host or the site (RELEASE.md PR 29).
+    expect(shares).toMatch(/`\$\{shareViewerOrigin\(\)\}\/app\/s\/\$\{raw\}`/);
     expect(shares).not.toMatch(/['"`]https:\/\//);
     for (const f of ['checkout', 'portal']) {
       const src = fs.readFileSync(`services/billing/src/routes/${f}.js`, 'utf8');
