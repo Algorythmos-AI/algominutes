@@ -293,6 +293,9 @@ describe('the notifier sends each notice once', () => {
     const n = notifier();
     expect((await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice' })).status).toBe(200);
     expect(n.sends).toHaveLength(1);
-    expect((await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice', noticeId: '1; DROP' })).status).toBe(400);
+    // Refused: acknowledged (2xx, so Cloud Tasks stops retrying it) and nothing sent.
+    expect(await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice', noticeId: '1; DROP' }))
+      .toEqual({ status: 200, json: { ok: false, error: 'bad_payload' } });
+    expect(n.sends).toHaveLength(1);
   });
 });
