@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { setRetentionDays, recordTermsAcceptance, createSupportRequest, trackEvent } from '@algominutes/db';
+import { setRetentionDays, getRetentionDays, recordTermsAcceptance, createSupportRequest, trackEvent } from '@algominutes/db';
 import { SetRetentionRequest, AcceptTermsRequest, SupportRequest } from '@algominutes/contracts/schemas';
 
 // Bodies are validated with the published contract schemas (packages/contracts),
@@ -19,6 +19,13 @@ export async function setRetentionRoute(req, res) {
   await setRetentionDays(req.uid, parsed.data.retentionDays);
   await recordEvent(req, 'retention_set', { days: parsed.data.retentionDays ?? 'keep' });
   return res.status(200).json({ ok: true });
+}
+
+// The account's retention, so every device shows the choice made on any of them (RELEASE.md PR 12b).
+// Only the caller's own row: the uid comes from the verified token.
+export async function getRetentionRoute(req, res) {
+  const retentionDays = await getRetentionDays(req.uid);
+  return res.status(200).json({ retentionDays });
 }
 
 // A10 #3 — timestamped, versioned Terms + Privacy acceptance at signup.

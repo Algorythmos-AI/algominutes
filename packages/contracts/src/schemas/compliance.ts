@@ -7,6 +7,11 @@ export const SetRetentionRequest = z
   .object({ retentionDays: z.number().int().positive().nullable() }) // null = keep until deleted
   .openapi('SetRetentionRequest');
 
+/** The account's retention, as last set on any device (GET /v1/account/retention). */
+export const RetentionResponse = z
+  .object({ retentionDays: z.number().int().positive().nullable() }) // null = keep until deleted
+  .openapi('RetentionResponse');
+
 // ── Terms/Privacy acceptance (#3) ────────────────────────────────────────────
 export const AcceptTermsRequest = z
   .object({

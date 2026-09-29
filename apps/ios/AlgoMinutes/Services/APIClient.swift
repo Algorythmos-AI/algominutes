@@ -586,7 +586,13 @@ final class APIClient: Sendable {
     // MARK: - A10 compliance (terms, retention, support)
     //
     // Field names mirror packages/contracts/src/schemas/compliance.ts exactly:
-    //   AcceptTermsRequest, SetRetentionRequest, SupportRequest.
+    //   AcceptTermsRequest, SetRetentionRequest, RetentionResponse, SupportRequest.
+
+    /// The account's note retention, as last set on any device (RELEASE.md PR 12b).
+    struct RetentionResponse: Decodable, Equatable, Sendable {
+        /// `nil` is "keep until I delete".
+        let retentionDays: Int?
+    }
 
     /// A10 #3: record timestamped acceptance of the Terms + Privacy Policy at
     /// signup. The server stamps the time and stores (uid, versions). Idempotent
@@ -605,6 +611,12 @@ final class APIClient: Sendable {
         ]
         if let appVersion { body["appVersion"] = appVersion }
         return try await post(path: "v1/account/accept-terms", body: body)
+    }
+
+    /// The account's retention (GET /v1/account/retention): a limit set in the web
+    /// app or on another iPhone shows here too.
+    func retention() async throws -> RetentionResponse {
+        try await getDecoded(path: "v1/account/retention")
     }
 
     /// A10 #5: set the note-retention window. `days == nil` means "keep until I

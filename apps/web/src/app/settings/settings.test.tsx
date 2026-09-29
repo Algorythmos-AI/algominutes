@@ -5,17 +5,23 @@ import { fakeFeed, renderApp } from '../../test/renderApp';
 import { shortens } from './SettingsPage';
 
 const ENT = { state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 12.4, remainingMinutes: 47.6, overQuota: false };
-const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
-let handlers: Record<string, () => Response> = {};
+const calls: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+// Keyed by path, or by "METHOD path" where one path answers two ways.
+let handlers: Record<string, () => Response | Promise<Response>> = {};
+const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
 const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const path = new URL(String(url)).pathname;
-  calls.push({ path, body: typeof init?.body === 'string' ? JSON.parse(init.body) : {} });
-  return (handlers[path] ?? (() => new Response('{"ok":true}', { status: 200 })))();
+  const method = init?.method ?? 'GET';
+  calls.push({ method, path, body: typeof init?.body === 'string' ? JSON.parse(init.body) : {} });
+  return (handlers[`${method} ${path}`] ?? handlers[path] ?? (() => new Response('{"ok":true}', { status: 200 })))();
 }) as typeof fetch;
 
 beforeEach(() => {
   calls.length = 0;
-  handlers = { '/v1/entitlement': () => new Response(JSON.stringify(ENT), { status: 200 }) };
+  handlers = {
+    '/v1/entitlement': () => json(ENT),
+    'GET /v1/account/retention': () => json({ retentionDays: null }),
+  };
 });
 afterEach(() => {
   cleanup();
@@ -68,7 +74,7 @@ describe('settings', () => {
 
   it('data retention is saved only on Save, and a limit that deletes notes is confirmed first', async () => {
     open();
-    const retention = () => calls.filter((c) => c.path === '/v1/account/retention');
+    const retention = () => calls.filter((c) => c.method === 'POST' && c.path === '/v1/account/retention');
     // Moving through the options (as the arrow keys do) saves nothing.
     fireEvent.click(await screen.findByLabelText('Delete after 30 days'));
     fireEvent.click(screen.getByLabelText('Delete after 90 days'));
@@ -92,7 +98,30 @@ describe('settings', () => {
     fireEvent.click(await screen.findByLabelText('Delete after 30 days'));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
-    expect(calls.filter((c) => c.path === '/v1/account/retention')).toEqual([]);
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/v1/account/retention')).toEqual([]);
+  });
+
+  it("shows the account's retention, set on another device, over this browser's old copy", async () => {
+    localStorage.setItem('retention_days.u1', '7');
+    handlers['GET /v1/account/retention'] = () => json({ retentionDays: 365 });
+    open();
+    await waitFor(() => expect((screen.getByLabelText('Delete after 365 days') as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(localStorage.getItem('retention_days.u1')).toBe('365');
+  });
+
+  it("a choice made before the account's answers is kept, and Save compares it with the account's", async () => {
+    let answer!: (r: Response) => void;
+    handlers['GET /v1/account/retention'] = () => new Promise<Response>((r) => { answer = r; });
+    open();
+    fireEvent.click(await screen.findByLabelText('Delete after 90 days'));
+    answer(json({ retentionDays: 30 }));
+    await waitFor(() => expect(localStorage.getItem('retention_days.u1')).toBe('30'));
+    expect((screen.getByLabelText('Delete after 90 days') as HTMLInputElement).checked).toBe(true);
+    // Longer than the account's 30 days deletes nothing: saved without a confirmation.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/v1/account/retention').map((c) => c.body)).toEqual([{ retentionDays: 90 }]));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('knows which changes delete notes', () => {
