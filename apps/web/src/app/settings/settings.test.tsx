@@ -40,6 +40,27 @@ describe('settings', () => {
     expect(await screen.findByText(/Free plan\. 12 of 60 minutes used this month\./)).toBeTruthy();
   });
 
+  it('the plan card takes an invite code: sent trimmed, and the new minutes are shown', async () => {
+    handlers['/v1/beta/redeem'] = () => new Response(JSON.stringify({
+      entitlement: { ...ENT, plan: 'pro', includedMinutes: 600, usedMinutes: 0, remainingMinutes: 600 },
+      grantEndsAt: '2026-10-29T00:00:00.000Z', notetaker: false,
+    }), { status: 200 });
+    open();
+    fireEvent.change(await screen.findByLabelText('Invite code'), { target: { value: '  BETA-7K2QX-M9D4R-TW8HN ' } }); // gitleaks:allow
+    fireEvent.click(screen.getByRole('button', { name: 'Add minutes' }));
+    expect(await screen.findByText(/You have 600 recording minutes, until 29 October\./)).toBeTruthy();
+    expect(calls.find((c) => c.path === '/v1/beta/redeem')?.body).toEqual({ code: 'BETA-7K2QX-M9D4R-TW8HN' }); // gitleaks:allow
+    expect(await screen.findByText(/Pro plan\. 0 of 600 minutes used this month\./)).toBeTruthy();
+  });
+
+  it('a refused invite code says why', async () => {
+    handlers['/v1/beta/redeem'] = () => new Response(JSON.stringify({ error: 'invite_used_up' }), { status: 409 });
+    open();
+    fireEvent.change(await screen.findByLabelText('Invite code'), { target: { value: 'BETA-0000A-1111B-2222C' } }); // gitleaks:allow
+    fireEvent.click(screen.getByRole('button', { name: 'Add minutes' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/used as many times as it allows/);
+  });
+
   it('a guest is told the notes are not backed up', async () => {
     open(GUEST);
     expect(await screen.findByText(/Guest \(not backed up\)/)).toBeTruthy();

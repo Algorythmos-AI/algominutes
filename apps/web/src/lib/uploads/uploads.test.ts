@@ -105,8 +105,8 @@ describe('kickoff failures, as iOS KickoffFailure', () => {
   });
 
   it('the quota message says when the minutes come back, with no paywall to send people to', () => {
-    expect(quotaMessage({ state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 60, remainingMinutes: 0, overQuota: true })).toBe("You've used this month's 60 included minutes. They reset on 1 October.");
-    expect(quotaMessage(null)).toMatch(/isn't included on your account/);
+    expect(quotaMessage({ state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 60, remainingMinutes: 0, overQuota: true })).toBe("You've used this month's 60 included minutes. They reset on 1 October, or a new invite code adds more (Settings).");
+    expect(quotaMessage(null)).toMatch(/come with an invite code\. Enter yours in Settings/);
   });
 });
 
@@ -164,7 +164,7 @@ describe('importAudio', () => {
     const quota = deps();
     quota.api.process.mockRejectedValueOnce(new ApiError('quota_exceeded', { entitlement: null }));
     await importAudio(file(10), quota.d);
-    expect(quota.d.markNoteFailed).toHaveBeenCalledWith('web1', expect.stringMatching(/isn't included/));
+    expect(quota.d.markNoteFailed).toHaveBeenCalledWith('web1', expect.stringMatching(/invite code/));
   });
 
   it("a session that couldn't be minted, or a note doc that couldn't be written, uploads nothing", async () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useBlocker, useNavigate } from 'react-router';
-import { maxRecordingSecondsForPlan, type PlanId } from '@algominutes/contracts';
+import { maxRecordingSecondsForPlan, type EntitlementResponse, type PlanId } from '@algominutes/contracts';
+import { noMinutesLeft } from '../../lib/billing/invite';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
 import { canCaptureCalls, captureCall, CaptureError, type Capture, type CaptureEnv } from '../../lib/recorder/callCapture';
@@ -9,6 +10,7 @@ import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
 import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
 import { endedUpload, startedUpload } from '../../lib/uploads/ownUploads';
 import { useApi } from '../ApiContext';
+import { InviteCodeForm } from '../billing/InviteCodeForm';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
@@ -82,6 +84,9 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const capture = useRef<Capture | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [capSeconds, setCapSeconds] = useState(() => maxRecordingSecondsForPlan());
+  // The server's minutes: with none left, the page asks for an invite code before a
+  // recording the server would refuse (RELEASE.md PR 9). Unknown never blocks.
+  const [ent, setEnt] = useState<EntitlementResponse | null>(null);
   const active = useRef<ActiveRecording | null>(null);
   // Set synchronously, so a second click (or Start) during the slow read of a long recording does nothing.
   const uploading = useRef(false);
@@ -123,7 +128,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   // The plan's per-recording cap (the default until the plan is known).
   useEffect(() => {
     api.entitlement().then(
-      (e) => setCapSeconds(maxRecordingSecondsForPlan(e.plan as PlanId)),
+      (e) => {
+        setEnt(e);
+        setCapSeconds(maxRecordingSecondsForPlan(e.plan as PlanId));
+      },
       (err: unknown) => reportCrash('record.entitlement', err),
     );
   }, [api]);
@@ -337,11 +345,22 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
               Everyone on the call has agreed to be recorded.
             </label>
           )}
+          {noMinutesLeft(ent) && (
+            <div className="mt-4 rounded-xl border border-border bg-bg p-4">
+              <p className="mb-3 text-body">You have no recording minutes left, so a recording couldn’t be processed. Enter the invite code from your invitation first.</p>
+              <InviteCodeForm
+                onRedeemed={(r) => {
+                  setEnt(r.entitlement);
+                  setCapSeconds(maxRecordingSecondsForPlan(r.entitlement.plan as PlanId));
+                }}
+              />
+            </div>
+          )}
           {(() => {
-            const ready = agreed && (source === 'mic' || callAgreed);
+            const ready = agreed && (source === 'mic' || callAgreed) && !noMinutesLeft(ent);
             return (
               <button type="button" disabled={!ready} onClick={() => void start()} className="mt-4 rounded-xl bg-accent px-5 py-3 font-semibold text-white disabled:opacity-50">
-                {ready ? (source === 'call' ? 'Choose the call’s tab' : 'Start recording') : 'Tick the box to start'}
+                {ready ? (source === 'call' ? 'Choose the call’s tab' : 'Start recording') : noMinutesLeft(ent) ? 'Enter your invite code first' : 'Tick the box to start'}
               </button>
             );
           })()}
