@@ -28,6 +28,14 @@ checks is recorded here, under the wave.
   - [ ] **Owner, after Apply A** (which turns the trial off on staging): make the reviewer's code and each cohort's
     codes with `scripts/new-invite-code.sh`, which prints the code for the tester and the exact command to register
     its hash. The clients' code entry lands in PR 8 (iOS) and PR 9 (web).
+- [x] **Notifier and the 426 gate (RELEASE.md PR 4, rev 9's S2-PR1):**
+  - A malformed notify task is acknowledged (2xx) and logged. It answered 400, which Cloud Tasks retries like any
+    other non-2xx.
+  - A push token is pruned only when FCM says the token is dead (`registration-token-not-registered`,
+    `invalid-registration-token`). `invalid-argument`, which FCM also answers for a bad message, used to delete
+    every recipient's working token.
+  - The api's 426 floors are the contract's `MIN_SUPPORTED_CLIENT`, one list.
+  - Unit-tested (`tests/notifier-handler.test.ts`, `tests/client-version.test.ts`), each change mutation-checked.
 - [ ] **Owner, start today (long lead times):**
   - send the Terms, the Privacy Policy and `docs/CONSENT.md` for legal review, including recording consent (NSW is
     all-party), bots in meetings and APP 8 cross-border;

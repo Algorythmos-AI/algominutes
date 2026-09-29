@@ -8,21 +8,19 @@
 // prompt, not a 500").
 //
 // Leniency, by design:
-//   - Minimums are GENEROUS (1.0.0 across the board) so no currently-shipping
-//     client is ever gated. Raising a floor is a one-line edit here.
+//   - The minimums are the contract's MIN_SUPPORTED_CLIENT
+//     (packages/contracts/src/version.ts), 1.0.0 across the board today, so no
+//     shipping client is gated. Raise a floor there, and only there.
 //   - An UNKNOWN platform is allowed through rather than rejected — a new
 //     client we have not enumerated yet must not be locked out by this gate.
 //   - A malformed header is a clear 400, not a 500.
 //   - A missing header from an otherwise-unidentifiable caller is a clear 400.
 //   - Parsing can never throw past this middleware.
 
-// Constant map, generous defaults. Bump a floor here (and only here) when a
-// minimum supported version needs to move.
-export const MIN_SUPPORTED_CLIENTS = {
-  ios: '1.0.0',
-  web: '1.0.0',
-  android: '1.0.0',
-};
+import { MIN_SUPPORTED_CLIENT } from '@algominutes/contracts/version';
+
+// The one list of floors, from the contract the clients are generated from.
+export const MIN_SUPPORTED_CLIENTS = { ...MIN_SUPPORTED_CLIENT };
 
 const UPGRADE_BODY = {
   error: 'please_update',
