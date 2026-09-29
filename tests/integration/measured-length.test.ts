@@ -210,7 +210,12 @@ describe('the transcoder settles before any paid work', () => {
 
   it('too long: the note fails with a full refund and its reason, no paid work, and no dead letter', async () => {
     await charge(0);
-    await handler.handle(kickoff, deps(4 * 3600 + 60));
+    const said: string[] = [];
+    const heard: any = { info: noop, warn: (_o: unknown, m: string) => void said.push(m), error: (_o: unknown, m: string) => void said.push(m), child: () => heard };
+    await handler.handle(kickoff, { ...deps(4 * 3600 + 60), log: heard });
+    // The user's recording, refused: not a pipeline failure for the note_failed alert (RELEASE.md PR 15b).
+    expect(said).toContain('note_refused');
+    expect(said).not.toContain('note_failed');
     expect((await pool.query(`SELECT status, error_message FROM notes WHERE id = 'n1'`)).rows[0])
       .toEqual({ status: 'error', error_message: expect.stringMatching(/longer than 4 hours/) });
     expect(await net()).toBe(0);

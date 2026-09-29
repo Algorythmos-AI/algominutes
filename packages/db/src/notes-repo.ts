@@ -367,10 +367,12 @@ export async function markQueued(
           input.authorName ? `${input.authorName}'s Workspace` : 'My Workspace',
         );
         const noteRow = await client.query(
-          `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, storage_path, source_url, mime_type)
-             VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7)
+          `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, storage_path, source_url, mime_type, queued_at)
+             VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7, NOW())
            ON CONFLICT (id) DO UPDATE SET
              status = 'queued',
+             -- This run's start, for SLO 4 (the summarizer times the run from it; migration 026).
+             queued_at = NOW(),
              source_type = EXCLUDED.source_type,
              storage_path = COALESCE(EXCLUDED.storage_path, notes.storage_path),
              source_url   = COALESCE(EXCLUDED.source_url, notes.source_url),

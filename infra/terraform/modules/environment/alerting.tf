@@ -72,6 +72,62 @@ locals {
       severity  = "ERROR"
       doc       = "/health/ready couldn't reach Postgres. Check Cloud SQL, the VPC connector and the connection budget."
     }
+
+    # RELEASE.md PR 15b.
+    # A task out of attempts whose failure could be lost: its dead letter wasn't written, or its note wasn't
+    # marked failed (the user sees it stuck). dead_letter_recorded, above, covers the ones that were.
+    dead_letter_record_failed = {
+      threshold = 0
+      window    = "300s"
+      severity  = "ERROR"
+      doc       = "A task ran out of attempts and its dead letter couldn't be written: the failure is only in this log line (CLAUDE.md §2). See dead_letter_record_failed (noteId, queue, err), fix the cause, and re-drive or fail the note by hand."
+    }
+    sweep_dead_letter_failed = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "The sweep couldn't dead-letter a note it gave up on. See sweep_dead_letter_failed (noteId, err)."
+    }
+    transcoder_last_attempt_dead_letter_only = {
+      threshold = 0
+      window    = "600s"
+      severity  = "ERROR"
+      doc       = "A transcode ran out of attempts and was dead-lettered, but its note couldn't be marked failed (reason: postgres_error, missing_ids or note_not_failed): the user sees it stuck. Review it in the admin view; the sweep fails a stuck note after STUCK_NOTE_MS."
+    }
+    summarizer_last_attempt_dead_letter_only = {
+      threshold = 0
+      window    = "600s"
+      severity  = "ERROR"
+      doc       = "A summary ran out of attempts and was dead-lettered, but its note couldn't be marked failed: the user sees it stuck. Review it in the admin view; the sweep fails a stuck note after STUCK_NOTE_MS."
+    }
+    # SLO 4 (docs/SLO.md): the summarizer logs a pipeline run slower than half its recording's length plus 5 min.
+    time_to_summary_slo_missed = {
+      threshold = 2
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "More than two recordings in an hour took longer than SLO 4 allows (half the recording's length plus 5 minutes). See time_to_summary_slo_missed (noteId, timeToSummarySec, recordingSec, objectiveSec) and the run's traceId: queue backlog, STT latency or Gemini retries (gemini_transient)."
+    }
+    # The daily spend cap (DAILY_SPEND_CAP_AUD): at 80%, and reached (every recording is then refused until the
+    # day turns, with its minutes refunded).
+    spend_cap_approaching = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "Today's paid audio has passed 80% of DAILY_SPEND_CAP_AUD. At the cap, every new recording is refused (and refunded) until tomorrow. Decide whether to raise the cap (Terraform daily_spend_cap_aud)."
+    }
+    spend_cap_tripped = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "The daily spend cap was reached: recordings are refused, with their minutes refunded, until the day turns. See spend_cap_tripped (spent, cap). Raise daily_spend_cap_aud and apply if it's real use; look for a runaway if it isn't."
+    }
+    # Someone asked for help in the app (Settings → Help & Support, or a bad transcript/summary report).
+    support_request_created = {
+      threshold = 0
+      window    = "300s"
+      severity  = "WARNING"
+      doc       = "A user sent a support request. Find it by id: SELECT * FROM support_requests WHERE id = '<supportId>'. Answer within one working day (docs/runbooks/testflight-internal.md, Triage feedback)."
+    }
   }
 }
 

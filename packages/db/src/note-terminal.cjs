@@ -77,8 +77,12 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  *   notify task is enqueued after the commit (`enqueueNotice`), so no caller
  *   can forget to tell the author and a crash in between can't lose it (the
  *   sweep re-enqueues a notice left unsent). `traceId` is the recording's.
+ *
+ * With `refusal` (the user's recording refused: longer than the plan allows, or
+ * than the minutes left), a new failure is logged `note_refused`, not
+ * `note_failed`, which alerts and counts against SLO 3.
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null, traceId = null, enqueueNotice = defaultEnqueueNotice }) {
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null, traceId = null, enqueueNotice = defaultEnqueueNotice, refusal = false }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
@@ -254,7 +258,12 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // this matched nothing on (ready, gone, or an `onlyIfStatus` miss), since the
   // alert counts this line.
   const failed = pgOk && prevStatus !== 'error';
-  if (failed || pgErrored) {
+  if (failed && refusal) {
+    // The user's recording refused (longer than the plan, or than the minutes left), not a pipeline fault: it
+    // isn't what note_failed alerts on, nor SLO 3's failures (RELEASE.md PR 15b). A refusal that couldn't be
+    // marked is still note_failed, below.
+    log.warn({ traceId: trace, noteId, workspaceId, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_refused');
+  } else if (failed || pgErrored) {
     log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
   } else {
     log.info({ noteId, workspaceId, pgOk, prevStatus, exists }, `${name}_not_a_new_failure`);

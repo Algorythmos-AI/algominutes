@@ -229,6 +229,7 @@ async function handleKickoff(payload, deps) {
         log,
         event: 'measured_length_refused',
         retryOnPgError: true,
+        refusal: true,
       });
       return;
     }
