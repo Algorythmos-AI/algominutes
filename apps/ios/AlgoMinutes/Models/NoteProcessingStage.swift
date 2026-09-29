@@ -52,7 +52,8 @@ struct NoteProcessingStage: Equatable, Sendable {
     static func from(
         status: NoteStatus,
         progress: NoteProgress?,
-        uploadPercent: Int?
+        uploadPercent: Int?,
+        notetaker: NoteNotetaker? = nil
     ) -> NoteProcessingStage {
         // The upload is the one phase the client measures directly, so it is
         // the one place a percentage is honest. Bounded to 1...99: 0 means
@@ -97,6 +98,13 @@ struct NoteProcessingStage: Equatable, Sendable {
             return NoteProcessingStage(
                 phase: .transcribe, fill: .indeterminate,
                 label: "Preparing audio", detail: nil
+            )
+
+        case .recording where notetaker != nil:
+            // A notetaker in a meeting: what it's doing, not "Recording".
+            return NoteProcessingStage(
+                phase: .upload, fill: .indeterminate,
+                label: notetaker?.label ?? status.label, detail: nil
             )
 
         case .queued, .processing, .recording:

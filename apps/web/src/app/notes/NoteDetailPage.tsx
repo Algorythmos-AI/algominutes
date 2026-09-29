@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { NoteReadResponse, TranscriptLine } from '@algominutes/contracts';
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
-import { displayTitle, formatClock, formatDate, formatDuration, statusOf } from '../../lib/notes/format';
+import { displayTitle, formatClock, formatDate, formatDuration, notetakerAction, statusOf } from '../../lib/notes/format';
 import { workspaceIdFor } from '../../lib/notes/workspace';
 import { isSlow } from '../../lib/noteWatchdog';
 import { useApi } from '../ApiContext';
@@ -45,6 +45,8 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmNotetaker, setConfirmNotetaker] = useState(false);
+  const [notetakerBusy, setNotetakerBusy] = useState(false);
   // Bumped after an edit: the page re-reads the note, keeping what it shows until the answer arrives.
   const [version, setVersion] = useState(0);
   const [renaming, setRenaming] = useState<{ tag: number; name: string } | null>(null);
@@ -111,6 +113,21 @@ function NoteDetail({ noteId }: { noteId: string }) {
     }
   };
 
+  // Cancel a notetaker before it records, or stop one that is: it leaves, and what it recorded is kept.
+  const endNotetaker = async (botId: string, action: 'cancel' | 'stop') => {
+    setConfirmNotetaker(false);
+    setNotetakerBusy(true);
+    try {
+      await api.cancelMeetingBot(botId);
+      notice.show(action === 'stop' ? 'The notetaker is leaving. What it recorded is on its way.' : 'The notetaker is cancelled.');
+    } catch (err) {
+      notice.show(err instanceof ApiError ? `The notetaker wasn't stopped. ${err.message}` : "The notetaker wasn't stopped. Try again.");
+      if (!(err instanceof ApiError)) reportCrash('notes.cancelNotetaker', err);
+    } finally {
+      setNotetakerBusy(false);
+    }
+  };
+
   const renameSpeaker = async (tag: number, name: string) => {
     setRenaming(null);
     try {
@@ -138,7 +155,8 @@ function NoteDetail({ noteId }: { noteId: string }) {
     );
   }
 
-  const s = statusOf(live.status);
+  const s = statusOf(live.status, live.notetaker);
+  const botAction = live.status === 'recording' && live.notetaker ? notetakerAction(live.notetaker.status) : null;
   const meta = [formatDate(live.createdAt), formatDuration(live.duration)].filter(Boolean).join(' · ');
   const data = load.status === 'ready' ? load.data : null;
   // Read from the doc when the api has no copy: a scanned note, or an older note that never reached Postgres.
@@ -179,11 +197,18 @@ function NoteDetail({ noteId }: { noteId: string }) {
       </header>
 
       {s.kind === 'working' && (
-        <p role="status" className="rounded-2xl border border-border bg-card p-4 text-body">
-          {isSlow(live, now)
-            ? 'This is taking longer than usual. It will finish on its own, or show an error if it can’t.'
-            : `${s.label}${live.progress && live.progress.total > 1 ? ` (${live.progress.done} of ${live.progress.total} parts)` : ''}… You can leave this page; it updates on its own.`}
-        </p>
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <p role="status" className="text-body">
+            {isSlow(live, now)
+              ? 'This is taking longer than usual. It will finish on its own, or show an error if it can’t.'
+              : `${s.label}${live.progress && live.progress.total > 1 ? ` (${live.progress.done} of ${live.progress.total} parts)` : ''}… You can leave this page; it updates on its own.`}
+          </p>
+          {botAction && live.notetaker && (
+            <button type="button" className="mt-3 rounded-lg border border-border px-3 py-2 text-heading" disabled={notetakerBusy} onClick={() => setConfirmNotetaker(true)}>
+              {botAction === 'stop' ? 'Stop the notetaker' : 'Cancel the notetaker'}
+            </button>
+          )}
+        </div>
       )}
       {s.kind === 'failed' && (
         <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">
@@ -292,6 +317,22 @@ function NoteDetail({ noteId }: { noteId: string }) {
               <button type="button" className="px-4 py-2 text-muted" onClick={() => setRenaming(null)}>Cancel</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {confirmNotetaker && botAction && live.notetaker && (
+        <Modal title={botAction === 'stop' ? 'Stop the notetaker?' : 'Cancel the notetaker?'} onClose={() => setConfirmNotetaker(false)} initialFocus="[data-keep]">
+          <p className="mb-4 text-body">
+            {botAction === 'stop'
+              ? 'It leaves the meeting now. What it has recorded so far becomes this note.'
+              : 'It won’t join the meeting, and nothing is recorded or charged.'}
+          </p>
+          <div className="flex flex-col gap-2">
+            <button type="button" className="rounded-xl bg-danger px-4 py-3 font-semibold text-white" onClick={() => void endNotetaker(live.notetaker!.botId, botAction)}>
+              {botAction === 'stop' ? 'Stop it' : 'Cancel it'}
+            </button>
+            <button type="button" data-keep className="py-2 text-muted" onClick={() => setConfirmNotetaker(false)}>Keep it</button>
+          </div>
         </Modal>
       )}
 

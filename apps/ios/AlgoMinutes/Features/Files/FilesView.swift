@@ -354,10 +354,18 @@ struct FilesView: View {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(Theme.outline)
-                Capsule()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: 140, height: 6)
-                    .shimmer()
+                if note.status == .recording, note.notetaker != nil {
+                    // A notetaker in a meeting says what it's doing.
+                    Text(note.statusLabel)
+                        .font(Typography.body(12))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                } else {
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(width: 140, height: 6)
+                        .shimmer()
+                }
             }
         }
     }

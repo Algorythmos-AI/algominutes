@@ -316,6 +316,18 @@ final class APIClient: Sendable {
         return (json["deleted"] as? Bool) ?? false
     }
 
+    /// Cancel a notetaker before it records, or stop one that is (it leaves,
+    /// and what it recorded becomes the note): POST /v1/meetings/bots/{id}/cancel.
+    /// Returns the notetaker's status afterwards.
+    @discardableResult
+    func cancelMeetingBot(botId: String) async throws -> String? {
+        guard let id = botId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) else {
+            throw APIError.invalidResponse
+        }
+        let json = try await post(path: "v1/meetings/bots/\(id)/cancel", body: [:])
+        return json["status"] as? String
+    }
+
     /// Persist a manual note edit.
     ///
     /// Goes through `/v1/notes/update` rather than writing Firestore directly,
