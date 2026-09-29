@@ -6,13 +6,19 @@ name: deploy-staging
 # production — so this runs on pushes to `integration`; prod deploys from
 # `main` arrive with the prod environment (plan PR-35).
 #
-# - Order: build → migrate + Vertex smoke → rollout → smoke. Every image is built first; the
+# - Order: build → migrate + Vertex smoke → rollout in three waves → smoke. Every image is built first; the
 #   db-job `migrate` handler then applies migrations INSIDE the VPC (Cloud SQL
 #   is private-IP) from the image built at this commit, and must finish before
 #   any service image rolls out. That is safe because new migrations are
 #   expand-only or explicitly marked contract steps (the invariants gate
 #   scripts/check-migration-expand.mjs), so old images keep working on it. A failed migrate
 #   stops the deploy with every service still on its previous image.
+# - Rollout waves (RELEASE.md PR 26c, audit Q25): a service goes live only after
+#   every service it hands work to. Wave 1 is the workers (and billing and
+#   db-job, which take nobody's tasks); wave 2 is meetings, which queues the
+#   transcoder's runs; wave 3 is the api, which queues everyone's. So a task
+#   in a new shape is never sent to an old worker, and a wave that fails stops
+#   the ones after it, leaving the front on its previous image.
 # - Keyless: authenticates via Workload Identity Federation as gha-deployer.
 #   Every job that authenticates runs in the `staging` GitHub Environment: the
 #   WIF provider only accepts tokens from refs/heads/integration in that
@@ -63,6 +69,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.pick.outputs.services }}
+      # The rollout waves (see the header): who hands work to whom.
+      wave1: ${{ steps.pick.outputs.wave1 }}
+      wave2: ${{ steps.pick.outputs.wave2 }}
+      wave3: ${{ steps.pick.outputs.wave3 }}
     steps:
       - uses: actions/checkout@v7
       - id: filter
@@ -101,6 +111,13 @@ jobs:
           out=$(printf '%s' "$out" | jq -c 'if length > 0 and (index("db-job") | not) then . + ["db-job"] else . end')
           echo "services=$out" >> "$GITHUB_OUTPUT"
           echo "Deploying: $out"
+          # Wave 3 the api (it queues work for everyone), wave 2 meetings (it
+          # queues the transcoder's runs), wave 1 everything else.
+          {
+            echo "wave1=$(printf '%s' "$out" | jq -c 'map(select(. != "api" and . != "meetings"))')"
+            echo "wave2=$(printf '%s' "$out" | jq -c 'map(select(. == "meetings"))')"
+            echo "wave3=$(printf '%s' "$out" | jq -c 'map(select(. == "api"))')"
+          } >> "$GITHUB_OUTPUT"
 
   # Nothing deploys a commit whose CI hasn't passed. A push to integration
   # starts this workflow and CI at the same time, so wait for CI's runs on this
@@ -235,9 +252,10 @@ jobs:
           gcloud run jobs execute db-job --region "$REGION" --project "$PROJECT" --wait \
             --update-env-vars "JOB_NAME=vertex-smoke,TRACE_ID=${trace}"
 
+  # Wave 1: the workers, billing and db-job.
   rollout:
     needs: [changes, migrate]
-    if: needs.changes.outputs.services != '[]'
+    if: needs.changes.outputs.wave1 != '[]'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -247,7 +265,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        service: ${{ fromJSON(needs.changes.outputs.services) }}
+        service: ${{ fromJSON(needs.changes.outputs.wave1) }}
     steps:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -263,9 +281,62 @@ jobs:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
         run: gcloud run services update "$SERVICE" --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
 
+  # Wave 2: meetings, once every worker is live (it queues the transcoder's
+  # runs). Runs when wave 1 succeeded or had nothing to deploy; never after a
+  # failure.
+  rollout-meetings:
+    needs: [changes, migrate, rollout]
+    if: >-
+      !cancelled() && needs.changes.outputs.wave2 != '[]' && needs.migrate.result == 'success'
+      && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Roll out image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/meetings:${{ github.sha }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: gcloud run services update meetings --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+
+  # Wave 3: the api, last (it queues everyone's work). Same rule: never after a
+  # failed wave.
+  rollout-api:
+    needs: [changes, migrate, rollout, rollout-meetings]
+    if: >-
+      !cancelled() && needs.changes.outputs.wave3 != '[]' && needs.migrate.result == 'success'
+      && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
+      && (needs.rollout-meetings.result == 'success' || needs.rollout-meetings.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Roll out image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/api:${{ github.sha }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: gcloud run services update api --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+
   smoke:
-    needs: [changes, rollout]
-    if: needs.changes.outputs.services != '[]'
+    needs: [changes, migrate, rollout, rollout-meetings, rollout-api]
+    # After every wave that ran, and only if none failed (a skipped wave had nothing to deploy).
+    if: >-
+      !cancelled() && needs.changes.outputs.services != '[]' && needs.migrate.result == 'success'
+      && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     environment: staging
     permissions:
