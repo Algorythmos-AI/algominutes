@@ -103,6 +103,42 @@ whatever deep link the notifier sent (iOS's `algominutes://note/<id>`). The brow
 card shown once the user has a note, or from Settings; sign-out deletes the browser's FCM token first. To check: turn
 notifications on, upload a short file, switch to another tab, and wait for "ready"; tapping it opens the note.
 
+## The beta web app (beta.algominutes.algorythmos.com, for external testers)
+
+Staging's `/app` is behind Vercel Authentication, so testers outside the Vercel team can't open it
+(docs/plans/RELEASE.md, PR 7). The beta is a **second Vercel project** on the same repo:
+- its **Production** branch is `integration`, at `beta.algominutes.algorythmos.com`, on staging's Firebase and api;
+- a project's production domain isn't behind Standard Protection, so testers get in, and PR previews stay protected;
+- it signs in on its own host through the `/__/auth` proxy in `vercel.json`, as prod will;
+- the whole host is `noindex` (`vercel.json`), because it serves the site pages too.
+
+**Owner, once:**
+1. **Vercel → Add New → Project:**
+   - Import `Algorythmos-AI/algominutes` as `algominutes-beta`, with Root Directory `apps/site` (framework and
+     commands come from `vercel.json`).
+   - Settings → Git → Production Branch: `integration`.
+   - Settings → Git → Ignored Build Step:
+     `if [ "$VERCEL_GIT_COMMIT_REF" = "integration" ]; then exit 1; else exit 0; fi`, so it builds only
+     `integration`, never a PR branch.
+2. **Environment Variables, Production:** the same values as staging's table above, except
+   `VITE_FIREBASE_AUTH_DOMAIN` = `beta.algominutes.algorythmos.com`. `scripts/build-site.mjs` refuses the build if
+   the `/__/auth` rewrite for that host is missing.
+3. **Domains:** add `beta.algominutes.algorythmos.com`. In Cloudflare (zone `algorythmos.com`), add the CNAME Vercel
+   shows, DNS only.
+4. **Sign-in:**
+   - Firebase (`algominutes-staging`) → Authentication → Settings → Authorized domains: add
+     `beta.algominutes.algorythmos.com`.
+   - Apple Developer → the Services ID `com.algorythmos.algominutes.signin` → Return URLs: add
+     `https://beta.algominutes.algorythmos.com/__/auth/handler`.
+   - Google Cloud (`algominutes-staging`) → Credentials → the Web OAuth client: add the origin
+     `https://beta.algominutes.algorythmos.com` and the redirect `https://beta.algominutes.algorythmos.com/__/auth/handler`.
+   - The Browser key's website restrictions: add `https://beta.algominutes.algorythmos.com/*`.
+5. **Check** (read-only, with admin access): `node scripts/check-signin-chain.mjs --env beta`. It checks the key's
+   referrers, the authorized domain, the auth handler and iframe on the beta host, and that Apple's cross-site POST
+   reaches the handler. Then sign in with Apple and Google at `https://beta.algominutes.algorythmos.com/app`.
+
+The api already allows the beta origin: `allowed_origins` in `infra/terraform/envs/staging/main.tf` (Apply A).
+
 ## Sign-in troubleshooting (staging and production)
 
 Sign-in crosses five systems, and a missing setting in any of them can fail silently. So the web app traces every

@@ -189,6 +189,18 @@ describe('the Firebase auth proxy', () => {
     expect(resolve(config, dist, '/__/firebase/init.json', undefined, STAGING)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/firebase/init.json' });
   });
 
+  it("proxies the beta host's /__/auth and /__/firebase to staging's Firebase too (RELEASE.md PR 7)", () => {
+    const BETA = 'beta.algominutes.algorythmos.com';
+    expect(resolve(config, dist, '/__/auth/handler', undefined, BETA)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/auth/handler' });
+    expect(resolve(config, dist, '/__/firebase/init.json', undefined, BETA)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/firebase/init.json' });
+  });
+
+  it('keeps the whole beta host out of search, and only that host', () => {
+    const BETA = 'beta.algominutes.algorythmos.com';
+    for (const p of ['/', '/privacy', '/app', '/app/notes/1']) expect(headersFor(config, p, BETA)['X-Robots-Tag'], p).toMatch(/noindex/);
+    for (const host of ['algominutes.algorythmos.com', STAGING, '']) expect(headersFor(config, '/privacy', host)['X-Robots-Tag'], host).toBeUndefined();
+  });
+
   it('proxies nothing on the public host (the app is off there until the prod launch)', () => {
     expect(resolve(config, dist, '/__/auth/handler', undefined, 'algominutes.algorythmos.com').status).toBe(404);
   });

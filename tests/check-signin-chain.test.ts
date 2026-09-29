@@ -61,4 +61,11 @@ describe('the sign-in chain audit', () => {
     expect(parseArgs(['--env', 'staging'])).toBe(ENVS.staging);
     expect(() => parseArgs(['--env=nope'])).toThrow(/unknown --env nope/);
   });
+
+  it("knows the beta: staging's project, signing in on its own host (so Apple's cross-site POST is checked)", () => {
+    const beta = parseArgs(['--env', 'beta']);
+    expect(beta).toBe(ENVS.beta);
+    expect(beta).toMatchObject({ project: 'algominutes-staging', site: 'beta.algominutes.algorythmos.com', api: ENVS.staging.api });
+    expect(beta.authDomain).toBe(beta.site);
+  });
 });

@@ -5,9 +5,11 @@
 //   2. when APP_ENABLED=true, the web app (apps/web, Vite base /app/), copied
 //      into apps/site/dist/app in place of the "coming soon" placeholder.
 //
-// APP_ENABLED is set on Vercel's Preview environment (staging) and, from the
-// prod launch (plan Phase 3), on Production. Anything else leaves the
-// placeholder, so the app can't reach the public by accident.
+// APP_ENABLED is set on Vercel's Preview environment (staging), on the beta
+// project's Production (integration at beta.algominutes.algorythmos.com, for
+// testers: RELEASE.md PR 7), and, from the prod launch (plan Phase 3), on the
+// site's Production. Anything else leaves the placeholder, so the app can't
+// reach the public by accident.
 //
 //   APP_ENABLED=true node scripts/build-site.mjs
 import { execFileSync } from 'node:child_process';
