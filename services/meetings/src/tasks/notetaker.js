@@ -8,6 +8,7 @@ import { RecallError, botCreateParams } from '../lib/recall-client.js';
 import { actionFor, FAILURE_MESSAGES } from '../lib/recall-events.js';
 import { botNameFor, noticeFor } from '../lib/notice.js';
 import loggerModule from '@algominutes/ai/logger.cjs';
+import { recordMeetingsDeadLetter } from '../lib/dead-letters.js';
 
 const { isFinalAttempt } = noteTerminalModule;
 const { traceIdFromTask } = loggerModule;
@@ -25,6 +26,9 @@ function childLog(req, bot, extra = {}) {
     meetingBotId: bot?.id, userId: bot?.uid, workspaceId: bot?.workspaceId, noteId: bot?.noteId, ...extra,
   });
 }
+
+// The trace a bot's lines carry (childLog's): its recording's, else the task's.
+const traceOf = (req, bot) => bot?.traceId || traceIdFromTask(req.body, req.headers);
 
 // Before a bot is found: the task's own trace, and its id only if it is one.
 function taskLog(req) {
@@ -225,6 +229,8 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, enque
       if (isFinalAttempt(req.headers)) {
         // Out of retries: say so on the note rather than leave it waiting.
         log.error({ err, attempt: attemptOf(req) }, 'create_bot_gave_up');
+        // The dead letter first: it never throws, and failing the bot can (its mirror), which would lose it.
+        await recordMeetingsDeadLetter({ repo, kind: 'create_bot', bot, err, attempts: attemptOf(req) + 1, traceId: traceOf(req, bot), log });
         await failBot({ repo, firestore, bot: (await repo.getMeetingBotById(bot.id)) || bot, reason: 'error', log });
         return res.status(200).json({ ok: true });
       }
@@ -269,6 +275,14 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, enque
       await cancelWithRecall({ recall: await getRecall(log), bot, firestore, log });
       return res.status(200).json({ ok: true });
     } catch (err) {
+      if (isFinalAttempt(req.headers)) {
+        // Out of retries: a person's (the dead letter, and cancel_bot_gave_up alerts). A bot that never
+        // recorded is picked up by the reconcile once it goes quiet; one recording stays until its
+        // reservation runs out unless someone makes it leave.
+        log.error({ err, attempt: attemptOf(req) }, 'cancel_bot_gave_up');
+        await recordMeetingsDeadLetter({ repo, kind: 'cancel_bot', bot, err, attempts: attemptOf(req) + 1, traceId: traceOf(req, bot), log });
+        return res.status(200).json({ ok: true });
+      }
       log.warn({ err, attempt: attemptOf(req) }, 'cancel_bot_attempt_failed');
       throw err;
     }
@@ -335,6 +349,13 @@ export function createNotetakerTasks({ getRecall, getCrypto, getFirestore, enque
       await repo.markRecallEventProcessed(ev.id);
       log.info({ action: action.kind }, 'recall_event_processed');
     } catch (err) {
+      if (isFinalAttempt(req.headers)) {
+        // Out of retries: dead-lettered, and closed, so the reconcile doesn't re-drive a poison event for ever.
+        log.error({ err, attempt: attemptOf(req) }, 'process_event_gave_up');
+        await recordMeetingsDeadLetter({ repo, kind: 'process_event', bot, payload: { recallEventId: ev.id, event: ev.event }, err, attempts: attemptOf(req) + 1, traceId: traceOf(req, bot), log });
+        await repo.markRecallEventProcessed(ev.id);
+        return res.status(200).json({ ok: true });
+      }
       log.warn({ err, attempt: attemptOf(req) }, 'process_event_attempt_failed');
       throw err;
     }

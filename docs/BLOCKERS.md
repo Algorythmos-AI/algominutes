@@ -1786,13 +1786,16 @@ and tested, but no bot joins a real meeting.
     `.s3.amazonaws.com` and `.s3.ap-northeast-1.amazonaws.com`; `RECALL_MEDIA_HOSTS` replaces them.
   - The spike also confirms what `delete_media` leaves: each recording's status becomes `deleted`, and a
     `recording.deleted` webhook arrives. The purge worker confirms a purge on either.
-  - Left for PR 21:
-    - an ingest's dead letter (on its last attempt the note fails and `notetaker_ingest_gave_up` alerts, but
-      nothing is written to `dead_letters` yet);
-    - a notetaker note whose mirror doc went missing isn't restored by ingest (its kickoff fails, and the
-      note ends in `error` in Postgres alone);
-    - deleting a note whose bot is still in the meeting doesn't yet make it leave or queue Recall's purge.
-      Ingest purges it when the media arrive.
+  - ~~An ingest's dead letter; deleting a note mid-meeting~~ **fixed (RELEASE.md PR 21):** every meetings task
+    out of attempts writes a Postgres dead letter, and a note or account deletion queues Recall's purge (a live
+    bot leaves) in its own transaction.
+  - Still open: a notetaker note whose mirror doc went missing isn't restored (its kickoff fails, and the note
+    ends in `error` in Postgres alone). Rare: only a client deleting the doc directly, which the rules forbid.
+  - The meetings-reconcile and purge schedules ride in Apply B with the rest of the notetaker's Terraform.
+  - The admin view's `DeadLetterEntry` (contracts `schemas/async.ts`) has no `payload`, so a meetings dead
+    letter's `kind` and `meetingBotId` show only in psql. Adding it is a contract change (three clients).
+  - A cancel that can't reach Recall in 5 attempts is dead-lettered and alerts (`cancel_bot_gave_up`); a bot
+    already recording then stays until its reservation runs out unless someone makes it leave.
 - [ ] **Owner: a written legal opinion on recording meetings** (`docs/CONSENT.md` §2.4 and §4). NSW requires
   the consent of all parties. Until it arrives, the notetaker stays with allowlisted testers.
 - [ ] **Owner, only if the M0 spike shows guest bots are refused too often:** a dedicated paid Google Workspace

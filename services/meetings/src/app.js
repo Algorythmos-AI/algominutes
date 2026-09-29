@@ -22,6 +22,7 @@ import { createTaskAuth } from './lib/task-auth.js';
 import { createSecretReader } from './lib/secrets.js';
 import { createNotetakerTasks } from './tasks/notetaker.js';
 import { createIngestTasks } from './tasks/ingest.js';
+import { createReconcileTasks } from './tasks/reconcile.js';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 
 const { enqueueTask } = cloudTasksModule;
@@ -71,7 +72,11 @@ export function buildApp({
 } = {}) {
   // The notetaker's handlers, unless a test gives its own.
   tasks = tasks ?? (taskDeps
-    ? { ...createNotetakerTasks({ env, enqueue, ...taskDeps }), ...createIngestTasks({ env, ...taskDeps }) }
+    ? {
+      ...createNotetakerTasks({ env, enqueue, ...taskDeps }),
+      ...createIngestTasks({ env, ...taskDeps }),
+      ...createReconcileTasks({ enqueue, ...taskDeps }),
+    }
     : {});
   // One fixed route per task, registered at startup: nothing from the request
   // path ever picks the function that runs.

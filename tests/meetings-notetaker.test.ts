@@ -70,6 +70,7 @@ function world(over: Partial<{ status: Status; recallBotId: string | null; cance
     recordConsentEvent: async (_id: string, c: object) => { calls.push(`consent:${Object.keys(c).sort().join(',')}`); },
     markBotMediaReady: async (_id: string, what: string) => { calls.push(`media:${what}`); return { audioReady: what === 'audio', participantsReady: what === 'participants' }; },
     confirmRecallPurge: async (id: string) => { calls.push(`confirmed:${id}`); },
+    recordDeadLetter: async (d: any) => { calls.push(`dead_letter:${d.queue}:${d.payload.kind}`); repo.deadLetters = [...(repo.deadLetters ?? []), d]; return { id: 9 }; },
   };
   const tasks = createNotetakerTasks({
     getRecall: async () => recall,
@@ -142,7 +143,22 @@ describe('create_bot', () => {
     process.env.MAX_TASK_ATTEMPTS = '5';
     expect(await w.run('create_bot', { meetingBotId: w.bot.id }, { 'x-cloudtasks-taskretrycount': '4' })).toBe(200);
     expect(w.calls).toContain('status:failed:error');
+    // Dead-lettered in Postgres (the admin view, and the dead_letter_recorded alert), with ids only.
+    expect(w.calls).toContain('dead_letter:meetings:create_bot');
+    expect(w.repo.deadLetters[0]).toMatchObject({
+      queue: 'meetings', noteId: 'mtg_7f0e', workspaceId: 'workspace_alice', attempts: 5, traceId: 'trace-1',
+      payload: { kind: 'create_bot', meetingBotId: w.bot.id }, error: expect.stringMatching(/busy/),
+    });
+    expect(JSON.stringify(w.repo.deadLetters)).not.toContain('meet.google.com');
     delete process.env.MAX_TASK_ATTEMPTS;
+  });
+
+  it('a last attempt whose failing of the bot itself fails still leaves the dead letter', async () => {
+    const w = world();
+    w.recall.createBot = async () => { throw new RecallError('busy', { status: 507 }); };
+    w.repo.failThrows = new Error('firestore unavailable');
+    await expect(w.run('create_bot', { meetingBotId: w.bot.id }, { 'x-cloudtasks-taskretrycount': '4' })).rejects.toThrow('firestore unavailable');
+    expect(w.calls).toContain('dead_letter:meetings:create_bot');
   });
 
   it('a cancel that came first stops it before Recall is asked', async () => {
@@ -369,6 +385,33 @@ describe('event task names', () => {
 
 describe('failures are never half-done, and never mistaken', () => {
   const ev = (event: string, extra: object = {}) => ({ id: 1, meetingBotId: '7f0e0c1a-0000-4000-8000-000000000001', recallBotId: 'recall-1', event, subCode: null, occurredAt: new Date('2026-09-28T01:00:00Z'), processed: false, ...extra });
+
+  it('an event out of retries is dead-lettered and closed, so the reconcile never re-drives a poison event', async () => {
+    const w = world({ recallBotId: 'recall-1', status: 'waiting_room' });
+    w.events.push(ev('bot.call_ended', { subCode: 'timeout_exceeded_waiting_room' }));
+    w.repo.failThrows = new Error('firestore unavailable');
+    expect(await w.run('process_event', { recallEventId: 1 }, { 'x-cloudtasks-taskretrycount': '4' })).toBe(200);
+    expect(w.calls.slice(-2)).toEqual(['dead_letter:meetings:process_event', 'processed:1']);
+    expect(w.repo.deadLetters[0]).toMatchObject({ payload: { kind: 'process_event', meetingBotId: w.bot.id, recallEventId: 1, event: 'bot.call_ended' }, attempts: 5 });
+    expect(w.lines.find((l) => l.msg === 'process_event_gave_up')).toMatchObject({ level: 'error', meetingBotId: w.bot.id, traceId: 'trace-1' });
+  });
+
+  it('a cancel out of retries is dead-lettered and acknowledged', async () => {
+    const w = world({ recallBotId: 'recall-1', status: 'recording' });
+    w.recall.leaveFails = 500;
+    await expect(w.run('cancel_bot', { meetingBotId: w.bot.id })).rejects.toThrow();
+    expect(await w.run('cancel_bot', { meetingBotId: w.bot.id }, { 'x-cloudtasks-taskretrycount': '4' })).toBe(200);
+    expect(w.calls).toContain('dead_letter:meetings:cancel_bot');
+    expect(w.lines.find((l) => l.msg === 'cancel_bot_gave_up')).toMatchObject({ level: 'error', meetingBotId: w.bot.id });
+  });
+
+  it('a dead letter that can\'t be written is an error line of its own, never the task\'s failure', async () => {
+    const w = world({ recallBotId: 'recall-1', status: 'recording' });
+    w.recall.leaveFails = 500;
+    w.repo.recordDeadLetter = async () => { throw new Error('pg down'); };
+    expect(await w.run('cancel_bot', { meetingBotId: w.bot.id }, { 'x-cloudtasks-taskretrycount': '4' })).toBe(200);
+    expect(w.lines.find((l) => l.msg === 'dead_letter_record_failed')).toMatchObject({ level: 'error', queue: 'meetings', kind: 'cancel_bot', meetingBotId: w.bot.id });
+  });
 
   it('an ending that fails partway is retried in full; a replay on a failed bot finishes its mirror', async () => {
     const w = world({ recallBotId: 'recall-1', status: 'waiting_room' });

@@ -34,6 +34,7 @@ import { getPool, isPostgresEnabled, withTx } from './db';
 import { listStoragePurgesForAccount, runStoragePurge } from './storage-purges-repo';
 import { recordNoteDeleted } from './deleted-notes-repo';
 import { AccountDeletedError, ensureUser, ensureWorkspaceAccess } from './workspace-access';
+import { purgeRecallBotsOf } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorage as {
@@ -50,6 +51,8 @@ export interface AccountDeletion {
   uploadSessionUris: string[];
   notesQueued: number;
   membershipsDeleted: number;
+  /** Recall copies of the account's meetings queued for deletion (and live bots for leaving). */
+  recallPurges: number;
 }
 
 export async function deleteAccountData(
@@ -107,6 +110,20 @@ export async function deleteAccountData(
         );
         await recordNoteDeleted(client, { noteId: n.id, workspaceId: n.workspace_id });
       }
+      // The account's notetakers cascade away with it (the user's, and any in a
+      // workspace it owns), but Recall's copies of their meetings mustn't
+      // outlive it, and one still in a meeting must leave: queued here, with
+      // the deletion, for the purge worker (recall_purges outlives the bots).
+      // Every one of them locked, in id order, before its purge row: failNotetaker takes a bot before its
+      // purge row, so the same order can't deadlock; and a create task attaching a Recall bot to one of them
+      // waits, then finds it gone and removes the Recall bot itself.
+      const bots = await client.query<{ recall_bot_id: string | null; status: string; status_rank: number; trace_id: string | null }>(
+        `SELECT recall_bot_id, status, status_rank, trace_id FROM meeting_bots
+          WHERE uid = $1 OR workspace_id = ANY($2::text[])
+          ORDER BY id FOR UPDATE`,
+        [input.uid, ownedIds],
+      );
+      const recallPurges = await purgeRecallBotsOf(client, bots.rows, 'account_deleted');
       await client.query(
         'DELETE FROM dead_letter WHERE workspace_id = ANY($1::text[]) OR note_id = ANY($2::text[])',
         [workspaceIds, notes.rows.map((n) => n.id)],
@@ -122,6 +139,7 @@ export async function deleteAccountData(
         uploadSessionUris,
         notesQueued: notes.rows.length,
         membershipsDeleted: members.rowCount ?? 0,
+        recallPurges,
       };
     },
     { log, fields: { userId: input.uid } },
