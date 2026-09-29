@@ -1101,11 +1101,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               path's failed mirror after its commit, a last attempt's lost `error` mirror, and any other lost
               mirror write. Tested on Postgres with a precondition-honouring fake (13 cases); seven mutations
               checked.
-              - [ ] **Queued (from its audit):** a run lists at most 200 notes, oldest first, and warns
-                (`mirror_repair_limit_reached`) when it hits that; past it, newer notes can age out of the
-                window unchecked (page by `(updated_at, id)` or keep a watermark). The listing uses
-                `notes_status_idx`, which doesn't narrow `ready`/`error`; a partial index on `updated_at` for
-                finished notes (new migration) would stop it scanning every finished note. Whether Firestore
+              - [x] ~~A run lists at most 200 notes, and newer ones can age out unchecked; the listing scans
+                every finished note~~ **fixed (RELEASE.md PR 30a; audit Q20, Q21):** it pages through the whole
+                window by an `(updated_at, id)` watermark on a partial index of the finished notes (migration
+                031), within a 5-minute budget (`mirror_repair_budget_reached` if it runs out), and a failed
+                note's doc is repaired when its message differs from Postgres's too. Whether Firestore
                 answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
                 The repaired lists share the `created_at, id` ordering item below.
             - ~~When the fast path's or a completion's embedder enqueue throws after its claim, the claim is

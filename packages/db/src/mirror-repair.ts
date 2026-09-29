@@ -40,17 +40,33 @@ const { redactLines } = redaction as {
 
 export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' }
 
-/** Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first. */
-export async function listRecentlyFinishedNotes(input: { settledMs: number; windowMs: number; limit: number }): Promise<FinishedNote[]> {
+/** Where a page of finished notes ended: the next page starts after it. */
+export interface FinishedNotesCursor { updatedAt: string; noteId: string }
+
+/**
+ * Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first, a page at a time
+ * (audit Q20): pass the previous page's `next` as `after`; `next` is null on the last page. Paged by the
+ * (updated_at, id) watermark on the finished-notes index (migration 031), so every note in the window is
+ * seen however many there are. `updated_at` goes out as text, at full microsecond precision, so the
+ * watermark never skips a row that shares a millisecond.
+ */
+export async function listRecentlyFinishedNotes(input: {
+  settledMs: number; windowMs: number; limit: number; after?: FinishedNotesCursor | null;
+}): Promise<{ notes: FinishedNote[]; next: FinishedNotesCursor | null }> {
   const { rows } = await getPool().query(
-    `SELECT id AS "noteId", workspace_id AS "workspaceId", status FROM notes
+    `SELECT id AS "noteId", workspace_id AS "workspaceId", status, updated_at::text AS "updatedAt" FROM notes
       WHERE status IN ('ready', 'error') AND deleted_at IS NULL
         AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND updated_at > NOW() - (($1::bigint + $2::bigint) * INTERVAL '1 millisecond')
-      ORDER BY updated_at LIMIT $3`,
-    [input.settledMs, input.windowMs, input.limit],
+        AND ($4::timestamptz IS NULL OR (updated_at, id) > ($4::timestamptz, $5::text))
+      ORDER BY updated_at, id LIMIT $3`,
+    [input.settledMs, input.windowMs, input.limit, input.after?.updatedAt ?? null, input.after?.noteId ?? ''],
   );
-  return rows;
+  const last = rows[rows.length - 1];
+  return {
+    notes: rows.map(({ noteId, workspaceId, status }) => ({ noteId, workspaceId, status })),
+    next: rows.length === input.limit && last ? { updatedAt: last.updatedAt, noteId: last.noteId } : null,
+  };
 }
 
 function clock(ms: number | null): string {
@@ -153,7 +169,11 @@ export async function repairNoteMirror(
   const pg = await readPostgres(input.noteId, input.workspaceId, doc.status, opts.log ?? defaultLog);
   if (!pg) return 'gone';
   if (pg.status !== 'ready' && pg.status !== 'error') return 'not_finished';
-  if (doc.status === pg.status) return 'in_step';
+  // A failed note's message too (audit Q21): a mirror written when Postgres's own write failed carries the
+  // caller's message, and a later failure's message never reached the doc. Only when Postgres has one: an
+  // older row without it never blanks the doc's.
+  const messageBehind = pg.status === 'error' && pg.errorMessage != null && (doc.errorMessage ?? null) !== pg.errorMessage;
+  if (doc.status === pg.status && !messageBehind) return 'in_step';
 
   const patch: Record<string, unknown> = { status: pg.status, updatedAt: new Date().toISOString() };
   if (pg.status === 'error') patch.errorMessage = pg.errorMessage;
