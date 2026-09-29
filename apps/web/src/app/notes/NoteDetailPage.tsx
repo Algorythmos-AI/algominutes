@@ -24,9 +24,27 @@ export function NoteDetailPage() {
   return <NoteDetail key={noteId} noteId={noteId} />;
 }
 
+/** Whether the server offers share links (/v1/config shareLinks, RELEASE.md PR 29): off until it says so. */
+function useShareLinksOn(): boolean {
+  const { api } = useApi();
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.appConfig().then(
+      (c) => live && setOn(c.shareLinks === true),
+      (err: unknown) => reportCrash('note.appConfig', err),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api]);
+  return on;
+}
+
 function NoteDetail({ noteId }: { noteId: string }) {
   const { user } = useAuth();
   const { api } = useApi();
+  const shareLinks = useShareLinksOn();
   const { state, visible, hide, unhide } = useNotes();
   const notice = useNotice();
   const navigate = useNavigate();
@@ -206,7 +224,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
         </div>
         {ready && data && (
           <div className="mt-2">
-            <NoteTools noteId={noteId} workspaceId={workspaceId} title={displayTitle(data.note.title ?? live.title)} summary={data.summary} reload={() => setVersion((v) => v + 1)} />
+            <NoteTools noteId={noteId} workspaceId={workspaceId} title={displayTitle(data.note.title ?? live.title)} summary={data.summary} reload={() => setVersion((v) => v + 1)} shareLinks={shareLinks} />
           </div>
         )}
         {audio.src && (

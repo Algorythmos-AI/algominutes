@@ -49,10 +49,19 @@ export async function notetakerFor(uid, env = process.env, { built = NOTETAKER_B
   return Object.fromEntries(Object.entries(on).map(([k, v]) => [k, v && allowed]));
 }
 
+/**
+ * Share links (RELEASE.md PR 29): OFF unless SHARE_LINKS=on. A link is public (anyone with it can read the
+ * note), and it opens in the web app, so it stays off until that viewer's host is public (the beta's).
+ */
+export function shareLinksOn(env = process.env) {
+  return ['on', 'true', '1'].includes(String(env.SHARE_LINKS || '').trim().toLowerCase());
+}
+
 export async function appConfig(env = process.env, uid = null, opts = {}) {
   return {
     broadcastCapture: String(env.BROADCAST_CAPTURE || 'on').trim().toLowerCase() !== 'off',
     notetaker: await notetakerFor(uid, env, opts),
+    shareLinks: shareLinksOn(env),
   };
 }
 

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { AppConfigResponse, FeatureDisabledError } from '@algominutes/contracts/schemas';
-import { appConfig, notetakerSwitches, notetakerFor, NOTETAKER_BUILT } from '../services/api/src/routes/app-config.js';
+import { appConfig, notetakerSwitches, notetakerFor, NOTETAKER_BUILT, shareLinksOn } from '../services/api/src/routes/app-config.js';
+// @ts-expect-error: plain CJS module, no type declarations
+import siteUrl from '../packages/ai/src/site-url.cjs';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from '../services/api/src/routes/meetings.js';
 
 // GET /v1/config: broadcast capture's kill switch. BROADCAST_CAPTURE=off
@@ -14,8 +16,27 @@ describe('app config', () => {
     expect((await appConfig({ BROADCAST_CAPTURE: ' OFF ' })).broadcastCapture).toBe(false);
   });
 
+  // RELEASE.md PR 29: a share link is public, so the apps show it only once the server says so.
+  it('share links are off unless the env says on', async () => {
+    expect((await appConfig({})).shareLinks).toBe(false);
+    expect((await appConfig({ SHARE_LINKS: 'on' })).shareLinks).toBe(true);
+    expect(shareLinksOn({ SHARE_LINKS: ' TRUE ' })).toBe(true);
+    for (const v of ['off', 'yes please', '0', '']) expect(shareLinksOn({ SHARE_LINKS: v }), v).toBe(false);
+  });
+
+  it("a share link opens on the viewer's origin, only an https one, else the public site", () => {
+    const { shareViewerOrigin } = siteUrl;
+    expect(shareViewerOrigin({})).toBe('https://algominutes.algorythmos.com');
+    expect(shareViewerOrigin({ PUBLIC_SITE_URL: 'https://site.example.test' })).toBe('https://site.example.test');
+    expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: ' https://beta.example.test/ ' })).toBe('https://beta.example.test');
+    expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: 'http://localhost:5173' })).toBe('http://localhost:5173');
+    for (const bad of ['http://beta.example.test', 'https://beta.example.test/app', 'https://u@beta.example.test', 'https://beta.example.test/?x=1', 'beta.example.test', 'javascript:alert(1)']) {
+      expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: bad, PUBLIC_SITE_URL: 'https://site.example.test' }), bad).toBe('https://site.example.test');
+    }
+  });
+
   it('matches the AppConfigResponse contract', async () => {
-    for (const env of [{}, { BROADCAST_CAPTURE: 'off' }, { NOTETAKER: 'bot,calendar' }]) {
+    for (const env of [{}, { BROADCAST_CAPTURE: 'off' }, { NOTETAKER: 'bot,calendar' }, { SHARE_LINKS: 'on' }]) {
       const body = await appConfig(env, 'alice', { isTester: async () => true });
       expect(AppConfigResponse.parse(body)).toEqual(body);
     }

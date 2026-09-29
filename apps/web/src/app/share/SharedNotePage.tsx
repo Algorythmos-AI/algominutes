@@ -9,11 +9,10 @@ import { SITE_URL } from '../site';
 type Load = { status: 'loading' } | { status: 'ready'; data: SharedNoteResponse } | { status: 'gone' } | { status: 'error' };
 
 /**
- * A note someone shared (/v1/shares/read, public: no sign-in). Built but off,
- * as on iOS (SHARE_LINKS_ENABLED=NO): nothing links here until sharing is
- * turned on, and the public site serves /s/<token> meanwhile. A share that
- * expired, was revoked or never existed reads the same way, so a guess
- * learns nothing.
+ * A note someone shared (/v1/shares/read, public: no sign-in). Share links open
+ * here (RELEASE.md PR 29), once the server's shareLinks switch is on and the api
+ * points links at this host (SHARE_VIEWER_ORIGIN). A share that expired, was
+ * revoked or never existed reads the same way, so a guess learns nothing.
  */
 export function SharedNotePage() {
   const { token = '' } = useParams();
