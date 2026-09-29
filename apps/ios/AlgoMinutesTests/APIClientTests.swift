@@ -123,6 +123,20 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(entitlement.state, .trialing)
     }
 
+    func testRetentionIsReadFromTheAccount() async throws {
+        respond(#"{"retentionDays":30}"#)
+        let r = try await api.retention()
+        assertRequest("GET", "/v1/account/retention")
+        XCTAssertNil(last.body)
+        XCTAssertEqual(r.retentionDays, 30)
+        XCTAssertEqual(RetentionSettingsCard.stored(r.retentionDays), 30)
+
+        respond(#"{"retentionDays":null}"#)
+        let keep = try await api.retention()
+        XCTAssertNil(keep.retentionDays)
+        XCTAssertEqual(RetentionSettingsCard.stored(keep.retentionDays), 0) // "Keep until I delete"
+    }
+
     func testRedeemInviteIsAPostWithTheCode() async throws {
         respond(#"{"entitlement":{"state":"active","plan":"pro","billingPeriod":"2026-10","includedMinutes":600,"usedMinutes":0,"remainingMinutes":600,"overQuota":false,"trialEndsAt":null},"grantEndsAt":"2026-10-29T00:00:00.000Z","notetaker":false}"#)
         let r = try await api.redeemInvite(code: "BETA-7K2QX-M9D4R-TW8HN")

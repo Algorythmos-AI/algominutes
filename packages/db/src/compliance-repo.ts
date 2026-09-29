@@ -9,6 +9,7 @@ export async function setRetentionDays(uid: string, days: number | null): Promis
   if (!isPostgresEnabled()) return;
   await getPool().query(`UPDATE users SET retention_days = $2 WHERE uid = $1`, [uid, days]);
 }
+/** The account's own choice (null: keep until deleted), so every device shows the same (RELEASE.md PR 12b). */
 export async function getRetentionDays(uid: string): Promise<number | null> {
   if (!isPostgresEnabled()) return null;
   const { rows } = await getPool().query(`SELECT retention_days FROM users WHERE uid = $1`, [uid]);

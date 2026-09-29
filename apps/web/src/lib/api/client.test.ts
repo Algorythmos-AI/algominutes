@@ -55,6 +55,7 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'appConfig', run: (c) => c.appConfig(), method: 'GET', url: `${ORIGINS.api}/v1/config` },
   { name: 'redeemInvite', run: (c) => c.redeemInvite({ code: 'BETA-7K2QX-M9D4R-TW8HN' }), method: 'POST', url: `${ORIGINS.api}/v1/beta/redeem`, body: { code: 'BETA-7K2QX-M9D4R-TW8HN' } }, // gitleaks:allow
   { name: 'acceptTerms', run: (c) => c.acceptTerms({ termsVersion: 't', privacyVersion: 'p' }), method: 'POST', url: `${ORIGINS.api}/v1/account/accept-terms`, body: { termsVersion: 't', privacyVersion: 'p' } },
+  { name: 'retention', run: (c) => c.retention(), method: 'GET', url: `${ORIGINS.api}/v1/account/retention` },
   { name: 'setRetention', run: (c) => c.setRetention({ retentionDays: 30 }), method: 'POST', url: `${ORIGINS.api}/v1/account/retention`, body: { retentionDays: 30 } },
   { name: 'deleteAccount', run: (c) => c.deleteAccount(), method: 'POST', url: `${ORIGINS.api}/v1/account/delete`, body: {} },
   { name: 'support', run: (c) => c.support({ kind: 'contact', message: 'hi' }), method: 'POST', url: `${ORIGINS.api}/v1/support`, body: { kind: 'contact', message: 'hi' } },

@@ -1534,10 +1534,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       Signing out with any not uploaded says so first. **Upload first** goes to the record page, and **Delete and
       sign out** removes them from IndexedDB. The notes list shows them too, not only `/record`
       (`apps/web/src/app/record/unsent.test.tsx`).
-- [ ] **The retention shown on the web is this browser's, not the account's.** There's no read for
-      `users.retention_days`, so a limit set on iOS or in another browser shows as nothing chosen (saving still
-      works, and a shorter limit is confirmed first). Fix: return `retentionDays` from `/v1/entitlement` or
-      `/v1/config`, a contract change (three clients).
+- [x] **The retention shown on the web is this browser's, not the account's: fixed 2026-09-29 (RELEASE.md PR
+      12b).** `GET /v1/account/retention` returns `{ retentionDays }` (additive, in the contract). Web Settings and
+      the iOS retention card read it when they open, so a limit set on any device shows on all of them
+      (`tests/integration/retention.test.ts`).
 - [ ] **Deleting an Apple account on the web needs a popup.** Where the browser blocks it, the user is told to
       allow pop-ups (or use the iOS app); a redirect would leave the page mid-delete. The Apple token is also
       revoked before the server delete, as on iOS: if the delete then fails, the account remains and the user

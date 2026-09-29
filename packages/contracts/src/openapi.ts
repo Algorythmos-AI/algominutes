@@ -567,6 +567,15 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/account/retention`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: "The account's note retention (days), or null to keep until deleted: the same on every device.",
+    responses: {
+      200: { description: 'The retention last set on any device.', ...json(S.RetentionResponse) },
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'post', path: `${API_BASE_PATH}/account/retention`, tags: ['account'], security: authed, parameters: commonHeaders,
     summary: 'Set how long notes are kept (days), or null to keep until deleted.',
     request: { body: json(S.SetRetentionRequest) },

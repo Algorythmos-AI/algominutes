@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { RETENTION_OPTIONS_DAYS, type EntitlementResponse } from '@algominutes/contracts';
 import pkg from '../../../package.json';
@@ -15,6 +15,7 @@ import { InviteCodeForm } from '../billing/InviteCodeForm';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
 
+// This browser's copy of the account's retention: what the card shows until the account's own arrives.
 function readRetention(uid: string): number | null | undefined {
   try {
     const v = localStorage.getItem(retentionKey(uid));
@@ -22,6 +23,14 @@ function readRetention(uid: string): number | null | undefined {
   } catch (err) {
     reportCrash('settings.readRetention', err);
     return undefined;
+  }
+}
+
+function writeRetention(uid: string, days: number | null) {
+  try {
+    localStorage.setItem(retentionKey(uid), days == null ? 'keep' : String(days));
+  } catch (err) {
+    reportCrash('settings.saveRetention', err);
   }
 }
 
@@ -161,17 +170,34 @@ function RetentionCard({ uid }: { uid: string }) {
   const [choice, setChoice] = useState<number | null | undefined>(saved);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Set once a choice is made here: the account's value, arriving later, doesn't overwrite it.
+  const picked = useRef(false);
+
+  // The account's own choice, made on any device (RELEASE.md PR 12b). Before, a limit set on iOS or in
+  // another browser showed here as nothing chosen.
+  useEffect(() => {
+    let cancelled = false;
+    api.retention().then(
+      (r) => {
+        if (cancelled) return;
+        setSaved(r.retentionDays);
+        if (!picked.current) setChoice(r.retentionDays);
+        writeRetention(uid, r.retentionDays);
+      },
+      (err: unknown) => reportCrash('settings.retention', err),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, uid]);
+
   const save = async (days: number | null) => {
     setConfirming(false);
     setBusy(true);
     try {
       await api.setRetention({ retentionDays: days });
       setSaved(days);
-      try {
-        localStorage.setItem(retentionKey(uid), days == null ? 'keep' : String(days));
-      } catch (err) {
-        reportCrash('settings.saveRetention', err);
-      }
+      writeRetention(uid, days);
       notice.show(days == null ? 'Notes are kept until you delete them.' : `Notes are deleted after ${days} days.`);
     } catch (err) {
       notice.show(err instanceof ApiError ? `That wasn’t saved. ${err.message}` : 'That wasn’t saved. Try again.');
@@ -196,7 +222,7 @@ function RetentionCard({ uid }: { uid: string }) {
           <div className="flex flex-col gap-2">
             {options.map((o) => (
               <label key={String(o.days)} className="flex gap-2 text-body">
-                <input type="radio" name="retention" checked={choice === o.days} onChange={() => setChoice(o.days)} />
+                <input type="radio" name="retention" checked={choice === o.days} onChange={() => { picked.current = true; setChoice(o.days); }} />
                 {o.label}
               </label>
             ))}

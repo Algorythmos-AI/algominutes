@@ -2181,6 +2181,20 @@
           "web"
         ]
       },
+      "RetentionResponse": {
+        "type": "object",
+        "properties": {
+          "retentionDays": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "exclusiveMinimum": true
+          }
+        },
+        "required": [
+          "retentionDays"
+        ]
+      },
       "SetRetentionRequest": {
         "type": "object",
         "properties": {
@@ -4656,6 +4670,44 @@
       }
     },
     "/v1/account/retention": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "The account's note retention (days), or null to keep until deleted: the same on every device.",
+        "responses": {
+          "200": {
+            "description": "The retention last set on any device.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "account"

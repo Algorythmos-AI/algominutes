@@ -35,7 +35,7 @@ import { redeemInviteRoute } from './beta.js';
 import { appConfigRoute } from './app-config.js';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
-import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
+import { setRetentionRoute, getRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
 
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
@@ -237,6 +237,7 @@ export function buildRouter() {
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
   router.post('/events', authed, wrap(trackEventRoute));
   // ── A10 compliance ── compliance.js ────────────────────────────────────
+  router.get('/account/retention', authed, wrap(getRetentionRoute));
   router.post('/account/retention', authed, wrap(setRetentionRoute));
   router.post('/account/accept-terms', authed, wrap(acceptTermsRoute));
   router.post('/support', authed, wrap(supportRoute));
