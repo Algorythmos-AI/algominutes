@@ -96,6 +96,8 @@ final class TranscriptRepository {
     ///   - the full set must be *longer*, because a short note's mirror
     ///     already is the whole transcript and swapping it for an identical
     ///     fetch would rebuild the list — losing scroll position — for nothing.
+    ///     Unless it carries speakers the mirror can't (speaker tags, which the
+    ///     mirror has no field for): those are what make a speaker renamable.
     /// `nonisolated` because it touches no state — it is a decision over its
     /// arguments, and isolating it would force callers onto the main actor for
     /// no reason.
@@ -105,9 +107,24 @@ final class TranscriptRepository {
         mirrored: [TranscriptLine]?,
         noteId: String
     ) -> [TranscriptLine] {
-        guard fullNoteId == noteId, full.count > (mirrored?.count ?? 0) else {
+        guard fullNoteId == noteId, !full.isEmpty,
+              full.count > (mirrored?.count ?? 0) || full.contains(where: { $0.speakerTag != nil })
+        else {
             return mirrored ?? []
         }
         return full
+    }
+
+    /// A speaker renamed (`APIClient.setNoteSpeaker`): every line of theirs
+    /// takes the new name at once, as the next read would give it. An empty
+    /// name is "Speaker N" again (the server clears the mapping).
+    func renameSpeaker(tag: Int, to name: String, noteId: String) {
+        guard self.noteId == noteId else { return }
+        let label = name.isEmpty ? "Speaker \(tag)" : name
+        lines = lines.map { line in
+            var l = line
+            if l.speakerTag == tag { l.speaker = label }
+            return l
+        }
     }
 }

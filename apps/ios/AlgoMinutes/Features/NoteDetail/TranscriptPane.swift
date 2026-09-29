@@ -18,6 +18,8 @@ struct TranscriptPane: View {
     /// empty the transcript someone was reading.
     var isTruncated: Bool = false
     var onRetry: (() -> Void)?
+    /// Rename a speaker, from their chip. Nil where names can't change.
+    var onRenameSpeaker: ((TranscriptLine) -> Void)?
 
     var body: some View {
         if !lines.isEmpty {
@@ -26,7 +28,8 @@ struct TranscriptPane: View {
                     TranscriptLineRow(
                         line: line,
                         isActive: line.index == activeIndex,
-                        onSeek: onSeek
+                        onSeek: onSeek,
+                        onRenameSpeaker: onRenameSpeaker
                     )
                 }
                 if isTruncated {
@@ -63,6 +66,7 @@ struct TranscriptLineRow: View {
     let line: TranscriptLine
     var isActive: Bool = false
     var onSeek: ((TimeInterval) -> Void)?
+    var onRenameSpeaker: ((TranscriptLine) -> Void)?
 
     /// Where a tap would jump to. Nil means this line cannot be located in
     /// the audio, and the row is then not tappable at all — better than a tap
@@ -87,13 +91,26 @@ struct TranscriptLineRow: View {
             // path (ADR 0005) a line carries a real "Speaker N" / renamed name;
             // short fast-path and undiarised lines carry none, and the row then
             // simply omits it rather than implying an attribution the data does
-            // not support. (Tap-to-rename is a fast-follow — see BLOCKERS.)
+            // not support. A speaker with a tag is a chip: tap it to rename them.
             if !line.speaker.isEmpty || !line.time.isEmpty {
                 HStack(spacing: 8) {
                     if !line.speaker.isEmpty {
-                        Text(line.speaker)
-                            .font(Typography.label(12))
-                            .foregroundStyle(Theme.heading)
+                        if line.speakerTag != nil, let onRenameSpeaker {
+                            Button { onRenameSpeaker(line) } label: {
+                                Text(line.speaker)
+                                    .font(Typography.label(12))
+                                    .foregroundStyle(Theme.heading)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().strokeBorder(Theme.outline.opacity(0.5), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Rename this speaker")
+                        } else {
+                            Text(line.speaker)
+                                .font(Typography.label(12))
+                                .foregroundStyle(Theme.heading)
+                        }
                     }
                     if !line.time.isEmpty {
                         Text(line.time)
