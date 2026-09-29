@@ -76,10 +76,14 @@ final class NotesRepository {
         lastStatusById.removeAll()
         receivedFirstSnapshot = false
         resubscribeAttempts = 0
+        // A new session starts healthy: the last one's failure isn't this one's.
+        listenerHealthy = true
     }
 
     private func subscribe() {
         guard let uid, let collection = notesCollection() else { return }
+        // Never two listeners: a Retry during backoff, or a refresh, replaces the old one.
+        listener?.remove()
         listener = collection
             .whereField("authorId", isEqualTo: uid)
             .addSnapshotListener { [weak self] snapshot, error in
@@ -107,6 +111,10 @@ final class NotesRepository {
     /// deliver a fresh snapshot. The listener is already realtime, so this is a
     /// user-reassurance affordance (and recovers a silently-dropped listener).
     func refresh() async {
+        // A pending backoff resubscribe would attach a second listener later.
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
+        resubscribeAttempts = 0
         listener?.remove()
         listener = nil
         subscribe()

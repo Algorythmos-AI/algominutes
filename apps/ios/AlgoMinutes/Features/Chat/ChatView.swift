@@ -83,6 +83,16 @@ struct ChatView: View {
                 if let citations = message.citations, !citations.isEmpty {
                     sourcesList(citations)
                 }
+                if message.failedQuery != nil, !viewModel.isStreaming {
+                    Button {
+                        viewModel.retry(messageId: message.id)
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.body)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -103,7 +113,8 @@ struct ChatView: View {
             case .citation(let index):
                 var chip = AttributedString("[\(index)]")
                 chip.foregroundColor = Theme.heading
-                chip.font = .system(size: 14, weight: .bold)
+                // Scales with Dynamic Type, like the text around it.
+                chip.font = Typography.label(14)
                 if let citation = citation(at: index, in: message) {
                     chip.link = URL(string: "algominutes://note/\(citation.noteId)")
                 }
@@ -225,13 +236,26 @@ final class ChatViewModel {
 
     func send() {
         let query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isStreaming, let api else { return }
+        guard !query.isEmpty, !isStreaming, api != nil else { return }
         draft = ""
 
         messages.append(ChatMessage(role: .user, content: query))
-        var assistant = ChatMessage(role: .assistant, content: "")
-        messages.append(assistant)
-        let assistantIndex = messages.count - 1
+        messages.append(ChatMessage(role: .assistant, content: ""))
+        ask(query, into: messages.count - 1)
+    }
+
+    /// Ask a failed answer's question again, in the same place: no second
+    /// question bubble (RELEASE.md PR 10c).
+    func retry(messageId: String) {
+        guard !isStreaming, let index = messages.firstIndex(where: { $0.id == messageId }),
+              let query = messages[index].failedQuery else { return }
+        messages[index] = ChatMessage(id: messageId, role: .assistant, content: "")
+        ask(query, into: index)
+    }
+
+    private func ask(_ query: String, into assistantIndex: Int) {
+        guard let api else { return }
+        var assistant = messages[assistantIndex]
         isStreaming = true
 
         streamTask = Task { [weak self] in
@@ -245,6 +269,7 @@ final class ChatViewModel {
                         assistant.content += text
                     case .serverError(let error):
                         assistant.content += "\n\n_Error: \(error)_"
+                        assistant.failedQuery = query
                     case .done:
                         break
                     }
@@ -257,6 +282,7 @@ final class ChatViewModel {
                 assistant.content += assistant.content.isEmpty
                     ? "Error: \(message)"
                     : "\n\nError: \(message)"
+                assistant.failedQuery = query
                 self.messages[assistantIndex] = assistant
             }
             self.isStreaming = false

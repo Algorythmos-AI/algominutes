@@ -172,12 +172,23 @@ struct FilesView: View {
 
     private var notesList: some View {
         List {
+            NotesSyncBanner()
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             if let error = searchError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Typography.body(13))
-                    .foregroundStyle(Theme.heading)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                HStack {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.body(13))
+                        .foregroundStyle(Theme.heading)
+                    Spacer()
+                    // The query is still in the field: search it again.
+                    Button("Retry") { Task { await runTranscriptSearch() } }
+                        .font(Typography.label(14))
+                        .foregroundStyle(Theme.body)
+                        .buttonStyle(.borderless)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
 
             if filteredNotes.isEmpty && transcriptHits.isEmpty && !isSearching {
