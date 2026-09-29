@@ -13,5 +13,6 @@ Then please try:
 3. Search for a word you said, and ask the note a question in chat.
 4. Settings, then Create account, to keep your notes with Apple or Google.
 
-This is a test environment: record only people who agreed, and nothing
-confidential.
+Your notes are kept for the whole beta, and backed up. The public release
+starts fresh: you'll be told before then, with time to export your notes.
+Record only people who agreed, and nothing confidential.

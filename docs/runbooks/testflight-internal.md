@@ -36,8 +36,9 @@ what to try and what changed. Beyond that, the flows that matter most:
   Center long-press Screen Recording and choose AlgoMinutes. The app asks you to confirm everyone
   agreed before the capture becomes a note.
 
-This is a test environment and it can be reset. **Record only people who agreed, and nothing
-confidential.**
+Your notes are kept for the whole beta, and backed up (staging keeps data like production:
+docs/DECISIONS.md, 2026-09-29). The public release starts fresh: testers are told before then, with
+time to export. **Record only people who agreed, and nothing confidential.**
 
 ### Send feedback
 
