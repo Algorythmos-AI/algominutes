@@ -154,6 +154,29 @@ variable "notetaker_surfaces" {
   }
 }
 
+variable "trial_on_first_use" {
+  description = "Whether a brand-new user starts the 7-day reverse trial (TRIAL_ON_FIRST_USE on the api). \"off\" opens new users on the free floor, so minutes come only from a grant, an invite code or a purchase; existing users are unchanged. The external beta on staging runs \"off\" until the server checks DeviceCheck with Apple (docs/plans/RELEASE.md, DECISIONS 2026-09-29)."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.trial_on_first_use)
+    error_message = "trial_on_first_use must be \"on\" or \"off\"."
+  }
+}
+
+variable "daily_spend_cap_aud" {
+  description = "The §4.6 daily spend cap in AUD (DAILY_SPEND_CAP_AUD on the api, which refuses a kickoff at the cap, and the transcoder, which halts queued work). null leaves it unset: spend-guard.cjs then uses its per-environment default (staging A$20, prod A$200)."
+  type        = number
+  default     = null
+
+  validation {
+    # A conditional, not ||: Terraform evaluates both sides of || , and null > 0 is an error.
+    condition     = var.daily_spend_cap_aud == null ? true : (var.daily_spend_cap_aud > 0 && var.daily_spend_cap_aud <= 2000)
+    error_message = "daily_spend_cap_aud must be null or between 0 and 2000 (AUD a day)."
+  }
+}
+
 variable "admin_uids" {
   description = "Firebase uids allowed on the api's operator routes (/v1/admin/*, ADMIN_UIDS). Passed at plan time as TF_VAR_admin_uids, never committed. Empty leaves ADMIN_UIDS unset, so every admin route answers 403."
   type        = list(string)

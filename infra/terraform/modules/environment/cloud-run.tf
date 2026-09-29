@@ -86,22 +86,28 @@ locals {
   # some: an unset ADMIN_UIDS means every admin route answers 403.
   admin_env = length(var.admin_uids) > 0 ? { ADMIN_UIDS = join(",", var.admin_uids) } : {}
 
+  # The daily spend cap, where it's checked (the api at kickoff, the transcoder
+  # before paid work). Unset, spend-guard.cjs uses its per-environment default.
+  spend_env = var.daily_spend_cap_aud == null ? {} : { DAILY_SPEND_CAP_AUD = tostring(var.daily_spend_cap_aud) }
+
   # Per-service extra plain env, merged over common_env. Every name a service's
   # src/env-spec.cjs requires must be set here, non-blank
   # (tests/tf-env-contract.test.ts).
   service_env = {
-    api = merge(local.db_env, local.admin_env, {
-      STORAGE_BUCKET    = local.region_bucket["recordings"]
-      ALLOWED_ORIGINS   = var.allowed_origins
-      PUBLIC_SITE_URL   = var.public_site_url
-      BROADCAST_CAPTURE = var.broadcast_capture
+    api = merge(local.db_env, local.admin_env, local.spend_env, {
+      STORAGE_BUCKET = local.region_bucket["recordings"]
+      # New users start the reverse trial unless it's switched off (the beta).
+      TRIAL_ON_FIRST_USE = var.trial_on_first_use
+      ALLOWED_ORIGINS    = var.allowed_origins
+      PUBLIC_SITE_URL    = var.public_site_url
+      BROADCAST_CAPTURE  = var.broadcast_capture
       # The notetaker's surfaces (off unless named) and where its tasks go.
       NOTETAKER    = var.notetaker_surfaces
       MEETINGS_URL = local.service_url["meetings"]
       # The key the api encrypts a notetaker's meeting link with (kms.tf).
       MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
     })
-    transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
+    transcoder = merge(local.db_env, local.spend_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     # Must equal the summarize queue's max_attempts (main.tf queue_retry), so the
     # summarizer's dead-letter write fires on that queue's true last attempt.
     summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })

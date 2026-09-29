@@ -162,9 +162,14 @@ describe('the site in Terraform', () => {
     expect(fs.readFileSync('infra/terraform/modules/environment/variables.tf', 'utf8')).toMatch(/variable "site_uptime_host"\s*\{[^}]*default\s*=\s*""/);
   });
 
-  it("staging's api allows the site and the staging web app; prod's allows only the site", () => {
+  it("staging's api allows the site, the staging web app and the beta's; prod's allows only the site", () => {
     const origins = (e: string) => /^\s*allowed_origins\s*=\s*"([^"]+)"/m.exec(env(e))![1].split(',');
-    expect(origins('staging')).toEqual(['https://algominutes.algorythmos.com', 'https://staging.algominutes.algorythmos.com']);
+    expect(origins('staging')).toEqual([
+      'https://algominutes.algorythmos.com',
+      'https://staging.algominutes.algorythmos.com',
+      // The external beta's web app (RELEASE.md PR 6 and PR 7), public to testers.
+      'https://beta.algominutes.algorythmos.com',
+    ]);
     expect(origins('prod')).toEqual(['https://algominutes.algorythmos.com']);
   });
 });
