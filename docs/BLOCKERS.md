@@ -1105,8 +1105,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 (`mirror_repair_limit_reached`) when it hits that; past it, newer notes can age out of the
                 window unchecked (page by `(updated_at, id)` or keep a watermark). The listing uses
                 `notes_status_idx`, which doesn't narrow `ready`/`error`; a partial index on `updated_at` for
-                finished notes (new migration) would stop it scanning every finished note. Whether Firestore
-                answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
+                finished notes (new migration) would stop it scanning every finished note. Firestore's refusal codes
+                are pinned against the emulator in CI (RELEASE.md PR 30c, audit Q23:
+                `tests/rules/firestore-codes.test.ts`): a stale precondition is 9, and a conditional write to a
+                deleted doc is refused and never read as a failure. The GCS DELETE codes stay as documented (404:
+                gone), not yet confirmed on staging.
                 The repaired lists share the `created_at, id` ordering item below.
             - ~~When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
               spent and the note is never embedded~~ **fixed (RELEASE.md PR 5c; audit Q11):** the sweep's `redrive`
