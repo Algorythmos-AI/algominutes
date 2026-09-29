@@ -61,6 +61,16 @@ describe('embedChunks', () => {
     expect(refused.calls).toHaveLength(1);
   });
 
+  it("a refusal is logged and thrown without Vertex's text, which can quote the chunks back", async () => {
+    const logged: string[] = [];
+    const spy: any = { info: noop, warn: noop, error: (o: any, m: string) => void logged.push(JSON.stringify({ m, status: o.status, err: o.err?.message })) };
+    const quoting = async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: "Invalid instance: 'Priya's card 4111 1111 1111 1111'" } }) });
+    const err = await embedChunks({ chunks: chunks(2), log: spy, project: 'p', location: 'l', fetchImpl: quoting, getToken, sleep: async () => {} }).catch((e: Error) => e);
+    expect(err.message).toBe('vertex_embed_failed: 400 INVALID_ARGUMENT');
+    expect(logged.join('')).not.toMatch(/Priya|4111/);
+    expect(logged.join('')).toContain('vertex_embed_http_error');
+  });
+
   it('an answer with the wrong number of vectors is refused, not misaligned', async () => {
     const impl = async (_u: string, init: any) => ok(JSON.parse(init.body).instances.slice(1));
     await expect(embedChunks({ chunks: chunks(3), log, project: 'p', location: 'l', fetchImpl: impl, getToken, sleep: async () => {} }))
