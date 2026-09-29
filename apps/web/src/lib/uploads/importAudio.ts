@@ -57,13 +57,33 @@ export interface ImportDeps {
   track?: { start: (noteId: string) => void; end: (noteId: string) => void };
   /** A recording made here, not an imported file: its note type and title. */
   recording?: { title: string };
+  /**
+   * The note an earlier upload of this recording created, cut off before it ended (a tab closed
+   * mid-upload): its doc exists, so the audio goes into it rather than a second note. Deleted since
+   * (the api answers 404), the recording gets a new note.
+   */
+  reuseNoteId?: string;
+  /** The note the upload goes into, once it exists: remembered, so a cut-off upload's retry reuses it. */
+  onNote?: (noteId: string) => void | Promise<unknown>;
+  /** The note was deleted again (a cancelled or failed recording upload): nothing to reuse. */
+  onNoteDropped?: () => void | Promise<unknown>;
 }
 
 export async function importAudio(file: File, deps: ImportDeps): Promise<ImportResult> {
   const problem = importProblem(file);
   if (problem) return { ok: false, noteId: null, message: problem };
   const workspaceId = workspaceIdFor(deps.uid);
-  const noteId = deps.newNoteId?.() ?? `web${crypto.randomUUID().replace(/-/g, '')}`;
+  const newNoteId = () => deps.newNoteId?.() ?? `web${crypto.randomUUID().replace(/-/g, '')}`;
+  let noteId = deps.reuseNoteId ?? newNoteId();
+  let reused = Boolean(deps.reuseNoteId);
+  // Remembering the note is the caller's (a recording's entry in IndexedDB): a failure there is reported, not fatal.
+  const tell = async (what: string, fn: () => unknown) => {
+    try {
+      await fn();
+    } catch (err) {
+      reportCrash(`import.${what}`, err);
+    }
+  };
   const mimeType = file.type || 'application/octet-stream';
   const cancelled = (): ImportResult => ({ ok: false, noteId: null, message: 'The upload was cancelled.' });
 
@@ -79,24 +99,39 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   const duration = await deps.probeDuration(file);
   if (deps.signal?.aborted) return cancelled();
 
+  const mint = () => deps.api.createUpload({ noteId, workspaceId, fileName: file.name, contentType: mimeType, totalBytes: file.size });
   let session;
   try {
-    session = await deps.api.createUpload({ noteId, workspaceId, fileName: file.name, contentType: mimeType, totalBytes: file.size });
+    try {
+      session = await mint();
+    } catch (err) {
+      // silent-catch-ok: the note to reuse was deleted since (its tombstone refuses uploads), so the recording gets a new one; anything else is rethrown
+      if (!(reused && err instanceof ApiError && err.kind === 'not_found')) throw err;
+      await tell('onNoteDropped', () => deps.onNoteDropped?.());
+      noteId = newNoteId();
+      reused = false;
+      session = await mint();
+    }
   } catch (err) {
-    // Nothing exists yet: no note to mark.
+    // Nothing new exists yet: no note to mark. The client makes every failure an ApiError: anything else is a bug.
+    if (!(err instanceof ApiError)) reportCrash('import.createUpload', err);
     return { ok: false, noteId: null, message: err instanceof ApiError ? err.message : "The upload couldn't start. Try again." };
   }
 
   if (deps.signal?.aborted) return cancelled();
   const type = deps.recording ? 'recording' : 'import_audio';
-  try {
-    await deps.createNoteDoc({ noteId, uid: deps.uid, title: deps.recording?.title ?? titleFrom(file.name), type, mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
-    deps.track?.start(noteId);
-  } catch (err) {
-    // No doc, no note: stop before uploading (the minted session just expires).
-    reportCrash('import.createNoteDoc', err);
-    return { ok: false, noteId: null, message: "The upload couldn't start. Try again." };
+  if (!reused) {
+    try {
+      await deps.createNoteDoc({ noteId, uid: deps.uid, title: deps.recording?.title ?? titleFrom(file.name), type, mimeType, storagePath: session.storagePath, ...(duration ? { duration } : {}) });
+    } catch (err) {
+      // No doc, no note: stop before uploading (the minted session just expires).
+      reportCrash('import.createNoteDoc', err);
+      return { ok: false, noteId: null, message: "The upload couldn't start. Try again." };
+    }
   }
+  // A reused note's doc is already there, with this same storage path (recordings/{ws}/{noteId}.{ext}).
+  await tell('onNote', () => deps.onNote?.(noteId));
+  deps.track?.start(noteId);
 
   const mark = async (message: string) => {
     try {
@@ -112,6 +147,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     if (deps.recording) {
       try {
         await deps.api.deleteNote({ noteId, workspaceId });
+        await tell('onNoteDropped', () => deps.onNoteDropped?.());
         return { ok: false, noteId: null, message };
       } catch (err) {
         reportCrash('import.failDelete', err);
@@ -140,6 +176,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
       // Cancelled: the note goes, rather than staying behind as a failure the user has to delete.
       try {
         await deps.api.deleteNote({ noteId, workspaceId });
+        await tell('onNoteDropped', () => deps.onNoteDropped?.());
       } catch (delErr) {
         reportCrash('import.cancelDelete', delErr);
         await mark('The upload was cancelled.');
@@ -147,6 +184,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
       deps.track?.end(noteId);
       return cancelled();
     }
+    if (!(err instanceof UploadError || err instanceof ApiError)) reportCrash('import.upload', err);
     deps.track?.end(noteId);
     return fail(err instanceof UploadError || err instanceof ApiError ? err.message : "The upload didn't finish. Try again.");
   }

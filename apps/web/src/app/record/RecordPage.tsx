@@ -136,17 +136,22 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     );
   }, [api]);
 
-  // The clock, and a guard before the tab closes mid-recording.
+  // The clock while recording.
   useEffect(() => {
     if (!recording) return;
     const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [recording]);
+
+  // A guard before the tab closes mid-recording or mid-upload. Nothing recorded is lost either way (it's in
+  // this browser), but a closed upload has to start again, and its note waits in the list until it does.
+  const saving = phase.kind === 'saving';
+  useEffect(() => {
+    if (!recording && !saving) return;
     const beforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener('beforeunload', beforeUnload);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener('beforeunload', beforeUnload);
-    };
-  }, [recording]);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [recording, saving]);
 
   const upload = useCallback(
     async (meta: RecordingMeta) => {
@@ -178,6 +183,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
             markNoteFailed: (noteId, message) => writer.markNoteFailed(user.uid, noteId, message),
             probeDuration: async () => (meta.seconds > 0 ? meta.seconds : null),
             track: { start: startedUpload, end: endedUpload },
+            // A tab closed mid-upload left its note: the audio goes into that one, not a second.
+            reuseNoteId: meta.note?.noteId,
+            onNote: (noteId) => env.store.setNote(meta.id, { noteId }),
+            onNoteDropped: () => env.store.setNote(meta.id, undefined),
             fetchImpl: env.fetchImpl,
             sleep: env.sleep,
             onProgress: (fraction) => setPhase((p) => (p.kind === 'saving' ? { ...p, fraction } : p)),
@@ -405,7 +414,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       )}
 
       {phase.kind === 'saving' && (
-        <p role="status" className="rounded-2xl border border-border bg-card p-4 text-heading">Uploading your recording… {Math.round(phase.fraction * 100)}%</p>
+        <p role="status" className="rounded-2xl border border-border bg-card p-4 text-heading">Uploading your recording… {Math.round(phase.fraction * 100)}%. Keep this tab open until it’s done.</p>
       )}
     </section>
   );

@@ -7,7 +7,10 @@
 //   3. search finds a moment in it, and a question about it gets an answer;
 //   4. a recording made in the browser (a fake microphone playing the same
 //      speech) becomes a note with a summary;
-//   5. the account is deleted from Settings, back to the sign-in page.
+//   5. a recording cut off by a reload (as a crash or a closed tab leaves one)
+//      is asked about first, kept, shown on the notes list, and uploads as one
+//      note: the list then holds three;
+//   6. the account is deleted from Settings, back to the sign-in page.
 // The deletion runs whatever failed before it, so no test user is left behind.
 // Any console error or page error (a CSP refusal is one) fails the run.
 //
@@ -142,6 +145,31 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_0
       await page.getByRole('button', { name: 'Stop and save' }).click();
       check('a browser recording becomes a note with a summary', (await toNote()) && (await heading('Summary', Math.min(readyMs, left()))), page.url().replace(siteUrl, ''));
     }
+
+    // RELEASE.md PR 12a: a Chrome tester never loses a recording.
+    await page.goto(`${siteUrl}/app/record`);
+    await page.getByRole('checkbox', { name: /I have permission/ }).check();
+    await page.getByRole('button', { name: 'Start recording' }).click();
+    if (!check('a second recording starts', await within(page.getByText('● RECORDING').waitFor({ timeout: wait(30_000) })))) return;
+    await page.waitForTimeout(recordMs);
+    // The page asks before it goes (beforeunload); the reload goes ahead as a closing tab would.
+    let asked = false;
+    page.once('dialog', (d) => {
+      asked = d.type() === 'beforeunload';
+      d.accept().catch((err) => write(`     dialog: ${String(err?.message ?? err).slice(0, 200)}\n`));
+    });
+    await page.reload();
+    check('reloading mid-recording asks first', asked);
+    await page.getByRole('link', { name: '← Your notes' }).click();
+    if (!check('the cut-off recording is kept, and shown on the notes list', await within(page.getByText('A recording wasn’t uploaded').waitFor({ timeout: wait(30_000) })))) return;
+    await page.getByRole('link', { name: 'Upload it' }).click();
+    await page.getByRole('button', { name: 'Upload it' }).click();
+    check('it uploads, and becomes a note with a summary', (await toNote()) && (await heading('Summary', Math.min(readyMs, left()))), page.url().replace(siteUrl, ''));
+    await page.getByRole('link', { name: '← Your notes' }).click();
+    const notes = page.locator('main a[href*="/app/notes/"]');
+    const three = await within(notes.nth(2).waitFor({ timeout: wait(30_000) }));
+    const count = await notes.count();
+    check('uploaded once: three notes, and nothing left to upload', three && count === 3 && !(await page.getByText('A recording wasn’t uploaded').isVisible()), `${count} notes`);
   };
   try {
     await journey().catch((err) => check('the journey ran to the end', false, err?.message?.slice(0, 200)));

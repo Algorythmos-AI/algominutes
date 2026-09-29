@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { ApiProvider } from '../ApiContext';
 import { AuthProvider } from '../auth/AuthContext';
@@ -293,6 +293,40 @@ describe('recording, when things go wrong', () => {
     expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
     expect(again.calls.filter((c) => c === '/v1/uploads')).toHaveLength(1);
     void calls;
+  });
+
+  it('a tab closed mid-upload: the retry puts the audio into the note it left, not a second one', async () => {
+    // The first upload never finishes: the tab is closed while it runs.
+    const first = setup({ fetchImpl: (() => new Promise(() => {})) as typeof fetch });
+    await begin();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and save' }));
+    await waitFor(async () => expect((await first.store.list('u1'))[0]?.note?.noteId).toMatch(/^web/));
+    const [{ note }] = await first.store.list('u1');
+    expect(first.writer.createNoteDoc).toHaveBeenCalledTimes(1);
+    cleanup();
+    const again = setup({ store: first.store } as Partial<RecorderEnv>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload it' }));
+    expect(await screen.findByRole('heading', { name: 'Opened' })).toBeTruthy();
+    expect(again.router.state.location.pathname).toBe(`/notes/${note!.noteId}`);
+    // Its doc was written once, by the first upload: no second note.
+    expect(again.writer.createNoteDoc).not.toHaveBeenCalled();
+    expect(await first.store.list('u1')).toEqual([]);
+  });
+
+  it('closing the tab mid-upload asks first, as mid-recording does', async () => {
+    setup({ fetchImpl: (() => new Promise(() => {})) as typeof fetch });
+    await begin();
+    const unload = () => {
+      const e = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    expect(unload()).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and save' }));
+    expect(await screen.findByText(/Uploading your recording…/)).toBeTruthy();
+    // The recording's guard is taken down as the upload's goes up: let those effects run first.
+    await act(async () => {});
+    expect(unload()).toBe(true);
   });
 
   it("a kickoff that fails after the upload is retried on the same note, never uploaded again", async () => {
