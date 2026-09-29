@@ -229,6 +229,11 @@ struct SettingsView: View {
                         .font(Typography.body(13))
                         .foregroundStyle(Theme.muted)
                 }
+                // Beta testers' minutes come from the code in their invitation.
+                Divider().overlay(Theme.borderSoft)
+                Button("Enter an invite code") { env.billing.presentInviteSheet() }
+                    .font(Typography.body(15))
+                    .foregroundStyle(Theme.body)
                 if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
                     Button("Restore Purchases") {

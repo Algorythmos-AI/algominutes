@@ -64,6 +64,15 @@ struct EntitlementResponse: Codable, Sendable {
     }
 }
 
+/// A redeemed beta invite code (beta.ts `RedeemInviteResponse`): the entitlement
+/// it produced, when those minutes end (nil = until revoked), and whether it also
+/// allows the notetaker.
+struct RedeemInviteResponse: Codable, Sendable {
+    let entitlement: EntitlementResponse
+    let grantEndsAt: String?
+    let notetaker: Bool
+}
+
 /// Client → server purchase verification response (billing.ts
 /// `VerifyPurchaseResponse`). `ok == true` means the server validated the
 /// StoreKit JWS and activated the entitlement keyed to this user.
