@@ -34,9 +34,6 @@ settings:
     CURRENT_PROJECT_VERSION: "14"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    # Share links (POST /v1/shares) open on the public site, which has no
-    # viewer yet. Off everywhere until it does; the share sheet still exports.
-    SHARE_LINKS_ENABLED: "NO"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
     # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic

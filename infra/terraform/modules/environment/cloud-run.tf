@@ -105,6 +105,9 @@ locals {
       ALLOWED_ORIGINS    = var.allowed_origins
       PUBLIC_SITE_URL    = var.public_site_url
       BROADCAST_CAPTURE  = var.broadcast_capture
+      # Share links (RELEASE.md PR 29): off until the viewer's host is public.
+      SHARE_LINKS         = var.share_links
+      SHARE_VIEWER_ORIGIN = var.share_viewer_origin
       # The notetaker's surfaces (off unless named) and where its tasks go.
       NOTETAKER    = var.notetaker_surfaces
       MEETINGS_URL = local.service_url["meetings"]

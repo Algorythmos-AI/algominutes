@@ -123,9 +123,9 @@ struct NoteDetailView: View {
                                 transcript: exportLines(for: note), api: env.api
                             ) { env.alertMessage = $0 }
                         },
-                        // A public link opens on the site, which has no viewer
-                        // yet: offered only when SHARE_LINKS_ENABLED is on.
-                        onCreateLink: AppConfig.shareLinksEnabled ? { scope in
+                        // A public link, opening the web app's viewer: offered
+                        // only while the server says so (AppSwitches, PR 29).
+                        onCreateLink: env.switches.shareLinks ? { scope in
                             viewModel.createShareLink(
                                 scope: scope, noteId: note.id, workspaceId: note.workspaceId,
                                 api: env.api

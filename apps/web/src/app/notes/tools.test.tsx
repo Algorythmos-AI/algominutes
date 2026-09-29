@@ -27,7 +27,7 @@ const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
 
 beforeEach(() => {
   calls.length = 0;
-  handlers = { '/v1/notes/read': () => json(READ) };
+  handlers = { '/v1/notes/read': () => json(READ), '/v1/config': () => json({ broadcastCapture: true }) };
 });
 afterEach(() => {
   cleanup();
@@ -123,5 +123,45 @@ describe('note tools', () => {
     fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Sam:' })).toHaveLength(2));
     expect(calls.find((c) => c.path === '/v1/notes/n1/speakers')?.body).toEqual({ workspaceId: WS, speakerTag: 1, name: 'Sam' });
+  });
+});
+
+// RELEASE.md PR 29: share links, offered only while the server says so.
+describe('share a link', () => {
+  const SHARE = { shareId: 7, token: 'tok_abc', url: 'https://beta.example.test/app/s/tok_abc', scope: 'both', expiresAt: '2026-10-07T00:00:00.000Z' };
+
+  it('is not offered while the server has share links off', async () => {
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, fetchImpl, fakeFeed([NOTE]).feed);
+    await screen.findByRole('button', { name: 'Rename' });
+    await waitFor(() => expect(calls.some((c) => c.path === '/v1/config')).toBe(true));
+    expect(screen.queryByRole('button', { name: 'Share a link' })).toBeNull();
+  });
+
+  it('says first who can read it, then makes the link, copies it, and stops sharing', async () => {
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/create'] = () => json(SHARE);
+    handlers['/v1/shares/revoke'] = () => json({ ok: true, revoked: true });
+    const write = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    const dlg = await open('Share a link');
+    expect(within(dlg).getByText(/Anyone with the link can read this note/)).toBeTruthy();
+    expect(calls.some((c) => c.path === '/v1/shares/create')).toBe(false); // nothing made until asked
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create link' }));
+    await waitFor(() => expect((within(dlg).getByLabelText('The link') as HTMLInputElement).value).toBe(SHARE.url));
+    expect(calls.find((c) => c.path === '/v1/shares/create')?.body).toEqual({ noteId: 'n1', workspaceId: WS, scope: 'both' });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Copy link' }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(SHARE.url));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Stop sharing' }));
+    await waitFor(() => expect(calls.find((c) => c.path === '/v1/shares/revoke')?.body).toEqual({ noteId: 'n1', workspaceId: WS, shareId: 7 }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('a refused link says so, and makes nothing', async () => {
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/create'] = () => json({ error: 'Note not found' }, 404);
+    const dlg = await open('Share a link');
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create link' }));
+    expect(await within(dlg).findByRole('alert')).toBeTruthy();
+    expect(within(dlg).queryByLabelText('The link')).toBeNull();
   });
 });

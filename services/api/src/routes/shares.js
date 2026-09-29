@@ -19,8 +19,9 @@ const { isValidId } = intelligenceModule;
 const shareLinks = shareLinksModule;
 const { pool, postgresEnabled } = pgQueryModule;
 
-// Where a share link points: the public site (PUBLIC_SITE_URL).
-const { publicSiteUrl } = siteUrlModule;
+// Where a share link opens: the web app's viewer (/app/s/<token>) on SHARE_VIEWER_ORIGIN, else the public
+// site (RELEASE.md PR 29).
+const { shareViewerOrigin } = siteUrlModule;
 
 // ── shareCreate ────────────────────────────────────────────────────────
 // The raw token is returned HERE AND NOWHERE ELSE. Only sha256(token) is
@@ -75,7 +76,7 @@ export async function shareCreateRoute(req, res) {
     return res.status(200).json({
       shareId: created.id,
       token: raw,
-      url: `${publicSiteUrl()}/s/${raw}`,
+      url: `${shareViewerOrigin()}/app/s/${raw}`,
       scope: opts.scope,
       expiresAt: created.expiresAt,
     });

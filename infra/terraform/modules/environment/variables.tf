@@ -401,3 +401,17 @@ variable "app_store_key_id" {
   type        = string
   default     = ""
 }
+
+# --- Share links ---------------------------------------------------------------
+
+variable "share_links" {
+  description = "Share links in the apps (RELEASE.md PR 29): \"on\" shows them; anything else hides them. A link is public, and opens the web app's viewer on share_viewer_origin, so turn it on only once that host is public (the beta's)."
+  type        = string
+  default     = "off"
+}
+
+variable "share_viewer_origin" {
+  description = "The https origin a share link opens on (/app/s/<token>): the host where the web app is public, e.g. the beta's. Empty: the public site."
+  type        = string
+  default     = ""
+}

@@ -2008,6 +2008,9 @@
           },
           "notetaker": {
             "$ref": "#/components/schemas/NotetakerSwitches"
+          },
+          "shareLinks": {
+            "type": "boolean"
           }
         },
         "required": [
