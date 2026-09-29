@@ -86,8 +86,8 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
     if (note.status === 'ready' && docStatus !== 'ready') {
       const [summary, items, decisions, lines] = [
         await client.query('SELECT gist, topics, chapters FROM summaries WHERE note_id = $1', [noteId]),
-        await client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
-        await client.query('SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
+        await client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY position NULLS LAST, created_at, id', [noteId]),
+        await client.query('SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY position NULLS LAST, created_at, id', [noteId]),
         await client.query(
           `SELECT speaker_tag, chunk_id, start_ms, text FROM transcript_lines
             WHERE note_id = $1 ORDER BY start_ms, id LIMIT 201`,
@@ -98,9 +98,9 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
       const s = summary.rows[0];
       if (s) {
         // summaries.topics holds the generated action items in order; an edit
-        // rewrites only the rows. Rows are read by created_at, then id, as the
-        // export and share views read them. One writer's rows share created_at,
-        // so among them that's the id's order, not the model's (BLOCKERS).
+        // rewrites only the rows. Rows are read by their position (migration
+        // 032, audit Q22), as the note, export and share views read them, and
+        // rows from before it by created_at, then id.
         const topics = Array.isArray(s.topics) && s.topics.every((t: unknown) => typeof t === 'string') ? s.topics : null;
         out.summary = {
           gist: s.gist || '',

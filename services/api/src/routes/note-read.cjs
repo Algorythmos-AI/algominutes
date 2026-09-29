@@ -187,7 +187,7 @@ async function fetchSummary({ noteId, uid, log }) {
       text: `SELECT id, text, status, assignee_name, due_date
                FROM action_items
               WHERE note_id = $1 AND ${MEMBERSHIP_EXISTS}
-              ORDER BY created_at ASC, id ASC`,
+              ORDER BY position ASC NULLS LAST, created_at ASC, id ASC`,
       values: [noteId, uid],
       log,
       op: 'note_read_action_items',
@@ -196,7 +196,7 @@ async function fetchSummary({ noteId, uid, log }) {
       timeoutMs: TIMEOUT_SUMMARY_MS,
       text: `SELECT id, text FROM key_decisions
               WHERE note_id = $1 AND ${MEMBERSHIP_EXISTS}
-              ORDER BY created_at ASC, id ASC`,
+              ORDER BY position ASC NULLS LAST, created_at ASC, id ASC`,
       values: [noteId, uid],
       log,
       op: 'note_read_key_decisions',

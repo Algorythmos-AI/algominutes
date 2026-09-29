@@ -1107,15 +1107,17 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 `notes_status_idx`, which doesn't narrow `ready`/`error`; a partial index on `updated_at` for
                 finished notes (new migration) would stop it scanning every finished note. Whether Firestore
                 answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
-                The repaired lists share the `created_at, id` ordering item below.
+                The repaired lists are read in their stored order (PR 30b).
             - ~~When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
               spent and the note is never embedded~~ **fixed (RELEASE.md PR 5c; audit Q11):** the sweep's `redrive`
               step enqueues the embedder again for a `ready` note with a transcript and no embeddings, claimed 90
               minutes to 6 hours ago and not dead-lettered (`claimLostEmbeds`, which re-stamps the claim, so once
               per window). Logged `lost_work_redriven` (a warning alert).
-            - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
-              transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
-              the summary from Firestore, so it isn't affected. Fix: store a position.
+            - ~~`/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
+              transaction's `created_at`, and `id` is a random UUID, so the order is random~~ **fixed
+              (RELEASE.md PR 30b; audit Q22):** every writer stores each item's index (`position`, migration
+              032), and the note, export, share and mirror-repair reads order by it (rows from before it, by
+              `created_at, id` as before).
             - ~~**Every** `completeChunkAndAdvance` caller commits `summarizing` and spends the summarizer
               claim, then mirrors, then enqueues; a mirror that throws in between left the summarizer
               unqueued~~ **fixed (pipeline-no-lost-work-after-commit PR):** a failed mirror after that
