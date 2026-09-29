@@ -123,7 +123,7 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
     await client.query('COMMIT');
     return out;
   } catch (err: any) {
-    // The sweep logs the thrown error; a failed rollback rides along on it.
+    // silent-catch-ok: the sweep logs the thrown error (mirror_repair_failed); a failed rollback rides along on it.
     await client.query('ROLLBACK').catch((rollbackErr) => { if (err && typeof err === 'object') err.rollbackError = rollbackErr; });
     throw err;
   } finally {
@@ -165,6 +165,7 @@ export async function repairNoteMirror(
   try {
     await ref.update(patch, { lastUpdateTime: snap.updateTime });
   } catch (err: any) {
+    // silent-catch-ok: a newer mirror write or a deleted note is the outcome 'moved' or 'gone', not a failure
     // FAILED_PRECONDITION: a writer mirrored since the read; it is newer.
     if (err && (err.code === 9 || /FAILED_PRECONDITION/.test(String(err.message)))) return 'moved';
     // NOT_FOUND: the note was deleted since the read.

@@ -227,6 +227,7 @@ function SupportCard() {
       setMessage('');
       setState('sent');
     } catch (err) {
+      // silent-catch-ok: an ApiError is a typed answer (the server's, or no connection) shown as failed; anything else is reported
       setState('failed');
       if (!(err instanceof ApiError)) reportCrash('settings.support', err);
     }

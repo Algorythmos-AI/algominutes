@@ -69,6 +69,7 @@ export function firestoreNotesFeed(getDb: () => Promise<Firestore>): NotesFeed {
           );
         })
         .catch((err) => {
+          // silent-catch-ok: unsubscribed before the feed loaded means nobody is listening; otherwise onError gets it
           if (!cancelled) onError(err);
         });
       return () => {

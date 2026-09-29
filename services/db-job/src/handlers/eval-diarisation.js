@@ -80,6 +80,7 @@ function liveHypothesis(dir, fixtureId, engine) {
   try {
     raw = fs.readFileSync(p, 'utf8');
   } catch (err) {
+    // silent-catch-ok: no override file (ENOENT) means the synthetic hypothesis; anything else fails the eval
     if (err.code === 'ENOENT') return null;
     throw err;
   }

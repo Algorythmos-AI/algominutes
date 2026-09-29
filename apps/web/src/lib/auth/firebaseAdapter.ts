@@ -46,6 +46,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await signInWithPopup(auth, providerFor(p));
         return true;
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel, and a blocked one falls back to a redirect
         if (CANCELLED.has(codeOf(err))) return false;
         if (REDIRECT_INSTEAD.has(codeOf(err))) {
           await signInWithRedirect(auth, providerFor(p));
@@ -64,6 +65,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await linkWithPopup(user, providerFor(p));
         return { outcome: 'linked' };
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel, and a blocked one falls back to a redirect
         const code = codeOf(err);
         if (CANCELLED.has(code)) return { outcome: 'cancelled' };
         if (REDIRECT_INSTEAD.has(code)) {
@@ -90,6 +92,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await revokeAccessToken(auth, token);
         return true;
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel
         if (CANCELLED.has(codeOf(err))) return false;
         throw err;
       }

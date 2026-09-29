@@ -99,6 +99,7 @@ function salvageSummaryJson(rawText) {
   try {
     parsed = JSON.parse(cleaned);
   } catch {
+    // silent-catch-ok: the failure is returned as partial: true, which the summarizer logs (summary_salvaged_partial)
     parsed = repairTruncatedJson(cleaned);
     partial = true;
     // Never the parser's message: it quotes the model's output, which can hold

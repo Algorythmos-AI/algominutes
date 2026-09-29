@@ -135,6 +135,7 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     deps.onUploaded?.();
     await deps.api.completeUpload(session.uploadId);
   } catch (err) {
+    // silent-catch-ok: a cancelled upload is the user's choice, and its note is deleted
     if (err instanceof UploadError && err.kind === 'cancelled') {
       // Cancelled: the note goes, rather than staying behind as a failure the user has to delete.
       try {

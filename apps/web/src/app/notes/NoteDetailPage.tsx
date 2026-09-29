@@ -66,6 +66,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
         setCursor(data.transcript.nextCursor);
       })
       .catch((err: unknown) => {
+        // silent-catch-ok: a cancelled read's answer is dropped; not_found is the gone state, and anything else is shown
         if (cancelled) return;
         if (err instanceof ApiError && err.kind === 'not_found') setLoad({ status: 'gone' });
         else setLoad({ status: 'error', message: err instanceof ApiError ? err.message : "This note couldn't be loaded." });
@@ -99,7 +100,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
       await api.deleteNote({ noteId, workspaceId });
       notice.show('Note deleted.');
     } catch (err) {
-      // Already gone (a retry, or deleted elsewhere) is what was asked for.
+      // silent-catch-ok: already gone (a retry, or deleted elsewhere) is what was asked for.
       if (err instanceof ApiError && err.kind === 'not_found') {
         notice.show('Note deleted.');
         return;

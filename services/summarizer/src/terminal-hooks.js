@@ -23,6 +23,7 @@ function requireRepo(basename) {
     try {
       return require(spec);
     } catch (err) {
+      // silent-catch-ok: a spec that doesn't resolve tries the next; if none does, repoFn logs db_repo_unavailable_skipping
       if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) continue;
       throw err;
     }
