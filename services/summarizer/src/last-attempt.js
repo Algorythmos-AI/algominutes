@@ -19,13 +19,20 @@ async function onLastAttempt({ body, headers, err, markNoteFailed, terminalHooks
   // that run's charge stands. Refunding it gave the whole recording back for a
   // failed re-summary, and the next regeneration left it ready at net 0.
   const regeneration = b.summaryGeneration !== undefined && b.summaryGeneration !== null;
-  const { failed, marked, pgErrored, exists } = await markNoteFailed({
+  const attempts = Number((headers && headers['x-cloudtasks-taskretrycount']) || 0) + 1;
+  const payload = { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration };
+  const error = err && err.message ? err.message : (err ? String(err) : null);
+  // The dead letter goes with the failure (RELEASE.md PR 5a): a crash after the commit can't lose it.
+  const { failed, marked, pgErrored, exists, deadLetterId, deadLetterDuplicate } = await markNoteFailed({
     noteId, workspaceId,
     message: 'We could not write a summary for this recording.',
     log,
     refund: regeneration ? null : summaryRefund(noteId),
     traceId,
+    deadLetter: { queue: 'summarize', payload, error, attempts, reason: 'summarize_failed' },
   });
+  // Written with the failure, or already there: nothing more to record.
+  if (deadLetterId != null || deadLetterDuplicate) return { failed };
   const deadLetterOnly = !marked;
   if (deadLetterOnly && !(exists || pgErrored)) {
     log.warn({ noteId, workspaceId, reason: 'note_gone' }, 'summarizer_last_attempt_hooks_skipped');
@@ -34,7 +41,6 @@ async function onLastAttempt({ body, headers, err, markNoteFailed, terminalHooks
   if (deadLetterOnly) {
     log.warn({ noteId, workspaceId, reason: pgErrored ? 'postgres_error' : 'note_not_failed' }, 'summarizer_last_attempt_dead_letter_only');
   }
-  const attempts = Number((headers && headers['x-cloudtasks-taskretrycount']) || 0) + 1;
   await terminalHooks.onSummarizeTerminalFailure({
     pool: pool(),
     noteId,
@@ -42,7 +48,7 @@ async function onLastAttempt({ body, headers, err, markNoteFailed, terminalHooks
     err,
     attempts,
     traceId,
-    payload: { kind: 'summarize', noteId, workspaceId, template: b.template, summaryGeneration: b.summaryGeneration },
+    payload,
     log,
     deadLetterOnly,
   });

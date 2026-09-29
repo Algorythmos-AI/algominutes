@@ -63,6 +63,8 @@ function transcoderDeps({ probe = async (): Promise<number> => 1500, op = { done
   return { d, terminal };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', type: 'recording', storagePath: 'recordings/ws/n1.aac' };
+// The dead letter's one record, whichever path wrote it: the hook, or markNoteFailed with the failure (RELEASE.md PR 5a).
+const recorded = async (terminal: unknown[]) => terminal.length + (await pool.query(`SELECT count(*)::int AS n FROM dead_letter WHERE note_id = 'n1'`)).rows[0].n;
 const unreadable = async (): Promise<number> => { throw new Error('no duration'); };
 
 beforeEach(async () => {
@@ -98,7 +100,7 @@ describe('markNoteFailed with retryOnPgError', () => {
   it("with onlyIfStatus, a Postgres error mirrors nothing (Postgres couldn't say the note was one to fail)", async () => {
     await breakFailedWrites();
     const r = await markNoteFailed({ pool, firestore: fsStub, noteId: 'n1', workspaceId: 'ws', message: 'x', log, event: 't', onlyIfStatus: ['queued'] });
-    expect(r).toEqual({ failed: false, marked: false, pgErrored: true, exists: false, refunded: false, superseded: false, notice: null });
+    expect(r).toEqual({ failed: false, marked: false, pgErrored: true, exists: false, refunded: false, superseded: false, notice: null, deadLetterId: null, deadLetterDuplicate: false });
     expect(mirrored).toEqual([]);
   });
 });
@@ -110,14 +112,14 @@ describe('the transcoder retries a failure it decided on, when Postgres missed i
     await expect(transcoder.handle(kickoff, first.d)).rejects.toThrow(/simulated outage/);
     expect((await note()).status).not.toBe('error');
     expect(mirrored.filter((m) => m.status === 'error')).toEqual([]);
-    expect(first.terminal).toEqual([]);
+    expect(await recorded(first.terminal)).toBe(0);
 
     await heal();
     const retry = transcoderDeps({ probe: unreadable });
     await transcoder.handle(kickoff, retry.d);
     expect((await note()).status).toBe('error');
     expect(mirrored.filter((m) => m.status === 'error')).toHaveLength(1);
-    expect(retry.terminal).toHaveLength(1);
+    expect(await recorded(retry.terminal)).toBe(1);
   });
 
   it("a speech job that errored: the chunk isn't marked failed until the note is, so the retry isn't skipped", async () => {
@@ -130,14 +132,14 @@ describe('the transcoder retries a failure it decided on, when Postgres missed i
     const first = transcoderDeps({ op: errored });
     await expect(transcoder.handle(pollTask, first.d)).rejects.toThrow(/simulated outage/);
     expect((await pool.query(`SELECT status FROM audio_chunks WHERE id = $1`, [c0.id])).rows[0].status).not.toBe('error');
-    expect(first.terminal).toEqual([]);
+    expect(await recorded(first.terminal)).toBe(0);
 
     await heal();
     const retry = transcoderDeps({ op: errored });
     await transcoder.handle(pollTask, retry.d);
     expect((await note()).status).toBe('error');
     expect((await pool.query(`SELECT status FROM audio_chunks WHERE id = $1`, [c0.id])).rows[0].status).toBe('error');
-    expect(retry.terminal).toHaveLength(1);
+    expect(await recorded(retry.terminal)).toBe(1);
   });
   it('a poll chain that ran out: the same, the chunk is marked failed only after the note', async () => {
     await transcoder.handle(kickoff, transcoderDeps().d);
@@ -152,7 +154,7 @@ describe('the transcoder retries a failure it decided on, when Postgres missed i
     const retry = transcoderDeps();
     await transcoder.handle(lastPoll, retry.d);
     expect(await note()).toEqual({ status: 'error', error_message: 'Transcription took too long and was stopped.' });
-    expect(retry.terminal).toHaveLength(1);
+    expect(await recorded(retry.terminal)).toBe(1);
   });
 
   it('a replayed kickoff that finds a failed chunk: throws until Postgres takes the note write', async () => {

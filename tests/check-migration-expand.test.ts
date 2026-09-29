@@ -51,7 +51,9 @@ describe('migration expand-only classifier', () => {
       .filter((f) => classify(readFileSync(join(dir, f), 'utf-8')).length > 0)
       .sort();
     // 002 + 009: unique indexes on existing tables (ON CONFLICT targets);
-    // 006: DROP COLUMN token, SET NOT NULL, unique index on shares.
-    expect(flagged).toEqual(['002_chunked_pipeline.sql', '006_shares_hardening.sql', '009_reverse_trial_and_rails.sql']);
+    // 006: DROP COLUMN token, SET NOT NULL, unique index on shares;
+    // 027: a partial unique index on dead_letter's new dedupe_key, with its contract marker.
+    expect(flagged).toEqual(['002_chunked_pipeline.sql', '006_shares_hardening.sql', '009_reverse_trial_and_rails.sql', '027_dead_letter_once.sql']);
+    expect(hasContractMarker(readFileSync(join(dir, '027_dead_letter_once.sql'), 'utf-8'))).toBe(true);
   });
 });

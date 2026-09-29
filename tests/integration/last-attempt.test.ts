@@ -34,21 +34,34 @@ const log: any = { info: noop, error: noop, warn: (_o: unknown, m: string) => vo
 const headers = { 'x-cloudtasks-taskretrycount': '4' };
 const status = async () => (await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0]?.status;
 
+// The dead letters a run wrote with its failure (RELEASE.md PR 5a), in the shape of the hook calls that used
+// to record them: a test reads both as one list, the dead letter's one record whichever path wrote it.
+async function withDeadLetters<T>(hooks: any[], go: () => Promise<T>): Promise<T> {
+  const since = (await pool.query(`SELECT COALESCE(max(id), 0)::int AS id FROM dead_letter`)).rows[0].id;
+  try {
+    return await go();
+  } finally {
+    const { rows } = await pool.query(`SELECT * FROM dead_letter WHERE note_id = 'n1' AND id > $1 ORDER BY id`, [since]);
+    hooks.push(...rows.map((r: any) => ({
+      deadLetterOnly: false, withFailure: true, noteId: r.note_id, workspaceId: r.workspace_id, attempts: r.attempts, reason: r.reason, payload: r.payload,
+    })));
+  }
+}
 function transcoder() {
   const hooks: any[] = [];
-  const run = (body: any) => transcoderLast.onLastAttempt({
+  const run = (body: any) => withDeadLetters(hooks, () => transcoderLast.onLastAttempt({
     body, headers, err: new Error('boom'), noteTerminal, log, traceId: 't',
     db: transcoderDb, mirror: { db: () => fsStub },
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => void hooks.push(a) },
-  });
+  }));
   return { hooks, run };
 }
 function summarizerRun() {
   const hooks: any[] = [];
-  const run = (body: any) => summarizerLast.onLastAttempt({
+  const run = (body: any) => withDeadLetters(hooks, () => summarizerLast.onLastAttempt({
     body, headers, err: new Error('boom'), markNoteFailed: summarizer.markNoteFailed, pool: summarizer.pool, log, traceId: 't',
     terminalHooks: { onSummarizeTerminalFailure: async (a: any) => void hooks.push(a) },
-  });
+  }));
   return { hooks, run };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', type: 'recording', storagePath: 'recordings/ws/n1.aac' };
