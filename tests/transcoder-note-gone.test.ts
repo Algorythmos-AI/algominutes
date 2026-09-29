@@ -65,10 +65,11 @@ describe('transcoder kickoff for a deleted note', () => {
   // status writes and mirror writes together.
   function deps({
     exists = [true] as boolean[], upsertErr = null as Error | null, upsertErrOn = 'later' as 'later' | 'chunking',
-    mirrorStatusErr = null as Error | null,
+    mirrorStatusErr = null as Error | null, sourceKind = null as string | null,
   } = {}) {
     const calls: string[] = [];
     const order: string[] = [];
+    const infos: Array<{ o: any; m: string }> = [];
     const warns: Array<{ o: any; m: string }> = [];
     const errors: Array<{ o: any; m: string }> = [];
     const answers = [...exists];
@@ -76,16 +77,18 @@ describe('transcoder kickoff for a deleted note', () => {
     return {
       calls,
       order,
+      infos,
       warns,
       errors,
       deps: {
-        log: { info: () => {}, error: (o: any, m: string) => void errors.push({ o, m }), warn: (o: any, m: string) => void warns.push({ o, m }) },
+        log: { info: (o: any, m: string) => void infos.push({ o, m }), error: (o: any, m: string) => void errors.push({ o, m }), warn: (o: any, m: string) => void warns.push({ o, m }) },
         db: {
           pool: () => ({ connect: async () => client }),
           // The kickoff's pre-check reads the status; a later re-check asks noteExists.
           noteStatus: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? 'queued' : null),
           noteRun: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? { status: 'queued', runSeq: 0 } : null),
           noteExists: async () => (answers.length > 1 ? answers.shift() : answers[0]),
+          noteSourceKind: async () => sourceKind,
           upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => {
             order.push(`pg:${status}`);
             if (upsertErr && (upsertErrOn === 'chunking') === (status === 'chunking')) throw upsertErr;
@@ -154,6 +157,22 @@ describe('transcoder kickoff for a deleted note', () => {
     const d = deps({ exists: [true, true], mirrorStatusErr: new NoteGoneError('firestore') });
     await expect(handler.handle(kickoff, d.deps)).rejects.toThrow('mirror_doc_missing_for_live_note');
     expect(d.errors).toContainEqual(expect.objectContaining({ m: 'transcoder_mirror_doc_missing' }));
+  });
+
+  // RELEASE.md PR 20: a notetaker's speaker names need word timings, which the fast path doesn't have.
+  it('a short notetaker recording takes the chunked path; any other short one the fast path', async () => {
+    const bot = deps({ sourceKind: 'bot' });
+    const outcome = await handler.handle(kickoff, bot.deps).then(() => 'done', (err: Error) => err);
+    expect(bot.calls).not.toContain('fastPath');
+    expect(bot.order).toContain('pg:chunking');
+    expect(bot.infos.find((i) => i.m === 'transcoder_routed')?.o).toMatchObject({ decision: 'chunked', forcedBy: 'notetaker', durationSec: 30 });
+    // The chunked path itself isn't faked here: it stops at its first repo call this harness doesn't fake.
+    expect((outcome as Error).message).toMatch(/is not a function/);
+
+    const device = deps({ sourceKind: 'device' });
+    await handler.handle(kickoff, device.deps);
+    expect(device.calls).toContain('fastPath');
+    expect(device.infos.find((i) => i.m === 'transcoder_routed')?.o).toEqual({ noteId: 'n1', workspaceId: 'w1', durationSec: 30, decision: 'fast' });
   });
 
   it("any other failure throws so the task retries, and mirrors no failure Postgres doesn't have", async () => {

@@ -57,6 +57,32 @@ async function noteStatus(client, { noteId, workspaceId }) {
   return rows[0] ? rows[0].status : null;
 }
 
+// How a note's audio arrived (notes.source_kind: device|upload|bot|...). A
+// notetaker's note ('bot') takes the chunked path whatever its length: the fast
+// path has no word timings to put the meeting's speaker names on (RELEASE.md
+// PR 20). Scoped to the task's workspace; null for a note that isn't there.
+async function noteSourceKind(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT source_kind FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? rows[0].source_kind : null;
+}
+
+// Who spoke when in a notetaker's meeting (meetings-repo saveMeetingSpeakers),
+// in order: what its transcript's words are aligned with. Empty for every other
+// note. Scoped to the task's workspace through the note.
+async function speakerSegments(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    `SELECT s.start_ms, s.end_ms, s.speaker_tag
+       FROM meeting_speaker_segments s JOIN notes n ON n.id = s.note_id
+      WHERE s.note_id = $1 AND n.workspace_id = $2
+      ORDER BY s.seq`,
+    [noteId, workspaceId],
+  );
+  return rows.map((r) => ({ startMs: Number(r.start_ms), endMs: Number(r.end_ms), speakerTag: Number(r.speaker_tag) }));
+}
+
 // Scoped to the task's workspace (CLAUDE.md §1): a note id from another
 // workspace, or a deleted note, matches nothing and throws NOTE_NOT_FOUND,
 // which the handler treats as "note gone".
@@ -402,6 +428,8 @@ module.exports = {
   noteExists,
   noteStatus,
   noteRun,
+  noteSourceKind,
+  speakerSegments,
   fetchPriorChunkEndMs,
   upsertNoteStatus,
   insertAudioChunkRow,
