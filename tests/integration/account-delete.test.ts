@@ -32,7 +32,7 @@ afterAll(async () => {
 describe('deleteAccountData (Postgres, first)', () => {
   it("deletes the account and everything it owns, leaves others' data, queues every note's purge, and leaves a tombstone", async () => {
     const r = await deleteAccountData({ uid: 'alice', traceId: 't1' }, quietLog);
-    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 3, membershipsDeleted: 2 });
+    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 3, membershipsDeleted: 2, recallPurges: 0 });
     expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(0);
     expect(await count(`SELECT 1 FROM workspaces WHERE id = 'ws-a'`)).toBe(0);
     expect(await count(`SELECT 1 FROM notes WHERE id IN ('a1', 'a2', 'a-in-b')`)).toBe(0);
@@ -59,7 +59,7 @@ describe('deleteAccountData (Postgres, first)', () => {
   it('a retry is a no-op that still knows the owned workspaces (from the tombstone)', async () => {
     await deleteAccountData({ uid: 'alice' }, quietLog);
     expect(await deleteAccountData({ uid: 'alice' }, quietLog))
-      .toEqual({ deleted: false, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0 });
+      .toEqual({ deleted: false, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0, recallPurges: 0 });
   });
 
   // The race the second audit found: a request that checked before the
@@ -191,6 +191,22 @@ describe('POST /v1/account/delete', () => {
     expect(await count(`SELECT 1 FROM storage_purges WHERE uid = 'alice'`)).toBe(0);
     expect(await count(`SELECT 1 FROM account_deletions WHERE uid = 'alice' AND completed_at IS NOT NULL`)).toBe(1);
     expect(f.order.at(-1)).toBe('auth'); // Auth last
+  });
+
+  // RELEASE.md PR 21: the account's notetakers leave their meetings and Recall's copies go, started at once.
+  it('an account with notetakers starts the Recall purge now; one without doesn\'t', async () => {
+    const started: any[] = [];
+    const f = fakes();
+    const startRecallPurges = async (env: any, o: any) => void started.push({ env, traceId: o.traceId });
+    await call({ ...f.deps, startRecallPurges, env: { MEETINGS_URL: 'https://meetings.test' } });
+    expect(started).toEqual([]);
+
+    const g = fakes();
+    await call({
+      ...g.deps, startRecallPurges, env: { MEETINGS_URL: 'https://meetings.test' },
+      deleteAccountData: async () => ({ deleted: true, workspaceIds: [], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0, recallPurges: 2 }),
+    });
+    expect(started).toEqual([{ env: { MEETINGS_URL: 'https://meetings.test' }, traceId: 't' }]);
   });
 
   it('a Postgres failure answers 500 and touches nothing else (Auth intact, so the user can retry)', async () => {

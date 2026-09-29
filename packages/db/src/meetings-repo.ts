@@ -11,9 +11,13 @@
  *   - notetaker minutes are reserved when a bot is sent, under a per-workspace
  *     lock, so two parallel requests can't both spend the last of them.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool, isPostgresEnabled, withTx } from './db.js';
+import loggerModule from '@algominutes/ai/logger.cjs';
+
+// The caller's logger when it passes one; the root logger otherwise, so a failure is never unlogged.
+const rootLog = (loggerModule as { logger: { error: (o: unknown, m?: string) => void } }).logger;
 import { ensureUser, ensureWorkspaceAccess } from './workspace-access';
 import { lockNoteId } from './note-lock';
 
@@ -263,16 +267,26 @@ export async function getMeetingBotById(botId: string): Promise<MeetingBot | nul
  */
 export async function attachRecallBot(botId: string, recallBotId: string): Promise<{ attached: boolean; recallBotId: string | null; terminal: boolean }> {
   // Never to a bot that has ended (a cancel that landed while Recall made
-  // this one): the caller removes the Recall bot instead.
+  // this one), nor to one whose note was deleted meanwhile: the caller removes
+  // the Recall bot instead, and a deleted note's bot is ended by its create
+  // task's replay (the reconcile's).
   const { rows } = await getPool().query(
     `UPDATE meeting_bots SET recall_bot_id = $2, updated_at = NOW()
       WHERE id = $1 AND (recall_bot_id IS NULL OR recall_bot_id = $2) AND status NOT IN ${TERMINAL_SQL}
+        AND note_deleted_at IS NULL
       RETURNING recall_bot_id`,
     [botId, recallBotId],
   );
   if (!rows[0]) {
-    const current = await getMeetingBotById(botId);
-    return { attached: false, recallBotId: current?.recallBotId ?? null, terminal: !current || ['done', 'failed', 'cancelled'].includes(current.status) };
+    const { rows: [current] } = await getPool().query(
+      'SELECT recall_bot_id, status, note_deleted_at FROM meeting_bots WHERE id = $1',
+      [botId],
+    );
+    return {
+      attached: false,
+      recallBotId: current?.recall_bot_id ?? null,
+      terminal: !current || ['done', 'failed', 'cancelled'].includes(current.status) || current.note_deleted_at != null,
+    };
   }
   await advanceBotStatus(botId, 'scheduled');
   return { attached: true, recallBotId, terminal: false };
@@ -371,6 +385,58 @@ export async function listUnprocessedRecallEvents(olderThanMs: number, limit = 1
     [olderThanMs, limit],
   );
   return rows.map((r) => ({ id: Number(r.id), meetingBotId: r.meeting_bot_id, recallBotId: r.recall_bot_id, event: r.event }));
+}
+
+/**
+ * Bots the create task never took up (RELEASE.md PR 21): still 'requested', with no Recall bot, for longer
+ * than `olderThanMs`. Its task was lost (an enqueue that failed after the reservation, or one out of attempts).
+ */
+export async function listStaleRequestedBots(olderThanMs: number, limit = 50): Promise<MeetingBot[]> {
+  const { rows } = await getPool().query(
+    `SELECT * FROM meeting_bots
+      WHERE status = 'requested' AND recall_bot_id IS NULL
+        AND created_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      ORDER BY created_at LIMIT $2`,
+    [olderThanMs, limit],
+  );
+  return rows.map(toBot);
+}
+
+/**
+ * Recorded bots whose note never got its run (RELEASE.md PR 21): not ended, the run not queued, and the
+ * recording over for longer than `afterEndMs`. One whose note was deleted meanwhile (noteId null) is here too:
+ * its ingest ends it, with Recall's copy. Over means Recall said so
+ * (recording_ended_at), or the bot has been recording past its reservation (it leaves then). What they wait
+ * for decides the reconcile: both media ready means the ingest was lost; otherwise Recall is asked, and a
+ * recording whose media never came fails.
+ */
+export async function listStalledNotetakers(afterEndMs: number, limit = 50): Promise<Array<MeetingBot & { endedAt: string }>> {
+  const { rows } = await getPool().query(
+    `SELECT *, COALESCE(recording_ended_at, recording_started_at + reserved_minutes * INTERVAL '1 minute') AS ended_at
+       FROM meeting_bots
+      WHERE status NOT IN ${TERMINAL_SQL} AND status_rank >= $3 AND run_queued_at IS NULL
+        AND recall_bot_id IS NOT NULL
+        AND COALESCE(recording_ended_at, recording_started_at + reserved_minutes * INTERVAL '1 minute')
+              < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      ORDER BY ended_at LIMIT $2`,
+    [afterEndMs, limit, BOT_STATUS_RANK.recording],
+  );
+  return rows.map((r) => ({ ...toBot(r), endedAt: new Date(r.ended_at).toISOString() }));
+}
+
+/**
+ * Bots sent to a meeting that haven't moved in `olderThanMs` and never recorded (RELEASE.md PR 21): their
+ * webhooks were lost, or Recall never sent them. Recall is asked how each ended.
+ */
+export async function listQuietLiveBots(olderThanMs: number, limit = 50): Promise<MeetingBot[]> {
+  const { rows } = await getPool().query(
+    `SELECT * FROM meeting_bots
+      WHERE status NOT IN ${TERMINAL_SQL} AND status_rank < $3 AND recall_bot_id IS NOT NULL
+        AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      ORDER BY updated_at LIMIT $2`,
+    [olderThanMs, limit, BOT_STATUS_RANK.recording],
+  );
+  return rows.map(toBot);
 }
 
 /**
@@ -520,6 +586,55 @@ export async function enqueueRecallPurge(
 }
 
 export interface RecallPurge { id: number; recallBotId: string; reason: string; leaveCall: boolean; attempts: number; traceId: string | null }
+
+/**
+ * Queue Recall's purge for each bot with a Recall bot (deleteNote, deleteAccountData), in the caller's
+ * transaction: a live one is made to leave the call too. Returns how many were queued, for the caller to run
+ * the purge worker now rather than at its next scheduled run.
+ */
+export async function purgeRecallBotsOf(
+  client: PoolClient,
+  bots: Array<{ recall_bot_id: string | null; status: string; status_rank: number | string; trace_id: string | null }>,
+  reason: 'note_deleted' | 'account_deleted',
+): Promise<number> {
+  let queued = 0;
+  for (const b of bots) {
+    if (!b.recall_bot_id) continue;
+    const live = !TERMINAL_BOT_STATUSES.includes(b.status as BotStatus) && Number(b.status_rank) < BOT_STATUS_RANK.call_ended;
+    await enqueueRecallPurge(client, { recallBotId: b.recall_bot_id, reason, leaveCall: live, traceId: b.trace_id ?? undefined });
+    queued += 1;
+  }
+  return queued;
+}
+
+/**
+ * One Recall purge run at a time (a deletion's kick can land on the schedule's, and each attempt counts
+ * against a purge). A lease row (job_leases, migration 034), not a session-level advisory lock: that held a
+ * pooled connection for the whole run while the run's own queries needed another, so on a pool of one it
+ * waited on itself for ever. Taking and releasing the lease are one short query each; a run that dies leaves
+ * a lease that expires by itself (`leaseMs`, the meetings service's request timeout).
+ */
+export async function withRecallPurgeLock<T>(
+  fn: () => Promise<T>,
+  opts: { leaseMs?: number; log?: { error: (o: unknown, m?: string) => void } } = {},
+): Promise<{ ran: true; value: T } | { ran: false }> {
+  const holder = randomUUID();
+  const { rowCount } = await getPool().query(
+    `INSERT INTO job_leases (name, holder, locked_until) VALUES ('recall_purges', $1, NOW() + $2::bigint * INTERVAL '1 millisecond')
+     ON CONFLICT (name) DO UPDATE SET holder = EXCLUDED.holder, locked_until = EXCLUDED.locked_until
+       WHERE job_leases.locked_until <= NOW()`,
+    [holder, opts.leaseMs ?? 15 * 60 * 1000],
+  );
+  if (!rowCount) return { ran: false };
+  try {
+    return { ran: true, value: await fn() };
+  } finally {
+    // Released for the next run; a failed release only makes it wait for the lease to expire.
+    await getPool()
+      .query(`UPDATE job_leases SET locked_until = NOW() WHERE name = 'recall_purges' AND holder = $1`, [holder])
+      .catch((err: unknown) => (opts.log ?? rootLog).error({ err }, 'recall_purge_lease_release_failed'));
+  }
+}
 
 /** Purges not yet confirmed and still worth retrying, oldest first. */
 export async function listPendingRecallPurges(limit = 50, maxAttempts = 10): Promise<RecallPurge[]> {

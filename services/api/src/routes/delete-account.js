@@ -32,6 +32,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { deleteAccountData, finishAccountDeletion, trackEvent } from '@algominutes/db';
+import { runRecallPurgesSoon } from './meetings.js';
 
 export async function deleteAccountRoute(req, res, deps = {}) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
@@ -75,6 +76,8 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   }
   summary.notesDeleted = pg.notesQueued;
   summary.pgMembershipsDeleted = pg.membershipsDeleted;
+  // Its notetakers: a bot still in a meeting leaves, and Recall's copies go (queued with the deletion).
+  if (pg.recallPurges) await (deps.startRecallPurges ?? runRecallPurgesSoon)(deps.env ?? process.env, { traceId: req.traceId, log });
   // Counted once, when the account row actually went (a retry reports
   // deleted: false). No uid: the user is gone. Never fails the deletion.
   if (pg.deleted) {
@@ -96,6 +99,6 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   if (done.authFailed) return res.status(500).json({ error: 'auth_deletion_failed', summary });
   if (!done.complete) return res.status(500).json({ error: 'delete_incomplete', summary });
 
-  log.info({ summary, pgDeleted: pg.deleted }, 'delete_account_complete');
+  log.info({ summary, pgDeleted: pg.deleted, recallPurges: pg.recallPurges }, 'delete_account_complete');
   return res.status(200).json({ ok: true, summary });
 }

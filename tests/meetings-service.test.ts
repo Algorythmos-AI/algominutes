@@ -265,7 +265,7 @@ describe('the app, over HTTP', () => {
     try {
       const post = (k: string) => fetch(`${s.url}/tasks/${k}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       // Routed (a handler ran and failed on its fake), never "Unknown task".
-      for (const k of ['create_bot', 'cancel_bot', 'process_event', 'ingest', 'purge_media']) expect((await post(k)).status, k).not.toBe(404);
+      for (const k of ['create_bot', 'cancel_bot', 'process_event', 'ingest', 'purge_media', 'reconcile']) expect((await post(k)).status, k).not.toBe(404);
     } finally {
       await s.close();
     }

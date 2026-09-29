@@ -12,35 +12,44 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { DeleteNoteRequest } from '@algominutes/contracts/schemas';
 import { deleteNote, getStoragePurge, runStoragePurge } from '@algominutes/db';
+import { runRecallPurgesSoon } from './meetings.js';
 
-export async function deleteNoteRoute(req, res) {
-  const parsed = DeleteNoteRequest.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid noteId / workspaceId' });
-  const { noteId, workspaceId } = parsed.data;
-  const log = req.log.child({ userId: req.uid, noteId, workspaceId });
+// `startRecallPurges` is injectable for tests; the route itself is deleteNoteRoute below.
+export function createDeleteNoteRoute({ env = process.env, startRecallPurges = runRecallPurgesSoon } = {}) {
+  return async function deleteNoteRoute(req, res) {
+    const parsed = DeleteNoteRequest.safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid noteId / workspaceId' });
+    const { noteId, workspaceId } = parsed.data;
+    const log = req.log.child({ userId: req.uid, noteId, workspaceId });
 
-  let result;
-  try {
-    result = await deleteNote(getFirestore(), { noteId, workspaceId, uid: req.uid, traceId: req.traceId }, log);
-  } catch (err) {
-    log.error({ err }, 'delete_note_failed');
-    return res.status(500).json({ error: 'Delete failed. Please try again.' });
+    let result;
+    try {
+      result = await deleteNote(getFirestore(), { noteId, workspaceId, uid: req.uid, traceId: req.traceId }, log);
+    } catch (err) {
+      log.error({ err }, 'delete_note_failed');
+      return res.status(500).json({ error: 'Delete failed. Please try again.' });
+    }
+    if (!result.allowed) {
+      log.warn({}, 'delete_note_not_member');
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    // The note is gone from Postgres and Firestore. Purging its audio now is
+    // best-effort: runStoragePurge never throws, and a failure stays queued.
+    const purge = await getStoragePurge(result.purgeId).catch((err) => {
+      log.error({ err, purgeId: result.purgeId }, 'delete_note_purge_lookup_failed');
+      return null;
+    });
+    const purged = purge
+      ? await runStoragePurge({ bucket: getStorage().bucket(), firestore: getFirestore() }, purge, log)
+      : false;
+
+    // A notetaker's note: its bot leaves the meeting and Recall's copy goes, queued with the delete.
+    if (result.recallPurges) await startRecallPurges(env, { traceId: req.traceId, log });
+
+    log.info({ deleted: result.deleted, purgeId: result.purgeId, purged, recallPurges: result.recallPurges }, 'delete_note_ok');
+    return res.status(200).json({ ok: true, noteId, deleted: result.deleted });
   }
-  if (!result.allowed) {
-    log.warn({}, 'delete_note_not_member');
-    return res.status(404).json({ error: 'Note not found' });
-  }
-
-  // The note is gone from Postgres and Firestore. Purging its audio now is
-  // best-effort: runStoragePurge never throws, and a failure stays queued.
-  const purge = await getStoragePurge(result.purgeId).catch((err) => {
-    log.error({ err, purgeId: result.purgeId }, 'delete_note_purge_lookup_failed');
-    return null;
-  });
-  const purged = purge
-    ? await runStoragePurge({ bucket: getStorage().bucket(), firestore: getFirestore() }, purge, log)
-    : false;
-
-  log.info({ deleted: result.deleted, purgeId: result.purgeId, purged }, 'delete_note_ok');
-  return res.status(200).json({ ok: true, noteId, deleted: result.deleted });
 }
+
+export const deleteNoteRoute = createDeleteNoteRoute();

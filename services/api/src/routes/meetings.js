@@ -60,6 +60,28 @@ export function periodStartOf(now = new Date()) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
+/**
+ * Run the notetaker's purge worker now, after a deletion queued Recall purges in its own transaction (a bot
+ * still in the meeting leaves, Recall's copy goes). Its 30-minute schedule is the backstop, so a failure here
+ * is logged, never the deletion's.
+ */
+export async function runRecallPurgesSoon(env, { traceId, log }) {
+  if (!env.MEETINGS_URL) {
+    // Purges are queued but there's no meetings service to run them now: misconfigured, as notetaker_misconfigured.
+    log.error({}, 'recall_purges_not_started');
+    return false;
+  }
+  try {
+    // One kick per 5 minutes: a run of deletions starts the worker once (it also holds a lock per run).
+    await enqueueMeetingsTask(env, 'purge_media', undefined, { traceId, log, taskId: `purge-kick-${Math.floor(Date.now() / 300_000)}` });
+    log.info({}, 'recall_purges_started');
+    return true;
+  } catch (err) {
+    log.warn({ err }, 'recall_purges_start_failed');
+    return false;
+  }
+}
+
 function enqueueMeetingsTask(env, kind, meetingBotId, { traceId, log, taskId }) {
   return enqueueTask({
     projectId: env.TASKS_PROJECT,

@@ -32,6 +32,30 @@ locals {
       severity  = "ERROR"
       doc       = "Recall's copy of a notetaker recording wasn't confirmed deleted after 10 attempts. See recall_purge_exhausted (recallBotId, reason, traceId) and the recall_media_delete_failed lines under the same traceId. Recall's 72-hour retention deletes it regardless; delete it by hand (POST /api/v1/bot/{id}/delete_media/) and confirm the recall_purges row."
     }
+    notetaker_media_never_arrived = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recorded a meeting but its media never reached us in 6 hours, so its note failed (nothing charged, Recall's copy queued to go). See notetaker_media_never_arrived (meetingBotId, noteId, endedAt): check Recall's status for the bot and the webhook endpoint (an endpoint Recall disabled stops every event)."
+    }
+    notetaker_reconcile_step_failed = {
+      threshold = 0
+      window    = "1800s"
+      severity  = "ERROR"
+      doc       = "A whole step of the notetaker reconcile failed (it couldn't read what to re-drive): the steps after it still ran, this one didn't. See notetaker_reconcile_step_failed (step, err): usually Postgres."
+    }
+    cancel_bot_gave_up = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A user's cancel of a notetaker couldn't reach Recall in 5 attempts (dead-lettered). A bot already recording keeps recording until its reservation runs out: make it leave by hand (POST /api/v1/bot/{id}/leave_call/) and see cancel_bot_gave_up (meetingBotId, err)."
+    }
+    notetaker_reconcile_item_failed = {
+      threshold = 2
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "The notetaker reconcile couldn't re-drive some work more than twice in an hour. See notetaker_reconcile_item_failed (meetingBotId or recallEventId, err): usually Recall or the queue unreachable."
+    }
     notetaker_ingest_gave_up = {
       threshold = 0
       window    = "900s"

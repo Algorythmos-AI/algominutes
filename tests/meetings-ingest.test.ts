@@ -106,6 +106,8 @@ function world(over: Partial<{ ingestedAt: string | null; billableSeconds: numbe
     },
     advanceNotetaker: async (_fs: unknown, input: any) => { calls.push(`repo:bot:${input.status}`); return { changed: true, bot }; },
     failNotetaker: async (_fs: unknown, input: any) => { calls.push(`repo:bot:${input.status}:${input.failureReason}`); return { changed: true, bot: { ...bot, status: input.status } }; },
+    recordDeadLetter: async (d: any) => { calls.push(`repo:dead_letter:${d.payload.kind}`); return { id: 1 }; },
+    withRecallPurgeLock: async (fn: () => Promise<unknown>) => (repo.lockHeld ? { ran: false } : { ran: true, value: await fn() }),
     listPendingRecallPurges: async () => repo.pending ?? [],
     listExhaustedRecallPurges: async () => repo.exhausted ?? [],
     recordRecallPurgeAttempt: async (id: number, err: string | null) => { calls.push(`repo:attempt:${id}:${err ?? 'ok'}`); },
@@ -436,6 +438,16 @@ describe('ingest', () => {
     expect(w.objects.size).toBe(0);
   });
 
+  it('a bot that ended without its recording (the reconcile gave up on it) queues nothing when its media arrive late', async () => {
+    for (const status of ['failed', 'cancelled']) {
+      const w = world();
+      w.bot.status = status;
+      expect(await w.run('ingest')).toBe(200);
+      expect(w.calls).toEqual([]);
+      expect(w.lines.find((l) => l.msg === 'notetaker_ingest_bot_ended')).toMatchObject({ status });
+    }
+  });
+
   it('a bot never sent to Recall has nothing to ingest', async () => {
     const w = world();
     w.bot.recallBotId = null;
@@ -450,7 +462,7 @@ describe('ingest', () => {
       const w = world();
       w.recall.remote = { recordings: [] };
       expect(await w.run('ingest', { meetingBotId: w.bot.id }, LAST)).toBe(200);
-      expect(w.calls).toEqual(['recall:get:recall-1', 'repo:bot:failed:error']);
+      expect(w.calls).toEqual(['recall:get:recall-1', 'repo:dead_letter:ingest', 'repo:bot:failed:error']);
       expect(w.lines.find((l) => l.msg === 'notetaker_ingest_gave_up')).toMatchObject({ level: 'error', attempt: 4, noteId: 'mtg_7f0e', traceId: 'trace-1' });
     });
 
@@ -458,8 +470,16 @@ describe('ingest', () => {
       const w = world();
       w.repo.purgeFailsOnce = new Error('Connection terminated unexpectedly');
       expect(await w.run('ingest', { meetingBotId: w.bot.id }, LAST)).toBe(200);
-      expect(w.calls.slice(-3)).toEqual(['repo:purge:recall-1:ingested', 'repo:purge:recall-1:ingested', 'repo:bot:done']);
+      expect(w.calls.slice(-4)).toEqual(['repo:purge:recall-1:ingested', 'repo:dead_letter:ingest', 'repo:purge:recall-1:ingested', 'repo:bot:done']);
       expect(w.calls.some((c) => c.startsWith('repo:bot:failed'))).toBe(false);
+    });
+
+    it('giving up that itself fails still leaves the dead letter', async () => {
+      const w = world();
+      w.recall.remote = { recordings: [] };
+      w.repo.failNotetaker = async () => { throw new Error('firestore unavailable'); };
+      await expect(w.run('ingest', { meetingBotId: w.bot.id }, LAST)).rejects.toThrow('firestore unavailable');
+      expect(w.calls).toContain('repo:dead_letter:ingest');
     });
 
     it('an earlier attempt still throws for Cloud Tasks to retry', async () => {
@@ -533,6 +553,16 @@ describe('purge_media', () => {
     ]);
     expect(w.lines.find((l) => l.msg === 'recall_media_delete_failed')).toMatchObject({ level: 'warn', status: 401, recallBotId: 'recall-2', traceId: 'trace-2' });
     expect(w.lines.find((l) => l.msg === 'recall_leave_already_gone')).toMatchObject({ status: 400, recallBotId: 'recall-1', traceId: 'trace-1' });
+  });
+
+  it('a run that overlaps another does nothing: two runs would each count an attempt against every purge', async () => {
+    const w = world();
+    w.repo.pending = [purge(1)];
+    w.repo.lockHeld = true;
+    expect(await w.run('purge_media', {})).toBe(200);
+    expect(w.lastBody()).toEqual({ ok: true, skipped: true });
+    expect(w.calls).toEqual([]);
+    expect(w.lines.map((l) => l.msg)).toEqual(['recall_purges_skipped_overlap']);
   });
 
   it('nothing pending: Recall isn\'t asked; out of attempts: each is an error line, every run, until a person acts', async () => {

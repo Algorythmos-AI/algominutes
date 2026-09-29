@@ -188,3 +188,38 @@ resource "google_cloud_scheduler_job" "meetings_purge_media" {
 
   depends_on = [google_project_service.apis]
 }
+
+# ---------------------------------------------------------------------------
+# The notetaker's reconcile (services/meetings/src/tasks/reconcile.js): every
+# 15 minutes it picks up work whose own task was lost: webhooks never
+# processed, bots never sent, recordings whose ingest never ran, and bots
+# silent for hours. Called as purge_media is. A run with failures answers 500,
+# which Cloud Scheduler records; the next run tries again.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "meetings_reconcile" {
+  project          = var.project_id
+  region           = var.region
+  name             = "meetings-reconcile"
+  description      = "Re-drives notetaker work whose task was lost (meetings /tasks/reconcile)."
+  schedule         = "*/15 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["meetings"]}/tasks/reconcile"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "reconcile" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["meetings"]}/tasks/reconcile"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}

@@ -16,6 +16,7 @@ import loggerModule from '@algominutes/ai/logger.cjs';
 import noteTerminalModule from '@algominutes/db/note-terminal.cjs';
 import { RecallError } from '../lib/recall-client.js';
 import { failBot } from './notetaker.js';
+import { recordMeetingsDeadLetter } from '../lib/dead-letters.js';
 import { mediaHosts, openMedia, readJsonMedia } from '../lib/media-download.js';
 import { createRecordingsStore } from '../lib/recordings-store.js';
 
@@ -170,10 +171,18 @@ export function createIngestTasks({
         log.warn({ requestedBotId: bot.id }, 'notetaker_ingest_nothing_to_do');
         return res.status(200).json({ ok: true });
       }
+      if (bot.status === 'failed' || bot.status === 'cancelled') {
+        // Ended without its recording (a late media event after the reconcile gave up on it): its note says
+        // so, and Recall's copy was queued with the ending. Nothing is queued now.
+        log.warn({ status: bot.status }, 'notetaker_ingest_bot_ended');
+        return res.status(200).json({ ok: true });
+      }
       return await ingestBot(res, bot, log, traceId);
     } catch (err) {
       if (isFinalAttempt(req.headers)) {
         log.error({ err, attempt: attemptOf(req) }, 'notetaker_ingest_gave_up');
+        // The dead letter first: it never throws, and giving up can (Postgres, the mirror), which would lose it.
+        await recordMeetingsDeadLetter({ repo, kind: 'ingest', bot, err, attempts: attemptOf(req) + 1, traceId, log });
         await giveUp(bot, log, traceId);
         return res.status(200).json({ ok: true });
       }
@@ -294,6 +303,16 @@ export function createIngestTasks({
   async function purgeMedia(req, res) {
     const taskTraceId = traceIdFromTask(req.body, req.headers);
     const log = req.log.child({ traceId: taskTraceId });
+    // One run at a time (a deletion's kick can land on the schedule's): each attempt counts against a purge.
+    const locked = await repo.withRecallPurgeLock(() => purgeMediaRun(log, taskTraceId), { log });
+    if (!locked.ran) {
+      log.info({}, 'recall_purges_skipped_overlap');
+      return res.status(200).json({ ok: true, skipped: true });
+    }
+    return res.status(200).json({ ok: true, ...locked.value });
+  }
+
+  async function purgeMediaRun(log, taskTraceId) {
     // A purge's lines carry the recording's trace (queued with it), so its deletion is on the same trail.
     const purgeFields = (p) => ({ recallBotId: p.recallBotId, ...(p.traceId ? { traceId: p.traceId, taskTraceId } : {}) });
     const pending = await repo.listPendingRecallPurges(PURGE_BATCH, PURGE_MAX_ATTEMPTS);
@@ -335,7 +354,7 @@ export function createIngestTasks({
       log.child(purgeFields(p)).error({ reason: p.reason, attempts: p.attempts }, 'recall_purge_exhausted');
     }
     log.info({ tried: pending.length, failed, unrecorded }, 'recall_purges_run');
-    return res.status(200).json({ ok: true, tried: pending.length, failed, unrecorded });
+    return { tried: pending.length, failed, unrecorded };
   }
 
   return { ingest, purge_media: purgeMedia };

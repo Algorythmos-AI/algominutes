@@ -8,7 +8,8 @@ import {
   getMeetingBotByRecallId, getRecallEvent, getBotOwnerName, getBotMeetingUrlCiphertext, failNotetaker, recordConsentEvent,
   enqueueRecallPurge, listPendingRecallPurges, listExhaustedRecallPurges, recordRecallPurgeAttempt, confirmRecallPurge,
   createServerNote, advanceNotetaker, deleteNote, noteIdForBot, meetingUrlHash, toNotetakerStatus, getSpeakerSegments,
-  WorkspaceBoundaryError,
+  WorkspaceBoundaryError, deleteAccountData, listStuckNotes,
+  listStaleRequestedBots, listStalledNotetakers, listQuietLiveBots, withRecallPurgeLock,
 } from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, count, quietLog } from './helpers';
 
@@ -254,6 +255,166 @@ describe('the notetaker\'s note', () => {
     expect(await createServerNote(fakeDb, noteInput(botId), quietLog)).toEqual({ created: false, deleted: true });
     expect(await count(`SELECT 1 FROM notes`)).toBe(0);
     expect(docOf(botId)).toBeUndefined();
+  });
+
+  // RELEASE.md PR 21: a deleted note takes its meeting with it. The bot leaves, and Recall's copy goes,
+  // queued in the deletion's own transaction (the purge worker runs it; the api starts it at once).
+  const purgeOf = async (recallBotId: string) =>
+    (await pool.query('SELECT reason, leave_call, trace_id FROM recall_purges WHERE recall_bot_id = $1', [recallBotId])).rows[0];
+
+  it('deleting a note whose bot is still in the meeting queues it to leave and Recall\'s copy to go', async () => {
+    const botId = botOf(await reserve()).id;
+    await createServerNote(fakeDb, noteInput(botId), quietLog);
+    await attachRecallBot(botId, 'recall-live');
+    await advanceBotStatus(botId, 'recording');
+    const out = await deleteNote(fakeDb, { noteId: noteIdForBot(botId), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
+    expect(out).toMatchObject({ allowed: true, deleted: true, recallPurges: 1 });
+    expect(await purgeOf('recall-live')).toEqual({ reason: 'note_deleted', leave_call: true, trace_id: 't1' });
+    // A retry finds nothing more to queue.
+    expect(await deleteNote(fakeDb, { noteId: noteIdForBot(botId), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog))
+      .toMatchObject({ deleted: false, recallPurges: 0 });
+  });
+
+  it('a bot that already left only has its copy purged; one never sent to Recall queues nothing', async () => {
+    const ended = botOf(await reserve()).id;
+    await createServerNote(fakeDb, noteInput(ended), quietLog);
+    await attachRecallBot(ended, 'recall-ended');
+    await advanceBotStatus(ended, 'call_ended');
+    await deleteNote(fakeDb, { noteId: noteIdForBot(ended), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
+    expect(await purgeOf('recall-ended')).toMatchObject({ reason: 'note_deleted', leave_call: false });
+
+    const unsent = botOf(await reserve({ meetingUrl: 'https://meet.google.com/xyz-abcd-efg' })).id;
+    await createServerNote(fakeDb, noteInput(unsent), quietLog);
+    expect(await deleteNote(fakeDb, { noteId: noteIdForBot(unsent), workspaceId: 'workspace_alice', uid: 'alice' }, quietLog))
+      .toMatchObject({ deleted: true, recallPurges: 0 });
+    expect(await count('SELECT 1 FROM recall_purges')).toBe(1);
+  });
+
+  it('deleting the account queues every one of its bots with Recall, and the purges outlive the bots', async () => {
+    const live = botOf(await reserve()).id;
+    await createServerNote(fakeDb, noteInput(live), quietLog);
+    await attachRecallBot(live, 'recall-a');
+    await advanceBotStatus(live, 'in_call');
+    const done = botOf(await reserve({ meetingUrl: 'https://meet.google.com/xyz-abcd-efg' })).id;
+    await attachRecallBot(done, 'recall-b');
+    await advanceBotStatus(done, 'done');
+    // Someone else's bot in another workspace is left alone (bob is seeded for every test).
+    const bobs = botOf(await reserve({ uid: 'bob', workspaceId: 'workspace_bob' })).id;
+    await attachRecallBot(bobs, 'recall-bob');
+
+    const out = await deleteAccountData({ uid: 'alice', traceId: 'del-trace' }, quietLog);
+    expect(out.recallPurges).toBe(2);
+    expect(await count('SELECT 1 FROM meeting_bots WHERE uid = $1', ['alice'])).toBe(0);
+    expect(await purgeOf('recall-a')).toMatchObject({ reason: 'account_deleted', leave_call: true });
+    expect(await purgeOf('recall-b')).toMatchObject({ reason: 'account_deleted', leave_call: false });
+    expect(await purgeOf('recall-bob')).toBeUndefined();
+  });
+
+  it('account deletion and a bot failing at the same moment finish, one after the other, never deadlocked', async () => {
+    const botId = await botRow('joining', `recall_bot_id = 'recall-race'`);
+    // failNotetaker's order: the bot row, then (later) its purge row.
+    const other = await pool.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query('SELECT 1 FROM meeting_bots WHERE id = $1 FOR UPDATE', [botId]);
+      const deletion = deleteAccountData({ uid: 'alice', traceId: 't' }, quietLog);
+      await new Promise((r) => setTimeout(r, 300));
+      await other.query(
+        `INSERT INTO recall_purges (recall_bot_id, reason, leave_call) VALUES ('recall-race', 'failed', TRUE)
+         ON CONFLICT (recall_bot_id) DO UPDATE SET leave_call = TRUE`,
+      );
+      await other.query('COMMIT');
+      await expect(deletion).resolves.toMatchObject({ recallPurges: 1 });
+    } finally {
+      other.release();
+    }
+    expect(await purgeOf('recall-race')).toMatchObject({ leave_call: true });
+  });
+
+  it('a Recall bot made for a note deleted meanwhile is never attached (the create task removes it)', async () => {
+    const botId = await botRow('requested', `note_deleted_at = NOW()`);
+    expect(await attachRecallBot(botId, 'recall-late')).toEqual({ attached: false, recallBotId: null, terminal: true });
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND recall_bot_id IS NULL`, [botId])).toBe(1);
+  });
+
+  it('one purge run at a time: an overlapping run is skipped, and the run holds no connection', async () => {
+    let release!: () => void;
+    // The run's own queries go through the pool while it holds the lease: on a pool of one (meetings on
+    // staging; CI runs this suite with PG_POOL_MAX=1) a lease that held a connection waited on itself.
+    const first = withRecallPurgeLock(async () => {
+      await listPendingRecallPurges();
+      return new Promise<string>((r) => { release = () => r('first'); });
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await withRecallPurgeLock(async () => 'second')).toEqual({ ran: false });
+    release();
+    expect(await first).toEqual({ ran: true, value: 'first' });
+    expect(await withRecallPurgeLock(async () => 'third')).toEqual({ ran: true, value: 'third' });
+  });
+
+  it("a run that died leaves a lease that expires by itself", async () => {
+    await pool.query(`INSERT INTO job_leases (name, holder, locked_until) VALUES ('recall_purges', 'dead-run', NOW() + INTERVAL '10 minutes')
+                      ON CONFLICT (name) DO UPDATE SET holder = 'dead-run', locked_until = NOW() + INTERVAL '10 minutes'`);
+    expect(await withRecallPurgeLock(async () => 'blocked')).toEqual({ ran: false });
+    await pool.query(`UPDATE job_leases SET locked_until = NOW() - INTERVAL '1 second' WHERE name = 'recall_purges'`);
+    expect(await withRecallPurgeLock(async () => 'after')).toEqual({ ran: true, value: 'after' });
+    // Released at the end: the next run needn't wait.
+    expect(await withRecallPurgeLock(async () => 'next')).toEqual({ ran: true, value: 'next' });
+  });
+
+  it('a notetaker\'s note, recording for hours, is never taken for a stuck one by the sweep', async () => {
+    const botId = botOf(await reserve()).id;
+    await createServerNote(fakeDb, noteInput(botId), quietLog);
+    await pool.query(`UPDATE notes SET updated_at = NOW() - INTERVAL '5 hours' WHERE id = $1`, [noteIdForBot(botId)]);
+    expect((await listStuckNotes({ olderThanMs: 60_000 })).map((n) => n.noteId)).not.toContain(noteIdForBot(botId));
+  });
+
+  // RELEASE.md PR 21: what the reconcile picks up, and what it leaves alone. Rows written directly: reserve
+  // allows two live bots a user.
+  const RANKS: Record<string, number> = { requested: 0, joining: 20, waiting_room: 30, recording: 50, call_ended: 60, failed: 100 };
+  async function botRow(status: string, set = '', { note = false } = {}) {
+    const id = randomUUID();
+    if (note) {
+      await pool.query(`INSERT INTO notes (id, workspace_id, author_uid, status, source_type) VALUES ($1, 'workspace_alice', 'alice', 'recording', 'online_meeting')`, [noteIdForBot(id)]);
+    }
+    await pool.query(
+      `INSERT INTO meeting_bots (id, uid, workspace_id, note_id, recall_bot_id, platform, meeting_url_hash, status, status_rank)
+         VALUES ($1, 'alice', 'workspace_alice', $2, $3, 'google_meet', $4, $5, $6)`,
+      [id, note ? noteIdForBot(id) : null, status === 'requested' ? null : `recall-${id}`, `h-${id}`, status, RANKS[status]],
+    );
+    if (set) await pool.query(`UPDATE meeting_bots SET ${set} WHERE id = $1`, [id]);
+    return id;
+  }
+
+  it('bots never sent to Recall, only once they have waited', async () => {
+    const stale = await botRow('requested', `created_at = NOW() - INTERVAL '20 minutes'`);
+    await botRow('requested');
+    await botRow('joining', `created_at = NOW() - INTERVAL '20 minutes'`);
+    // Already made in Recall, its status not caught up: the create task's own replay finishes it, not this.
+    await botRow('requested', `created_at = NOW() - INTERVAL '20 minutes', recall_bot_id = 'recall-made'`);
+    expect((await listStaleRequestedBots(15 * 60_000)).map((b) => b.id)).toEqual([stale]);
+  });
+
+  it('recorded meetings without a run, 45 minutes after they ended (by Recall, or by their reservation running out)', async () => {
+    const ended = await botRow('call_ended', `recording_ended_at = NOW() - INTERVAL '50 minutes'`, { note: true });
+    const overran = await botRow('recording', `recording_started_at = NOW() - INTERVAL '6 hours', reserved_minutes = 60`, { note: true });
+    await botRow('call_ended', `recording_ended_at = NOW() - INTERVAL '10 minutes'`, { note: true });
+    await botRow('recording', `recording_started_at = NOW() - INTERVAL '30 minutes', reserved_minutes = 60`, { note: true });
+    await botRow('call_ended', `recording_ended_at = NOW() - INTERVAL '50 minutes', run_queued_at = NOW()`, { note: true });
+    await botRow('failed', `recording_ended_at = NOW() - INTERVAL '50 minutes'`, { note: true });
+    // Its note was deleted while it recorded: here too, for its ingest to take the meeting with it.
+    const orphan = await botRow('call_ended', `recording_ended_at = NOW() - INTERVAL '50 minutes'`);
+    const got = await listStalledNotetakers(45 * 60_000);
+    expect(got.map((b) => b.id).sort()).toEqual([ended, overran, orphan].sort());
+    expect(Date.parse(got.find((b) => b.id === overran)!.endedAt)).toBeLessThan(Date.now() - 4 * 3600_000);
+  });
+
+  it('bots in a meeting that have been silent for hours, never recorded', async () => {
+    const quiet = await botRow('waiting_room', `updated_at = NOW() - INTERVAL '4 hours'`);
+    await botRow('recording', `updated_at = NOW() - INTERVAL '4 hours'`);
+    await botRow('joining');
+    await botRow('failed', `updated_at = NOW() - INTERVAL '4 hours'`);
+    expect((await listQuietLiveBots(3 * 3600_000)).map((b) => b.id)).toEqual([quiet]);
   });
 
   it('a bot whose account is gone creates nothing', async () => {

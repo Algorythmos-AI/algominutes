@@ -26,7 +26,7 @@ const { reverseNoteUsage } = ledgerReversal as {
 };
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
-import { advanceBotStatus, botFromRow, enqueueRecallPurge, toNotetakerStatus, BOT_STATUS_RANK, type BotStatus, type MeetingBot } from './meetings-repo';
+import { advanceBotStatus, botFromRow, enqueueRecallPurge, purgeRecallBotsOf, toNotetakerStatus, BOT_STATUS_RANK, type BotStatus, type MeetingBot } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { ownedStoragePath } = noteStorage as {
@@ -936,8 +936,11 @@ export async function applyNoteEdit(
 export type DeleteNoteResult =
   /** The caller is not a member of the workspace: nothing was touched. */
   | { allowed: false }
-  /** deleted: whether a Postgres row went (false on a retry, or a note that never reached Postgres). */
-  | { allowed: true; deleted: boolean; purgeId: number };
+  /**
+   * deleted: whether a Postgres row went (false on a retry, or a note that never reached Postgres).
+   * recallPurges: a notetaker's Recall copies queued for deletion (and a live bot for leaving) with it.
+   */
+  | { allowed: true; deleted: boolean; purgeId: number; recallPurges: number };
 
 /**
  * Delete a note (POST /v1/notes/delete). This is the single deletion path;
@@ -981,9 +984,11 @@ export async function deleteNote(
       const manager = ['owner', 'admin'].includes(member.rows[0]!.role);
       // A notetaker's note: its bot must remember the deletion, because the
       // row's delete sets meeting_bots.note_id to NULL and the tombstones are
-      // pruned in 30 days (createServerNote checks note_deleted_at).
-      const bots = await client.query<{ id: string }>(
-        'SELECT id FROM meeting_bots WHERE note_id = $1 AND workspace_id = $2 FOR UPDATE',
+      // pruned in 30 days (createServerNote checks note_deleted_at). Recall's
+      // copy goes too, and a bot still in the meeting leaves it.
+      const bots = await client.query<{ id: string; recall_bot_id: string | null; status: string; status_rank: number; trace_id: string | null }>(
+        `SELECT id, recall_bot_id, status, status_rank, trace_id FROM meeting_bots
+          WHERE note_id = $1 AND workspace_id = $2 FOR UPDATE`,
         [input.noteId, input.workspaceId],
       );
       const gone = await client.query<{ storage_path: string | null }>(
@@ -992,11 +997,13 @@ export async function deleteNote(
         [input.noteId, input.workspaceId, manager, input.uid],
       );
       const deleted = (gone.rowCount ?? 0) > 0;
+      let recallPurges = 0;
       if (deleted && bots.rowCount) {
         await client.query(
           'UPDATE meeting_bots SET note_deleted_at = COALESCE(note_deleted_at, NOW()), updated_at = NOW() WHERE id = ANY($1::uuid[])',
           [bots.rows.map((b) => b.id)],
         );
+        recallPurges = await purgeRecallBotsOf(client, bots.rows, 'note_deleted');
       }
       // Nothing deleted: either the note is someone else's and the caller
       // doesn't manage the workspace, or there's no Postgres row (a retry, or
@@ -1031,7 +1038,7 @@ export async function deleteNote(
           sessions.rows.map((r) => r.session_uri),
         ],
       );
-      return { allowed: true, deleted, purgeId: Number(purge.rows[0]!.id) };
+      return { allowed: true, deleted, purgeId: Number(purge.rows[0]!.id), recallPurges };
     },
     { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
   );

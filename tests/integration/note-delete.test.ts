@@ -57,7 +57,7 @@ describe('deleteNote (the single deletion path)', () => {
   it('deletes the note and everything derived from it, mirrors the delete, and queues its audio', async () => {
     const { fs, deletes } = fsStub();
     const r = await deleteNote(fs, { noteId: 'note-a', workspaceId: 'ws-a', uid: 'alice', traceId: 't-1' }, quietLog);
-    expect(r).toEqual({ allowed: true, deleted: true, purgeId: expect.any(Number) });
+    expect(r).toEqual({ allowed: true, deleted: true, purgeId: expect.any(Number), recallPurges: 0 });
     expect(await rowsFor('note-a')).toEqual(NONE); // nothing left for search/chat to return
     expect(deletes).toEqual(['workspaces/ws-a/notes/note-a']);
     const purge = await getStoragePurge((r as { purgeId: number }).purgeId);
