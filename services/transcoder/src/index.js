@@ -23,6 +23,13 @@ requireEnv(
   require('./env-spec.cjs'),
   { logger: sharedLogger.logger },
 );
+// An engine that can't be replayed safely refuses to boot, like missing env (audit Q30).
+try {
+  require('./stt-provider').assertProviderBootable(process.env);
+} catch (err) {
+  sharedLogger.logger.fatal({ err, provider: process.env.STT_PROVIDER }, 'transcoder_provider_refused');
+  throw err;
+}
 const noteTerminal = loadShared('note-terminal.cjs');
 const spendGuard = loadShared('spend-guard.cjs');
 const spendRepo = loadShared('spend-repo.cjs');

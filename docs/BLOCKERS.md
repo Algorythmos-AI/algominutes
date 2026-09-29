@@ -1230,10 +1230,15 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           admin view shows it (`DeadLetterEntry.reason`). The user still sees the generic "We could not
           process this recording."
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
-      (`STT_PROVIDER=google`).
+      (`STT_PROVIDER=google`). **Guarded (RELEASE.md PR 5b; audit Q30):** the transcoder refuses to boot with
+      `STT_PROVIDER=deepgram` (`assertProviderBootable`, `transcoder_provider_refused`) until inline mode records
+      an operation id.
     - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
-    - A kickoff of a note's previous run can continue into a re-queued note. Checking the kickoff's
-      `jobId` needs `markQueued` to store it.
+    - ~~A kickoff of a note's previous run can continue into a re-queued note~~ **fixed (PR 5b; audit Q12):**
+      `markQueued` returns the run it queued (`notes.run_seq`, which it bumps), the kickoff task carries it as
+      `runSeq`, and the transcoder acknowledges a task from a run the note has left without touching it
+      (`kickoff_superseded_by_new_run`). A task from before `runSeq` goes on as before. Tested on Postgres
+      (`kickoff-run-guard.test.ts`).
 
 ## Uploads finish without the app (plan rev 8, PR-24, 2026-09-25)
 

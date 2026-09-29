@@ -116,13 +116,23 @@ async function handleKickoff(payload, deps) {
   // and the mirror only ever shows a status Postgres holds.
   const pre = await db.pool().connect();
   let status;
+  let run = null;
+  let superseded = false;
   try {
-    status = await db.noteStatus(pre, { noteId, workspaceId });
-    if (KICKOFF_RESUMABLE.has(status)) {
+    run = await db.noteRun(pre, { noteId, workspaceId });
+    status = run ? run.status : null;
+    // A kickoff task from a run the note has since left (re-queued after IN_FLIGHT_STALE_MS; audit Q12): the
+    // new run's own task does its work. A task from before runSeq was carried has none, and goes on as before.
+    superseded = run != null && payload.runSeq != null && Number(payload.runSeq) !== run.runSeq;
+    if (!superseded && KICKOFF_RESUMABLE.has(status)) {
       await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking', onlyIfStatus: ONLY_IF_IN_PROGRESS });
     }
   } finally { pre.release(); }
   if (status == null) throw new NoteGoneError('postgres');
+  if (superseded) {
+    log.info({ noteId, workspaceId, taskRunSeq: Number(payload.runSeq), runSeq: run.runSeq }, 'kickoff_superseded_by_new_run');
+    return;
+  }
   if (!KICKOFF_RESUMABLE.has(status)) {
     log.info({ noteId, workspaceId, status }, 'kickoff_replay_after_progress');
     return;

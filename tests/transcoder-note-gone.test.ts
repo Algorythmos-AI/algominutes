@@ -84,6 +84,7 @@ describe('transcoder kickoff for a deleted note', () => {
           pool: () => ({ connect: async () => client }),
           // The kickoff's pre-check reads the status; a later re-check asks noteExists.
           noteStatus: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? 'queued' : null),
+          noteRun: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? { status: 'queued', runSeq: 0 } : null),
           noteExists: async () => (answers.length > 1 ? answers.shift() : answers[0]),
           upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => {
             order.push(`pg:${status}`);
@@ -180,7 +181,7 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     const hooks: string[] = [];
     const deps = {
       log: { info: () => {}, error: () => {}, warn: () => {} },
-      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true, noteStatus: async () => 'queued', upsertNoteStatus: async () => {} },
+      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true, noteStatus: async () => 'queued', noteRun: async () => ({ status: 'queued', runSeq: 0 }), upsertNoteStatus: async () => {} },
       mirror: {
         mirrorStatus: async () => {},
         mirrorError: async () => { throw new Error('the Firestore-only error mirror must not be used here'); },

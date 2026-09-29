@@ -315,11 +315,12 @@ export async function markQueued(
   input: MarkQueuedInput,
   log: { error: (o: any, m?: string) => void },
   now: Date = new Date(),
-): Promise<{ queued: boolean; status: string | null; deleted?: true }> {
+): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number }> {
   const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
+  let runSeq: number | undefined;
   if (isPostgresEnabled()) {
     const outcome = await withTx(
-      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true }> => {
+      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number }> => {
         // Serialize kickoffs for this note id, including a brand-new note with
         // no row to lock yet: the second of two concurrent duplicates waits
         // here, then sees the first's 'queued' row and backs off. deleteNote
@@ -390,7 +391,7 @@ export async function markQueued(
              updated_at = NOW()
            -- An existing note id in ANOTHER workspace must never be touched.
            WHERE notes.workspace_id = EXCLUDED.workspace_id
-           RETURNING id`,
+           RETURNING id, run_seq`,
           [
             input.noteId,
             input.workspaceId,
@@ -450,11 +451,13 @@ export async function markQueued(
             }
           }
         }
-        return { queued: true, status: 'queued' };
+        // The run this queues: its kickoff task carries it, and a task from an earlier run is dropped (audit Q12).
+        return { queued: true, status: 'queued', runSeq: Number(noteRow.rows[0].run_seq) };
       },
       { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
     );
     if (!outcome.queued) return outcome;
+    runSeq = outcome.runSeq;
   }
 
   // update(), never a merge-set: a doc deleted after the commit above must not
@@ -478,7 +481,7 @@ export async function markQueued(
     }
     return { queued: false, status: null, deleted: true };
   }
-  return { queued: true, status: 'queued' };
+  return { queued: true, status: 'queued', ...(runSeq !== undefined ? { runSeq } : {}) };
 }
 
 export type SummaryClaim =
