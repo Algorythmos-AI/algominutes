@@ -19,6 +19,9 @@ struct NoteDetailView: View {
     /// A notetaker cancel or stop waiting for the user's confirmation: its bot and which.
     @State private var notetakerAction: (String, NoteNotetaker.Action)?
     @State private var notetakerBusy = false
+    /// The speaker being renamed (their tag), and the name being typed.
+    @State private var renamingTag: Int?
+    @State private var renameText = ""
 
     /// Re-derived every render rather than captured. The Firestore listener is
     /// the source of truth for the screen, so a mirror write — a status change,
@@ -165,6 +168,14 @@ struct NoteDetailView: View {
                  ? "It leaves the meeting now. What it has recorded so far becomes this note."
                  : "It won't join the meeting, and nothing is recorded or charged.")
         }
+        .alert("Rename speaker", isPresented: Binding(get: { renamingTag != nil }, set: { if !$0 { renamingTag = nil } })) {
+            TextField("Name", text: $renameText)
+                .textInputAutocapitalization(.words)
+            Button("Save") { if let tag = renamingTag { renameSpeaker(tag: tag, to: renameText) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every line by this speaker in this note takes the new name. Leave it empty for \"Speaker\" again.")
+        }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { viewModel.alertMessage != nil },
             set: { if !$0 { viewModel.alertMessage = nil } }
@@ -297,7 +308,12 @@ struct NoteDetailView: View {
                 // mirror is the whole transcript would claim to be clipped.
                 isTruncated: note.transcriptTruncated == true
                     && env.transcripts.state == .failed,
-                onRetry: { loadFullTranscript(note) }
+                onRetry: { loadFullTranscript(note) },
+                onRenameSpeaker: { line in
+                    guard let tag = line.speakerTag else { return }
+                    renameText = line.speaker.hasPrefix("Speaker ") ? "" : line.speaker
+                    renamingTag = tag
+                }
             )
             .task(id: note.id) { loadFullTranscript(note) }
 
@@ -370,6 +386,20 @@ struct NoteDetailView: View {
             catch { env.alertMessage = "Couldn't delete this note. Please try again." }
         }
         dismiss()
+    }
+
+    private func renameSpeaker(tag: Int, to raw: String) {
+        let name = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard let note = env.notes.notes.first(where: { $0.id == noteId }) else { return }
+        Task {
+            do {
+                try await env.api.setNoteSpeaker(noteId: note.id, workspaceId: note.workspaceId, speakerTag: tag, name: name)
+                env.transcripts.renameSpeaker(tag: tag, to: name, noteId: note.id)
+            } catch {
+                AppLog.error("speaker_rename_failed: \(error.localizedDescription)")
+                viewModel.alertMessage = "The speaker wasn't renamed. Please try again."
+            }
+        }
     }
 
     private func endNotetaker(botId: String, action: NoteNotetaker.Action) {

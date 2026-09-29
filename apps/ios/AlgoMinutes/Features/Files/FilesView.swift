@@ -21,6 +21,7 @@ struct FilesView: View {
 
     // The example note, until there's a real one (SampleNote; RELEASE.md PR 10b).
     @State private var showingSample = false
+    @State private var sendingNotetaker = false
     @AppStorage("sample_note_hidden") private var sampleHidden = false
     private var showsSample: Bool {
         SampleNote.shouldShow(notesEmpty: env.notes.notes.isEmpty, query: query,
@@ -69,6 +70,18 @@ struct FilesView: View {
             .background(AlgoMinutesBackground())
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                // Only while the server has the notetaker on for this user (/v1/config notetaker.bot).
+                if env.switches.notetakerBot {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            sendingNotetaker = true
+                        } label: {
+                            Label("Send the notetaker", systemImage: "person.crop.circle.badge.plus")
+                        }
+                    }
+                }
+            }
             .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
             .navigationDestination(item: $selectedNoteId) { noteId in
                 NoteDetailView(noteId: noteId)
@@ -77,6 +90,9 @@ struct FilesView: View {
         .sheet(isPresented: $showChat) {
             ChatView(viewModel: chatModel)
                 .algoMinutesSheet()
+        }
+        .sheet(isPresented: $sendingNotetaker) {
+            SendNotetakerSheet { noteId in selectedNoteId = noteId }
         }
     }
 

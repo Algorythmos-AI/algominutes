@@ -224,11 +224,10 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
       the Pro included-minutes cap are fixed. The plan's cost figures are list prices, not measured.
 
 **Client follow-ups (diarisation rename UX — the plan's #2 cut):**
-- [ ] **iOS tap-to-rename chip.** The endpoint + map + `APIClient.setNoteSpeaker` + the decode fix (server
-      speaker now wins) are built and UNBUILT-in-session (no Xcode/simulator). Remaining: make the speaker
-      chip tappable → rename alert → call `setNoteSpeaker` → refresh the transcript (TranscriptRepository is
-      idempotent-per-note, so it needs a forced reload or an optimistic in-place label update keyed on the
-      new `TranscriptLine.speakerTag`). Compile + device-test all iOS edits before ship.
+- [x] ~~**iOS tap-to-rename chip.**~~ **Done (RELEASE.md PR 25):** a tagged speaker's chip opens a rename alert,
+      calls `setNoteSpeaker`, and relabels every line of theirs in place; the full transcript is shown whenever it
+      carries speaker tags (the mirror has none). Unit-tested on the simulator; a device check rides with Wave 2's
+      proof (a two-person Meet).
 - [x] ~~**Web rename is blocked by architecture.**~~ **Resolved (checked 2026-09-29):** the new web app reads the
       transcript through the api and renames speakers on the note page (`apps/web/src/app/notes/NoteDetailPage.tsx`,
       #193). The iOS chip above is still open (`docs/plans/RELEASE.md`, PR 25).

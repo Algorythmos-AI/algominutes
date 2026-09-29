@@ -316,6 +316,40 @@ final class APIClient: Sendable {
         return (json["deleted"] as? Bool) ?? false
     }
 
+    /// What sending the notetaker did (POST /v1/meetings/bots).
+    enum MeetingBotResult: Equatable {
+        /// A notetaker is on its way; its note is `noteId`.
+        case sent(botId: String, noteId: String)
+        /// One was already on its way to this meeting (409): that note is the one to watch.
+        case alreadyOnItsWay(noteId: String)
+    }
+
+    /// Send the notetaker to a meeting now (docs/plans/MEETINGS.md). `requestId`
+    /// is the idempotency key: the same id returns the same notetaker. A refusal
+    /// is an `APIError.http` carrying the server's own sentence (notetaker
+    /// minutes used up, an unsupported link, busy).
+    func createMeetingBot(meetingUrl: String, title: String?, requestId: String) async throws -> MeetingBotResult {
+        var body: [String: Any] = ["meetingUrl": meetingUrl, "requestId": requestId]
+        if let title, !title.isEmpty { body["title"] = title }
+        let req = try await request(path: "v1/meetings/bots", body: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        switch http.statusCode {
+        case 200..<300:
+            guard let botId = json?["botId"] as? String, let noteId = json?["noteId"] as? String else { throw APIError.invalidResponse }
+            return .sent(botId: botId, noteId: noteId)
+        case 409:
+            if let noteId = json?["noteId"] as? String { return .alreadyOnItsWay(noteId: noteId) }
+            throw APIError.http(status: 409, message: json?["error"] as? String)
+        case 402:
+            // The notetaker's own minutes, not the recording quota: its message, not the paywall.
+            throw APIError.http(status: 402, message: json?["message"] as? String ?? "You've used this month's notetaker minutes.")
+        default:
+            throw Self.httpError(status: http.statusCode, json: json)
+        }
+    }
+
     /// Cancel a notetaker before it records, or stop one that is (it leaves,
     /// and what it recorded becomes the note): POST /v1/meetings/bots/{id}/cancel.
     /// Returns the notetaker's status afterwards.
