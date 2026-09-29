@@ -329,6 +329,9 @@ resource "google_project_iam_member" "deployer_roles" {
     "roles/iam.serviceAccountUser", # deploy a service running AS a runtime SA
     "roles/cloudscheduler.admin",
     "roles/serviceusage.serviceUsageConsumer",
+    # The pipeline e2e (.github/workflows/e2e.yml) follows its run's traceId through the logs, and looks for
+    # dead letters: read-only.
+    "roles/logging.viewer",
   ])
 
   project = var.project_id
