@@ -10,9 +10,11 @@
 // normal parser; their credential is the signed payload / re-verified receipt,
 // not a body-bytes HMAC.
 //
-// TWO auth postures live here, deliberately:
+// THREE auth postures live here, deliberately:
 //   • /v1/*      — authed CLIENT endpoints, behind Firebase ID-token auth.
 //   • /webhooks/* — PUBLIC, signature/receipt-verified, NO Firebase auth.
+//   • /tasks/*   — Cloud Scheduler only: an OIDC token issued to run-jobs for
+//                  exactly that URL (@algominutes/ai/task-auth.cjs).
 // This is why billing runs in its own Cloud Run service (own scaling pool):
 // public webhook traffic never shares capacity with authed user traffic (§3.2).
 
@@ -21,10 +23,12 @@ import helmet from 'helmet';
 import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 import corsModule from '@algominutes/ai/cors.cjs';
 import pgConfigModule from '@algominutes/ai/pg-config.cjs';
-import { getPool } from '@algominutes/db';
+import taskAuthModule from '@algominutes/ai/task-auth.cjs';
+import { getPool, listAppleSubscriptionsDue, recordAppleCheck, trackEvent } from '@algominutes/db';
 
 const { pingPool } = pgConfigModule;
 const { clientRateLimit, userRateLimit, trustProxyHops } = rateLimitModule;
+const { createTaskAuth } = taskAuthModule;
 
 import { traceMiddleware, rootLogger } from './middleware/trace.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -37,6 +41,9 @@ import { stripeWebhookRoute } from './webhooks/stripe.js';
 import { appleWebhookRoute } from './webhooks/apple.js';
 import { googleWebhookRoute } from './webhooks/google.js';
 
+import { createAppStoreServer } from './lib/app-store-server.js';
+import { createReconcileApple } from './tasks/reconcile-apple.js';
+
 // Express 4 does not forward rejected promises to the error handler; this
 // adapter does, so an unhandled throw becomes a JSON 500 instead of a hung
 // socket (same guarantee services/api uses).
@@ -44,7 +51,21 @@ function wrap(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
-export function buildApp() {
+/** The scheduled tasks, by path under /tasks. */
+function defaultTasks(env) {
+  return {
+    'reconcile-apple': createReconcileApple({
+      appStoreServer: createAppStoreServer({ env }),
+      repo: { listAppleSubscriptionsDue, recordAppleCheck, trackEvent },
+    }),
+  };
+}
+
+export function buildApp({
+  env = process.env,
+  taskAuth = createTaskAuth({ baseUrl: env.BILLING_URL, serviceAccountEmail: env.JOBS_SA_EMAIL }),
+  tasks = defaultTasks(env),
+} = {}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -107,6 +128,10 @@ export function buildApp() {
   app.post('/v1/purchases/verify', authed, wrap(verifyPurchaseRoute));
   app.post('/v1/billing/checkout', authed, wrap(checkoutRoute));
   app.post('/v1/billing/portal', authed, wrap(portalRoute));
+
+  // ── Scheduled tasks (Cloud Scheduler, OIDC as run-jobs) ─────────────────
+  app.use('/tasks', taskAuth);
+  for (const [name, handler] of Object.entries(tasks)) app.post(`/tasks/${name}`, wrap(handler));
 
   // Unmatched → JSON 404 (never an HTML error page).
   app.use((_req, res) => {

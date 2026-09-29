@@ -239,3 +239,79 @@ export async function expireElapsedTrials(): Promise<number> {
   );
   return rowCount ?? 0;
 }
+
+/** An App Store subscription billing's reconcile-apple task asks Apple about (RELEASE.md PR 26). */
+export interface AppleSubscriptionDue {
+  uid: string;
+  originalTransactionId: string;
+  status: string;
+  plan: string;
+  currentPeriodEnd: string | null;
+  /** The row's version when read (xmin): recordAppleCheck writes only if nothing has written it since. */
+  version: string;
+}
+
+/**
+ * The App Store subscriptions due a check with Apple, most urgent first: those whose period ends within a
+ * day or ended in the last 3 days (a renewal or expiry whose notification may be missing), checked more
+ * than 6 hours ago; then any never checked or not checked for a week (a refund or revocation mid-period).
+ * Only rows Apple is the current rail for (a user who moved to Stripe keeps their old Apple id), and not
+ * ones that lapsed more than 30 days ago (a resubscribe comes back through /v1/purchases/verify).
+ */
+export async function listAppleSubscriptionsDue(limit = 100): Promise<AppleSubscriptionDue[]> {
+  if (!isPostgresEnabled()) return [];
+  const { rows } = await getPool().query(
+    `SELECT uid, apple_original_transaction_id AS "originalTransactionId", status, plan,
+            current_period_end AS "currentPeriodEnd", xmin::text AS version
+       FROM subscriptions
+      WHERE source = 'apple_storekit'
+        AND apple_original_transaction_id IS NOT NULL
+        AND current_period_end > NOW() - INTERVAL '30 days'
+        AND (apple_checked_at IS NULL
+             OR apple_checked_at < NOW() - INTERVAL '7 days'
+             OR (current_period_end BETWEEN NOW() - INTERVAL '3 days' AND NOW() + INTERVAL '1 day'
+                 AND apple_checked_at < NOW() - INTERVAL '6 hours'))
+      ORDER BY (current_period_end BETWEEN NOW() - INTERVAL '3 days' AND NOW() + INTERVAL '1 day') DESC,
+               apple_checked_at ASC NULLS FIRST, uid
+      LIMIT $1`,
+    [limit],
+  );
+  return rows.map((r) => ({
+    ...r,
+    currentPeriodEnd: r.currentPeriodEnd ? new Date(r.currentPeriodEnd).toISOString() : null,
+  })) as AppleSubscriptionDue[];
+}
+
+/** What Apple's answer changes on a subscription: its status, period end and plan. */
+export interface AppleCheckChange {
+  status: string;
+  currentPeriodEnd: string;
+  plan: PlanId;
+}
+
+/**
+ * Records a check with Apple on a subscription read by listAppleSubscriptionsDue. With a change, it is
+ * written only if the row is still as read (its version) and still Apple's: a notification or purchase
+ * that wrote it meanwhile is newer than the answer, and wins ('raced'; the next run asks again). Without
+ * one, only the check's time is stamped ('checked').
+ */
+export async function recordAppleCheck(
+  row: Pick<AppleSubscriptionDue, 'uid' | 'originalTransactionId' | 'version'>,
+  change: AppleCheckChange | null,
+): Promise<'updated' | 'checked' | 'raced'> {
+  if (!isPostgresEnabled()) return 'checked';
+  if (!change) {
+    await getPool().query(`UPDATE subscriptions SET apple_checked_at = NOW() WHERE uid = $1`, [row.uid]);
+    return 'checked';
+  }
+  const { rowCount } = await getPool().query(
+    `UPDATE subscriptions
+        SET status = $4, current_period_end = $5, plan = $6,
+            entitlement_state = CASE WHEN $4 = 'active' THEN 'active' ELSE entitlement_state END,
+            apple_checked_at = NOW(), updated_at = NOW()
+      WHERE uid = $1 AND xmin::text = $3
+        AND source = 'apple_storekit' AND apple_original_transaction_id = $2`,
+    [row.uid, row.originalTransactionId, row.version, change.status, change.currentPeriodEnd, change.plan],
+  );
+  return rowCount ? 'updated' : 'raced';
+}

@@ -118,7 +118,15 @@ prod). Required before this service can transact (each is a `TODO(A11)` in code)
   - the leaf's signature.
 
   The bundle id must be `com.algorythmos.algominutes`. Anything else is a 400, and grants nothing. Revocation (OCSP)
-  isn't checked, and neither is a live App Store Server API lookup (`TODO(A11)`).
+  isn't checked.
+- **Apple reconcile (RELEASE.md PR 26a):** `POST /tasks/reconcile-apple`, hourly from Cloud Scheduler with an
+  OIDC token issued to run-jobs (`@algominutes/ai/task-auth.cjs`, shared with meetings). It asks the App Store
+  Server API (`src/lib/app-store-server.js`: production, then the sandbox) about each subscription due a check
+  (`listAppleSubscriptionsDue`), verifies Apple's answer like a notification, and writes it with
+  `recordAppleCheck`, which refuses if a notification or purchase wrote the row after it was read. Sandbox
+  purchases entitle everywhere (docs/DECISIONS.md, "Real IAP in sandbox"), and every purchase and notification
+  line logs its `environment`. Until `APPLE_ISSUER_ID`, `APPLE_KEY_ID` and the `app-store-server-key` secret
+  are set, the task checks nothing and logs `apple_reconcile_not_configured`.
 
 ## Operating cost (BUILD-PLAN §3.3)
 

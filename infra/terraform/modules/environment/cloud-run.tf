@@ -117,8 +117,13 @@ locals {
     summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
+    # Its own URL: /tasks/* checks that each OIDC token was minted for it. The App Store
+    # Server API's key is the app-store-server-key secret, read at run time.
     billing = merge(local.db_env, {
       PUBLIC_SITE_URL = var.public_site_url
+      BILLING_URL     = local.service_url["billing"]
+      APPLE_ISSUER_ID = var.app_store_issuer_id
+      APPLE_KEY_ID    = var.app_store_key_id
       # The web app's checkout and portal (RELEASE.md PR 17): the api's allowlist.
       ALLOWED_ORIGINS = var.allowed_origins
     })

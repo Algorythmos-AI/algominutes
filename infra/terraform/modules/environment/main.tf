@@ -294,6 +294,25 @@ resource "google_secret_manager_secret" "devicecheck_key" {
   depends_on = [google_project_service.apis]
 }
 
+# The App Store Connect in-app purchase key billing asks Apple about subscriptions with
+# (RELEASE.md PR 26): a .p8 PEM the owner adds as a version. Billing reads it at run
+# time (services/billing/src/lib/app-store-server.js); with none, its reconcile task
+# checks nothing and logs apple_reconcile_not_configured.
+resource "google_secret_manager_secret" "app_store_server_key" {
+  project   = var.project_id
+  secret_id = "app-store-server-key"
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_secret_manager_secret_version" "db_password" {
   secret      = google_secret_manager_secret.db_password.id
   secret_data = random_password.db.result

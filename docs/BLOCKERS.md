@@ -281,7 +281,8 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     measures blended COGS/min. **Ship-blocker for the free floor** — shipping a guessed number risks an
     unbounded bill (A9.3). Pro included minutes (1500) is also config, confirm post-COGS.
   - **Billing credentials (Secret Manager, per env):** Stripe secret + webhook signing key + price ids;
-    Apple App Store Server API key (`TODO(A4-apple)`) + App Store Connect products; Google Play service
+    Apple App Store Server API key (the `app-store-server-key` secret, plus `app_store_issuer_id` and
+    `app_store_key_id` in the env's Terraform; RELEASE.md PR 26a) + App Store Connect products; Google Play service
     account + RTDN Pub/Sub topic + Play Console products. Receipt validation + webhooks are coded but
     untestable here (`TODO(A11)`).
   - **App Review 3.1.3:** iOS paywall shows StoreKit pricing only (no web-pricing reference) — safe
@@ -296,7 +297,10 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   2. **Missed cancellation/expiry webhook → over-grant.** Entitlement is derived from `current_period_end`;
      if an EXPIRED/cancel webhook is dropped, the user stays `active` until the stored period lapses. Needs a
      periodic reconciliation job (poll Apple/Stripe/Google status) + the `expireElapsedTrials` sweep on a
-     schedule. Not built (no scheduler wired — A11/infra).
+     schedule. **Apple done (RELEASE.md PR 26a):** billing's hourly `/tasks/reconcile-apple` asks the App Store
+     Server API about subscriptions near the end of their period (every 6 h) or not checked for a week, and
+     writes Apple's answer unless a notification wrote the row meanwhile. A lost DID_RENEW now costs a
+     subscriber at most about 6 hours without Pro. Stripe and Google Play still have no reconcile.
   3. **Cross-rail double-charge race.** The client hides "buy" when already entitled and the server logs
      `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
      can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
