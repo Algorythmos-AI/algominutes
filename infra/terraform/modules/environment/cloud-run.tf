@@ -113,8 +113,12 @@ locals {
     summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
-    billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
-    notifier   = local.db_env
+    billing = merge(local.db_env, {
+      PUBLIC_SITE_URL = var.public_site_url
+      # The web app's checkout and portal (RELEASE.md PR 17): the api's allowlist.
+      ALLOWED_ORIGINS = var.allowed_origins
+    })
+    notifier = local.db_env
     # Its own URL: /tasks/* checks that each OIDC token was minted for it.
     meetings = merge(local.db_env, {
       MEETINGS_URL        = local.service_url["meetings"]

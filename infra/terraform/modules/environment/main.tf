@@ -604,6 +604,14 @@ resource "google_storage_bucket_iam_member" "object_admin" {
   member = "serviceAccount:${google_service_account.runtime[each.value.sa].email}"
 }
 
+# The meetings service writes a bot's recording into recordings/{ws}/{noteId} and deletes it with the note
+# (RELEASE.md PR 17, for PR 19's ingest): the recordings bucket only, not imports or scans.
+resource "google_storage_bucket_iam_member" "meetings_recordings" {
+  bucket = google_storage_bucket.buckets["recordings"].name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime["run-meetings"].email}"
+}
+
 # Logs (traceId, uid, noteId, workspaceId; never transcript text) are kept 30
 # days, the deletion window (docs/DATA-RETENTION.md §3/§4). This is the _Default
 # bucket's own default, pinned here so it can't be raised by hand unnoticed.

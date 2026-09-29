@@ -7,6 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGETS=(
   "$ROOT/services/api"
+  "$ROOT/services/billing"
+  "$ROOT/packages/ai"
 )
 
 found=0
