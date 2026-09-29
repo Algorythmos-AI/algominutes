@@ -25,6 +25,7 @@ const CHAPTERS_MIN_MS = 10 * 60 * 1000;
 // runs under tsx, so it imports @algominutes/db's TypeScript directly.
 const { markSummaryReady } = require('@algominutes/db');
 const terminalHooks = require('./terminal-hooks');
+const { timeToSummary } = require('./slo');
 
 let _pool = null;
 function pool() {
@@ -96,7 +97,9 @@ async function handle(payload, deps) {
     // (deleted mid-pipeline) or not in this workspace is acknowledged, not
     // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template, author_uid FROM notes
+      `SELECT summary_generation, summary_template, author_uid, queued_at,
+              COALESCE(duration_sec_probed, duration_sec) AS recording_sec
+         FROM notes
         WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
       [noteId, workspaceId],
     );
@@ -258,7 +261,14 @@ async function handle(payload, deps) {
   // A7.3: the note is `ready`, and markSummaryReady wrote its "ready" notice in
   // the same transaction and enqueued it (note-notices.cjs): once per summary,
   // so a replay of this task tells nobody twice.
-  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null }, 'summarizer_complete');
+  const timing = timeToSummary({
+    queuedAt: noteRow.queued_at,
+    recordingSec: noteRow.recording_sec,
+    regeneration: summaryGeneration !== undefined && summaryGeneration !== null,
+  });
+  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null, ...timing.fields }, 'summarizer_complete');
+  // SLO 4 (docs/SLO.md): the alert counts these (alerting.tf, time_to_summary_slo_missed).
+  if (timing.missed) log.warn({ noteId, ...timing.fields }, 'time_to_summary_slo_missed');
 }
 
-module.exports = { handle, markNoteFailed, pool };
+module.exports = { handle, markNoteFailed, pool, timeToSummary };

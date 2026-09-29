@@ -48,6 +48,25 @@ describe('routes validated with the contract schemas', () => {
     expect(await count(`SELECT 1 FROM terms_acceptance WHERE uid = 'u1'`)).toBe(1);
   });
 
+  it('support: the owner is told by id (the alert counts the line), and the message never reaches a log', async () => {
+    const lines: Array<{ o: any; m: string }> = [];
+    const spy = { info: (o: any, m: string) => void lines.push({ o, m }), warn: () => {}, error: () => {} };
+    const out = { status: 0, body: undefined as any };
+    const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.body = b; return this; } };
+    await supportRoute({ uid: 'u1', ip: '203.0.113.9', body: { kind: 'contact', message: 'my card is 4111 1111 1111 1111', platform: 'ios' }, log: spy }, res);
+    expect(out.status).toBe(201);
+    const line = lines.find((l) => l.m === 'support_request_created');
+    expect(line?.o).toEqual({ supportId: out.body.id, kind: 'contact', platform: 'ios', noteId: null });
+    expect(JSON.stringify(lines)).not.toContain('4111');
+    // A note id that isn't one (the contract doesn't check its shape) isn't logged either.
+    lines.length = 0;
+    await supportRoute({ uid: 'u1', ip: '203.0.113.9', body: { kind: 'bad_summary', noteId: 'a@b.com please help' }, log: spy }, res);
+    expect(lines.find((l) => l.m === 'support_request_created')?.o.noteId).toBeNull();
+    expect(JSON.stringify(lines)).not.toContain('a@b.com');
+    await supportRoute({ uid: 'u1', ip: '203.0.113.9', body: { kind: 'bad_summary', noteId: 'web1a2b' }, log: spy }, res);
+    expect(lines.at(-1)?.o.noteId).toBe('web1a2b');
+  });
+
   it('support: kind enforced; a long message is trimmed to 4000 chars, not refused', async () => {
     const out = await call(supportRoute, { kind: 'bad_summary', message: 'x'.repeat(5000), noteId: 'n1', platform: 'web' });
     expect(out.status).toBe(201);

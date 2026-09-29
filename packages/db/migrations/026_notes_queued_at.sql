@@ -1,0 +1,11 @@
+-- 026_notes_queued_at.sql — when a note's current run was queued (RELEASE.md PR 15b).
+--
+-- SLO 3/4 (docs/SLO.md) time a recording from its kickoff to its summary. The
+-- kickoff was only a log line, so the time could be read per traceId but not
+-- alerted on. markQueued now stamps queued_at with each run it queues, and the
+-- summarizer logs time_to_summary_slo_missed when a run is slower than the
+-- objective (half the recording's length plus 5 minutes).
+--
+-- Expand-only: a nullable column, no default, no backfill (an older note's run
+-- is over). A rollback leaves it unused.
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ;

@@ -5,7 +5,8 @@
 # ---------------------------------------------------------------------------
 
 locals {
-  api_host = trimprefix(google_cloud_run_v2_service.services["api"].uri, "https://")
+  api_host     = trimprefix(google_cloud_run_v2_service.services["api"].uri, "https://")
+  billing_host = trimprefix(google_cloud_run_v2_service.services["billing"].uri, "https://")
 }
 
 # GET /v1/health: no auth, no version gate, no database (routes/index.js), so it
@@ -71,6 +72,78 @@ resource "google_monitoring_alert_policy" "api_uptime" {
 
   documentation {
     content   = "The api's /v1/health has failed from more than one region for 10 minutes. Check the api service's revisions and logs, and whether a deploy is in progress."
+    mime_type = "text/markdown"
+  }
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+
+  notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
+}
+
+# Billing takes the store webhooks (Apple's server notifications, Stripe) and the web's checkout: down, a
+# purchase or a renewal isn't recorded until the store retries (RELEASE.md PR 15b). GET /health: no auth, no
+# database (services/billing/src/app.js).
+resource "google_monitoring_uptime_check_config" "billing" {
+  project      = var.project_id
+  display_name = "algominutes-${var.env}: billing /health"
+  timeout      = "10s"
+  period       = "300s"
+
+  http_check {
+    path         = "/health"
+    port         = 443
+    use_ssl      = true
+    validate_ssl = true
+    accepted_response_status_codes {
+      status_class = "STATUS_CLASS_2XX"
+    }
+  }
+
+  content_matchers {
+    content = "ok"
+    matcher = "CONTAINS_STRING"
+  }
+
+  monitored_resource {
+    type = "uptime_url"
+    labels = {
+      project_id = var.project_id
+      host       = local.billing_host
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_monitoring_alert_policy" "billing_uptime" {
+  project      = var.project_id
+  display_name = "algominutes-${var.env}: billing down (/health)"
+  combiner     = "OR"
+  severity     = "CRITICAL"
+
+  conditions {
+    display_name = "/health failing from more than one region"
+    condition_threshold {
+      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.billing.uptime_check_id}\" AND resource.type=\"uptime_url\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 1
+      duration        = "600s"
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_NEXT_OLDER"
+        cross_series_reducer = "REDUCE_COUNT_FALSE"
+        group_by_fields      = ["resource.label.host"]
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  documentation {
+    content   = "Billing's /health has failed from more than one region for 10 minutes. Store notifications and web checkouts aren't being recorded (the stores retry). Check the billing service's revisions and logs."
     mime_type = "text/markdown"
   }
 
