@@ -12,6 +12,7 @@ import { useNotice } from '../Notice';
 import { SITE_URL } from '../site';
 import { usePush } from '../push/PushContext';
 import { InviteCodeForm } from '../billing/InviteCodeForm';
+import { ProOffer } from '../billing/ProOffer';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
 
@@ -147,6 +148,7 @@ function PlanCard() {
           {ent.source === 'subscription' && ent.rail === 'apple_storekit' && (
             <p className="mt-2 text-body">Billed through the App Store. Manage it on your iPhone: Settings, your name, then Subscriptions.</p>
           )}
+          <ProOffer ent={ent} />
           {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month, or an invite code adds more.</p>}
         </>
       )}

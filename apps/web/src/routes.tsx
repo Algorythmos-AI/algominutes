@@ -40,6 +40,9 @@ export const routes: RouteObject[] = [
       { path: 'record', lazy: page(() => import('./app/record/RecordPage'), 'RecordPage') },
       { path: 'search', lazy: page(() => import('./app/search/SearchPage'), 'SearchPage') },
       { path: 'settings', lazy: page(() => import('./app/settings/SettingsPage'), 'SettingsPage') },
+      // Where Stripe sends a buyer back (RELEASE.md PR 28).
+      { path: 'billing/success', lazy: page(() => import('./app/billing/BillingReturnPages'), 'BillingSuccessPage') },
+      { path: 'billing/cancel', lazy: page(() => import('./app/billing/BillingReturnPages'), 'BillingCancelPage') },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

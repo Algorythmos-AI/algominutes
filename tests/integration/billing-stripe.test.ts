@@ -133,6 +133,39 @@ describe('Stripe: checkout and the portal', () => {
     expect((await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } })).status).toBe(200);
   });
 
+  // RELEASE.md PR 28: Stripe sends the buyer back to the web app they came from, only on an origin we serve.
+  it('returns the buyer to the web app they came from, when its origin is one we serve', async () => {
+    const saved = process.env.ALLOWED_ORIGINS;
+    process.env.ALLOWED_ORIGINS = 'https://beta.example.test,http://plain.example.test';
+    try {
+      const urls = async (origin?: string) => {
+        seen.length = 0;
+        await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' }, headers: origin ? { origin } : {} });
+        return [seen[0].form.get('success_url'), seen[0].form.get('cancel_url')];
+      };
+      expect(await urls('https://beta.example.test')).toEqual(['https://beta.example.test/app/billing/success', 'https://beta.example.test/app/billing/cancel']);
+      const site = await urls();
+      expect(site[0]).toMatch(/\/billing\/success$/);
+      expect(site[0]).not.toContain('beta.example.test');
+      // Not on the allowlist, not https, or not just an origin: the public site, never that host.
+      for (const origin of ['https://evil.example.test', 'http://plain.example.test', 'https://beta.example.test/x', 'https://user@beta.example.test', 'capacitor://localhost']) {
+        const [success, cancel] = await urls(origin);
+        expect(success, origin).toEqual(site[0]);
+        expect(cancel, origin).toEqual(site[1]);
+      }
+      await pool.query(`INSERT INTO subscriptions (uid, plan, status, stripe_customer_id) VALUES ('u1', 'pro', 'expired', 'cus_1')`);
+      seen.length = 0;
+      await call(billing.portal.portalRoute, { uid: 'u1', headers: { origin: 'https://beta.example.test' } });
+      expect(seen[0].form.get('return_url')).toBe('https://beta.example.test/app/settings');
+      seen.length = 0;
+      await call(billing.portal.portalRoute, { uid: 'u1', headers: { origin: 'https://evil.example.test' } });
+      expect(seen[0].form.get('return_url')).not.toContain('evil');
+    } finally {
+      if (saved === undefined) delete process.env.ALLOWED_ORIGINS;
+      else process.env.ALLOWED_ORIGINS = saved;
+    }
+  });
+
   it("the portal opens a session for the account's customer, and answers 409 without one", async () => {
     expect(await call(billing.portal.portalRoute, { uid: 'u1' })).toEqual({ status: 409, body: { error: 'No Stripe customer for this account' } });
     expect(seen).toEqual([]);
