@@ -4,7 +4,7 @@ import { maxRecordingSecondsForPlan, type EntitlementResponse, type PlanId } fro
 import { noMinutesLeft } from '../../lib/billing/invite';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
-import { canCaptureCalls, captureCall, CaptureError, type Capture, type CaptureEnv } from '../../lib/recorder/callCapture';
+import { canCaptureCalls, captureCall, CaptureError, SILENT_LEVEL, type Capture, type CaptureEnv } from '../../lib/recorder/callCapture';
 import { extensionFor, leftOver, pickMimeType, RecordingGoneError, startRecording, type ActiveRecording, type Locks } from '../../lib/recorder/recorder';
 import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
 import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
@@ -41,6 +41,26 @@ type Phase =
   | { kind: 'failed'; message: string };
 
 const WARN_BEFORE_CAP_S = 5 * 60;
+/** A call that's been silent this long is probably muted, or its tab was shared without its sound. */
+export const CALL_SILENT_WARN_MS = 15_000;
+
+/** A meter's fill, on a decibel scale: -60 dB (a quiet room) is empty, full scale is full. */
+export function meterPercent(level: number): number {
+  if (level <= 0) return 0;
+  return Math.max(0, Math.min(100, ((20 * Math.log10(level) + 60) / 60) * 100));
+}
+
+function LevelMeter({ label, level }: { label: string; level: number }) {
+  const pct = Math.round(meterPercent(level));
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-28 shrink-0 text-sm text-body">{label}</span>
+      <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-2 flex-1 overflow-hidden rounded-full bg-border">
+        <div className="h-2 rounded-full bg-accent transition-[width] duration-300" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
 
 /** Holds the screen awake while recording (a sleeping laptop stops the microphone), where the browser can. */
 function useWakeLock(active: boolean) {
@@ -84,6 +104,11 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const capture = useRef<Capture | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [capSeconds, setCapSeconds] = useState(() => maxRecordingSecondsForPlan());
+  // A call's two sources, metered (RELEASE.md PR 13): null when not recording a call.
+  const [levels, setLevels] = useState<{ call: number; mic: number } | null>(null);
+  const [micMuted, setMicMuted] = useState(false);
+  const [callSilent, setCallSilent] = useState(false);
+  const silentSince = useRef<number | null>(null);
   // The server's minutes: with none left, the page asks for an invite code before a
   // recording the server would refuse (RELEASE.md PR 9). Unknown never blocks.
   const [ent, setEnt] = useState<EntitlementResponse | null>(null);
@@ -111,6 +136,22 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   );
 
   useWakeLock(recording);
+
+  // A call's meters, read while it's recorded: a call silent for a while is said to be.
+  useEffect(() => {
+    if (!recording) return;
+    const t = setInterval(() => {
+      const c = capture.current;
+      if (!c) return;
+      const at = Date.now();
+      const l = c.levels();
+      setLevels(l);
+      if (l.call >= SILENT_LEVEL) silentSince.current = null;
+      else silentSince.current ??= at;
+      setCallSilent(silentSince.current !== null && at - silentSince.current >= CALL_SILENT_WARN_MS);
+    }, 500);
+    return () => clearInterval(t);
+  }, [recording]);
   // Leaving the page inside the app while recording would leave the microphone on with no Stop: ask first.
   const blocker = useBlocker(recording);
 
@@ -255,6 +296,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       return;
     }
     setPhase({ kind: 'starting' });
+    setLevels(null);
+    setMicMuted(false);
+    setCallSilent(false);
+    silentSince.current = null;
     let stream: MediaStream;
     if (source === 'call' && env.capture) {
       try {
@@ -378,6 +423,11 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
               ? 'Your browser asks which tab to share: pick the call’s tab and tick “Also share tab audio”. Then it asks for the microphone, so your own voice is included.'
               : 'Your browser will ask to use the microphone.'}
           </p>
+          {source === 'call' && (
+            <p className="mt-2 text-sm text-muted">
+              Only a call in a browser tab can be shared here (Google Meet, or Zoom and Teams in the browser). For the Zoom or Teams desktop apps on a Mac, record the call with the AlgoMinutes iPhone app.
+            </p>
+          )}
         </div>
       )}
 
@@ -399,6 +449,28 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
           <p className="mt-2 font-mono text-5xl text-heading" aria-label={`Recorded ${formatClock(elapsed * 1000)}`}>{formatClock(elapsed * 1000)}</p>
           {left <= WARN_BEFORE_CAP_S && <p className="mt-2 text-body">{formatClock(left * 1000)} left: recording stops on its own at {formatClock(capSeconds * 1000)}.</p>}
           <p className="mt-2 text-sm text-muted">Keep this tab open. Everything recorded is saved in this browser as you go.</p>
+          {levels && (
+            <div className="mt-4 flex flex-col gap-2 text-left">
+              <LevelMeter label="The call" level={levels.call} />
+              <LevelMeter label={micMuted ? 'You (muted)' : 'You'} level={levels.mic} />
+              <button
+                type="button"
+                aria-pressed={micMuted}
+                onClick={() => {
+                  capture.current?.setMicMuted(!micMuted);
+                  setMicMuted(!micMuted);
+                }}
+                className="mt-1 self-start rounded-lg border border-border px-3 py-1 text-sm text-heading"
+              >
+                {micMuted ? 'Unmute my microphone' : 'Mute my microphone'}
+              </button>
+            </div>
+          )}
+          {callSilent && (
+            <p role="alert" className="mt-3 rounded-xl border border-warning/50 bg-warning/10 p-3 text-left text-body">
+              No sound from the call for a while. Check the call isn’t muted, and that its tab was shared with “Also share tab audio” ticked. If it wasn’t, stop and save, then record the call again.
+            </p>
+          )}
           <button type="button" onClick={() => void stop()} className="mt-4 rounded-xl bg-danger px-6 py-3 font-semibold text-white">Stop and save</button>
         </div>
       )}
