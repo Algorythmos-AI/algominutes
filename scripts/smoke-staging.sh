@@ -10,7 +10,7 @@ set -euo pipefail
 
 : "${PROJECT:?PROJECT is required}"
 REGION="${REGION:-australia-southeast1}"
-PUBLIC=(api billing)
+PUBLIC=(api billing meetings)
 PRIVATE=(transcoder summarizer embedder extractor notifier)
 fail=0
 
@@ -69,10 +69,15 @@ billing_url=$(describe billing | jq -r .status.url)
 check_code api "$api_url/v1/health" 200
 # /health, not /healthz: Cloud Run's front end reserves paths ending in "z".
 check_code billing "$billing_url/health" 200
+# The notetaker's service (Recall's webhooks, the bot tasks). Its Recall secrets are read per request, so it's
+# up and ready without them (RELEASE.md PR 18).
+meetings_url=$(describe meetings | jq -r .status.url)
+check_code meetings "$meetings_url/health" 200
 # Readiness: each public service proves its Postgres pools reach Cloud SQL over
 # TLS (ENCRYPTED_ONLY instance) — the path that failed silently before.
 check_code api-ready "$api_url/v1/health/ready" 200
 check_code billing-ready "$billing_url/health/ready" 200
+check_code meetings-ready "$meetings_url/health/ready" 200
 
 echo "== 3. workers reject unauthenticated callers =="
 for svc in "${PRIVATE[@]}"; do

@@ -79,6 +79,7 @@ jobs:
             embedder:   ['services/embedder/**', 'packages/**', 'package-lock.json']
             extractor:  ['services/extractor/**', 'packages/ai/**', 'package-lock.json']
             notifier:   ['services/notifier/**', 'packages/**', 'package-lock.json']
+            meetings:   ['services/meetings/**', 'packages/**', 'package-lock.json']
             db-job:     ['services/db-job/**', 'packages/**', 'package-lock.json']
       - id: pick
         env:
@@ -87,7 +88,7 @@ jobs:
           REQUESTED: ${{ github.event.inputs.services }}
         run: |
           set -euo pipefail
-          all='["api","billing","transcoder","summarizer","embedder","extractor","notifier","db-job"]'
+          all='["api","billing","transcoder","summarizer","embedder","extractor","notifier","meetings","db-job"]'
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ "$REQUESTED" = "all" ]; then out="$all"
             else out=$(printf '%s' "$REQUESTED" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')
