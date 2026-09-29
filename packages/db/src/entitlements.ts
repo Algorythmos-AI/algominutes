@@ -35,12 +35,19 @@ export interface Entitlement {
   trialEndsAt: string | null; // ISO; set only while trialing (reverse trial end)
 }
 
-export async function resolveEntitlement(uid: string): Promise<Entitlement> {
+/**
+ * `db` is the pool by default. markQueued passes its transaction's client, so
+ * the quota it checks is the one it debits against (under its per-user lock).
+ */
+export async function resolveEntitlement(
+  uid: string,
+  opts: { db?: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } } = {},
+): Promise<Entitlement> {
   const period = currentBillingPeriod();
-  const sub = await getSubscription(uid);
+  const sub = await getSubscription(uid, opts.db);
   // A user with no row yet starts the trial at first use, unless it's switched off.
   const derived = sub || trialOnFirstUse() ? deriveState(sub) : 'free_floor';
-  const grant = derived === 'active' ? null : await getActiveGrant(uid);
+  const grant = derived === 'active' ? null : await getActiveGrant(uid, new Date(), opts.db);
   const state: EntitlementState = grant ? 'active' : derived;
 
   let plan: PlanId;
@@ -59,7 +66,7 @@ export async function resolveEntitlement(uid: string): Promise<Entitlement> {
     included = freeFloorMinutes(); // UNSET config → 0 (fail safe)
   }
 
-  const used = await usedMinutes(uid, period);
+  const used = await usedMinutes(uid, period, opts.db);
   const remaining = included == null ? Infinity : Math.max(0, included - used);
   return {
     uid,

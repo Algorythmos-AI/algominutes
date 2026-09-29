@@ -3646,7 +3646,7 @@
             }
           },
           "413": {
-            "description": "Recording over the size limit.",
+            "description": "Recording over the size limit, or longer than the plan allows for one note.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3676,7 +3676,7 @@
             }
           },
           "503": {
-            "description": "Service is being upgraded.",
+            "description": "Service is being upgraded, or today's processing limit is reached (nothing was charged).",
             "content": {
               "application/json": {
                 "schema": {

@@ -876,8 +876,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     `markError` carries the refund (`refund:enqueue_failed`, net-guarded) in its transaction. A failed
     mirror write throws out of `markQueued` after its commit and reaches `failNote` too
     (`process-intelligence.js`, the `mark_queued_failed`, `kickoff_misconfig` and `enqueue` events).
-    - [ ] Only the enqueue failure has a Postgres test (`process-kickoff.test.ts`). Tests for the mirror
-      failure and the misconfigured kickoff land with the metering PR (RELEASE.md PR 3, rev 9's S2-PR6c).
+    - [x] ~~Only the enqueue failure has a Postgres test~~ **Done (RELEASE.md PR 3):** the mirror failure and
+      the misconfigured kickoff each refund on Postgres (`tests/integration/metering-exact.test.ts`).
   - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
     free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
     the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
@@ -912,10 +912,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           last attempt, falls back as above. The note is being deleted anyway.
         - `reverseUsageForNote` is still exported and takes no lock (only tests call it); a partial unique
           index on `reverses_id` would enforce one reversal per debit.
-    - [ ] `assertCanMeter` demands headroom for a retry that won't be charged (its earlier charge stands),
-      so a user at their limit gets a 402 on that retry.
-  - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
-    different notes can both pass it.
+    - [x] ~~`assertCanMeter` demands headroom for a retry that won't be charged~~ **Fixed (RELEASE.md PR 3):**
+      the kickoff's early check skips a note whose charge still stands (`noteChargeStands`), and markQueued
+      checks only when it will write a new debit.
+  - [x] ~~The quota check runs outside the queue transaction, so two concurrent kickoffs of different notes can
+    both pass it~~ **Fixed (RELEASE.md PR 3):** markQueued checks the user's minutes in the transaction that
+    debits, under a per-user advisory lock, and throws `QuotaExceededError` with nothing written. The kickoff's
+    early check stays as a cheap refusal. Tested with a deterministic race (a held lock, two kickoffs: one 200,
+    one 402, one debit); mutation-checked.
 
 - [x] **Fixed (admit-new-users PR): a new user's onboarding failed before their first recording.** Only
   `/v1/uploads` and `/v1/process` created the `users` row, but a new user's first requests are onboarding.
@@ -1312,7 +1316,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day). Verify the trip on staging
   (runbook `gcp-provisioning.md`, spend circuit breaker).
 - [ ] **Queued:**
-  - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
+  - ~~The api doesn't refuse a kickoff at the cap~~ **fixed (RELEASE.md PR 3):** the kickoff checks the cap
+    before anything is queued or charged: a 503 with the reason on the note, and the api reads the same
+    paid-work minutes as the transcoder (installed at startup). The notetaker's ingest is left to the
+    transcoder's gate, since its minutes were reserved when the bot was sent.
   - The embedder, chat and the summarizer's Gemini call aren't metered or gated. They are cents next to
     speech.
   - ~~Nothing deletes `usage_events` rows~~ **fixed (sweep-usage-events-retention PR):** the sweep's
@@ -1472,7 +1479,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
 - [ ] **Imported audio is metered on the client's estimate.** `/v1/process` charges `ceil(durationSec/60)` from the
       number the client sends. iOS imports send none, so they're charged 0 minutes; the web sends the length the browser
-      read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs.
+      read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs. **RELEASE.md
+      PR 3b**, with the measured-length limit (PR 3 refuses a claimed length over the plan's longest recording).
 - [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
       `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
       api's allowlist (`ALLOWED_ORIGINS`) before web checkout (RELEASE.md PR 17 and PR 28).

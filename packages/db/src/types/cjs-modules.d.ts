@@ -38,6 +38,10 @@ declare module '@algominutes/ai/intelligence.cjs' {
   const mod: unknown;
   export default mod;
 }
+declare module '@algominutes/ai/spend-guard.cjs' {
+  const mod: unknown;
+  export default mod;
+}
 declare module '@algominutes/ai/cloud-tasks.cjs' {
   const mod: unknown;
   export default mod;

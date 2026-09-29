@@ -399,10 +399,10 @@ export function buildRegistry(): OpenAPIRegistry {
       402: { description: 'Over the plan quota.', ...json(S.QuotaExceededResponse) },
       403: errorResponse('Workspace mismatch, or not your note.'),
       404: errorResponse('Note or audio not found.'),
-      413: errorResponse('Recording over the size limit.'),
+      413: errorResponse('Recording over the size limit, or longer than the plan allows for one note.'),
       429: errorResponse('Hourly processing or upload limit reached.'),
       500: errorResponse('Could not queue the audio.'),
-      503: errorResponse('Service is being upgraded.'),
+      503: errorResponse("Service is being upgraded, or today's processing limit is reached (nothing was charged)."),
     },
   });
 

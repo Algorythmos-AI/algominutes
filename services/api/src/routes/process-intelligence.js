@@ -126,7 +126,11 @@ export async function processIntelligenceRoute(req, res) {
     case 'audio_missing':
       return res.status(404).json({ error: 'Audio not found' });
     case 'too_large':
+    case 'too_long':
       return res.status(413).json({ error: result.message });
+    case 'spend_capped':
+      // Nothing was charged; the note says why, and a retry tomorrow works.
+      return res.status(503).json({ error: result.message });
     case 'rate_limited':
       return res.status(429).json({ error: result.message });
     case 'quota_exceeded':
