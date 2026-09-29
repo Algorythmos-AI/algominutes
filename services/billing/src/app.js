@@ -19,6 +19,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
+import corsModule from '@algominutes/ai/cors.cjs';
 import pgConfigModule from '@algominutes/ai/pg-config.cjs';
 import { getPool } from '@algominutes/db';
 
@@ -62,6 +63,10 @@ export function buildApp() {
   app.set('trust proxy', trustProxyHops());
 
   app.use(traceMiddleware);
+  // The web app's checkout and portal come from its own origin: the api's one
+  // allowlist (ALLOWED_ORIGINS; RELEASE.md PR 17). The stores' webhooks send no
+  // Origin, and pass.
+  app.use(corsModule.buildCorsMiddleware());
   // Per client IP on everything but the health probes, including the store
   // webhooks, which are public and signature-authenticated.
   app.use(clientRateLimit());

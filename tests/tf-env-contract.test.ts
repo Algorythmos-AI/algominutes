@@ -129,8 +129,8 @@ describe('the api env', () => {
     expect(envOfService('billing')).toMatchObject({ PUBLIC_SITE_URL: 'var.public_site_url' });
   });
 
-  it.each(ENVS)('%s: gives the api a real CORS origin', (env) => {
-    const r = resolve(envOfService('api').ALLOWED_ORIGINS, env);
+  it.each(ENVS.flatMap((env) => [['api', env], ['billing', env]]))('%s, %s: gets a real CORS origin', (svc, env) => {
+    const r = resolve(envOfService(svc).ALLOWED_ORIGINS, env);
     expect(r.kind).toBe('literal');
     expect((r as { value: string }).value).toMatch(/^https:\/\/[^,\s]+(,https:\/\/[^,\s]+)*$/);
   });

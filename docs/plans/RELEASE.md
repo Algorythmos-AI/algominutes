@@ -179,7 +179,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 
 | # | PR | What it does |
 |---|---|---|
-| 17 | `feat(infra)` notetaker and billing on staging (**Apply B**) | • `notetaker_surfaces=bot`<br>• a Storage role for `run-meetings`, scoped to the recordings bucket<br>• Recall and App Store Server API secrets wired (empty; you add the versions)<br>• DeviceCheck key secret<br>• `trial_on_first_use=true` (after PR 22)<br>• billing CORS from `ALLOWED_ORIGINS` |
+| 17 | `feat(infra)` notetaker and billing on staging (**Apply B**), **the parts usable now: meetings' Storage role on the recordings bucket, and billing CORS from the one shared allowlist. The App Store Server API and DeviceCheck key secrets land with PRs 26 and 22, which read them; `notetaker_surfaces=bot` and `trial_on_first_use=true` are plan-time values** | • `notetaker_surfaces=bot`<br>• a Storage role for `run-meetings`, scoped to the recordings bucket<br>• Recall and App Store Server API secrets wired (empty; you add the versions)<br>• DeviceCheck key secret<br>• `trial_on_first_use=true` (after PR 22)<br>• billing CORS from `ALLOWED_ORIGINS` |
 | 18 | `ci(deploy)` meetings in `deploy-staging` | The filter, `all`, and a health smoke. Merged only after Apply B |
 | 19 | `feat(meetings)` PR 10 ingest | • wait for both `audio_mixed.done` and `participant_events.done`<br>• SSRF-safe download, streamed to `recordings/{ws}/{noteId}.mp3`<br>• participants and segments stored, reserved minutes settled, then `queueNoteRun`<br>• `delete_media` confirmed, and a purge worker |
 | 20 | `feat(transcoder)` PR 11 speaker names | `alignWords` hooked into the STT poll; `forceChunked` for bots; `note_speakers` seeded once, so a rename wins |
