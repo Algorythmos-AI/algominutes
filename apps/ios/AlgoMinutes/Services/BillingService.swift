@@ -52,9 +52,11 @@ final class BillingService {
         // entitlement and note the purchase in the funnel.
         store.onEntitlementMayHaveChanged = { [weak self] in
             guard let self else { return }
-            let wasActive = self.entitlement?.state == .active
+            // A purchase is the entitlement becoming a subscription. A grant was
+            // `active` already, and isn't one (RELEASE.md PR 26b).
+            let wasSubscribed = self.entitlement?.isSubscription == true
             await self.refresh()
-            if !wasActive, self.entitlement?.state == .active {
+            if !wasSubscribed, self.entitlement?.isSubscription == true {
                 await self.track(.purchase)
             }
         }
@@ -65,15 +67,16 @@ final class BillingService {
     /// Re-read the entitlement from the server. Safe to call often.
     func refresh() async {
         do {
-            let previous = entitlement?.state
+            let previous = entitlement
             let next = try await api.fetchEntitlement()
             entitlement = next
-            // A9.6 `cancellation`: a lapse out of a paid/trial state into the
-            // free floor (or expiry) is the funnel's churn signal. Best-effort —
-            // the server's webhook is the authoritative cancellation record.
-            if let previous, previous == .active || previous == .trialing,
+            // A9.6 `cancellation`: a lapse out of a subscription or the trial into
+            // the free floor (or expiry) is the funnel's churn signal. A grant
+            // running out isn't. Best-effort — the server's webhook is the
+            // authoritative cancellation record.
+            if let previous, previous.isSubscription || previous.state == .trialing,
                next.state == .expired || next.state == .freeFloor {
-                await track(.cancellation, props: ["from": previous.rawValue])
+                await track(.cancellation, props: ["from": previous.state.rawValue])
             }
         } catch {
             // TODO(A9-infra): endpoint not live yet — leave prior value in place

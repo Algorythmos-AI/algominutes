@@ -10,7 +10,7 @@
 // Matches CheckoutSessionRequest / CheckoutSessionResponse
 // (packages/contracts/src/schemas/billing.ts).
 
-import { getSubscription } from '@algominutes/db';
+import { getSubscription, deriveState } from '@algominutes/db';
 import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 import { getStripe } from '../lib/stripe.js';
@@ -35,9 +35,19 @@ export async function checkoutRoute(req, res) {
 
   const stripe = getStripe();
 
+  const existing = await getSubscription(uid);
+  // The pre-purchase check (RELEASE.md PR 26b, BLOCKERS "Cross-rail double-charge race"): a user already
+  // paying, on any rail, is never sent to a second checkout. A store's charge can't be refunded from here,
+  // so the second purchase must not start. A grant or the trial isn't a subscription and doesn't block.
+  // The answer names the rail, so the client can say where to manage it.
+  if (existing && deriveState(existing) === 'active') {
+    const rail = existing.source || null;
+    req.log.warn({ uid, rail, productId: product.id, event: 'checkout_refused_subscribed' }, 'checkout_refused_subscribed');
+    return res.status(409).json({ error: 'Already subscribed', rail });
+  }
+
   // Reuse an existing Stripe customer for this uid if we already have one, so a
   // returning user does not get a duplicate customer record.
-  const existing = await getSubscription(uid);
   const customerId = existing?.stripe_customer_id || null;
 
   // URLs are config, not secrets: the public site's billing pages unless an

@@ -18,6 +18,8 @@ import {
   monthlyIncludedMinutes,
   trialIncludedMinutes,
   freeFloorMinutes,
+  type EntitlementSource,
+  type SubscriptionRail,
 } from '@algominutes/contracts';
 import { usedMinutes, currentBillingPeriod } from './usage-repo.js';
 import { getSubscription, deriveState, trialOnFirstUse } from './subscriptions-repo.js';
@@ -33,7 +35,13 @@ export interface Entitlement {
   remainingMinutes: number; // Infinity when includedMinutes is null
   overQuota: boolean;
   trialEndsAt: string | null; // ISO; set only while trialing (reverse trial end)
+  /** Where it comes from: a grant reports `active` like a subscription (EntitlementResponse.source). */
+  source: EntitlementSource;
+  /** The store a subscription is billed on; null for anything else. */
+  rail: SubscriptionRail | null;
 }
+
+const RAILS: readonly string[] = ['apple_storekit', 'stripe', 'google_play'];
 
 /**
  * `db` is the pool by default. markQueued passes its transaction's client, so
@@ -52,18 +60,25 @@ export async function resolveEntitlement(
 
   let plan: PlanId;
   let included: number | null;
+  let source: EntitlementSource;
+  let rail: SubscriptionRail | null = null;
   if (grant) {
     plan = grant.plan;
     included = grant.includedMinutes ?? monthlyIncludedMinutes(grant.plan);
+    source = 'grant';
   } else if (state === 'active') {
     plan = ((sub?.plan as PlanId) || 'pro');
     included = monthlyIncludedMinutes(plan);
+    source = 'subscription';
+    rail = sub?.source && RAILS.includes(sub.source) ? (sub.source as SubscriptionRail) : null;
   } else if (state === 'trialing') {
     plan = 'pro'; // full features during the reverse trial
     included = trialIncludedMinutes();
+    source = 'trial';
   } else {
     plan = 'free';
     included = freeFloorMinutes(); // UNSET config → 0 (fail safe)
+    source = 'free';
   }
 
   const used = await usedMinutes(uid, period, opts.db);
@@ -78,6 +93,8 @@ export async function resolveEntitlement(
     remainingMinutes: remaining,
     overQuota: included != null && used >= included,
     trialEndsAt: state === 'trialing' && sub?.trial_end ? new Date(sub.trial_end).toISOString() : null,
+    source,
+    rail,
   };
 }
 

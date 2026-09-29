@@ -101,6 +101,38 @@ describe('Stripe: checkout and the portal', () => {
     });
   });
 
+  // RELEASE.md PR 26b, the pre-purchase check: a second store charge can't be refunded from here, so it must
+  // never start.
+  it('refuses a second subscription to anyone already paying, on any rail, and says which', async () => {
+    const paying = (source: string, extra: string) => pool.query(
+      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, source, current_period_end, ${extra})
+       VALUES ('u1', 'pro', 'active', 'active', $1, NOW() + INTERVAL '20 days', $2)
+       ON CONFLICT (uid) DO UPDATE SET source = EXCLUDED.source, current_period_end = EXCLUDED.current_period_end`,
+      [source, source === 'stripe' ? 'sub_1' : '2000000000000001'],
+    );
+    await paying('apple_storekit', 'apple_original_transaction_id');
+    expect(await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } }))
+      .toEqual({ status: 409, body: { error: 'Already subscribed', rail: 'apple_storekit' } });
+    await pool.query(`DELETE FROM subscriptions WHERE uid = 'u1'`);
+    await paying('stripe', 'stripe_subscription_id');
+    expect(await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } }))
+      .toEqual({ status: 409, body: { error: 'Already subscribed', rail: 'stripe' } });
+    expect(seen).toEqual([]); // Stripe never asked
+  });
+
+  it('lets a lapsed subscriber, a trial or a grant buy', async () => {
+    await pool.query(
+      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, source, current_period_end, apple_original_transaction_id)
+       VALUES ('u1', 'pro', 'expired', 'free_floor', 'apple_storekit', NOW() - INTERVAL '2 days', '2000000000000001')`,
+    );
+    expect((await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } })).status).toBe(200);
+    await pool.query(`UPDATE subscriptions SET status = 'trialing', entitlement_state = 'trialing', source = NULL, current_period_end = NULL,
+      apple_original_transaction_id = NULL, trial_started_at = NOW(), trial_end = NOW() + INTERVAL '5 days' WHERE uid = 'u1'`);
+    expect((await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } })).status).toBe(200);
+    await pool.query(`INSERT INTO entitlement_grants (uid, plan, reason) VALUES ('u1', 'pro', 'invite:1')`);
+    expect((await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } })).status).toBe(200);
+  });
+
   it("the portal opens a session for the account's customer, and answers 409 without one", async () => {
     expect(await call(billing.portal.portalRoute, { uid: 'u1' })).toEqual({ status: 409, body: { error: 'No Stripe customer for this account' } });
     expect(seen).toEqual([]);

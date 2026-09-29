@@ -132,6 +132,8 @@ function PlanCard() {
     };
   }, [api]);
   const plan = ent ? { free: 'Free', pro: 'Pro', team: 'Team' }[ent.plan] : null;
+  // Where it comes from (RELEASE.md PR 26b): a grant's minutes say so, so they're never taken for a purchase.
+  const from = ent?.source === 'grant' ? ' (beta minutes)' : ent?.state === 'trialing' ? ' (trial)' : '';
   return (
     <Card title="Plan">
       {!ent && !failed && <p role="status" className="text-muted">Loading…</p>}
@@ -139,9 +141,12 @@ function PlanCard() {
       {ent && (
         <>
           <p className="text-body">
-            {plan} plan{ent.state === 'trialing' ? ' (trial)' : ''}.{' '}
+            {plan} plan{from}.{' '}
             {ent.includedMinutes == null ? 'Unmetered.' : `${Math.round(ent.usedMinutes)} of ${Math.round(ent.includedMinutes)} minutes used this month.`}
           </p>
+          {ent.source === 'subscription' && ent.rail === 'apple_storekit' && (
+            <p className="mt-2 text-body">Billed through the App Store. Manage it on your iPhone: Settings, your name, then Subscriptions.</p>
+          )}
           {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month, or an invite code adds more.</p>}
         </>
       )}
