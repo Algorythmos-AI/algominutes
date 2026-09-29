@@ -73,6 +73,7 @@ struct HomeView: View {
                         .appearFade(index: 0)
                     // A9.3 trial countdown; shows only while state == trialing.
                     TrialBanner()
+                    NotesSyncBanner()
                     if pendingCount > 0 { pendingBanner }
                     captureActions
                 }
