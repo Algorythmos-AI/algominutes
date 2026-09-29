@@ -55,8 +55,11 @@ async function onEmbedTerminalFailure({ noteId, workspaceId, err, attempts, trac
       error: err && err.message ? err.message : (err ? String(err) : null),
       attempts: attempts != null ? attempts : null,
       traceId: traceId || null,
+      reason: 'embed_failed',
     });
-    log.info({ deadLetterId: r && r.id, noteId }, 'dead_letter_recorded');
+    // Once per lost piece of work (migration 027): the alert counts dead_letter_recorded.
+    if (r && r.duplicate) log.info({ deadLetterId: r.id, noteId }, 'dead_letter_already_recorded');
+    else log.info({ deadLetterId: r && r.id, noteId, reason: 'embed_failed' }, 'dead_letter_recorded');
   } catch (dlErr) {
     log.error({ err: dlErr, noteId }, 'dead_letter_record_failed');
   }

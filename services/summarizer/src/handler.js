@@ -65,7 +65,7 @@ function fmtTime(ms) {
  * record the failure must not mask the original error. The one exception is
  * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null, deadLetter = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
     firestore: firestore(),
@@ -74,6 +74,7 @@ async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgErro
     retryOnPgError,
     refund,
     traceId,
+    deadLetter,
   });
 }
 

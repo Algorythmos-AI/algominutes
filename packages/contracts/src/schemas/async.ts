@@ -120,6 +120,8 @@ export const DeadLetterEntry = z
     error: z.string().nullable(),
     attempts: z.number().nullable(),
     traceId: z.string().nullable(),
+    /** Why, as a stable code (stt_poll_exhausted, transcode_failed, ...): migration 027. Null on older rows. */
+    reason: z.string().nullable().optional(),
     createdAt: z.string(),
     resolvedAt: z.string().nullable(),
   })

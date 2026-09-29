@@ -217,9 +217,14 @@ async function run({
           workspaceId: n.workspaceId,
           payload: { reason: 'stuck_in_flight', status: n.status, regeneration: Boolean(r.regeneration), updatedAt: n.updatedAt.toISOString() },
           error: 'stuck_in_flight',
+          reason: 'stuck_in_flight',
           attempts: null,
           traceId,
-        }).catch((err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'));
+        }).then(
+          // Once per lost run (migration 027): a duplicate is said, not counted.
+          (d) => d && d.duplicate && noteLog.info({ ...fields, deadLetterId: d.id }, 'dead_letter_already_recorded'),
+          (err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'),
+        );
       }
       return failed;
     });

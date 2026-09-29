@@ -1152,10 +1152,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               the note's lock; the ledger through the real hooks); mutations checked.
               - [ ] **Queued (from its re-reviews):**
                 - ~~**A crash after the commit loses the refund**~~ **fixed (refund-in-failure-tx PR):** the
-                  refund commits with the failure on every path. What a crash after the commit still loses
+                  refund commits with the failure on every path. ~~What a crash after the commit still loses
                   outside the poll terminals (the kickoff's YouTube and unreadable-length failures, the
-                  spend cap, each worker's last attempt) is the dead letter. (~~and the notice~~: the
-                  notices outbox, below.)
+                  spend cap, each worker's last attempt) is the dead letter~~ **fixed (RELEASE.md PR 5a,
+                  migration 027):** `markNoteFailed` writes the dead letter in the failure's own statement
+                  (both workers' last attempts, the four transcoder terminals), so it commits with the
+                  failure. (~~and the notice~~: the notices outbox, below.)
                 - ~~**A failed regeneration refunds the whole recording**~~ **fixed
                   (regeneration-failure-keeps-charge PR):** the summarizer's last attempt refunds only a
                   pipeline summary's failure; a regeneration's (its task carries `summaryGeneration`) is
@@ -1167,7 +1169,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   account deletion already did), so none of them deadlock with a poll's verdict.
                 - When Postgres errors, the mirror writes the caller's message while Postgres keeps the
                   first; mirror repair compares status only, so they don't converge.
-                - A re-drive's dead letter says `chunk_already_failed`, not the original reason.
+                - ~~A re-drive's dead letter says `chunk_already_failed`, not the original reason~~ **fixed
+                  (PR 5a):** a dead letter is keyed `queue:note:run_seq:chunk`, not by its reason, so the
+                  re-drive's record of the same loss writes nothing; the first reason stands.
                 - ~~A crash between the commit and the notice loses the push~~ **fixed (notices-outbox PR,
                   migration 022):** the transaction that makes a note ready or failed writes its notice
                   (`note_notices`, one per note, run, summary generation and kind), and enqueues it after the
@@ -1178,7 +1182,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   the commit, a duplicate and a concurrent delivery, a failed send, a deleted note, a re-run,
                   a regeneration); 13 mutations checked. Found on the way and fixed with it: the fast path
                   (every recording under 10 minutes) never sent a "ready" push at all.
-                - A re-driven poll records its dead letter again (the dedupe item below).
+                - ~~A re-driven poll records its dead letter again~~ **fixed (PR 5a):** the same key, a partial
+                  unique index (`dead_letter_dedupe_key_uniq`) and `ON CONFLICT DO NOTHING`: one row per queue,
+                  note, run and chunk, whichever attempt or path records it. A note that can't be read (gone)
+                  still gets a row, never deduped. Tested on Postgres (`dead-letter-once.test.ts`: replay,
+                  another chunk, queue or run, a gone note, a foreign workspace, written with the failure, a
+                  rolled-back refund); seven mutations checked.
                 - ~~A poll from a run that was just re-queued can fail the new run~~ and ~~a second poll
                   chain can turn a `done` chunk into `error`~~ **fixed (poll-failure-locks-chunk-first
                   PR):** a poll's verdict locks the note, then its chunk; a chunk that's gone (re-queued,
@@ -1213,9 +1222,13 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           (the alert counts it)~~ **fixed (final-attempt-hooks PR):** one statement writes both. If the
           speech job finishes before an exhausted poll's retry, that retry completes the chunk and the note can go on to `ready`, with no refund or failure
           notice sent. That's a good outcome, but the two stores briefly disagree.
-        - If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
+        - ~~If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
           carries the Postgres error and the request body, not `stt_operation_errored` / `stt_poll_exhausted`
-          and the chunk id. The user sees the generic "We could not process this recording."
+          and the chunk id~~ **fixed (PR 5a; audit Q7):** a dead letter has a `reason` column, and the last
+          attempt works it out from the task (a poll at its limit is `stt_poll_exhausted`, earlier
+          `stt_poll_failed`; a kickoff `transcode_failed`), with the chunk, whatever the attempt threw. The
+          admin view shows it (`DeadLetterEntry.reason`). The user still sees the generic "We could not
+          process this recording."
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
       (`STT_PROVIDER=google`).
     - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.

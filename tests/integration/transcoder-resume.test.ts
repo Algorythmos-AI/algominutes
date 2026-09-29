@@ -58,6 +58,8 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
   return { d, extracted, started, enqueued, terminal, progress };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', type: 'recording', storagePath: 'recordings/ws/n1.m4a' };
+// The dead letter's one record, whichever path wrote it: the hook, or markNoteFailed with the failure (RELEASE.md PR 5a).
+const recorded = async (terminal: unknown[]) => terminal.length + (await pool.query(`SELECT count(*)::int AS n FROM dead_letter WHERE note_id = 'n1'`)).rows[0].n;
 const chunks = async () => (await pool.query(
   `SELECT id, idx, status, stt_operation_id FROM audio_chunks WHERE note_id = 'n1' ORDER BY idx`,
 )).rows;
@@ -156,14 +158,14 @@ describe('transcoder kickoff, replayed', () => {
     const f = deps({ duration: Object.assign(new Error('could not determine duration'), { transient: true }) });
     await expect(handler.handle(kickoff, f.d)).rejects.toThrow(/could not determine duration/);
     expect((await status()).status).not.toBe('error');
-    expect(f.terminal).toEqual([]);
+    expect(await recorded(f.terminal)).toBe(0);
   });
 
   it("an unreadable duration fails the note for good (no retry), and never takes the fast path", async () => {
     const f = deps({ duration: new Error('could not determine duration') });
     await expect(handler.handle(kickoff, f.d)).resolves.toBeUndefined();
     expect(await status()).toMatchObject({ status: 'error', error_message: expect.stringMatching(/couldn't read this recording's length/) });
-    expect(f.terminal).toHaveLength(1);
+    expect(await recorded(f.terminal)).toBe(1);
     expect(f.enqueued).toEqual([]);
   });
 

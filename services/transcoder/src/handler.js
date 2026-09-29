@@ -37,6 +37,7 @@ const noteTerminal = loadShared('note-terminal.cjs');
 // The refund markNoteFailed writes in the failure's transaction.
 const { transcodeRefund } = require('./terminal-hooks');
 const { NoteGoneError, isNoteGone } = require('./note-gone');
+const { MAX_STT_POLLS } = require('./stt-polls');
 
 const KICKOFF = 'kickoff';
 const STT_POLL = 'stt-poll';
@@ -142,6 +143,11 @@ async function handleKickoff(payload, deps) {
           // Postgres first, then the mirror (note-terminal). A Firestore-only
           // error mirror left Postgres at 'queued', so the idempotent kickoff
           // saw the note as still in flight and refused a retry for 3 h.
+          const tail = {
+            pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+            payload: { kind: 'kickoff', reason: 'youtube_permanent_failure', type, noteId, workspaceId, sourceUrl },
+            log,
+          };
           const outcome = await noteTerminal.markNoteFailed({
             refund: transcodeRefund(noteId),
             traceId: deps.traceId,
@@ -153,14 +159,11 @@ async function handleKickoff(payload, deps) {
             log,
             event: 'youtube_permanent_failure',
             retryOnPgError: true,
+            deadLetter: deadLetterFrom(tail),
           });
           // A7.4 tail for a permanent (non-retryable) terminal failure.
           // Best-effort; never throws.
-          await terminalTail(terminalHooks, outcome, {
-            pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
-            payload: { kind: 'kickoff', type, noteId, workspaceId, sourceUrl },
-            log,
-          });
+          await terminalTail(terminalHooks, outcome, tail);
           return; // Stop retries
         }
         throw err;
@@ -181,6 +184,11 @@ async function handleKickoff(payload, deps) {
       // Permanent: the same bytes won't have a length on a retry, and guessing
       // one would send a long recording down the single-call fast path.
       log.error({ err, noteId, workspaceId }, 'duration_unreadable');
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+        payload: { kind: 'kickoff', reason: 'duration_unreadable', type, noteId, workspaceId, storagePath },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
@@ -192,12 +200,9 @@ async function handleKickoff(payload, deps) {
         log,
         event: 'duration_unreadable',
         retryOnPgError: true,
+        deadLetter: deadLetterFrom(tail),
       });
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
-        payload: { kind: 'kickoff', type, noteId, workspaceId, storagePath },
-        log,
-      });
+      await terminalTail(terminalHooks, outcome, tail);
       return;
     }
     // The charge follows the measured length, before any paid work: the kickoff
@@ -395,17 +400,27 @@ async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;
   // Gone, or a verdict whose run is over (superseded: exists is false too).
   if (!outcome.marked && !outcome.exists) return;
+  // Written with the failure (RELEASE.md PR 5a), or already there: nothing more to record.
+  if (outcome.deadLetterId != null || outcome.deadLetterDuplicate) return;
   await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked });
+}
+
+/** The dead letter a terminal failure writes with itself (note-terminal `deadLetter`), from its tail's arguments. */
+function deadLetterFrom({ err, attempts, payload }) {
+  return {
+    queue: 'transcode',
+    payload,
+    error: err && err.message ? err.message : (err ? String(err) : null),
+    attempts: attempts != null ? attempts : null,
+    reason: payload.reason,
+    chunkId: payload.chunkId || null,
+  };
 }
 
 function payloadJobId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// A 2-hour chunk transcribes well inside an hour; 120 polls at 60s is a wide
-// margin over that, and a bound the queue's own --max-attempts cannot provide
-// because each poll mints a NEW task rather than retrying the old one.
-const MAX_STT_POLLS = 120;
 
 async function handleSttPoll(payload, deps) {
   const { chunkId, noteId, workspaceId, jobId, poll = 0 } = payload;
@@ -434,20 +449,21 @@ async function handleSttPoll(payload, deps) {
   // Nothing is polled or revived.
   if (chunkRow.status === 'error') {
     log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
+    // Keyed like the first failure's dead letter, so it writes one only if the first never did (a crash).
+    const tail = {
+      pool: db.pool(), noteId, workspaceId, err: new Error('chunk_already_failed'), attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'chunk_already_failed', chunkId, noteId, workspaceId },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for part of this recording.',
       log, event: 'stt_poll_chunk_failed', retryOnPgError: true, chunkId, onlyIfStatus: ['error'],
+      deadLetter: deadLetterFrom(tail),
     });
-    if (outcome.marked) {
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('chunk_already_failed'), attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'chunk_already_failed', chunkId, noteId, workspaceId },
-        log,
-      });
-    }
+    if (outcome.marked) await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
@@ -477,6 +493,15 @@ async function handleSttPoll(payload, deps) {
       // `chunkId`): if Postgres misses it this throws and the task retries with
       // neither written, so the retry decides again. The tail (terminalTail)
       // tells the author only if this is what failed the note.
+      // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
+      // never sees a final attempt here — DLQ/refund/notify must be driven from
+      // this terminal decision, not from the index.js final-attempt branch.
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
@@ -488,16 +513,9 @@ async function handleSttPoll(payload, deps) {
         event: 'stt_poll_exhausted',
         retryOnPgError: true,
         chunkId,
+        deadLetter: deadLetterFrom(tail),
       });
-      // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
-      // never sees a final attempt here — DLQ/refund/notify must be driven from
-      // this terminal decision, not from the index.js final-attempt branch.
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
-        log,
-      });
+      await terminalTail(terminalHooks, outcome, tail);
       return;
     }
     // jobId is carried through so the whole poll chain stays attributable in
@@ -513,6 +531,14 @@ async function handleSttPoll(payload, deps) {
   if (op.error) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
     // One statement for the chunk and the note, as for stt_poll_exhausted above.
+    // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
+    const tail = {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
@@ -524,15 +550,9 @@ async function handleSttPoll(payload, deps) {
       event: 'stt_operation_errored',
       retryOnPgError: true,
       chunkId,
+      deadLetter: deadLetterFrom(tail),
     });
-    // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
-    await terminalTail(terminalHooks, outcome, {
-      pool: db.pool(), noteId, workspaceId,
-      err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
-      attempts: poll, traceId,
-      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
-      log,
-    });
+    await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
@@ -802,19 +822,21 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     if (poll >= MAX_STT_POLLS) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
       // One statement for the chunk and the note, as in handleSttPoll.
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
         log, event: 'stt_poll_exhausted', retryOnPgError: true, chunkId,
+        deadLetter: deadLetterFrom(tail),
       });
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
-        log,
-      });
+      await terminalTail(terminalHooks, outcome, tail);
       return;
     }
     await tasks.enqueue(
@@ -828,20 +850,22 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   if (op.error) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
     // One statement for the chunk and the note, as in handleSttPoll.
+    const tail = {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
       log, event: 'stt_operation_errored', retryOnPgError: true, chunkId,
+      deadLetter: deadLetterFrom(tail),
     });
-    await terminalTail(terminalHooks, outcome, {
-      pool: db.pool(), noteId, workspaceId,
-      err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
-      attempts: poll, traceId,
-      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
-      log,
-    });
+    await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
