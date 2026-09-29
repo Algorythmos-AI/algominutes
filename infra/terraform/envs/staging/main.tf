@@ -150,8 +150,9 @@ module "environment" {
   notetaker_surfaces = var.notetaker_surfaces
 
   # The external beta (RELEASE.md, Wave 1): new users get minutes from an invite
-  # code, not the reverse trial (its DeviceCheck hash isn't checked with Apple
-  # yet, so a reinstall would get a fresh one). Back on in Wave 2.
+  # code, not the reverse trial. On again once Apple DeviceCheck is set up here
+  # (RELEASE.md PR 22: devicecheck_key_id, apple_team_id and the devicecheck-key
+  # secret), so a reinstall can't start a fresh one.
   trial_on_first_use = "off"
   # About 1,600 minutes a day at the default A$0.03 a minute (a cohort of 25
   # testers); A$20, the default, is about 660. The owner's figure.

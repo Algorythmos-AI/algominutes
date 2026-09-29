@@ -1,5 +1,4 @@
 // POST /v1/process — Phase 3 thin async kickoff.
-import crypto from 'node:crypto';
 //
 // Ported from functions/index.js `exports.processIntelligence`
 // (BUILD-PLAN §3.1: one HTTP surface). Validates the request and the caller's
@@ -28,11 +27,18 @@ import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 
 import { queueNoteRun } from '@algominutes/db';
+import { createTrialDevices } from '../device-check.js';
 import { toEntitlementResponse } from './entitlement.js';
 import { NoteType } from '@algominutes/contracts/schemas';
 
 const { isValidId } = intelligenceModule;
 const { validateStoragePath } = storagePathsModule;
+
+// A new iOS user's trial is checked with Apple (device-check.js). Replaceable for tests.
+let trialDeviceFor = createTrialDevices();
+export function setTrialDevicesForTests(fn) {
+  trialDeviceFor = fn ?? createTrialDevices();
+}
 
 export async function processIntelligenceRoute(req, res) {
   const baseLog = req.log;
@@ -86,13 +92,14 @@ export async function processIntelligenceRoute(req, res) {
     return res.status(500).json({ error: 'Ownership check failed' });
   }
 
-  // A10 #7 trial anti-abuse: mobile presents a device-attestation token (hashed
-  // → trial_device_hash; a device that already trialled gets no fresh trial);
-  // web must have an email on the account. (Verifying the token with
-  // Apple/Google is TODO(A4-apple)/(A11): the hash is trusted for now.)
+  // A10 #7 trial anti-abuse: iOS presents a DeviceCheck token, and Apple says
+  // whether the device has had a trial (RELEASE.md PR 22); web must have an
+  // email on the account. Apple is asked only for a new user's trial.
+  // The platform is the client-version gate's (X-AlgoMinutes-Client, required on /v1), never a header a
+  // caller can simply leave out: a kickoff with no known platform gets no trial.
   const attToken = String(req.headers['x-device-attestation'] || '');
-  const devPlatform = String(req.headers['x-device-platform'] || '') || undefined;
-  const deviceHash = attToken ? crypto.createHash('sha256').update(attToken).digest('hex') : undefined;
+  const devPlatform = req.client?.platform || 'unknown';
+  const device = trialDeviceFor({ token: attToken, platform: devPlatform, log });
 
   const result = await queueNoteRun({
     firestore: db,
@@ -108,7 +115,7 @@ export async function processIntelligenceRoute(req, res) {
       : undefined,
     // The client's estimate at ingest (the transcoder's ffprobe measures it later).
     durationSec: Number(req.body?.durationSec ?? req.body?.duration ?? noteData?.duration ?? noteData?.durationSec ?? 0),
-    trial: { deviceHash, platform: devPlatform, emailPresent: !!req.authEmail },
+    trial: { device, platform: devPlatform, emailPresent: !!req.authEmail },
     traceId: req.traceId,
     log,
   });

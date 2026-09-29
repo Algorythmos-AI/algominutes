@@ -194,13 +194,11 @@ final class APIClient: Sendable {
         if let m = r.mimeType { body["mimeType"] = m }
         if let d = r.durationSec, d > 0 { body["durationSec"] = d }
 
-        // A10 #7: the process request is the trial kickoff. Bind it to the
-        // device with a DeviceCheck token so the server (which hashes it into
-        // trial_device_hash) can refuse a second fresh trial from the same
-        // device. Best-effort: an absent token just omits the header, and the
-        // server falls back to account-level trial checks.
-        // TODO(A4-apple): server-side DeviceCheck validation needs the Apple
-        // DeviceCheck key configured; the client half is wired here.
+        // A10 #7: the process request is the trial kickoff. It carries a
+        // DeviceCheck token, and the server asks Apple whether this device has
+        // had a trial (RELEASE.md PR 22), so a reinstall can't start a second.
+        // An absent token just omits the header: the server then starts no
+        // trial on this device.
         var req = try await request(path: "v1/process", body: body)
         req.setValue(DeviceAttestationService.platformHeaderValue, forHTTPHeaderField: "X-Device-Platform")
         if let token = await DeviceAttestationService.attestationToken() {

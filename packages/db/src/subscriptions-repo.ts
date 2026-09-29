@@ -8,6 +8,10 @@
  */
 import { PlanId, DEFAULT_PLAN_ID, TRIAL_DAYS, EntitlementState } from '@algominutes/contracts';
 import { getPool, isPostgresEnabled, withTx } from './db.js';
+import loggerModule from '@algominutes/ai/logger.cjs';
+
+// The request's logger when the caller passes one; the root logger otherwise, so a failure is never unlogged.
+const rootLog = (loggerModule as { logger: { error: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void } }).logger;
 import { ensureUser } from './workspace-access.js';
 
 export interface SubscriptionRow {
@@ -36,24 +40,25 @@ export async function getSubscription(
 
 /**
  * Whether a brand-new user starts the reverse trial (TRIAL_ON_FIRST_USE, default
- * on). The beta on staging turns it off (docs/plans/RELEASE.md, Wave 1): the
- * DeviceCheck hash isn't checked with Apple yet, so each reinstall would get a
- * fresh trial. Off, a new user opens on the free floor, and an invite code is how
- * they get minutes. A user who already has a row is never changed.
+ * on). The beta on staging turned it off (docs/plans/RELEASE.md, Wave 1) until
+ * the device check was real (PR 22). Off, a new user opens on the free floor,
+ * and an invite code is how they get minutes. A user who already has a row is
+ * never changed.
  */
 export function trialOnFirstUse(env: Record<string, string | undefined> = process.env): boolean {
   const v = String(env.TRIAL_ON_FIRST_USE ?? '').trim().toLowerCase();
   return !['off', 'false', '0', 'no'].includes(v);
 }
 
-/** Has this device already consumed a reverse trial (under any uid)? (A10 #7) */
-export async function deviceHasPriorTrial(deviceHash: string): Promise<boolean> {
-  if (!isPostgresEnabled() || !deviceHash) return false;
-  const { rows } = await getPool().query(
-    `SELECT 1 FROM subscriptions WHERE trial_device_hash = $1 AND trial_started_at IS NOT NULL LIMIT 1`,
-    [deviceHash],
-  );
-  return rows.length > 0;
+/**
+ * The device a new mobile user is on, as Apple knows it (RELEASE.md PR 22): whether it has had a trial
+ * (DeviceCheck bit0, which survives reinstalls), and a way to mark it once its trial starts. The api builds it
+ * from the kickoff's DeviceCheck token; the repo never calls Apple itself.
+ */
+export interface TrialDevice {
+  /** Throws when Apple can't be asked: the kickoff then fails and is retried, rather than deny the trial. */
+  trialUsed: () => Promise<boolean>;
+  markTrialUsed: () => Promise<void>;
 }
 
 /**
@@ -63,22 +68,23 @@ export async function deviceHasPriorTrial(deviceHash: string): Promise<boolean> 
  * Anti-abuse (A10 #7 — closes A9 fragility #1): a FRESH trial is granted only if the
  * eligibility gate passes; otherwise the account opens directly on the free floor
  * (no trial), never a new 7 days:
- *   - ios/android: a `deviceHash` (from DeviceCheck / Play Integrity) is REQUIRED,
- *     and must not have trialed before. NOTE: the server currently TRUSTS the
- *     client-sent hash — verifying the attestation token's authenticity with
- *     Apple/Google is TODO(A4-apple)/(A11).
+ *   - ios: Apple's DeviceCheck (`device`) is REQUIRED and must say the device has
+ *     never had a trial; the device is marked once it starts. (The token hash this
+ *     replaced never matched twice: DeviceCheck tokens are fresh each time.)
+ *   - android: no trial until Play Integrity is checked (A11).
  *   - web: an email on the account is REQUIRED (`emailPresent`).
  */
 export async function ensureTrial(
   uid: string,
   opts: {
-    deviceHash?: string;
-    platform?: 'ios' | 'android' | 'web';
+    device?: TrialDevice;
+    /** The caller's platform; anything but web or ios (Android waits for A11) gets no fresh trial. */
+    platform?: string;
     emailPresent?: boolean;
     /** The caller's claims: the user row is created from them if this is their first write. */
     user?: { email?: string | null; name?: string | null };
     /** The request logger, so a rollback failure carries its trace. */
-    log?: { error: (o: any, m?: string) => void };
+    log?: { error: (o: any, m?: string) => void; warn: (o: any, m?: string) => void };
   } = {},
 ): Promise<SubscriptionRow> {
   if (!isPostgresEnabled()) {
@@ -96,10 +102,15 @@ export async function ensureTrial(
   let eligible = trialOnFirstUse();
   if (eligible && opts.platform === 'web') {
     eligible = opts.emailPresent === true; // web requires an email
-  } else if (eligible && (opts.platform === 'ios' || opts.platform === 'android')) {
-    eligible = !!opts.deviceHash && !(await deviceHasPriorTrial(opts.deviceHash)); // require + unused device
+  } else if (eligible && opts.platform === 'ios') {
+    if (!opts.device) (opts.log ?? rootLog).warn({ userId: uid }, 'trial_device_unverified');
+    eligible = !!opts.device && !(await opts.device.trialUsed());
+  } else if (eligible && opts.platform !== undefined) {
+    // Android (Play Integrity isn't checked yet, A11), or a platform nobody ships: no fresh trial.
+    eligible = false;
   }
-  // Unknown platform (server-to-server / tests): default to eligible.
+  // No platform at all: a direct caller in this repo's own tests or jobs, never a request (the api always
+  // passes the client-version gate's platform, or 'unknown').
 
   // subscriptions.uid is a foreign key to users, and this can be a new user's
   // first write (a YouTube import creates no upload session first). So the
@@ -109,22 +120,31 @@ export async function ensureTrial(
     await ensureUser(client, { uid, email: opts.user?.email, name: opts.user?.name });
     const { rows } = eligible
       ? await client.query(
-        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end, trial_device_hash)
-           VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval, $3)
+        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_started_at, trial_end)
+           VALUES ($1, 'free', 'trialing', 'trialing', NOW(), NOW() + ($2 || ' days')::interval)
          ON CONFLICT (uid) DO NOTHING
          RETURNING *`,
-        [uid, String(TRIAL_DAYS), opts.deviceHash ?? null],
+        [uid, String(TRIAL_DAYS)],
       )
       // Not eligible for a fresh trial → open on the free floor (no trial_end set).
       : await client.query(
-        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_device_hash)
-           VALUES ($1, 'free', 'active', 'free_floor', $2)
+        `INSERT INTO subscriptions (uid, plan, status, entitlement_state)
+           VALUES ($1, 'free', 'active', 'free_floor')
          ON CONFLICT (uid) DO NOTHING
          RETURNING *`,
-        [uid, opts.deviceHash ?? null],
+        [uid],
       );
     return rows[0] as SubscriptionRow | undefined;
   }, { log: opts.log, fields: { userId: uid } });
+  if (created?.entitlement_state === 'trialing' && opts.device) {
+    // After the commit: a device marked for a trial that then failed to start would have lost it. A failure
+    // here costs at most one more trial on that device, and says so.
+    try {
+      await opts.device.markTrialUsed();
+    } catch (err) {
+      (opts.log ?? rootLog).error({ err, userId: uid }, 'trial_device_mark_failed');
+    }
+  }
   return created ?? (await getSubscription(uid))!;
 }
 

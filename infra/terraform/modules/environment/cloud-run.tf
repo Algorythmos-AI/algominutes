@@ -98,6 +98,10 @@ locals {
       STORAGE_BUCKET = local.region_bucket["recordings"]
       # New users start the reverse trial unless it's switched off (the beta).
       TRIAL_ON_FIRST_USE = var.trial_on_first_use
+      # Apple DeviceCheck, for a new iOS user's trial (device-check.js; the key is the devicecheck-key secret).
+      DEVICECHECK_KEY_ID = var.devicecheck_key_id
+      APPLE_TEAM_ID      = var.apple_team_id
+      DEVICECHECK_ENV    = "production"
       ALLOWED_ORIGINS    = var.allowed_origins
       PUBLIC_SITE_URL    = var.public_site_url
       BROADCAST_CAPTURE  = var.broadcast_capture

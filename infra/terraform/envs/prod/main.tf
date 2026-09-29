@@ -133,9 +133,14 @@ module "environment" {
 
   # The api's CORS allowlist (the public site) and its operator/kill-switch
   # settings. A blank allowed_origins fails the plan (the api can't boot on it).
-  allowed_origins    = "https://algominutes.algorythmos.com"
-  admin_uids         = var.admin_uids
-  broadcast_capture  = var.broadcast_capture
+  allowed_origins   = "https://algominutes.algorythmos.com"
+  admin_uids        = var.admin_uids
+  broadcast_capture = var.broadcast_capture
+
+  # No reverse trial until Apple DeviceCheck is set up here (devicecheck_key_id, apple_team_id and the
+  # devicecheck-key secret; RELEASE.md PR 22): without it every new iOS user would open on the free floor,
+  # with devicecheck_not_configured on each first kickoff. Turned on with them.
+  trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
   monthly_budget     = 300
 }
