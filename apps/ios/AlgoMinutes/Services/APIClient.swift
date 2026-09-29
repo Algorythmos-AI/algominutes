@@ -672,6 +672,14 @@ final class APIClient: Sendable {
         try await getDecoded(path: "v1/entitlement")
     }
 
+    /// Redeem a beta invite code (POST /v1/beta/redeem): time-limited Pro
+    /// minutes. A refusal is `APIError.http` with the server's code:
+    /// `invite_invalid` (400, also a revoked code), `invite_expired` (410),
+    /// `invite_used_up` (409), or `rate_limited` (429).
+    func redeemInvite(code: String) async throws -> RedeemInviteResponse {
+        try await postDecoded(path: "v1/beta/redeem", body: ["code": code])
+    }
+
     /// Server-side feature switches (`AppSwitches`).
     func fetchAppConfig() async throws -> AppConfigResponse {
         try await getDecoded(path: "v1/config")

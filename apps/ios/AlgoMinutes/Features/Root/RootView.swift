@@ -35,6 +35,13 @@ struct RootView: View {
                 .environment(env)
                 .algoMinutesSheet([.large])
         }
+        // The beta's invite code (RELEASE.md PR 8): with the paywall off, a quota
+        // hit or a recording with no minutes left opens it; so does Settings.
+        .sheet(isPresented: $billing.isInviteSheetPresented) {
+            InviteCodeSheet()
+                .environment(env)
+                .algoMinutesSheet([.large])
+        }
         // A6.3 account prompt — presented after the first summary, never at launch.
         .sheet(isPresented: $billing.isAccountPromptPresented) {
             AccountUpgradeSheet(onSeePlans: { env.billing.presentPaywall(.firstSummary) })

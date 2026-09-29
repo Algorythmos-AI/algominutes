@@ -34,11 +34,19 @@ final class BillingService {
     /// summary — never at launch.
     var isAccountPromptPresented = false
 
+    /// The beta's way to minutes (docs/plans/RELEASE.md PR 8): an invite code.
+    /// With the paywall off it's what a quota hit, or a recording with no
+    /// minutes left, opens; Settings opens it too.
+    var isInviteSheetPresented = false
+
     private let api: APIClient
     private let defaults = UserDefaults.standard
+    /// PAYWALL_ENABLED for this build; injectable so tests can try both.
+    private let paywallEnabled: Bool
 
-    init(api: APIClient) {
+    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled) {
         self.api = api
+        self.paywallEnabled = paywallEnabled
         self.store = StoreKitService(api: api)
         // When StoreKit forwards a verified receipt, re-read the authoritative
         // entitlement and note the purchase in the funnel.
@@ -95,20 +103,50 @@ final class BillingService {
     var isTrialing: Bool { entitlement?.state == .trialing }
     var trialDaysRemaining: Int? { entitlement?.trialDaysRemaining }
 
+    /// No minutes left right now, by the server's count. Unknown (not fetched
+    /// yet) or unmetered counts as having minutes, so a slow network never
+    /// blocks anyone.
+    var hasNoMinutesLeft: Bool {
+        guard let remaining = entitlement?.remainingMinutes else { return false }
+        return remaining <= 0
+    }
+
     /// Gate helper for metered call sites. If allowed, returns true. If gated,
-    /// presents the paywall and returns false so the caller aborts.
+    /// presents the paywall (or, with no paywall, the invite code sheet) and
+    /// returns false so the caller aborts.
     func guardMeteredAction() -> Bool {
-        // With no paywall to offer, let the server decide: a refused kickoff
-        // marks the note with the quota message (KickoffFailure).
-        if canStartMeteredAction || !AppConfig.paywallEnabled { return true }
+        if !paywallEnabled {
+            // No products on sale: an invite code is the way to minutes. Ask for
+            // it before a recording the server would refuse, rather than after
+            // the meeting. Otherwise the server decides.
+            if hasNoMinutesLeft {
+                presentInviteSheet()
+                return false
+            }
+            return true
+        }
+        if canStartMeteredAction { return true }
         presentPaywall(.meteredGate)
         return false
+    }
+
+    func presentInviteSheet() {
+        isInviteSheetPresented = true
+    }
+
+    /// Redeem an invite code; the entitlement it produced becomes the current
+    /// one. Throws the api's error (see `APIClient.redeemInvite`).
+    @discardableResult
+    func redeemInvite(_ code: String) async throws -> RedeemInviteResponse {
+        let result = try await api.redeemInvite(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+        entitlement = result.entitlement
+        return result
     }
 
     // MARK: - Paywall / prompt triggers
 
     func presentPaywall(_ context: PaywallContext) {
-        guard AppConfig.paywallEnabled else {
+        guard paywallEnabled else {
             AppLog.info("paywall_suppressed context=\(context.rawValue)")
             return
         }
@@ -147,7 +185,8 @@ final class BillingService {
     func onQuotaExceeded(entitlement: EntitlementResponse? = nil) {
         if let entitlement { self.entitlement = entitlement }
         Task { await track(.quotaHit) }
-        presentPaywall(.quotaHit)
+        // With no paywall, the invite code sheet is where minutes come from.
+        if paywallEnabled { presentPaywall(.quotaHit) } else { presentInviteSheet() }
     }
 
     // MARK: - Analytics

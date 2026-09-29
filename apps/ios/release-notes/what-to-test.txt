@@ -3,8 +3,8 @@
 # the PR that goes into the build; keep it short. The recent changes and the
 # commit are added automatically (ci_scripts/what-to-test.sh).
 Thanks for testing AlgoMinutes. First, open the app (you start as a guest, no
-sign-up), go to Settings, copy your User ID and send it to whoever invited
-you. Recording minutes are switched on by hand in this beta.
+sign-up), go to Settings, tap Enter an invite code, and enter the code from
+your invitation. It adds your recording minutes.
 
 Then please try:
 1. Record a meeting of a minute or two, stop, and wait for the note. You can

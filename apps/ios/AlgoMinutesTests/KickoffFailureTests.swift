@@ -13,22 +13,23 @@ final class KickoffFailureTests: XCTestCase {
     }
 
     /// Without a paywall, a quota refusal doesn't send the user to one: it
-    /// says when the minutes come back, or where to ask.
+    /// says when the minutes come back, and that an invite code adds more.
     func testWithoutAPaywallTheQuotaMessageSaysWhenMinutesReset() {
         let e = EntitlementResponse(state: .active, plan: "pro", billingPeriod: "2026-10", includedMinutes: 1500,
                                     usedMinutes: 1500, remainingMinutes: 0, overQuota: true, trialEndsAt: nil)
         let message = KickoffFailure.quotaMessage(e, paywallEnabled: false, locale: Locale(identifier: "en_AU"))
-        XCTAssertEqual(message, "You've used this month's 1,500 included minutes. They reset on 1 November.")
+        XCTAssertEqual(message, "You've used this month's 1,500 included minutes. They reset on 1 November, or a new invite code adds more (Settings).")
         XCTAssertFalse(message.contains("Upgrade"))
         XCTAssertEqual(KickoffFailure.quotaMessage(e, paywallEnabled: true), KickoffFailure.quotaMessage)
     }
 
-    func testWithoutAPaywallAndNoIncludedMinutesItSaysWhereToAsk() {
+    func testWithoutAPaywallAndNoIncludedMinutesItPointsAtTheInviteCode() {
         let floor = EntitlementResponse(state: .freeFloor, plan: "free", billingPeriod: "2026-10", includedMinutes: 0,
                                         usedMinutes: 0, remainingMinutes: 0, overQuota: true, trialEndsAt: nil)
         for e in [floor, nil] as [EntitlementResponse?] {
             let message = KickoffFailure.quotaMessage(e, paywallEnabled: false)
-            XCTAssertTrue(message.contains("Help & Support"), message)
+            XCTAssertTrue(message.contains("invite code"), message)
+            XCTAssertTrue(message.contains("Try again"), message)
             XCTAssertFalse(message.contains("Upgrade"))
         }
     }

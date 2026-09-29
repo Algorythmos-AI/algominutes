@@ -123,6 +123,31 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(entitlement.state, .trialing)
     }
 
+    func testRedeemInviteIsAPostWithTheCode() async throws {
+        respond(#"{"entitlement":{"state":"active","plan":"pro","billingPeriod":"2026-10","includedMinutes":600,"usedMinutes":0,"remainingMinutes":600,"overQuota":false,"trialEndsAt":null},"grantEndsAt":"2026-10-29T00:00:00.000Z","notetaker":false}"#)
+        let r = try await api.redeemInvite(code: "BETA-7K2QX-M9D4R-TW8HN")
+        assertRequest("POST", "/v1/beta/redeem")
+        XCTAssertEqual(last.body?["code"] as? String, "BETA-7K2QX-M9D4R-TW8HN")
+        XCTAssertEqual(r.entitlement.remainingMinutes, 600)
+        XCTAssertEqual(r.grantEndsAt, "2026-10-29T00:00:00.000Z")
+        XCTAssertFalse(r.notetaker)
+    }
+
+    func testARefusedInviteCarriesTheServersCode() async {
+        for (status, code) in [(400, "invite_invalid"), (409, "invite_used_up"), (410, "invite_expired"), (429, "rate_limited")] {
+            respond(#"{"error":"\#(code)"}"#, status: status)
+            do {
+                _ = try await api.redeemInvite(code: "x")
+                XCTFail("expected a refusal for \(code)")
+            } catch APIError.http(let s, let c) {
+                XCTAssertEqual(s, status)
+                XCTAssertEqual(c, code)
+            } catch {
+                XCTFail("\(error)")
+            }
+        }
+    }
+
     func testPurchasesGoToTheBillingHost() async throws {
         respond(#"{"ok":true,"entitlementState":"active"}"#)
         let r = try await api.verifyPurchase(jws: "jws")
