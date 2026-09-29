@@ -325,17 +325,3 @@ final class NotesRepository {
         }
     }
 }
-
-/// Minimal structured logging for the client. (Server-side logging invariants
-/// don't apply to the iOS app, but keep messages greppable.)
-enum AppLog {
-    static func info(_ message: String) {
-        #if DEBUG
-        print("[AlgoMinutes] \(message)")
-        #endif
-    }
-
-    static func error(_ message: String) {
-        print("[AlgoMinutes][error] \(message)")
-    }
-}

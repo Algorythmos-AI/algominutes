@@ -10,13 +10,6 @@ struct SettingsView: View {
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
-    private static let adminEmails: Set<String> = ["skalaliya@gmail.com"]
-
-    private var isAdmin: Bool {
-        guard let email = env.auth.user?.email?.lowercased() else { return false }
-        return Self.adminEmails.contains(email)
-    }
-
     // Real client-side usage — no quotas, no paywall. Minutes counts ready
     // notes created in the current calendar month.
     private var minutesThisMonth: Int {
@@ -100,9 +93,11 @@ struct SettingsView: View {
                         }
                     }
 
-                    if isAdmin {
-                        AdminCostsCard()
-                    }
+                    // The cost estimates are for whoever builds the app from Xcode:
+                    // they're compiled out of every build testers get (RELEASE.md PR 11).
+                    #if DEBUG
+                    AdminCostsCard()
+                    #endif
 
                     // A guest's notes live only under this guest: offer to keep
                     // them (create an account in place) before anything else.
@@ -497,8 +492,10 @@ struct DeleteAccountSheet: View {
     }
 }
 
+#if DEBUG
 // MARK: - Admin costs (parity with AdminCostsCard.tsx)
 
+/// Debug builds only: it names no one, and no tester's build carries it.
 struct AdminCostsCard: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -568,3 +565,4 @@ struct AdminCostsCard: View {
         }
     }
 }
+#endif
