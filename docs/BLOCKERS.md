@@ -1108,8 +1108,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 finished notes (new migration) would stop it scanning every finished note. Whether Firestore
                 answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
                 The repaired lists share the `created_at, id` ordering item below.
-            - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
-              spent and the note is never embedded.
+            - ~~When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
+              spent and the note is never embedded~~ **fixed (RELEASE.md PR 5c; audit Q11):** the sweep's `redrive`
+              step enqueues the embedder again for a `ready` note with a transcript and no embeddings, claimed 90
+              minutes to 6 hours ago and not dead-lettered (`claimLostEmbeds`, which re-stamps the claim, so once
+              per window). Logged `lost_work_redriven` (a warning alert).
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
               transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
               the summary from Firestore, so it isn't affected. Fix: store a position.
@@ -1126,8 +1129,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               - A summarizer enqueue that threw also dropped the embedder. Both are now tried, and the
                 first failure is logged (`chunk_complete_enqueue_failed`) and rethrown.
 
-              Still lost: an enqueue that itself throws after its claim (the 3.5 h sweep fails the note).
-              A sweep that re-drives a `summarizing` note with a full transcript would cover it.
+              ~~Still lost: an enqueue that itself throws after its claim (the 3.5 h sweep fails the note)~~
+              **fixed (RELEASE.md PR 5c; audit Q9):** the sweep's `redrive` step enqueues the summarizer again for a
+              pipeline note (not a regeneration) still `summarizing`, claimed and untouched for 90 minutes, past the
+              summarize queue's own retries (`claimLostSummaries`, re-stamped, so once per window). Tested on
+              Postgres (`sweep-redrive.test.ts`); seven mutations checked.
             - ~~`persistFastPathResult` writes `ready` without a status condition~~ **fixed (same PR):** it
               commits only over an in-progress note, so a duplicate delivery gets `NOTE_MOVED_ON` (acked)
               instead of overwriting the finished note and the user's edits since.
@@ -1233,7 +1239,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       (`STT_PROVIDER=google`). **Guarded (RELEASE.md PR 5b; audit Q30):** the transcoder refuses to boot with
       `STT_PROVIDER=deepgram` (`assertProviderBootable`, `transcoder_provider_refused`) until inline mode records
       an operation id.
-    - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
+    - ~~A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep~~
+      (audit Q10): `completeChunkGate` makes the chunk's completion and the claim one transaction, and a claim
+      whose enqueue was lost is re-driven by the sweep (PR 5c), so nothing is left to the stuck-note sweep but a
+      run that's truly stuck.
     - ~~A kickoff of a note's previous run can continue into a re-queued note~~ **fixed (PR 5b; audit Q12):**
       `markQueued` returns the run it queued (`notes.run_seq`, which it bumps), the kickoff task carries it as
       `runSeq`, and the transcoder acknowledges a task from a run the note has left without touching it
