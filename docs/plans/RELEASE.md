@@ -232,7 +232,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 | # | PR | What it does |
 |---|---|---|
 | 32 | `docs` ADR 0002 | The extension's design, permissions and data flow (`docs/decisions/` is created) |
-| 33 | `feat(contracts,api,web)` R3 progressive upload | `totalBytes` optional (unknown-length resumable). The web recorder uploads while recording, so the upload is done within 10 s of Stop |
+| 33 | `feat(contracts,api,web)` R3 progressive upload | • 33a (server): `totalBytes` optional, so a resumable session can start before its length is known (033); the 500 MB cap is checked at `/complete` on what arrived, and an object over it is deleted<br>• 33b (web): the recorder uploads while recording, so the upload is done within 10 s of Stop |
 | 34 | `feat(api)` the extension's sign-in | `POST /v1/auth/extension-link`: a one-time code, 60 s, bound to the uid, the extension id and a verifier. It's exchanged for a Firebase custom token |
 | 35 | `feat(api,db)` `POST /v1/notes` | Reuses `createServerNote`, so the extension creates its note server-side |
 | 36 | `feat(infra,api)` extension guards (**Apply C**) | `extension` in `MIN_SUPPORTED_CLIENTS`, the extension origins in `ALLOWED_ORIGINS`, and `extension` in `NOTETAKER_BUILT` |

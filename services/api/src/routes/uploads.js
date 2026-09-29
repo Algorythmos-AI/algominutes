@@ -91,7 +91,9 @@ export async function createUploadSessionRoute(req, res) {
   // The size cap, before any session is minted: clients upload straight to GCS
   // (no storage.rules in the way), and the kickoff refuses the same size later
   // anyway, after the bytes were paid for.
-  if (totalBytes > MAX_AUDIO_BYTES) {
+  // A session minted before its length is known (the web recorder uploads while it records, PR 33) is
+  // capped at /complete instead.
+  if (totalBytes != null && totalBytes > MAX_AUDIO_BYTES) {
     req.log.warn({ noteId, workspaceId, totalBytes }, 'upload_too_large');
     return res.status(413).json({ error: 'That file is too large. The current limit is 500 MB.' });
   }
@@ -137,7 +139,7 @@ export async function createUploadSessionRoute(req, res) {
   try {
     uploadId = await createUploadSession({
       uid: req.uid, email: req.authEmail, name: req.authName,
-      workspaceId, noteId, storagePath, sessionUri, totalBytes, expiresAt,
+      workspaceId, noteId, storagePath, sessionUri, totalBytes: totalBytes ?? null, expiresAt,
     }, log);
   } catch (err) {
     if (err?.code === 'ACCOUNT_DELETED') {
@@ -165,7 +167,7 @@ export async function createUploadSessionRoute(req, res) {
     log.error({ err, storagePath }, 'upload_session_record_failed');
     return res.status(502).json({ error: "We couldn't start your upload. Please try again." });
   }
-  log.info({ storagePath, totalBytes }, 'upload_session_created');
+  log.info({ storagePath, totalBytes: totalBytes ?? null, lengthKnown: totalBytes != null }, 'upload_session_created');
   return res.json({
     uploadId,
     sessionUri,
@@ -243,18 +245,34 @@ export async function completeUploadRoute(req, res) {
   // upload state to flip. We confirm the finalized object exists rather than
   // trusting the client's word that the transfer completed.
   // TODO(A11): verify getMetadata against live GCS.
+  let tooLarge = false;
+  let size = null;
   try {
     const bucket = getStorage().bucket();
-    const [exists] = await bucket.file(storagePath).exists();
+    const file = bucket.file(storagePath);
+    const [exists] = await file.exists();
     if (!exists) {
       log.warn({ storagePath }, 'complete_upload_object_missing');
       return res.status(409).json({ error: 'Upload is not complete yet.' });
+    }
+    // The size cap, checked on what arrived (PR 33): a session minted before its length was known was never
+    // capped, and a declared length is only the client's word. Too large, the object goes, before any
+    // kickoff can pay to read it.
+    const [metadata] = await file.getMetadata();
+    size = Number(metadata?.size);
+    if (Number.isFinite(size) && size > MAX_AUDIO_BYTES) {
+      tooLarge = true;
+      await file.delete({ ignoreNotFound: true });
     }
   } catch (err) {
     log.error({ err, storagePath }, 'complete_upload_check_failed');
     return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
+  if (tooLarge) {
+    log.warn({ storagePath, size }, 'upload_too_large');
+    return res.status(413).json({ error: 'That file is too large. The current limit is 500 MB.' });
+  }
 
-  log.info({ storagePath }, 'upload_completed');
+  log.info({ storagePath, size }, 'upload_completed');
   return res.json({ uploadId: session.id, storagePath, complete: true });
 }
