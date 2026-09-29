@@ -1779,6 +1779,20 @@ and tested, but no bot joins a real meeting.
   - Google OAuth consent-screen verification for the Calendar scope (weeks).
   - A Zoom Marketplace app (4–6 weeks of review).
   - Chrome Web Store and Edge Add-ons developer accounts.
+- [ ] **Notetaker ingest (RELEASE.md PR 19), built; needs Apply B and the M0 spike:**
+  - Apply B gives the meetings service `GCS_BUCKET` and its Storage role (PR 17), and creates the
+    `meetings-purge-media` schedule. Until then, an ingest fails with "GCS_BUCKET is not set" and is retried.
+  - The spike confirms the hosts Recall's download URLs use in ap-northeast-1. The defaults are `.recall.ai`,
+    `.s3.amazonaws.com` and `.s3.ap-northeast-1.amazonaws.com`; `RECALL_MEDIA_HOSTS` replaces them.
+  - The spike also confirms what `delete_media` leaves: each recording's status becomes `deleted`, and a
+    `recording.deleted` webhook arrives. The purge worker confirms a purge on either.
+  - Left for PR 21:
+    - an ingest's dead letter (on its last attempt the note fails and `notetaker_ingest_gave_up` alerts, but
+      nothing is written to `dead_letters` yet);
+    - a notetaker note whose mirror doc went missing isn't restored by ingest (its kickoff fails, and the
+      note ends in `error` in Postgres alone);
+    - deleting a note whose bot is still in the meeting doesn't yet make it leave or queue Recall's purge.
+      Ingest purges it when the media arrive.
 - [ ] **Owner: a written legal opinion on recording meetings** (`docs/CONSENT.md` §2.4 and §4). NSW requires
   the consent of all parties. Until it arrives, the notetaker stays with allowlisted testers.
 - [ ] **Owner, only if the M0 spike shows guest bots are refused too often:** a dedicated paid Google Workspace

@@ -149,3 +149,42 @@ resource "google_cloud_scheduler_job" "sweep" {
 
   depends_on = [google_project_service.apis, google_cloud_run_v2_job_iam_member.scheduler_runs_sweep]
 }
+
+# ---------------------------------------------------------------------------
+# The notetaker's purge worker (services/meetings/src/tasks/ingest.js
+# purge_media): every 30 minutes, asks Recall again to delete its copy of each
+# recording not yet confirmed deleted, and logs recall_purge_exhausted for each
+# that ran out of attempts (alerting.tf). The purge rows are the queue: ingest,
+# a failed bot and (PR 21) a deleted note each add one.
+#
+# Called as Cloud Tasks call it (lib/task-auth.js): an OIDC token issued to
+# run-jobs, for exactly this URL. No retries: the next tick is the retry. With
+# nothing pending it reads one table and never calls Recall.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "meetings_purge_media" {
+  project          = var.project_id
+  region           = var.region
+  name             = "meetings-purge-media"
+  description      = "Retries deleting Recall's copies of notetaker recordings until each is confirmed (meetings /tasks/purge_media)."
+  schedule         = "*/30 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["meetings"]}/tasks/purge_media"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "purge_media" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["meetings"]}/tasks/purge_media"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}

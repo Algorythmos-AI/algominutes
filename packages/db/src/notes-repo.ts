@@ -121,6 +121,14 @@ export interface MarkQueuedInput {
    * lock, so a client kickoff can never race it.
    */
   allowRecording?: boolean;
+  /**
+   * The notetaker's ingest: its bot. Its note's run is queued once: a bot whose
+   * run was already queued is answered `alreadyQueued` (an ingest replayed after
+   * the run has finished must not run it again), and queuing stamps
+   * meeting_bots.run_queued_at in this transaction. markError's
+   * `reopenMeetingBotId` clears it when the kickoff itself fails.
+   */
+  meetingBotId?: string;
 }
 
 export interface NoteEditSummary {
@@ -315,12 +323,12 @@ export async function markQueued(
   input: MarkQueuedInput,
   log: { error: (o: any, m?: string) => void },
   now: Date = new Date(),
-): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number }> {
+): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true }> {
   const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
   let runSeq: number | undefined;
   if (isPostgresEnabled()) {
     const outcome = await withTx(
-      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number }> => {
+      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true }> => {
         // Serialize kickoffs for this note id, including a brand-new note with
         // no row to lock yet: the second of two concurrent duplicates waits
         // here, then sees the first's 'queued' row and backs off. deleteNote
@@ -344,6 +352,19 @@ export async function markQueued(
         // deletion takes them (users FOR UPDATE, then the cascade to notes), so
         // the two can't deadlock. It also refuses a deleted account.
         await ensureUser(client, { uid: input.authorUid, email: input.authorEmail, name: input.authorName });
+        if (input.meetingBotId) {
+          // Users, then the bot, then the note: account deletion takes the user
+          // first and failNotetaker the bot before the note. (createServerNote
+          // takes the bot before the user, but holds this note's lock, as this
+          // does.) A bot no longer linked to this note had it deleted (note_id
+          // goes NULL), or went with its account.
+          const { rows: [bot] } = await client.query(
+            'SELECT note_id, run_queued_at FROM meeting_bots WHERE id = $1 FOR UPDATE',
+            [input.meetingBotId],
+          );
+          if (!bot || bot.note_id !== input.noteId) return { queued: false, status: null, deleted: true };
+          if (bot.run_queued_at) return { queued: false, status: null, alreadyQueued: true };
+        }
         const existing = await client.query(
           'SELECT workspace_id, status, updated_at FROM notes WHERE id = $1 FOR UPDATE',
           [input.noteId],
@@ -407,6 +428,9 @@ export async function markQueued(
         }
         // Safe only after the boundary check above, in the same transaction.
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
+        if (input.meetingBotId) {
+          await client.query('UPDATE meeting_bots SET run_queued_at = NOW(), updated_at = NOW() WHERE id = $1', [input.meetingBotId]);
+        }
         if (input.meter) {
           // One debit per run, decided under this note's row lock, which a
           // failure also holds while it writes its refund (ledger-reversal.cjs):
@@ -477,7 +501,10 @@ export async function markQueued(
         'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2',
         [input.noteId, input.workspaceId],
       );
-      if (live.rowCount) throw err;
+      // `committed`: Postgres queued it (and a notetaker's bot is stamped), so
+      // the caller's failure has to undo that; a throw from the transaction
+      // itself wrote nothing.
+      if (live.rowCount) throw Object.assign(err as object, { committed: true });
     }
     return { queued: false, status: null, deleted: true };
   }
@@ -778,6 +805,8 @@ export async function markError(
     /** Written in the same transaction, under the note's row lock (ledger-reversal.cjs). */
     refund?: { reason: string; idempotencyKey: string };
     traceId?: string | null;
+    /** A notetaker kickoff that failed after queuing: its bot's run is open again, so the retry queues it. */
+    reopenMeetingBotId?: string;
   },
   log: { error: (o: any, m?: string) => void },
 ): Promise<void> {
@@ -785,6 +814,13 @@ export async function markError(
     const fields = { noteId: input.noteId, workspaceId: input.workspaceId, traceId: input.traceId ?? undefined };
     try {
       await withTx(async (client) => {
+        if (input.reopenMeetingBotId) {
+          // The bot's row before the note's, as failNotetaker takes them.
+          await client.query(
+            'UPDATE meeting_bots SET run_queued_at = NULL, updated_at = NOW() WHERE id = $1 AND note_id = $2',
+            [input.reopenMeetingBotId, input.noteId],
+          );
+        }
         const { rowCount } = await client.query(
           // Scoped to the caller's workspace: an id from another workspace
           // (e.g. after markReady rejected a cross-workspace write) matches nothing.
@@ -1173,7 +1209,8 @@ function isFirestoreAlreadyExists(err: unknown): boolean {
  * Safe to repeat, and meant to be: the api calls it on every attempt of a
  * notetaker request, before it queues create_bot (so no bot is sent without
  * its note), which also writes a mirror doc a failed earlier attempt left
- * missing. Ingest calls it again before it queues the run.
+ * missing. (Ingest doesn't call it: a notetaker note whose doc went missing
+ * is left to the reconcile, RELEASE.md PR 21.)
  * A note deleted meanwhile never keeps a doc: on 'deleted' the doc is removed,
  * and a failure to remove it throws, so the task retries.
  */

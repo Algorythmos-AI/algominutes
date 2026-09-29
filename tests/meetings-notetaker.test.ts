@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 // @ts-expect-error: plain ESM modules, no type declarations
-import { createNotetakerTasks } from '../services/meetings/src/tasks/notetaker.js';
+import { createNotetakerTasks, ingestTaskId } from '../services/meetings/src/tasks/notetaker.js';
 // @ts-expect-error: plain ESM modules, no type declarations
 import { actionFor, failureReasonFor, FAILURE_MESSAGES } from '../services/meetings/src/lib/recall-events.js';
 // @ts-expect-error: plain ESM modules, no type declarations
@@ -75,6 +75,7 @@ function world(over: Partial<{ status: Status; recallBotId: string | null; cance
     getRecall: async () => recall,
     getCrypto: () => ({ decrypt: async (_ct: Buffer, boundTo: string) => { calls.push(`decrypt:${boundTo}`); return 'https://meet.google.com/abc-defg-hij'; } }),
     getFirestore: () => ({}),
+    enqueue: async (kind: string, payload: any, opts: any) => { calls.push(`enqueue:${kind}:${payload.meetingBotId}:${opts.taskId}:${opts.traceId}`); },
     env: { ALGOMINUTES_ENV: 'staging' },
     repo,
   });
@@ -229,6 +230,43 @@ describe('process_event', () => {
     await w.run('process_event', { recallEventId: 1 });
     await w.run('process_event', { recallEventId: 2 });
     expect(w.calls).toEqual(['media:audio', 'processed:1', 'confirmed:recall-1', 'processed:2']);
+  });
+
+  it('ingest is enqueued once both media are ready, in either order, named for the bot and on the recording\'s trace', async () => {
+    for (const order of [['audio_mixed.done', 'participant_events.done'], ['participant_events.done', 'audio_mixed.done']]) {
+      const w = world({ recallBotId: 'recall-1', status: 'call_ended' });
+      const ready = { audio: false, participants: false };
+      w.repo.markBotMediaReady = async (_id: string, what: 'audio' | 'participants') => {
+        w.calls.push(`media:${what}`); ready[what] = true;
+        return { audioReady: ready.audio, participantsReady: ready.participants, ingestedAt: null };
+      };
+      w.events.push(ev(order[0]), { ...ev(order[1]), id: 2 });
+      await w.run('process_event', { recallEventId: 1 });
+      await w.run('process_event', { recallEventId: 2 });
+      const task = `enqueue:ingest:${w.bot.id}:${ingestTaskId(w.bot.id)}:trace-1`;
+      expect(w.calls.filter((c) => c.startsWith('enqueue:')), order.join(' then ')).toEqual([task]);
+      expect(w.calls.indexOf(task)).toBeLessThan(w.calls.indexOf('processed:2'));
+    }
+    expect(ingestTaskId('7f0e0c1a-0000-4000-8000-000000000001')).toMatch(/^[A-Za-z0-9_-]{1,500}$/);
+  });
+
+  it('a media event for a bot already ingested enqueues nothing; a failed enqueue leaves the event to retry', async () => {
+    const w = world({ recallBotId: 'recall-1', status: 'call_ended' });
+    w.repo.markBotMediaReady = async () => ({ audioReady: true, participantsReady: true, ingestedAt: '2026-09-28T02:00:00Z' });
+    w.events.push(ev('audio_mixed.done'));
+    await w.run('process_event', { recallEventId: 1 });
+    expect(w.calls.some((c) => c.startsWith('enqueue:'))).toBe(false);
+
+    const v = world({ recallBotId: 'recall-1', status: 'call_ended' });
+    v.repo.markBotMediaReady = async () => ({ audioReady: true, participantsReady: true, ingestedAt: null });
+    v.events.push(ev('participant_events.done'));
+    const tasks = createNotetakerTasks({
+      getRecall: async () => v.recall, getCrypto: () => ({}), getFirestore: () => ({}), repo: v.repo,
+      enqueue: async () => { throw new Error('queue unavailable'); },
+    });
+    const log: any = { info: () => {}, warn: () => {}, error: () => {}, child: () => log };
+    await expect(tasks.process_event({ body: { recallEventId: 1 }, headers: {}, log }, {})).rejects.toThrow('queue unavailable');
+    expect(v.calls).not.toContain('processed:1');
   });
 
   it('an event already processed, or for a bot that isn\'t ours, changes nothing (and the latter is closed)', async () => {

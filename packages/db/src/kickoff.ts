@@ -79,6 +79,8 @@ export interface KickoffInput {
    * refused. The notetaker's own ingest, which ends the recording, passes true.
    */
   allowRecording?: boolean;
+  /** The notetaker's ingest: its run is queued once per bot (markQueued's meetingBotId). */
+  meetingBotId?: string;
   traceId?: string;
   log: Log;
   env?: NodeJS.ProcessEnv;
@@ -109,10 +111,13 @@ const TRY_AGAIN = "We couldn't queue your audio. Please try again.";
 // neither store says 'error': the note stays as Postgres has it. Once queued
 // and charged, a client retry re-queues it after IN_FLIGHT_STALE_MS, and the
 // sweep fails and refunds it after STUCK_NOTE_MS.
+// A notetaker's run is reopened with it, so the task's retry queues it: every
+// caller gets here only once this call's markQueued committed (a notetaker
+// kickoff whose transaction wrote nothing returns before failing anything).
 async function failNote(input: KickoffInput, userMsg: string, event: string): Promise<void> {
   const { firestore, noteId, workspaceId, log, traceId } = input;
   const refund = { reason: 'refund:enqueue_failed', idempotencyKey: `${noteId}:refund:enqueue` };
-  await markError(firestore, { noteId, workspaceId, errorMessage: userMsg, refund, traceId }, log).catch((err: unknown) =>
+  await markError(firestore, { noteId, workspaceId, errorMessage: userMsg, refund, traceId, reopenMeetingBotId: input.meetingBotId }, log).catch((err: unknown) =>
     log.error({ err, event }, 'mark_error_failed'),
   );
 }
@@ -270,6 +275,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       sourceType: type, storagePath: input.storagePath, sourceUrl: input.sourceUrl, mimeType: input.mimeType,
       meter: { minutes, idempotencyKey: `${noteId}:ingest`, enforceQuota: input.quota !== false },
       allowRecording: input.allowRecording,
+      meetingBotId: input.meetingBotId,
     }, log);
   } catch (err: any) {
     // The in-transaction quota check: nothing was written.
@@ -289,6 +295,12 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       return { kind: 'not_found' };
     }
     log.error({ err }, 'mark_queued_failed');
+    if (input.meetingBotId && !err?.committed) {
+      // A notetaker's ingest, and the transaction wrote nothing: its task
+      // retries, and markQueued decides then. Failing the note here would fail
+      // (and refund) a run an earlier attempt already queued, perhaps finished.
+      return { kind: 'failed', message: TRY_AGAIN };
+    }
     await failNote(input, TRY_AGAIN, 'queue');
     return { kind: 'failed', message: TRY_AGAIN };
   }
@@ -296,6 +308,11 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     // Deleted while this ran: it stays deleted, and nothing is queued.
     log.info({}, 'process_note_deleted');
     return { kind: 'not_found' };
+  }
+  if (queued.alreadyQueued) {
+    // A notetaker's run, queued by an earlier attempt of its ingest: never twice.
+    log.info({}, 'notetaker_run_already_queued');
+    return { kind: 'in_flight', status: queued.status };
   }
   if (!queued.queued && queued.status === 'recording') {
     // Became a notetaker's note between the pre-check and the lock.
