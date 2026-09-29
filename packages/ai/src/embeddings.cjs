@@ -13,6 +13,7 @@
 // the embedder still sees redacted content.
 
 const _redaction = require('./redaction.cjs');
+const { vertexRefusal } = require('./vertex-refusal.cjs');
 
 const TARGET_CHARS = 2000;
 const OVERLAP_CHARS = 200;
@@ -154,8 +155,10 @@ async function embedChunks({
         await sleep(1000 * 2 ** (attempt - 1));
         continue;
       }
-      log.error({ status: resp.status, body: errText.slice(0, 300) }, 'vertex_embed_http_error');
-      throw new Error(`vertex_embed_failed: ${resp.status}`);
+      // Never the body's text: a 400 can quote the batch back, and the batch is transcript chunks (Q29).
+      const refused = vertexRefusal('vertex_embed_failed:', resp.status, errText);
+      log.error({ status: resp.status, err: refused }, 'vertex_embed_http_error');
+      throw refused;
     }
     const predictions = data && data.predictions;
     if (!Array.isArray(predictions) || predictions.length !== batch.length) {

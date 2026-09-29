@@ -22,6 +22,7 @@
 const { GoogleAuth } = require('google-auth-library');
 
 const { redactPII } = require('@algominutes/ai/redaction.cjs');
+const { vertexRefusal } = require('@algominutes/ai/vertex-refusal.cjs');
 const { isValidId } = require('@algominutes/ai/intelligence.cjs');
 const models = require('@algominutes/ai/models.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
@@ -112,8 +113,8 @@ async function embedQuery(_apiKey, text, log, { fetchImpl = fetch, authHeader = 
       signal: controller.signal,
     });
     if (!resp.ok) {
-      const errText = await responseTextHead(resp);
-      throw new Error(`vertex_embed_failed: ${resp.status} ${errText}`);
+      // The status and its enum only: a 400 can quote the query back (Q29).
+      throw vertexRefusal('vertex_embed_failed:', resp.status, await responseTextHead(resp));
     }
     const data = await resp.json();
     const values = data && data.predictions && data.predictions[0] && data.predictions[0].embeddings && data.predictions[0].embeddings.values;
@@ -511,8 +512,9 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
       }),
     });
     if (!upstream.ok || !upstream.body) {
+      // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
       const errText = upstream.body ? await responseTextHead(upstream) : '';
-      throw new Error(`vertex_stream_failed: ${upstream.status} ${errText.slice(0, 200)}`);
+      throw vertexRefusal('vertex_stream_failed:', upstream.status, errText);
     }
 
     const decoder = new TextDecoder();

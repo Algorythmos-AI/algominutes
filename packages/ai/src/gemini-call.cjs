@@ -14,6 +14,7 @@
 // callers don't change — `apiKey` is now ignored.
 
 const { RETRY_DEADLINE_MS, isTransientError, sleep, backoffMs } = require('./intelligence.cjs');
+const { vertexRefusal } = require('./vertex-refusal.cjs');
 const { activeLadder } = require('./models.cjs');
 
 let _authClient = null;
@@ -122,18 +123,21 @@ async function callGeminiWithLadder({
             return '';
           });
           if (isModelUnavailable(resp.status)) {
-            lastErr = new Error(`Vertex Gemini ${resp.status}: ${errText.slice(0, 300)}`);
+            lastErr = vertexRefusal('Vertex Gemini', resp.status, errText);
             log.warn({ err: lastErr, model: modelName, location: loc }, 'gemini_model_unavailable');
             break; // next rung; retrying the same model can't help
           }
           // Match the existing isTransientError fingerprint by mapping
           // HTTP status to a synthetic message — we already detect 503,
           // 429, etc. via that helper.
-          const synthetic = new Error(`Vertex Gemini ${resp.status}: ${errText.slice(0, 300)}`);
-          throw synthetic;
+          throw vertexRefusal('Vertex Gemini', resp.status, errText);
         }
 
-        const data = await resp.json();
+        // A body that isn't JSON would throw a SyntaxError quoting its first characters: say so without them.
+        const data = await resp.json().catch((err) => {
+          if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) throw err;
+          throw new Error(`Vertex Gemini ${resp.status} unparseable body`);
+        });
         const rawText = extractText(data);
         const finishReason = (data && data.candidates && data.candidates[0] && data.candidates[0].finishReason) || null;
         if (!rawText || !rawText.trim() || rawText.trim() === '{}') {

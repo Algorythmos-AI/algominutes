@@ -68,6 +68,45 @@ describe('callGeminiWithLadder', () => {
     expect(calls).toEqual(['model-a']);
   });
 
+  it("never keeps a refusal's body text, which can quote the transcript back: only the status and its enum", async () => {
+    const quoted = JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', message: "Invalid value at 'contents[0].parts[0].text': Priya's card 4111 1111 1111 1111" } });
+    const { impl } = fakeFetch({ 'model-a': [{ status: 400, text: quoted }] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    expect(out.error?.message).toBe('Vertex Gemini 400 INVALID_ARGUMENT');
+    const logged = JSON.stringify(events.map((e) => ({ ...e, obj: { ...e.obj, err: e.obj?.err && { message: e.obj.err.message, stack: e.obj.err.stack } } })));
+    expect(logged).not.toMatch(/Priya|4111|contents\[0\]/);
+    // A body that isn't Vertex's JSON (a proxy's page) adds nothing but what its status means.
+    const page = fakeFetch({ 'model-a': [{ status: 400, text: '<html>Priya</html>' }] });
+    expect((await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: page.impl, log }))).error?.message).toBe('Vertex Gemini 400 INVALID_ARGUMENT');
+  });
+
+  it("a 500 or 503 whose body isn't readable JSON is still retried, as before (by what its status means)", async () => {
+    for (const reply of [{ status: 500, text: '<html>500 Internal Server Error</html>' }, { status: 500, text: JSON.stringify([{ error: { status: 'INTERNAL', message: 'x' } }]) }, { status: 503, text: '' }]) {
+      const { impl, calls } = fakeFetch({ 'model-a': [reply, ok('{"a":1}')] });
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log }));
+      expect(out.model).toBe('model-a');
+      expect(calls).toEqual(['model-a', 'model-a']);
+    }
+  });
+
+  it("a 2xx body that isn't JSON fails without quoting it", async () => {
+    const impl = async () => ({ ok: true, status: 200, json: async () => JSON.parse('<html>Priya'), text: async () => '' });
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log }));
+    expect(out.error?.message).toBe('Vertex Gemini 200 unparseable body');
+  });
+
+  it('still retries what is transient by its status enum: a 500 INTERNAL, a 504 DEADLINE_EXCEEDED', async () => {
+    for (const [status, enumName] of [[500, 'INTERNAL'], [504, 'DEADLINE_EXCEEDED']] as const) {
+      const body = JSON.stringify({ error: { code: status, status: enumName, message: 'transcript text here' } });
+      const { impl, calls } = fakeFetch({ 'model-a': [{ status, text: body }, ok('{"a":1}')] });
+      const { log } = logSpy();
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+      expect(out.model).toBe('model-a');
+      expect(calls).toEqual(['model-a', 'model-a']);
+    }
+  });
+
   it('reports finishReason and flags truncated structured output', async () => {
     const { impl } = fakeFetch({ 'model-a': [ok('{"gist":"cut', 'MAX_TOKENS')] });
     const { log, events } = logSpy();
