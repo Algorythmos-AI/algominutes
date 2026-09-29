@@ -38,6 +38,13 @@ final class AppEnvironment {
 
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
+    /// The microphone was refused when recording started (RootView offers Settings).
+    var micPermissionDenied = false
+    /// Ask whether to turn on notifications before iOS's one-shot prompt
+    /// (RecordingView shows it; RELEASE.md PR 10a).
+    var isNotificationPrePromptPending = false
+    /// Once per launch: "Not now" isn't asked again until the next launch.
+    private var notificationPrePromptShown = false
 
     /// A capture of another app finished without this session's pre-recording
     /// notice (it was started from Control Center). RootView asks the user to
@@ -158,7 +165,17 @@ final class AppEnvironment {
         // Only now — the microphone prompt has resolved, so the two never stack,
         // and the request lands at the one moment its purpose is obvious. Asking
         // at launch gets denied, and iOS only ever asks once.
-        Task { await RecordingNotifier.requestAuthorizationIfNeeded() }
+        // A short explanation comes first, so iOS's one-shot prompt isn't spent
+        // on a question nobody has had explained to them.
+        Task {
+            let status = await RecordingNotifier.authorizationStatus()
+            if RecordingNotifier.shouldPrePrompt(status: status, askedThisLaunch: notificationPrePromptShown) {
+                notificationPrePromptShown = true
+                isNotificationPrePromptPending = true
+            } else {
+                await RecordingNotifier.requestAuthorizationIfNeeded()
+            }
+        }
         // A9.6: the recorder is now actually capturing — the funnel's entry.
         billing.onFirstRecordingStarted()
     }

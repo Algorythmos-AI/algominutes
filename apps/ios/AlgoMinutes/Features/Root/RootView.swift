@@ -92,6 +92,18 @@ struct RootView: View {
         } message: {
             Text("Confirm you have permission from everyone whose voice was captured. If others were present, let them know it was recorded.")
         }
+        // The microphone was refused when recording started: the way back is Settings.
+        .alert(MicPermission.deniedTitle, isPresented: Binding(
+            get: { env.micPermissionDenied },
+            set: { env.micPermissionDenied = $0 }
+        )) {
+            if let url = MicPermission.settingsURL {
+                Button("Open Settings") { UIApplication.shared.open(url) }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text(MicPermission.deniedMessage)
+        }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { env.alertMessage != nil },
             set: { if !$0 { env.alertMessage = nil } }
