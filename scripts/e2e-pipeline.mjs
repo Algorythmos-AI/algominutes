@@ -117,6 +117,8 @@ export async function runPipelineE2E({
   traceId = `e2e-${randomBytes(12).toString('hex')}`,
 }) {
   const results = [];
+  // Seconds from kickoff to ready, when it got there (scripts/load-staging.mjs reads it).
+  let tookSec = null;
   const check = (name, ok, detail) => {
     results.push({ name, ok: Boolean(ok) });
     write(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}\n`);
@@ -133,7 +135,7 @@ export async function runPipelineE2E({
   const signUp = await identity('signUp', { returnSecureToken: true });
   const account = await readJson(signUp);
   if (!check('anonymous sign-up', signUp.status === 200 && account.idToken && account.localId, `HTTP ${signUp.status}`)) {
-    return { ok: false, results };
+    return { ok: false, results, tookSec };
   }
   const { idToken, localId: uid } = account;
   const workspaceId = `workspace_${uid}`;
@@ -229,6 +231,7 @@ export async function runPipelineE2E({
     const took = Math.round((now() - started) / 1000);
     if (!check(`ready within ${Math.round(readyMs / 60_000)} min (Firestore)`, status === 'ready', status === 'error' ? `failed: ${error}` : `${status} after ${took} s`)) return { ok: false, results };
     write(`     time to summary: ${took} s for ${minutes} min recorded\n`);
+    tookSec = took;
 
     const read = await api('POST', '/notes/read', { noteId, workspaceId });
     const pg = read.body;
@@ -260,7 +263,7 @@ export async function runPipelineE2E({
     const deleted = await api('POST', '/account/delete').catch((err) => ({ status: 0, body: { raw: String(err?.message ?? err) } }));
     check('the test account is deleted', deleted.status === 200, `HTTP ${deleted.status}`);
   }
-  return { ok: results.every((r) => r.ok), results };
+  return { ok: results.every((r) => r.ok), results, tookSec };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
