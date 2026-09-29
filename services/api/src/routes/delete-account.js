@@ -78,6 +78,8 @@ export async function deleteAccountRoute(req, res, deps = {}) {
   summary.pgMembershipsDeleted = pg.membershipsDeleted;
   // Its notetakers: a bot still in a meeting leaves, and Recall's copies go (queued with the deletion).
   if (pg.recallPurges) await (deps.startRecallPurges ?? runRecallPurgesSoon)(deps.env ?? process.env, { traceId: req.traceId, log });
+  // A Stripe subscription goes to billing to cancel (RELEASE.md PR 28b): its task, every 15 minutes.
+  if (pg.stripeCancellations > 0) log.info({ stripeCancellations: pg.stripeCancellations }, 'delete_account_stripe_cancel_queued');
   // Counted once, when the account row actually went (a retry reports
   // deleted: false). No uid: the user is gone. Never fails the deletion.
   if (pg.deleted) {

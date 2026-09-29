@@ -186,6 +186,14 @@ describe('deleting the account', () => {
     expect(auth.adapter.revokeApple).not.toHaveBeenCalled();
   });
 
+  // RELEASE.md PR 28b; App Review 5.1.1(v).
+  it('says, before deleting, that an App Store subscription must be cancelled there', async () => {
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete my account' }));
+    expect(await screen.findByText(/A subscription bought in the App Store isn’t cancelled with your account/)).toBeTruthy();
+    expect(screen.getByText(/One bought on the web is cancelled for you/)).toBeTruthy();
+  });
+
   it("an Apple account revokes the app's Apple access first, and deletes nothing if the user backs out", async () => {
     const apple = { ...PERMANENT, providers: ['apple.com'] };
     const { auth } = open(apple);

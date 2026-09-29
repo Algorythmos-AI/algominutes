@@ -334,6 +334,8 @@ function DeleteAccountCard() {
         <Modal title="Delete your account?" onClose={() => !busy && setOpen(false)} initialFocus="input">
           <form onSubmit={(e) => { e.preventDefault(); if (typed === 'DELETE') void remove(); }}>
             <p className="text-body">This permanently deletes your account, every recording, transcript and summary, and your search index.{apple ? ' You’ll confirm with Apple first.' : ''}</p>
+            {/* RELEASE.md PR 28b; App Review 5.1.1(v): an App Store subscription outlives the account unless cancelled there. */}
+            <p className="mt-2 text-body">A subscription bought in the App Store isn’t cancelled with your account: cancel it on your iPhone in Settings, your name, then Subscriptions. One bought on the web is cancelled for you.</p>
             <label className="mt-3 block text-body">
               Type DELETE to confirm:
               <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-heading" />

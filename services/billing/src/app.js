@@ -24,7 +24,10 @@ import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 import corsModule from '@algominutes/ai/cors.cjs';
 import pgConfigModule from '@algominutes/ai/pg-config.cjs';
 import taskAuthModule from '@algominutes/ai/task-auth.cjs';
-import { getPool, listAppleSubscriptionsDue, recordAppleCheck, trackEvent } from '@algominutes/db';
+import {
+  getPool, listAppleSubscriptionsDue, recordAppleCheck, trackEvent,
+  listDueStripeCancellations, markStripeCancelled, markStripeCancelFailed,
+} from '@algominutes/db';
 
 const { pingPool } = pgConfigModule;
 const { clientRateLimit, userRateLimit, trustProxyHops } = rateLimitModule;
@@ -43,6 +46,8 @@ import { googleWebhookRoute } from './webhooks/google.js';
 
 import { createAppStoreServer } from './lib/app-store-server.js';
 import { createReconcileApple } from './tasks/reconcile-apple.js';
+import { createCancelStripe } from './tasks/cancel-stripe.js';
+import { getStripe } from './lib/stripe.js';
 
 // Express 4 does not forward rejected promises to the error handler; this
 // adapter does, so an unhandled throw becomes a JSON 500 instead of a hung
@@ -57,6 +62,10 @@ function defaultTasks(env) {
     'reconcile-apple': createReconcileApple({
       appStoreServer: createAppStoreServer({ env }),
       repo: { listAppleSubscriptionsDue, recordAppleCheck, trackEvent },
+    }),
+    'cancel-stripe': createCancelStripe({
+      repo: { listDueStripeCancellations, markStripeCancelled, markStripeCancelFailed },
+      getStripe,
     }),
   };
 }

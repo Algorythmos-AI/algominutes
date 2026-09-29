@@ -4,7 +4,7 @@ import http, { type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 // @ts-expect-error: a plain .mjs script, no types
-import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, runWebE2E } from '../../scripts/e2e-web.mjs';
+import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, isStripePage, runWebE2E } from '../../scripts/e2e-web.mjs';
 
 // scripts/e2e-web.mjs walks the real web app on staging. Here it walks a stand-in
 // with the same labels, in a real Chromium, to prove what the script itself must
@@ -13,8 +13,11 @@ import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, runWebE2E } from '
 
 describe('its settings', () => {
   it('defaults to staging, and takes only an https origin', () => {
-    expect(e2eConfig({})).toEqual({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000, budgetMs: 1_200_000 });
-    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000', E2E_BUDGET_MS: '2000' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000, budgetMs: 2000 });
+    expect(e2eConfig({})).toEqual({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000, budgetMs: 1_200_000, stripe: false });
+    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000', E2E_BUDGET_MS: '2000' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000, budgetMs: 2000, stripe: false });
+    // RELEASE.md PR 28b: the Stripe step runs only when asked, once staging has Stripe's test-mode keys.
+    expect(e2eConfig({ E2E_STRIPE: 'true' }).stripe).toBe(true);
+    expect(e2eConfig({ E2E_STRIPE: '1' }).stripe).toBe(false);
     expect(e2eConfig({ E2E_READY_MS: 'soon', E2E_BUDGET_MS: '-1' })).toMatchObject({ readyMs: 480_000, budgetMs: 1_200_000 });
     expect(() => e2eConfig({ SITE_URL: 'http://example.test' })).toThrow(/https/);
     expect(() => e2eConfig({ SITE_URL: 'https://example.test/app' })).toThrow(/origin/);
@@ -256,4 +259,15 @@ describe('the journey, in a real browser', () => {
       PAGES['/app/notes-list'] = saved;
     }
   }, 60_000);
+});
+
+describe("Stripe's Checkout page (RELEASE.md PR 28b)", () => {
+  it("is recognised by its host, so its own console messages aren't counted as ours", () => {
+    expect(isStripePage('https://checkout.stripe.com/c/pay/cs_test_1')).toBe(true);
+    expect(isStripePage('https://stripe.com/')).toBe(true);
+    expect(isStripePage('https://staging.algominutes.algorythmos.com/app/settings')).toBe(false);
+    expect(isStripePage('https://notstripe.com/')).toBe(false);
+    expect(isStripePage('https://stripe.com.evil.test/')).toBe(false);
+    expect(isStripePage('about:blank')).toBe(false);
+  });
 });
