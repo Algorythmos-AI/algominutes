@@ -28,6 +28,19 @@ describe('the recording store', () => {
   });
 });
 
+describe('the note an upload made', () => {
+  it('is remembered for a retry, and forgotten again; a removed recording remembers nothing', async () => {
+    const store = new RecordingStore(new IDBFactory());
+    await store.create({ id: 'r', uid: 'u1', mimeType: 'audio/webm', startedAt: 1, seconds: 5 });
+    expect(await store.setNote('r', { noteId: 'web1' })).toBe(true);
+    expect((await store.get('r'))?.note).toEqual({ noteId: 'web1' });
+    expect(await store.setNote('r', undefined)).toBe(true);
+    expect(await store.get('r')).not.toHaveProperty('note');
+    await store.remove('r');
+    expect(await store.setNote('r', { noteId: 'web1' })).toBe(false);
+  });
+});
+
 describe('recording', () => {
   it('records in chunks straight to the store, and on stop keeps the last chunk and ends the microphone', async () => {
     const store = new RecordingStore(new IDBFactory());

@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { displayTitle, formatDate, formatDuration, statusOf } from '../../lib/notes/format';
 import { isSlow } from '../../lib/noteWatchdog';
+import { UnsentRecordingsNotice } from '../record/unsent';
 import { useNow } from '../useNow';
 import { useNotes } from './NotesContext';
 
@@ -22,6 +23,7 @@ export function NotesPage() {
           <Link to="/import" className="rounded-xl border border-border px-4 py-2 font-semibold text-heading no-underline">Import a recording</Link>
         </div>
       </div>
+      <UnsentRecordingsNotice />
       {state.status === 'loading' && <p role="status" className="text-muted">Loading your notes…</p>}
       {state.status === 'error' && (
         <p role="alert" className="text-body">Your notes couldn't be loaded. Check your connection and reload the page.</p>

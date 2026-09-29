@@ -1530,9 +1530,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       (`say` + `ffmpeg -c:a libopus`) sent that way to Vertex in `australia-southeast1` came back word for word from
       both `gemini-3.5-flash` and `gemini-2.5-flash`. Long recordings go through ffmpeg and Speech-to-Text, which
       read WebM. A real browser recording on staging is still part of the web e2e.
-- [ ] **A recording left in a browser stays on its disk after sign-out.** It's only shown to its own account
-      (`RecordingStore.list` filters by uid), but the audio remains in IndexedDB until uploaded or discarded. On a
-      shared computer, offer to upload or delete it at sign-out.
+- [x] **A recording left in a browser stays on its disk after sign-out: fixed 2026-09-29 (RELEASE.md PR 12a).**
+      Signing out with any not uploaded says so first. **Upload first** goes to the record page, and **Delete and
+      sign out** removes them from IndexedDB. The notes list shows them too, not only `/record`
+      (`apps/web/src/app/record/unsent.test.tsx`).
 - [ ] **The retention shown on the web is this browser's, not the account's.** There's no read for
       `users.retention_days`, so a limit set on iOS or in another browser shows as nothing chosen (saving still
       works, and a shorter limit is confirmed first). Fix: return `retentionDays` from `/v1/entitlement` or

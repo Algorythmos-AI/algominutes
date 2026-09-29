@@ -68,16 +68,24 @@ describe('its workflow', () => {
 // The stand-in: each page the journey visits, with the real app's roles and names.
 const PAGES: Record<string, string> = {
   '/app': `<h1>Sign in to AlgoMinutes</h1><button onclick="location='/app/notes-list'">Try it as a guest</button>`,
-  '/app/notes-list': `<main><h1>Your notes</h1><a href="/app/import">Import a recording</a></main>`,
+  // A recording cut off by a reload is "cut" until it's uploaded (as n3), the way IndexedDB keeps it in the app.
+  '/app/notes-list': `<main><h1>Your notes</h1><a href="/app/import">Import a recording</a><div id="left" hidden><p>A recording wasn’t uploaded</p><a href="/app/record">Upload it</a></div><ul id="notes"></ul></main>
+    <script>document.getElementById('left').hidden = !localStorage.getItem('cut');
+      for (const n of ['n1', 'n2'].concat(localStorage.getItem('uploaded') ? ['n3'] : [])) document.getElementById('notes').insertAdjacentHTML('beforeend', '<li><a href="/app/notes/' + n + '">' + n + '</a></li>');</script>`,
   '/app/import': `<h1>Import a recording</h1><input type="file" aria-label="Audio file" onchange="location='/app/notes/n1'">`,
   '/app/notes/n1': `<main><h1>Note</h1><h2>Summary</h2></main>`,
   '/app/notes/n2': `<main><h1>Note</h1><h2>Summary</h2></main>`,
+  '/app/notes/n3': `<main><p><a href="/app/notes-list">← Your notes</a></p><h1>Note</h1><h2>Summary</h2></main>`,
   '/app/search': `<main><h1>Search</h1><div role="tablist"><button role="tab">Search transcripts</button><button role="tab" onclick="document.getElementById('ask').hidden=false">Ask your notes</button></div>
     <label>Search your notes <input></label><button onclick="document.getElementById('hits').innerHTML='<a href=&quot;/app/notes/n1&quot;>n1</a>'">Search</button><div id="hits"></div>
     <div id="ask" hidden><label>Ask a question about your notes <input></label><button onclick="document.getElementById('st').textContent='Answer ready.'">Ask</button><p id="st" role="status"></p></div>
     <script>fetch(window.PROBE).catch(() => {})</script></main>`,
-  '/app/record': `<h1>Record a meeting</h1><label><input type="checkbox"> I have permission from anyone whose voice may be captured.</label>
-    <button onclick="document.getElementById('r').hidden=false">Start recording</button><div id="r" hidden><p>● RECORDING</p><button onclick="location='/app/notes/n2'">Stop and save</button></div>`,
+  // Recording asks before the page goes, as the app does; Stop takes the guard down first.
+  '/app/record': `<p><a href="/app/notes-list">← Your notes</a></p><h1>Record a meeting</h1><label><input type="checkbox"> I have permission from anyone whose voice may be captured.</label>
+    <button onclick="localStorage.setItem('cut', '1'); onbeforeunload = (e) => { e.preventDefault(); e.returnValue = ''; }; document.getElementById('r').hidden=false">Start recording</button>
+    <div id="r" hidden><p>● RECORDING</p><button onclick="onbeforeunload = null; localStorage.removeItem('cut'); location='/app/notes/n2'">Stop and save</button></div>
+    <div id="left" hidden><button onclick="localStorage.removeItem('cut'); localStorage.setItem('uploaded', '1'); location='/app/notes/n3'">Upload it</button></div>
+    <script>document.getElementById('left').hidden = !localStorage.getItem('cut');</script>`,
   '/app/settings': `<h1>Settings</h1><button onclick="document.getElementById('d').hidden=false">Delete my account</button>
     <form id="d" hidden onsubmit="event.preventDefault(); fetch('/deleted', { method: 'POST' }).then(() => location='/app')"><label>Type DELETE to confirm: <input></label><button type="submit">Delete account</button></form>`,
 };
@@ -129,7 +137,10 @@ describe('the journey, in a real browser', () => {
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
     expect(ok).toBe(true);
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
-    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(9);
+    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(14);
+    for (const step of ['reloading mid-recording asks first', 'the cut-off recording is kept, and shown on the notes list', 'uploaded once: three notes, and nothing left to upload']) {
+      expect(lines.some((l) => l.startsWith(`ok   ${step}`)), step).toBe(true);
+    }
     expect(seen.length).toBeGreaterThan(8);
     for (const r of seen) expect(r.headers['x-vercel-protection-bypass'], r.path).toBe('the-secret');
     expect(otherSeen.length).toBeGreaterThan(0);
@@ -188,6 +199,27 @@ describe('the journey, in a real browser', () => {
       PAGES['/app/search'] = saved;
     }
   }, 60_000);
+
+  it('a recording page with no guard, or a second note, fails the run', async () => {
+    const saved = PAGES['/app/record'];
+    PAGES['/app/record'] = saved.replace("onbeforeunload = (e) => { e.preventDefault(); e.returnValue = ''; }; ", '');
+    try {
+      const lines: string[] = [];
+      expect(await run(lines)).toBe(false);
+      expect(lines.some((l) => l.startsWith('FAIL reloading mid-recording asks first'))).toBe(true);
+    } finally {
+      PAGES['/app/record'] = saved;
+    }
+    const list = PAGES['/app/notes-list'];
+    PAGES['/app/notes-list'] = list.replace("['n3']", "['n3', 'n4']");
+    try {
+      const lines: string[] = [];
+      expect(await run(lines)).toBe(false);
+      expect(lines.find((l) => l.includes('uploaded once'))).toMatch(/^FAIL.*4 notes/);
+    } finally {
+      PAGES['/app/notes-list'] = list;
+    }
+  }, 120_000);
 
   it('a page error fails the run, even when every step passed', async () => {
     const saved = PAGES['/app/notes-list'];

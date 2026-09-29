@@ -24,6 +24,11 @@ export interface RecordingMeta {
    * asks the server to process that note, instead of uploading (and charging) again.
    */
   kickoff?: Kickoff;
+  /**
+   * The note an upload of it created, until that upload ends: a tab closed mid-upload leaves the note
+   * behind, and the retry puts the audio into it instead of making a second one.
+   */
+  note?: { noteId: string };
 }
 
 /** What /v1/process needs for a note whose audio is already uploaded. */
@@ -108,6 +113,16 @@ export class RecordingStore {
   /** Remembers the note its audio went to, when that note's processing didn't start. */
   async setKickoff(id: string, kickoff: Kickoff): Promise<boolean> {
     return this.update(id, (m) => ({ ...m, kickoff }));
+  }
+
+  /** Remembers (or, with undefined, forgets) the note an upload of it created. */
+  async setNote(id: string, note: { noteId: string } | undefined): Promise<boolean> {
+    return this.update(id, (m) => {
+      const next = { ...m };
+      if (note) next.note = note;
+      else delete next.note;
+      return next;
+    });
   }
 
   private async update(id: string, fn: (m: RecordingMeta) => RecordingMeta): Promise<boolean> {

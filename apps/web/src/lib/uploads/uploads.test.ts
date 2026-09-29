@@ -219,6 +219,50 @@ describe('importAudio', () => {
     expect(events).toEqual(['start web1', 'end web1']);
   });
 
+  it("a cut-off recording upload's retry puts the audio into the note it left, not a second one", async () => {
+    const noted: string[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew', onNote: (id: string) => noted.push(id) });
+    const r = await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d);
+    expect(r).toEqual({ ok: true, noteId: 'webOld' });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(api.createUpload).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webOld' }));
+    // Its doc is already there: writing it again would be a second create.
+    expect(d.createNoteDoc).not.toHaveBeenCalled();
+    expect(api.process).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webOld', type: 'recording' }));
+    expect(noted).toEqual(['webOld']);
+  });
+
+  it('a note to reuse that was deleted since (404) gets a new note, and is forgotten', async () => {
+    const events: string[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew', onNote: (id: string) => events.push(`note ${id}`), onNoteDropped: () => events.push('dropped') });
+    api.createUpload.mockImplementationOnce(async () => { throw new ApiError('not_found', { status: 404 }); });
+    const r = await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d);
+    expect(r).toEqual({ ok: true, noteId: 'webNew' });
+    expect(api.createUpload.mock.calls.map((c) => (c as unknown as [{ noteId: string }])[0].noteId)).toEqual(['webOld', 'webNew']);
+    expect(d.createNoteDoc).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webNew' }));
+    expect(events).toEqual(['dropped', 'note webNew']);
+  });
+
+  it('any other refusal of a note to reuse stops there: no new note', async () => {
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew' });
+    api.createUpload.mockImplementationOnce(async () => { throw new ApiError('bad_request', { status: 403 }); });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toMatchObject({ ok: false, noteId: null });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(d.createNoteDoc).not.toHaveBeenCalled();
+  });
+
+  it("a recording's failed upload deletes its note, and says so, so the retry doesn't reuse it", async () => {
+    const events: string[] = [];
+    const { d } = deps({ recording: { title: 'Recording' }, fetchImpl: (async () => { throw new TypeError('offline'); }) as typeof fetch, onNote: (id: string) => events.push(`note ${id}`), onNoteDropped: () => events.push('dropped') });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toMatchObject({ ok: false, noteId: null });
+    expect(events).toEqual(['note web1', 'dropped']);
+  });
+
+  it("remembering the note is best effort: a failure there doesn't stop the upload", async () => {
+    const { d } = deps({ recording: { title: 'Recording' }, onNote: async () => { throw new Error('IndexedDB full'); } });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toEqual({ ok: true, noteId: 'web1' });
+  });
+
   it('titles come from the file name', () => {
     expect(titleFrom('Board meeting.m4a')).toBe('Board meeting');
     expect(titleFrom('.m4a')).toBe('Imported recording');
