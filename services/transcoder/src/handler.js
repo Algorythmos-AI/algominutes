@@ -34,6 +34,7 @@ function loadShared(name) {
   }
 }
 const noteTerminal = loadShared('note-terminal.cjs');
+const { alignWords } = loadShared('speaker-align.cjs');
 // The refund markNoteFailed writes in the failure's transaction.
 const { transcodeRefund } = require('./terminal-hooks');
 const { NoteGoneError, isNoteGone } = require('./note-gone');
@@ -252,11 +253,15 @@ async function handleKickoff(payload, deps) {
       log.info({ noteId, workspaceId, durationSec, chargedMinutes: settled.chargedMinutes, deltaMinutes: settled.deltaMinutes }, 'charge_settled_to_measured');
     }
 
-    const decision = route.routeForDuration(durationSec);
-    log.info({ noteId, durationSec, decision }, 'transcoder_routed');
-
+    // A notetaker's note takes the chunked path whatever its length: its speaker
+    // names come from aligning each word with the meeting's timeline, and the
+    // fast path has no word timings (docs/plans/MEETINGS.md, RELEASE.md PR 20).
+    const byDuration = route.routeForDuration(durationSec);
     const client = await db.pool().connect();
+    let decision = byDuration;
     try {
+      if (byDuration === 'fast' && (await db.noteSourceKind(client, { noteId, workspaceId })) === 'bot') decision = 'chunked';
+      log.info({ noteId, workspaceId, durationSec, decision, ...(decision !== byDuration ? { forcedBy: 'notetaker' } : {}) }, 'transcoder_routed');
       await db.upsertNoteStatus(client, {
         noteId,
         workspaceId,
@@ -624,8 +629,31 @@ async function handleSttPoll(payload, deps) {
     } finally { c3.release(); }
   }
 
+  kept = await withMeetingSpeakers({ items: kept, noteId, workspaceId, chunkIdx: chunkRow.idx, deps });
   const lines = stt.wordsToLines(kept);
   await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+}
+
+// A notetaker's meeting says who spoke when (meeting_speaker_segments, saved at
+// ingest): each word, or a whole-file provider's line, goes to the speaker whose
+// turn it falls in (speaker-align.cjs), in place of the engine's own guess. Tags
+// are the meeting's (1..N, named in note_speakers); speech in no one's turn is 0,
+// "Speaker" with no name, never a guess. Every other note has no timeline and
+// keeps its diarisation. Alignment is pure, so a replayed poll writes the same.
+async function withMeetingSpeakers({ items, noteId, workspaceId, chunkIdx, deps }) {
+  const { db, log } = deps;
+  const c = await db.pool().connect();
+  let segments;
+  try {
+    segments = await db.speakerSegments(c, { noteId, workspaceId });
+  } finally { c.release(); }
+  if (!segments.length) return items;
+  const aligned = alignWords(items, segments);
+  log.info(
+    { noteId, workspaceId, chunkIdx, items: aligned.length, unknown: aligned.filter((w) => !w.speakerTag).length, segments: segments.length },
+    'speakers_aligned',
+  );
+  return aligned;
 }
 
 // Shared completion tail for BOTH the Google per-chunk path and the whole-file
@@ -784,7 +812,8 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
       contentType: audioContentType(inputLocal, mimeType),
       log: plog,
     });
-    await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+    const named = await withMeetingSpeakers({ items: lines, noteId, workspaceId, chunkIdx: 0, deps });
+    await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: named, deps });
     return;
   }
 
@@ -879,7 +908,8 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     return;
   }
 
-  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: op.lines, deps });
+  const named = await withMeetingSpeakers({ items: op.lines, noteId, workspaceId, chunkIdx: 0, deps });
+  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: named, deps });
 
   // The transcript is safe in Postgres; ask the vendor to drop its copy now
   // rather than waiting out its retention TTL. Best-effort — never throws.

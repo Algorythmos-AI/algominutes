@@ -109,7 +109,7 @@ only **1 hour** ([docs](https://docs.recall.ai/reference/idempotency.md)), so:
   - labels unmatched speech "Unknown speaker";
   - assigns tags **1..N**, because tag 0 is stored as NULL (`pipeline-repo.cjs:276`).
 - **Where it runs:** in the Google STT poll before `wordsToLines` (`handler.js:559`), and in the provider path (`providers/neutral.js`) for R6.
-- **The chunked path:** bot notes always take it, because the fast path has no word timings. The kickoff payload carries `forceChunked`, derived from `source_kind='bot'`.
+- **The chunked path:** bot notes always take it, because the fast path has no word timings. The transcoder reads the note's `source_kind` from Postgres when it routes (`pipeline-repo noteSourceKind`), rather than trusting a flag in the kickoff payload, so a kickoff from any caller routes the same way.
 - **The time base:** alignment uses the recording's `absolute` start. Recall's `relative` is measured from the **latest** `in_call_recording`. So bots never pause recording, and a bot with more than one recording is flagged.
 - **Names never override the user:** they seed `note_speakers` with `DO NOTHING`, **once, at first ingest**, so a rename wins. Clearing a name falls back to "Speaker N" by design (`note-read.cjs:267`).
 
