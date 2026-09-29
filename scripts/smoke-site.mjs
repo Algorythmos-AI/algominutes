@@ -37,7 +37,7 @@ export async function smoke(base, { fetchImpl = fetch, bypass = '', config = loa
   const headers = bypass ? { 'x-vercel-protection-bypass': bypass } : {};
   const get = (p) => fetchImpl(`${origin}${p}`, { headers, redirect: 'manual' });
   const expectHeaders = (p, res) => {
-    for (const [key, want] of Object.entries(headersFor(config, p))) {
+    for (const [key, want] of Object.entries(headersFor(config, p, new URL(origin).host))) {
       const got = res.headers.get(key);
       if (got !== want) failures.push(`${p}: ${key} is ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
     }

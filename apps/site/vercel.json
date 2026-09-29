@@ -28,6 +28,26 @@
       "destination": "https://algominutes-staging.firebaseapp.com/__/firebase/:path*"
     },
     {
+      "source": "/__/auth/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "beta.algominutes.algorythmos.com"
+        }
+      ],
+      "destination": "https://algominutes-staging.firebaseapp.com/__/auth/:path*"
+    },
+    {
+      "source": "/__/firebase/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "beta.algominutes.algorythmos.com"
+        }
+      ],
+      "destination": "https://algominutes-staging.firebaseapp.com/__/firebase/:path*"
+    },
+    {
       "source": "/s/:token*",
       "destination": "/s"
     },
@@ -146,6 +166,21 @@
         {
           "key": "Referrer-Policy",
           "value": "no-referrer"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "beta.algominutes.algorythmos.com"
+        }
+      ],
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
         }
       ]
     }

@@ -48,10 +48,15 @@ export function loadConfig(file = path.join(SITE, 'vercel.json')) {
 }
 
 /** The response headers vercel.json gives `pathname`: every matching rule, later rules overriding earlier ones. */
-export function headersFor(config, pathname) {
+/**
+ * The headers Vercel adds to a path. A rule with `has` applies only on its host
+ * (the beta host's noindex), as the rewrites' do; with no host given, only the
+ * rules without one apply.
+ */
+export function headersFor(config, pathname, host = '') {
   const out = {};
   for (const rule of config.headers || []) {
-    if (sourceRegex(rule.source).test(pathname)) for (const h of rule.headers) out[h.key] = h.value;
+    if (sourceRegex(rule.source).test(pathname) && hasMatches(rule, host)) for (const h of rule.headers) out[h.key] = h.value;
   }
   return out;
 }
@@ -132,7 +137,7 @@ export function createServer({ config = loadConfig(), dist = path.join(SITE, con
       res.end();
       return;
     }
-    const headers = headersFor(config, pathname);
+    const headers = headersFor(config, pathname, req.headers.host);
     if (!r.file) {
       res.writeHead(404, { ...headers, 'Content-Type': 'text/plain' });
       res.end('not found');

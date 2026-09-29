@@ -27,6 +27,18 @@ export const ENVS = {
     api: 'https://api-627101926311.australia-southeast1.run.app',
     account: 'algorythmos.france@gmail.com',
   },
+  // The external beta's web app (docs/plans/RELEASE.md PR 7): a second Vercel
+  // project serving integration at its own host, on staging's Firebase and api.
+  // It isn't behind Vercel Authentication, so it signs in on its own host through
+  // the /__/auth proxy, as prod will.
+  beta: {
+    project: 'algominutes-staging',
+    site: 'beta.algominutes.algorythmos.com',
+    authDomain: 'beta.algominutes.algorythmos.com',
+    browserKeyName: 'Browser key (auto created by Firebase)',
+    api: 'https://api-627101926311.australia-southeast1.run.app',
+    account: 'algorythmos.france@gmail.com',
+  },
 };
 
 export function parseArgs(argv) {

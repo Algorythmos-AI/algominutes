@@ -73,6 +73,10 @@ describe('the web build\'s backends', () => {
     expect(checkAppEnv(STAGING)).toEqual([]);
   });
 
+  it("the beta project's build (staging's backends, signing in on the beta host) passes", () => {
+    expect(checkAppEnv({ ...STAGING, VITE_FIREBASE_AUTH_DOMAIN: 'beta.algominutes.algorythmos.com' })).toEqual([]);
+  });
+
   it('refuses a build whose origins are missing, or that the CSP would block', () => {
     expect(checkAppEnv({})).toEqual([
       'VITE_API_ORIGIN is not set',
