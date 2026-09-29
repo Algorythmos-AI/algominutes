@@ -91,9 +91,23 @@ function decodeOperationId(stored) {
   return { provider: null, jobId: stored };
 }
 
+/**
+ * The engine this transcoder will run with, refused at boot if it can't be run safely (audit Q30): Deepgram's
+ * inline mode records no operation id, so a replayed kickoff transcribes (and pays for) the recording again.
+ * It stays refused until inline mode records one.
+ */
+function assertProviderBootable(env) {
+  const name = providerName(env);
+  if (name === DEEPGRAM) {
+    throw new Error('STT_PROVIDER=deepgram is refused: its inline mode records no operation id, so a replayed kickoff re-transcribes and pays again (audit Q30)');
+  }
+  return name;
+}
+
 module.exports = {
   getProvider,
   providerName,
+  assertProviderBootable,
   encodeOperationId,
   decodeOperationId,
   GOOGLE,

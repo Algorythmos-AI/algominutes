@@ -40,6 +40,15 @@ async function noteExists(client, { noteId, workspaceId }) {
  * The note's status in the task's workspace, or null when it is gone or isn't
  * there (the kickoff's replay guard).
  */
+/** A note's status and its current run (notes.run_seq, which each markQueued bumps), scoped like noteStatus. */
+async function noteRun(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT status, run_seq FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? { status: rows[0].status, runSeq: Number(rows[0].run_seq) } : null;
+}
+
 async function noteStatus(client, { noteId, workspaceId }) {
   const { rows } = await client.query(
     'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
@@ -392,6 +401,7 @@ module.exports = {
   recordPaidWork,
   noteExists,
   noteStatus,
+  noteRun,
   fetchPriorChunkEndMs,
   upsertNoteStatus,
   insertAudioChunkRow,

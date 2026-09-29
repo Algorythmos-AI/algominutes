@@ -99,6 +99,9 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     const debits = await pool.query(`SELECT uid, workspace_id, note_id, minutes::int AS minutes FROM usage_ledger WHERE entry_type = 'debit'`);
     expect(debits.rows).toEqual([{ uid: 'alice', workspace_id: 'workspace_alice', note_id: 'n1', minutes: 3 }]);
     expect(enqueued).toHaveLength(1);
+    // The run it queued rides with the task (audit Q12): the transcoder drops one from an older run.
+    const run = (await pool.query(`SELECT run_seq FROM notes WHERE id = 'n1'`)).rows[0].run_seq;
+    expect(enqueued[0]).toMatchObject({ kind: 'kickoff', noteId: 'n1', runSeq: Number(run) });
     expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'queued' });
   });
 
@@ -281,7 +284,7 @@ describe('a note still recording', () => {
     const base = { noteId: 'rec4', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'online_meeting' };
     expect(await markQueued(fakeDb as never, base, quietLog)).toEqual({ queued: false, status: 'recording' });
     expect(await count(`SELECT 1 FROM notes WHERE id = 'rec4' AND status = 'recording'`)).toBe(1);
-    expect(await markQueued(fakeDb as never, { ...base, allowRecording: true }, quietLog)).toEqual({ queued: true, status: 'queued' });
+    expect(await markQueued(fakeDb as never, { ...base, allowRecording: true }, quietLog)).toEqual({ queued: true, status: 'queued', runSeq: expect.any(Number) });
   });
 });
 

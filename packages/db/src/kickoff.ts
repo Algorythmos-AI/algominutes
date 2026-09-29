@@ -344,6 +344,8 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
         // The caller, carried through every worker hop so their logs name the
         // user (CLAUDE.md §1: userId where it exists).
         uid,
+        // This run (notes.run_seq): the transcoder drops a kickoff from a run the note has left (audit Q12).
+        ...(queued.runSeq !== undefined ? { runSeq: queued.runSeq } : {}),
       },
       traceId: input.traceId,
       log,
