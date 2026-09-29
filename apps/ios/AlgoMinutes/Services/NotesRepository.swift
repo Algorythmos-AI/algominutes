@@ -30,7 +30,7 @@ final class NotesRepository {
     /// the local-notification fallback exactly once. Empty until the first
     /// snapshot so an app launch that finds already-finished notes stays silent.
     private var lastStatusById: [String: NoteStatus] = [:]
-    private var receivedFirstSnapshot = false
+    private(set) var receivedFirstSnapshot = false
 
     static let maxRetryAttempts = 3
 
