@@ -1,0 +1,104 @@
+name: e2e
+
+# The pipeline end to end on staging (scripts/e2e-pipeline.mjs; RELEASE.md PR 14):
+# a real recording through every service, checked in Postgres and Firestore, its
+# one traceId followed through the logs, and no dead letters. Nightly: 2 and 15
+# minutes. Weekly: 180 minutes. By hand: any of the three.
+#
+# Needs, once (the owner):
+#   - secrets.E2E_INVITE_CODE: an invite code for the test accounts, made with
+#     scripts/new-invite-code.sh (1000 uses, 365 days, 600 minutes each);
+#   - secrets.STAGING_FIREBASE_API_KEY is already set (the deploy smoke's), and
+#     staging's Firebase project is its GCP project (vars.GCP_PROJECT_ID);
+#   - roles/logging.viewer on gha-deployer (infra: applied with Apply B), for the
+#     log checks; until then they say they were skipped.
+# Cost: about 17 minutes of pipeline a night and 180 a week (about A$0.50 and A$5.40).
+
+on:
+  schedule:
+    - cron: '47 17 * * *' # nightly, 03:47 Sydney: 2 and 15 minutes
+    - cron: '7 15 * * 6' # Sunday, 01:07 Sydney: 180 minutes
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'How long a recording (minutes)'
+        required: true
+        default: '2'
+        type: choice
+        options: ['2', '15', '180']
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      minutes: ${{ steps.plan.outputs.minutes }}
+    steps:
+      - name: Which lengths
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          CHOSEN: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then minutes="[$CHOSEN]"
+          elif [ "$SCHEDULE" = "7 15 * * 6" ]; then minutes='[180]'
+          else minutes='[2,15]'; fi
+          echo "minutes=$minutes" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    needs: plan
+    # gha-deployer trusts only integration's jobs in this environment (Terraform wif_github_environment).
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: e2e-pipeline
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        minutes: ${{ fromJSON(needs.plan.outputs.minutes) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install ffmpeg (the recording is the fixture, looped)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: The api's address, and whether its logs can be read
+        id: env
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          echo "api=$(gcloud run services describe api --region australia-southeast1 --project "$PROJECT" --format='value(status.url)')" >> "$GITHUB_OUTPUT"
+          if gcloud logging read 'severity>=DEFAULT' --project "$PROJECT" --limit=1 --freshness=1h --format='value(timestamp)' >/dev/null 2>&1; then
+            echo "logs=$PROJECT" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::gha-deployer can't read logs yet (roles/logging.viewer, Apply B): the traceId and dead-letter checks are skipped"
+            echo "logs=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The pipeline, end to end
+        timeout-minutes: 140
+        env:
+          API_URL: ${{ steps.env.outputs.api }}
+          LOG_PROJECT: ${{ steps.env.outputs.logs }}
+          MINUTES: ${{ matrix.minutes }}
+          FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY }}
+          E2E_INVITE_CODE: ${{ secrets.E2E_INVITE_CODE }}
+        run: node scripts/e2e-pipeline.mjs

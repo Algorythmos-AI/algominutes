@@ -36,7 +36,29 @@ checks is recorded here, under the wave.
     every recipient's working token.
   - The api's 426 floors are the contract's `MIN_SUPPORTED_CLIENT`, one list.
   - Unit-tested (`tests/notifier-handler.test.ts`, `tests/client-version.test.ts`), each change mutation-checked.
-- [ ] **Owner: Apply A (RELEASE.md PR 6), staging becomes the beta.** After PR 6 merges I re-plan read-only as
+- [ ] **The pipeline e2e (RELEASE.md PR 14): `.github/workflows/e2e.yml` runs 2 and 15 minutes nightly and 180
+  minutes weekly.** Each run is a real anonymous user, redeeming an invite code, uploading as the apps do and kicking
+  off. It checks the note ready in Firestore, then Postgres agreeing (`/v1/notes/read`), chapters from 15 minutes,
+  one traceId in the api, transcoder, summarizer and embedder logs, and no dead letter. It deletes the account
+  whatever happens (`tests/e2e-pipeline.test.ts`, mutation-checked).
+  - [ ] **Owner:** make a code for it with `scripts/new-invite-code.sh` (1000 uses, 365 days, 600 minutes), register
+    its hash, and save the code as the repository secret `E2E_INVITE_CODE`. Then run the workflow once by hand
+    (2 minutes).
+  - The log checks need `roles/logging.viewer` on gha-deployer (in this PR's Terraform, applied with Apply B). Until
+    then they print `skip`, never `ok`.
+  - Done when the first nightly is green on staging; its time to summary goes here.
+- [x] **Apply A (RELEASE.md PR 6) applied 2026-09-29: staging is the beta.** Checked after the apply and a
+  `services=all` redeploy (run 36519201500: migrate, rollouts and both smokes green, every service and the db-job on
+  162fc1f):
+  - Cloud SQL has deletion protection on, and PITR on with 7 days of logs.
+  - The recordings bucket has no lifecycle rule for live objects.
+  - The api has `TRIAL_ON_FIRST_USE=off` and `DAILY_SPEND_CAP_AUD=50`; the transcoder's cap is 50.
+  - A preflight from the beta web origin answers 204.
+  - Known gaps:
+    - Firestore still shows `DELETE_PROTECTION_DISABLED`: `ABANDON` only stops Terraform deleting it. A later
+      infra PR sets `delete_protection_state` for staging and prod.
+    - It was planned without `TF_VAR_admin_uids`, so the dead-letter admin view is off until your uid is in a plan.
+- [x] **Owner: Apply A (RELEASE.md PR 6), staging becomes the beta.** After PR 6 merges I re-plan read-only as
   `reviewed-<sha>.tfplan` in `~/algominutes-apply`, with `check-tfplan-env.mjs`. You apply it; I redeploy
   `services=all` (a saved plan resets Cloud Run images) and check every image.
   - A sanity plan on the PR branch showed 20 to add, 21 to change, 0 to destroy, nothing replaced.
