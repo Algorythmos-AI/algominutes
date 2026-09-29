@@ -29,9 +29,13 @@ export class GrantUserNotFoundError extends Error {
 const GRANTABLE: readonly string[] = ['pro'];
 
 /** The user's grant, if one is live at `now`. */
-export async function getActiveGrant(uid: string, now: Date = new Date()): Promise<EntitlementGrant | null> {
+export async function getActiveGrant(
+  uid: string,
+  now: Date = new Date(),
+  db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } = getPool(),
+): Promise<EntitlementGrant | null> {
   if (!isPostgresEnabled()) return null;
-  const { rows } = await getPool().query(
+  const { rows } = await db.query(
     `SELECT uid, plan, included_minutes, reason, granted_at, expires_at
        FROM entitlement_grants
       WHERE uid = $1 AND (expires_at IS NULL OR expires_at > $2)`,

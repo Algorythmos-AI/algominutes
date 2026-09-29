@@ -11,8 +11,11 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
+import spendGuardModule from '@algominutes/ai/spend-guard.cjs';
+import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { getNoteQueueState, markQueued, markError, markKickoffRejected } from './notes-repo';
-import { assertCanMeter, QuotaExceededError } from './entitlements';
+import { resolveEntitlement, QuotaExceededError } from './entitlements';
+import { noteChargeStands } from './usage-repo';
 import { ensureTrial } from './subscriptions-repo';
 import { WorkspaceBoundaryError } from './workspace-access';
 import type { Entitlement } from './entitlements';
@@ -28,6 +31,10 @@ const { enqueueTask } = cloudTasksModule as {
     projectId: string; location: string; queue: string; targetUrl: string; oidcServiceAccount: string;
     payload: Record<string, unknown>; traceId?: string; log: unknown;
   }) => Promise<unknown>;
+};
+const { assertUnderDailyCap, SPEND_CAP_MESSAGE } = spendGuardModule as {
+  assertUnderDailyCap: (args: { log?: unknown }) => Promise<unknown>;
+  SPEND_CAP_MESSAGE: string;
 };
 
 type Log = {
@@ -84,6 +91,8 @@ export type KickoffResult =
   | { kind: 'recording' }
   | { kind: 'audio_missing' }
   | { kind: 'too_large'; message: string }
+  | { kind: 'too_long'; message: string }
+  | { kind: 'spend_capped'; message: string }
   | { kind: 'rate_limited'; message: string }
   | { kind: 'quota_exceeded'; entitlement: Entitlement | null }
   | { kind: 'account_deleted' }
@@ -186,6 +195,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   const durationSec = Number(input.durationSec ?? 0);
   const minutes = Number.isFinite(durationSec) && durationSec > 0 ? Math.ceil(durationSec / 60) : 0;
   if (input.quota !== false) {
+    let ent: Entitlement;
     try {
       // A9.3 the reverse trial starts at first value (idempotent, so a reinstall
       // never restarts it). A10 #7: a device already trialled gets no fresh
@@ -197,21 +207,57 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
         user: { email: input.email, name: input.name },
         log,
       });
-      await assertCanMeter(uid, minutes);
-      // The debit itself is written by markQueued, in the transaction that
-      // creates the note row, and only if it actually queues.
+      ent = await resolveEntitlement(uid);
     } catch (err: any) {
       if (isAccountDeleted(err)) {
         log.warn({}, 'process_account_deleted');
         return { kind: 'account_deleted' };
       }
-      // instanceof is the intent; the code check is the cross-realm fallback.
-      if (err instanceof QuotaExceededError || err?.code === 'QUOTA_EXCEEDED') {
-        log.warn({ minutes, plan: err.entitlement?.plan }, 'quota_exceeded');
-        return { kind: 'quota_exceeded', entitlement: err.entitlement ?? null };
-      }
       log.error({ err }, 'meter_ingest_failed');
       return { kind: 'failed', message: TRY_AGAIN };
+    }
+
+    // One note holds at most the plan's longest recording. This is the
+    // caller's own figure; the transcoder measures the audio itself.
+    const maxSec = maxRecordingSecondsForPlan(ent.plan);
+    if (durationSec > maxSec) {
+      const message = `This recording is longer than ${maxSec / 3600} hours, the longest a note can be.`;
+      await rejectNote(input, message, 'too_long');
+      log.warn({ durationSec, maxSec, plan: ent.plan }, 'kickoff_too_long');
+      return { kind: 'too_long', message };
+    }
+
+    // An early refusal, before anything is written. markQueued checks again in
+    // the transaction that debits, which is the check that counts. A note whose
+    // earlier charge still stands isn't charged again, so it needs no headroom.
+    if (ent.includedMinutes != null && ent.usedMinutes + minutes > ent.includedMinutes) {
+      let stands = false;
+      try {
+        stands = await noteChargeStands(noteId, workspaceId);
+      } catch (err) {
+        log.error({ err }, 'note_charge_read_failed');
+        return { kind: 'failed', message: TRY_AGAIN };
+      }
+      if (!stands) {
+        log.warn({ minutes, plan: ent.plan }, 'quota_exceeded');
+        return { kind: 'quota_exceeded', entitlement: ent };
+      }
+    }
+
+    // The daily spend cap (§4.6), before anything is queued or charged. The
+    // transcoder's own gate stays as the backstop for work already queued.
+    try {
+      await assertUnderDailyCap({ log });
+    } catch (err: any) {
+      if (err?.code !== 'SPEND_CAP_EXCEEDED') {
+        // Not expected (a reader error fails open inside the guard): logged here,
+        // with the note's context, and answered like the kickoff's other failures.
+        log.error({ err }, 'spend_guard_failed');
+        return { kind: 'failed', message: TRY_AGAIN };
+      }
+      log.warn({}, 'kickoff_spend_capped');
+      await rejectNote(input, SPEND_CAP_MESSAGE, 'spend_cap');
+      return { kind: 'spend_capped', message: SPEND_CAP_MESSAGE };
     }
   }
 
@@ -222,10 +268,15 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       noteId, workspaceId,
       authorUid: uid, authorEmail: input.email, authorName: input.name,
       sourceType: type, storagePath: input.storagePath, sourceUrl: input.sourceUrl, mimeType: input.mimeType,
-      meter: { minutes, idempotencyKey: `${noteId}:ingest` },
+      meter: { minutes, idempotencyKey: `${noteId}:ingest`, enforceQuota: input.quota !== false },
       allowRecording: input.allowRecording,
     }, log);
   } catch (err: any) {
+    // The in-transaction quota check: nothing was written.
+    if (err instanceof QuotaExceededError || err?.code === 'QUOTA_EXCEEDED') {
+      log.warn({ minutes, plan: err.entitlement?.plan }, 'quota_exceeded');
+      return { kind: 'quota_exceeded', entitlement: err.entitlement ?? null };
+    }
     if (isAccountDeleted(err)) {
       // The account was deleted; its token is still valid for up to an hour.
       log.warn({}, 'process_account_deleted');

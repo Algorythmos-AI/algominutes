@@ -52,14 +52,34 @@ export async function reverseUsageForNote(input: {
 }
 
 /** Net minutes used by a user in a billing period (debits − reversals). */
-export async function usedMinutes(uid: string, billingPeriod: string = currentBillingPeriod()): Promise<number> {
+export async function usedMinutes(
+  uid: string,
+  billingPeriod: string = currentBillingPeriod(),
+  db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } = getPool(),
+): Promise<number> {
   if (!isPostgresEnabled()) return 0;
-  const { rows } = await getPool().query(
+  const { rows } = await db.query(
     `SELECT COALESCE(SUM(minutes), 0)::float AS used
        FROM usage_ledger WHERE uid = $1 AND billing_period = $2`,
     [uid, billingPeriod],
   );
   return Number(rows[0]?.used ?? 0);
+}
+
+/**
+ * Whether a note's charge still stands: its net in the ledger is above zero
+ * (charged, and not refunded). markQueued won't charge such a note again, so a
+ * retry of it needs no headroom.
+ */
+export async function noteChargeStands(noteId: string, workspaceId: string): Promise<boolean> {
+  if (!isPostgresEnabled()) return false;
+  // Scoped to the workspace: note ids are global, and another workspace's
+  // charges are none of the caller's business (CLAUDE.md §1).
+  const { rows } = await getPool().query(
+    `SELECT COALESCE(SUM(minutes), 0) > 0 AS stands FROM usage_ledger WHERE note_id = $1 AND workspace_id = $2`,
+    [noteId, workspaceId],
+  );
+  return rows[0]?.stands === true;
 }
 
 /**
