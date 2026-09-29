@@ -98,6 +98,7 @@ async function removeRecallBot({ recall, repo, recallBotId, traceId, log, purge 
   try {
     await recall.deleteBot(recallBotId);
   } catch (err) {
+    // silent-catch-ok: a dispatched bot is made to leave instead, and one already gone is what was wanted; recall_extra_bot_removed logs both below
     if (err instanceof RecallError && DISPATCHED_ON_DELETE.has(err.status)) {
       await leaveCall(recall, recallBotId, log);
       if (purge) await repo.enqueueRecallPurge(null, { recallBotId, reason: 'failed', traceId });

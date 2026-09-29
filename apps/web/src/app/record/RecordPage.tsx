@@ -205,6 +205,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       if (!meta) throw new RecordingGoneError();
       await upload(meta);
     } catch (err) {
+      // silent-catch-ok: RecordingGoneError is another tab having taken the recording, and the page says so; anything else is reported
       if (err instanceof RecordingGoneError) {
         setPhase({ kind: 'failed', message: 'This recording was uploaded or discarded in another tab, so the rest of it couldn’t be saved.' });
       } else {
@@ -245,6 +246,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
         // The browser's own "Stop sharing" ends the recording and saves it.
         capture.current.onEnded(() => void stopRef.current());
       } catch (err) {
+        // silent-catch-ok: a cancelled share picker is the user's choice: back to the consent step
         if (err instanceof CaptureError && err.kind === 'cancelled') {
           setPhase({ kind: 'consent' });
           return;
@@ -256,6 +258,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
       try {
         stream = await env.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       } catch (err) {
+        // silent-catch-ok: getUserMedia's refusal is the user's permission or device, shown as denied or unsupported
         setPhase({ kind: (err as { name?: string })?.name === 'NotAllowedError' ? 'denied' : 'unsupported' });
         return;
       }

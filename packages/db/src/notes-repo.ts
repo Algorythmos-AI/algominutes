@@ -460,6 +460,7 @@ export async function markQueued(
   try {
     await noteDoc.update({ status: 'queued', updatedAt: ISO_NOW() });
   } catch (err) {
+    // silent-catch-ok: NOT_FOUND with no Postgres row is a deleted note, answered as deleted: true
     if (!isFirestoreNotFound(err)) throw err;
     // deleteNote (and account deletion) waited for this transaction and then
     // removed the row as well: the note is deleted, and nothing is enqueued.
@@ -701,6 +702,7 @@ export async function markSummaryReady(
       transcriptTruncated: input.transcriptTruncated,
     });
   } catch (err) {
+    // silent-catch-ok: NOT_FOUND with no live Postgres row is a deleted note, answered as written: false
     // The doc is gone. That means "deleted" only if Postgres agrees. Firestore
     // also answers NOT_FOUND for a wrong project or database, and then this
     // must fail loudly (retry, then dead-letter) instead of dropping the note.
@@ -1236,6 +1238,7 @@ export async function createServerNote(
       updatedAt: now,
     });
   } catch (err) {
+    // silent-catch-ok: ALREADY_EXISTS is a replayed task finding the doc it already created
     if (!isFirestoreAlreadyExists(err)) throw err;
   }
   // Deleted between the commit and the write? Then the doc is an orphan: take it

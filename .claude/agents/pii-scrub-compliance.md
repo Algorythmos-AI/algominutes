@@ -21,24 +21,28 @@ The scrub function:
 Run these greps. For each call site to a model or embedding API, confirm `redactPII` is on the input data path.
 
 ```bash
+# One --include per extension: grep matches --include globs with fnmatch, which has
+# no {a,b} alternation, so --include='*.{ts,js}' matches no file at all.
+
 # Vertex / Gemini generation calls
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "(generateContent|generateContentStream|streamGenerateContent)\(" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "(generateContent|generateContentStream|streamGenerateContent)\(" .
 
 # Embedding calls
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "(predict|embedContent|getEmbeddings)\(" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "(predict|embedContent|getEmbeddings)\(" .
 
 # Direct calls to the shared Gemini helper
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  "callGemini\|geminiCall" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "callGemini|geminiCall" .
 
 # Existing redactPII call sites (for cross-reference)
-grep -rn --include='*.{ts,js,cjs,mjs}' "redactPII(" \
-  --exclude-dir={node_modules,dist,.git}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+  -F "redactPII(" .
 ```
 
 For each call site found in the first three greps, **trace the input back to its source**:

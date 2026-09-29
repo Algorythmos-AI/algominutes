@@ -13,13 +13,18 @@
 // @algominutes/db (CLAUDE.md §Data plane), never re-implemented here.
 
 let _repoWarned = false;
-function requireRepo(basename) {
+function requireRepo(basename, misses = []) {
   const specs = [`@algominutes/db/${basename}.ts`, `@algominutes/db/${basename}`];
   for (const spec of specs) {
     try {
       return require(spec);
     } catch (err) {
-      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) continue;
+      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) {
+        // Kept for repoFn's warning: a spec that resolves but whose own import
+        // fails looks the same here, and only the message tells them apart.
+        misses.push(err);
+        continue;
+      }
       throw err;
     }
   }
@@ -27,11 +32,12 @@ function requireRepo(basename) {
 }
 
 function repoFn(basename, fnName, log) {
-  const mod = requireRepo(basename);
+  const misses = [];
+  const mod = requireRepo(basename, misses);
   if (mod && typeof mod[fnName] === 'function') return mod[fnName];
   if (!_repoWarned) {
     _repoWarned = true;
-    log.warn({ basename, fnName }, 'db_repo_unavailable_skipping');
+    log.warn({ basename, fnName, misses: misses.map((e) => String(e.message)) }, 'db_repo_unavailable_skipping');
   }
   return null;
 }

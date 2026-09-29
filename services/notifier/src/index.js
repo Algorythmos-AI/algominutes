@@ -18,6 +18,7 @@ const { getMessaging } = require('firebase-admin/messaging');
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }

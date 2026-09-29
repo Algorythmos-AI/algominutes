@@ -60,7 +60,10 @@ export async function regenerateSummaryRoute(req, res) {
   try {
     await enforceUsageBudget(db, uid, 0);
   } catch (err) {
-    if (err && err.code === 429) return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+    if (err && err.code === 429) {
+      log.warn({ reason: err.message }, 'regenerate_summary_rate_limited'); // RATE_LIMIT or BYTES_BUDGET
+      return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+    }
     throw err;
   }
 

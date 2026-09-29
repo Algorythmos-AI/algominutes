@@ -24,15 +24,18 @@ logger.info({ traceId, userId, noteId, latencyMs }, 'event_name');
 ## What to check
 
 ```bash
-# Forbidden: console.* in server-side code
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "console\.(log|warn|error|info|debug)\(" \
-  --exclude-dir={node_modules,dist,.git,src,tests,scripts}
+# One --include per extension: grep matches --include globs with fnmatch, which has
+# no {a,b} alternation, so --include='*.{ts,js}' matches no file at all.
 
-# All logger.* call sites (to inspect for required fields)
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "logger\.(error|warn|info|debug|fatal)\(" \
-  --exclude-dir={node_modules,dist,.git,tests}
+# Forbidden: console.* in server-side code (the dirs scripts/check-no-console.sh checks)
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist \
+  -E "console\.(log|warn|error|info|debug)\(" services packages/ai packages/db
+
+# All logger call sites (to inspect for required fields): logger., log., reqLog., qlog., req.log?.warn?.(), ...
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "(logger|[[:alnum:]_]*[lL]og)\??\.(error|warn|info|debug|fatal)(\?\.)?\(" .
 ```
 
 For each `logger.*` hit, read 3 lines of context above to determine which correlation fields are in scope:

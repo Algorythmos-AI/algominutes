@@ -104,6 +104,7 @@ export function SearchPage() {
       patch((a) => (a.status === 'streaming' ? { ...a, status: controller.signal.aborted ? 'stopped' : 'done' } : a));
       if (controller.signal.aborted) setAnnounce('The answer was stopped.');
     } catch (err) {
+      // silent-catch-ok: cancelled is the user's Stop; any other failure is shown, and reported unless it is an ApiError
       if (err instanceof ApiError && err.kind === 'cancelled') {
         patch((a) => ({ ...a, status: 'stopped' }));
         setAnnounce('The answer was stopped.');

@@ -19,23 +19,26 @@ Postgres is the source of truth. Firestore is a denormalized cache for the realt
 Run these greps from the repo root. Report any hit that isn't inside `packages/db/src/notes-repo.ts` itself.
 
 ```bash
+# One --include per extension: grep matches --include globs with fnmatch, which has
+# no {a,b} alternation, so --include='*.{ts,js}' matches no file at all.
+
 # Direct Firestore mutations on the notes collection
-grep -rn --include='*.{ts,js,cjs,mjs,tsx}' \
-  -E "(noteRef|notesRef|noteDoc)\.(set|update|delete)\(" \
-  --exclude-dir={node_modules,dist,.git,lib}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' --include='*.tsx' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+  -E "(noteRef|notesRef|noteDoc)\.(set|update|delete)\(" .
 
-grep -rn --include='*.{ts,js,cjs,mjs,tsx}' \
-  -E "collection\(['\"]notes['\"]\)\.doc\(" \
-  --exclude-dir={node_modules,dist,.git,lib}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' --include='*.tsx' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+  -E "collection\(['\"]notes['\"]\)\.doc\(" .
 
-grep -rn --include='*.{ts,js,cjs,mjs,tsx}' \
-  -E "doc\(.*['\"]notes['\"]" \
-  --exclude-dir={node_modules,dist,.git,lib}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' --include='*.tsx' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+  -E "doc\(.*['\"]notes['\"]" .
 
 # Direct Postgres writes to notes/summaries/transcript_lines/etc outside the repo
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "(INSERT INTO|UPDATE|DELETE FROM)\s+(notes|summaries|transcript_lines|action_items|key_decisions|embeddings|chat_messages)" \
-  --exclude-dir={node_modules,dist,.git,lib,db}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=db \
+  -E "(INSERT INTO|UPDATE|DELETE FROM)\s+(notes|summaries|transcript_lines|action_items|key_decisions|embeddings|chat_messages)" .
 ```
 
 Also scan changed files for these patterns even if the greps come back clean (they catch the obvious cases, not all of them):

@@ -256,7 +256,7 @@ export function createApiClient(opts: ApiClientOptions) {
         }
       } catch (err) {
         if (err instanceof ApiError) throw err; // our own verdict on a frame (invalid_response)
-        // The caller's Stop ends the stream quietly; our timeout or a dropped connection says so.
+        // silent-catch-ok: the caller's Stop ends the stream quietly; our timeout or a dropped connection says so.
         if (signal?.aborted) return;
         yield { type: 'error', error: transportError(err, traceId).kind === 'timeout' ? 'timeout' : 'stream_ended' };
         return;
