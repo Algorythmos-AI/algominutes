@@ -223,3 +223,41 @@ resource "google_cloud_scheduler_job" "meetings_reconcile" {
 
   depends_on = [google_project_service.apis]
 }
+
+# ---------------------------------------------------------------------------
+# Billing's Apple reconcile (services/billing/src/tasks/reconcile-apple.js):
+# every hour it asks Apple (App Store Server API) about the App Store
+# subscriptions near the end of their period, or not checked for a week, so a
+# notification that never arrived can't leave an entitlement wrong.
+#
+# Called as Cloud Tasks call a task (@algominutes/ai/task-auth.cjs): an OIDC
+# token issued to run-jobs, for exactly this URL. No retries: the next tick is
+# the retry. Until the owner adds the key it checks nothing.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "billing_reconcile_apple" {
+  project          = var.project_id
+  region           = var.region
+  name             = "billing-reconcile-apple"
+  description      = "Checks App Store subscriptions with Apple, for notifications that never arrived (billing /tasks/reconcile-apple)."
+  schedule         = "17 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "90s" # billing answers within its 60 s request timeout
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["billing"]}/tasks/reconcile-apple"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "reconcile-apple" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["billing"]}/tasks/reconcile-apple"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}

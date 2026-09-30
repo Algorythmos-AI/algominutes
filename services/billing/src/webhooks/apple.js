@@ -44,7 +44,8 @@ export async function appleWebhookRoute(req, res) {
   const notificationType = notification.notificationType;
   const subtype = notification.subtype || null;
   const originalTransactionId = tx.originalTransactionId;
-  const log = req.log.child({ rail: 'apple', notificationType, subtype, railId: originalTransactionId });
+  // Production or Sandbox (TestFlight, App Review): both count (docs/DECISIONS.md), and each line says which.
+  const log = req.log.child({ rail: 'apple', notificationType, subtype, railId: originalTransactionId, environment: tx.environment });
 
   if (!originalTransactionId) {
     log.warn({ event: 'apple_no_original_transaction_id' }, 'apple_no_original_transaction_id');
@@ -70,28 +71,28 @@ export async function appleWebhookRoute(req, res) {
         currentPeriodEnd: tx.currentPeriodEnd,
         appleOriginalTransactionId: originalTransactionId,
       });
-      log.info({ uid, currentPeriodEnd: tx.currentPeriodEnd, event: 'apple_renewed' }, 'apple_renewed');
+      log.info({ uid, userId: uid, currentPeriodEnd: tx.currentPeriodEnd, event: 'apple_renewed' }, 'apple_renewed');
       break;
     }
     case 'DID_FAIL_TO_RENEW': {
       // Billing retry / grace period. Keep the current period end; deriveState
       // keeps the user active until it lapses.
       await setSubscriptionStatus(uid, 'past_due');
-      log.info({ uid, event: 'apple_billing_retry' }, 'apple_billing_retry');
+      log.info({ uid, userId: uid, event: 'apple_billing_retry' }, 'apple_billing_retry');
       break;
     }
     case 'GRACE_PERIOD_EXPIRED':
     case 'EXPIRED': {
       await setSubscriptionStatus(uid, 'expired', new Date().toISOString());
       await trackEvent({ uid, event: 'cancellation', props: { rail: 'apple_storekit', reason: notificationType } });
-      log.info({ uid, event: 'apple_expired' }, 'apple_expired');
+      log.info({ uid, userId: uid, event: 'apple_expired' }, 'apple_expired');
       break;
     }
     case 'REFUND': {
       // Refund: revoke immediately.
       await setSubscriptionStatus(uid, 'refunded', new Date().toISOString());
       await trackEvent({ uid, event: 'cancellation', props: { rail: 'apple_storekit', reason: 'refund' } });
-      log.info({ uid, event: 'apple_refunded' }, 'apple_refunded');
+      log.info({ uid, userId: uid, event: 'apple_refunded' }, 'apple_refunded');
       break;
     }
     default:

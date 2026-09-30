@@ -35,6 +35,7 @@ export async function verifyPurchaseRoute(req, res) {
   let railKey; // { apple } | { google } for findUidByRailId
   let durable; // fields for activateSubscription
   let storeProductId;
+  let environment = null; // Apple's: Production | Sandbox
 
   if (rail === 'apple_storekit') {
     if (!body.jwsRepresentation) {
@@ -59,6 +60,9 @@ export async function verifyPurchaseRoute(req, res) {
       return res.status(409).json({ error: 'Receipt revoked' });
     }
     storeProductId = tx.productId;
+    // Production or Sandbox: both entitle, as TestFlight and App Review buy in the sandbox against the
+    // production server (docs/DECISIONS.md). Logged, so a sandbox entitlement is never mistaken for revenue.
+    environment = tx.environment;
     railKey = { apple: tx.originalTransactionId };
     durable = {
       appleOriginalTransactionId: tx.originalTransactionId,
@@ -122,7 +126,7 @@ export async function verifyPurchaseRoute(req, res) {
   const row = await getSubscription(uid);
   const entitlementState = deriveState(row);
   req.log.info(
-    { uid, rail, plan, currentPeriodEnd: durable.currentPeriodEnd, entitlementState, event: 'purchase_verified' },
+    { uid, rail, plan, environment, currentPeriodEnd: durable.currentPeriodEnd, entitlementState, event: 'purchase_verified' },
     'purchase_verified',
   );
 

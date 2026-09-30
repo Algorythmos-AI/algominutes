@@ -1,9 +1,8 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { X509Certificate, sign } from 'node:crypto';
+import type { X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { b64u, makeApplePki, type ApplePki } from './helpers/apple-pki';
 // @ts-expect-error: plain ESM modules, no type declarations
 import { APPLE_ROOT_G3_SHA256, appleRootCA, verifyAndDecodeJws, verifyAppleJws, verifyAppleNotification, verifyStoreKitPurchase, unverifiedAppleJwsAllowed } from '../services/billing/src/lib/apple.js';
 // @ts-expect-error: plain ESM module, no type declarations
@@ -11,57 +10,18 @@ import { appleWebhookRoute } from '../services/billing/src/webhooks/apple.js';
 
 // Apple's JWS (StoreKit 2 transactions, App Store Server Notifications) is
 // trusted only when it chains to Apple Root CA - G3 (plan PR-32). Here a
-// throwaway PKI built with openssl stands in for Apple's, passed as `root`, so
-// each check can be shown refusing what it should.
+// throwaway PKI built with openssl stands in for Apple's (tests/helpers/apple-pki.ts),
+// passed as `root`, so each check can be shown refusing what it should.
 
-const b64u = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
-
-let dir: string;
-const openssl = (...args: string[]) => execFileSync('openssl', args, { cwd: dir, stdio: 'pipe' });
-const der = (pemFile: string) => new X509Certificate(fs.readFileSync(path.join(dir, pemFile))).raw.toString('base64');
-
-/** A CA or leaf certificate signed by `issuer` (none: self-signed), with the given extensions. */
-function cert(name: string, issuer: string | null, ext: string[]) {
-  openssl('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', `${name}.key`);
-  fs.writeFileSync(path.join(dir, `${name}.ext`), `${ext.join('\n')}\n`);
-  if (!issuer) {
-    openssl('req', '-x509', '-new', '-key', `${name}.key`, '-subj', `/CN=${name}`, '-days', '3650', '-out', `${name}.pem`, '-extensions', 'v3', '-config', writeReqConfig(name, ext));
-    return;
-  }
-  openssl('req', '-new', '-key', `${name}.key`, '-subj', `/CN=${name}`, '-out', `${name}.csr`);
-  openssl('x509', '-req', '-in', `${name}.csr`, '-CA', `${issuer}.pem`, '-CAkey', `${issuer}.key`, '-CAcreateserial', '-days', '3650', '-extfile', `${name}.ext`, '-out', `${name}.pem`);
-}
-function writeReqConfig(name: string, ext: string[]) {
-  const f = path.join(dir, `${name}.cnf`);
-  fs.writeFileSync(f, `[req]\ndistinguished_name=dn\n[dn]\n[v3]\n${ext.join('\n')}\n`);
-  return f;
-}
-const CA = ['basicConstraints=critical,CA:TRUE', 'keyUsage=critical,keyCertSign,cRLSign'];
-const INTERMEDIATE = [...CA, '1.2.840.113635.100.6.2.1=ASN1:NULL'];
-const LEAF = ['basicConstraints=critical,CA:FALSE', 'keyUsage=critical,digitalSignature', '1.2.840.113635.100.6.11.1=ASN1:NULL'];
-
+let pki: ApplePki;
 let root: X509Certificate;
 beforeAll(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apple-pki-'));
-  cert('root', null, CA);
-  cert('int', 'root', INTERMEDIATE);
-  cert('leaf', 'int', LEAF);
-  cert('plainleaf', 'int', ['basicConstraints=critical,CA:FALSE']); // no App Store marker
-  cert('other', null, CA); // another root
-  cert('otherint', 'other', INTERMEDIATE);
-  cert('otherleaf', 'otherint', LEAF);
-  root = new X509Certificate(fs.readFileSync(path.join(dir, 'root.pem')));
+  pki = makeApplePki();
+  root = pki.root;
 });
-afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterAll(() => pki.cleanup());
 
-/** A JWS signed by `leafName`'s key, carrying the chain `chain` (x5c). */
-function jws(payload: unknown, { leafName = 'leaf', chain = ['leaf', 'int', 'root'], alg = 'ES256' } = {}) {
-  const head = b64u({ alg, x5c: chain.map((n) => der(`${n}.pem`)) });
-  // Signed now, as Apple stamps it: after the certificates were made (a payload may set its own).
-  const body = b64u({ signedDate: Date.now(), ...(payload as object) });
-  const sig = sign('sha256', Buffer.from(`${head}.${body}`), { key: fs.readFileSync(path.join(dir, `${leafName}.key`)), dsaEncoding: 'ieee-p1363' }).toString('base64url');
-  return `${head}.${body}.${sig}`;
-}
+const jws = (payload: unknown, opts?: { leafName?: string; chain?: string[]; alg?: string }) => pki.jws(payload, opts);
 const PURCHASE = { originalTransactionId: '2000000123456789', productId: 'pro_monthly', expiresDate: Date.parse('2099-01-01'), bundleId: 'com.algorythmos.algominutes' };
 const refused = (fn: () => unknown) => {
   try {

@@ -110,6 +110,25 @@ locals {
       severity  = "ERROR"
       doc       = "The api or billing couldn't reach Postgres to admit a caller, so it answered 503. Check Cloud SQL, the VPC connector and the connection budget."
     }
+    # App Store subscriptions (RELEASE.md PR 26: billing's /tasks/reconcile-apple, hourly).
+    apple_server_api_unauthorized = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Apple refused billing's App Store Server API key (401/403), so no subscription is being checked with Apple: a missed renewal or refund notification stays wrong. Check the app-store-server-key secret, APPLE_ISSUER_ID and APPLE_KEY_ID against App Store Connect (Users and Access, Integrations, In-App Purchase). See apple_server_api_unauthorized (status, errorCode)."
+    }
+    apple_reconcile_failed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Billing's Apple reconcile checked nothing this run: it couldn't read its key from Secret Manager (step key: the app-store-server-key secret or run-billing's access to it) or which subscriptions to check (step list: usually Postgres). See apple_reconcile_failed (step, err)."
+    }
+    apple_reconcile_item_failed = {
+      threshold = 5
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "Billing's Apple reconcile couldn't check more than five subscriptions in an hour (Apple unreachable, 429/5xx, or an answer that wasn't Apple's). They're due again next run. See apple_reconcile_item_failed (userId, railId, status, errorCode, code)."
+    }
     readiness_db_unreachable = {
       threshold = 0
       window    = "300s"

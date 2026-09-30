@@ -22,6 +22,7 @@ env_args=(
   -e TRANSCODER_URL=https://transcoder.invalid -e SUMMARIZER_URL=https://summarizer.invalid
   -e EMBEDDER_URL=https://embedder.invalid -e NOTIFIER_URL=https://notifier.invalid
   -e EXTRACTOR_URL=https://extractor.invalid -e MEETINGS_URL=https://meetings.invalid
+  -e BILLING_URL=https://billing.invalid
   -e MEETINGS_QUEUE=meetings -e ALGOMINUTES_ENV=staging
   -e STORAGE_BUCKET=boot-smoke-recordings -e GCS_BUCKET=boot-smoke-bucket
   -e ALLOWED_ORIGINS=https://boot-smoke.invalid

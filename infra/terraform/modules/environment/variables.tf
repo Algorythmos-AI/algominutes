@@ -387,3 +387,17 @@ variable "apple_team_id" {
   type        = string
   default     = ""
 }
+
+# --- App Store subscriptions ---------------------------------------------------
+
+variable "app_store_issuer_id" {
+  description = "The App Store Connect API issuer id (Users and Access, Integrations, In-App Purchase) for the key billing asks Apple about subscriptions with (RELEASE.md PR 26). Its .p8 goes into the app-store-server-key secret, never here. Empty: billing's Apple reconcile checks nothing."
+  type        = string
+  default     = ""
+}
+
+variable "app_store_key_id" {
+  description = "The Key ID of that In-App Purchase key."
+  type        = string
+  default     = ""
+}
