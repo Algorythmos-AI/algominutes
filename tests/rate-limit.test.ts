@@ -129,5 +129,7 @@ describe('billing', () => {
       if (saved === undefined) delete process.env.RATE_LIMIT_IP_PER_MIN;
       else process.env.RATE_LIMIT_IP_PER_MIN = saved;
     }
-  });
+    // The first import of the whole billing app (Stripe's SDK, firebase-admin, the repo layer) is in this
+    // test's time: on a cold transform cache, under a full parallel run, that alone can pass 5 s.
+  }, 20_000);
 });
