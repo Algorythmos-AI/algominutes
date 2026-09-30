@@ -32,7 +32,7 @@ afterAll(async () => {
 describe('deleteAccountData (Postgres, first)', () => {
   it("deletes the account and everything it owns, leaves others' data, queues every note's purge, and leaves a tombstone", async () => {
     const r = await deleteAccountData({ uid: 'alice', traceId: 't1' }, quietLog);
-    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 3, membershipsDeleted: 2, recallPurges: 0 });
+    expect(r).toEqual({ deleted: true, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 3, membershipsDeleted: 2, recallPurges: 0, stripeCancellations: 0 });
     expect(await count(`SELECT 1 FROM users WHERE uid = 'alice'`)).toBe(0);
     expect(await count(`SELECT 1 FROM workspaces WHERE id = 'ws-a'`)).toBe(0);
     expect(await count(`SELECT 1 FROM notes WHERE id IN ('a1', 'a2', 'a-in-b')`)).toBe(0);
@@ -59,7 +59,7 @@ describe('deleteAccountData (Postgres, first)', () => {
   it('a retry is a no-op that still knows the owned workspaces (from the tombstone)', async () => {
     await deleteAccountData({ uid: 'alice' }, quietLog);
     expect(await deleteAccountData({ uid: 'alice' }, quietLog))
-      .toEqual({ deleted: false, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0, recallPurges: 0 });
+      .toEqual({ deleted: false, workspaceIds: ['ws-a'], uploadSessionUris: [], notesQueued: 0, membershipsDeleted: 0, recallPurges: 0, stripeCancellations: 0 });
   });
 
   // The race the second audit found: a request that checked before the

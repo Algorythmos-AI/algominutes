@@ -129,6 +129,25 @@ locals {
       severity  = "WARNING"
       doc       = "Billing's Apple reconcile couldn't check more than five subscriptions in an hour (Apple unreachable, 429/5xx, or an answer that wasn't Apple's). They're due again next run. See apple_reconcile_item_failed (userId, railId, status, errorCode, code)."
     }
+    # Deleted accounts' Stripe subscriptions (RELEASE.md PR 28b: billing's /tasks/cancel-stripe).
+    stripe_cancellation_stuck = {
+      threshold = 0
+      window    = "86400s"
+      severity  = "ERROR"
+      doc       = "A deleted account's Stripe subscription couldn't be cancelled in 10 attempts, so Stripe may still be charging someone who deleted their account. Cancel it by hand in the Stripe dashboard (stripeSubscriptionId in stripe_cancellation_stuck), then set cancelled_at on its stripe_cancellations row. See the stripe_cancel_failed lines (reason) for why."
+    }
+    stripe_cancel_not_configured = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Deleted accounts' Stripe subscriptions are waiting to be cancelled, and billing has no Stripe key to cancel them with, so charges continue. Restore STRIPE_SECRET_KEY for billing. See stripe_cancel_not_configured (due)."
+    }
+    stripe_cancel_run_failed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Billing's Stripe cancellation run couldn't read what to cancel (usually Postgres), so it cancelled nothing this run. See stripe_cancel_run_failed (err)."
+    }
     readiness_db_unreachable = {
       threshold = 0
       window    = "300s"

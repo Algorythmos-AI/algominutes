@@ -15,7 +15,11 @@
  *     events (their foreign keys only NULL the uid, keeping the content);
  *   - the users row is deleted, and ON DELETE CASCADE removes the rest
  *     (workspaces and their notes, transcripts, summaries, embeddings,
- *     memberships, subscriptions, push tokens, terms, upload sessions).
+ *     memberships, subscriptions, push tokens, terms, upload sessions);
+ *   - a Stripe subscription is recorded for cancellation first (RELEASE.md
+ *     PR 28b): the cascade takes its row, and Stripe would go on charging.
+ *     Billing's cancel-stripe task cancels it. An App Store subscription can't
+ *     be cancelled by us: the apps say so before the deletion.
  * The purges then remove each note's mirror doc and audio
  * (storage-purges-repo). deleteAccountMirror removes the account's own
  * Firestore docs, and the route deletes the Auth user last.
@@ -53,6 +57,8 @@ export interface AccountDeletion {
   membershipsDeleted: number;
   /** Recall copies of the account's meetings queued for deletion (and live bots for leaving). */
   recallPurges: number;
+  /** Stripe subscriptions recorded for billing to cancel (stripe_cancellations). */
+  stripeCancellations: number;
 }
 
 export async function deleteAccountData(
@@ -131,6 +137,13 @@ export async function deleteAccountData(
       await client.query('DELETE FROM support_requests WHERE uid = $1', [input.uid]);
       await client.query('DELETE FROM analytics_events WHERE uid = $1', [input.uid]);
       const members = await client.query('SELECT 1 FROM workspace_members WHERE uid = $1', [input.uid]);
+      // Before the cascade takes the subscription row: its Stripe subscription, to be cancelled (PR 28b).
+      const stripe = await client.query(
+        `INSERT INTO stripe_cancellations (stripe_subscription_id, trace_id)
+           SELECT stripe_subscription_id, $2 FROM subscriptions WHERE uid = $1 AND stripe_subscription_id IS NOT NULL
+         ON CONFLICT (stripe_subscription_id) DO NOTHING`,
+        [input.uid, input.traceId ?? null],
+      );
       const gone = await client.query('DELETE FROM users WHERE uid = $1', [input.uid]);
       return {
         // A real account row went (not just the placeholder made above).
@@ -140,6 +153,7 @@ export async function deleteAccountData(
         notesQueued: notes.rows.length,
         membershipsDeleted: members.rowCount ?? 0,
         recallPurges,
+        stripeCancellations: stripe.rowCount ?? 0,
       };
     },
     { log, fields: { userId: input.uid } },

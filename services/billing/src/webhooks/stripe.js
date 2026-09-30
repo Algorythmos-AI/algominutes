@@ -19,6 +19,7 @@
 
 import {
   activateSubscription,
+  cancelIfAccountDeleted,
   setSubscriptionStatus,
   findUidByRailId,
   trackEvent,
@@ -80,6 +81,12 @@ export async function stripeWebhookRoute(req, res) {
       const customerId = session.customer || null;
       if (!uid || !subscriptionId) {
         log.error({ uid, subscriptionId, event: 'stripe_checkout_incomplete' }, 'stripe_checkout_incomplete');
+        break;
+      }
+      // Paid for an account deleted meanwhile (RELEASE.md PR 28b): it's cancelled, never activated
+      // (activating would fail the deleted user's foreign key, and Stripe would go on charging).
+      if (await cancelIfAccountDeleted(uid, subscriptionId, req.traceId)) {
+        log.warn({ uid, userId: uid, subscriptionId, event: 'stripe_checkout_after_deletion' }, 'stripe_checkout_after_deletion');
         break;
       }
       // Retrieve the subscription to read the price (plan) + current_period_end.

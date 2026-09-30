@@ -9,6 +9,7 @@ export * from './dead-letter-repo.js';
 export * from './push-tokens-repo.js';
 export * from './notices-repo.js';
 export * from './subscriptions-repo.js';
+export * from './stripe-cancellations-repo.js';
 export * from './analytics-repo.js';
 export * from './compliance-repo.js';
 export * from './note-speakers-repo.js';

@@ -261,3 +261,38 @@ resource "google_cloud_scheduler_job" "billing_reconcile_apple" {
 
   depends_on = [google_project_service.apis]
 }
+
+# ---------------------------------------------------------------------------
+# Billing's Stripe cancellations (services/billing/src/tasks/cancel-stripe.js):
+# every 15 minutes it cancels, with Stripe, the subscriptions of deleted
+# accounts (RELEASE.md PR 28b), which would otherwise go on charging. Called as
+# reconcile-apple is. With nothing waiting it reads one table and never calls
+# Stripe.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "billing_cancel_stripe" {
+  project          = var.project_id
+  region           = var.region
+  name             = "billing-cancel-stripe"
+  description      = "Cancels deleted accounts' Stripe subscriptions (billing /tasks/cancel-stripe)."
+  schedule         = "*/15 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "90s" # billing answers within its 60 s request timeout
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["billing"]}/tasks/cancel-stripe"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "cancel-stripe" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["billing"]}/tasks/cancel-stripe"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}

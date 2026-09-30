@@ -417,6 +417,13 @@ struct DeleteAccountSheet: View {
                 .foregroundStyle(Theme.body)
                 .fixedSize(horizontal: false, vertical: true)
 
+            // RELEASE.md PR 28b; App Review 5.1.1(v): deleting the account doesn't
+            // cancel an App Store subscription, and only the App Store can.
+            Text("A subscription bought in the App Store isn't cancelled with your account: cancel it in Settings, your name, then Subscriptions. One bought on the web is cancelled for you.")
+                .font(Typography.body(14))
+                .foregroundStyle(Theme.body)
+                .fixedSize(horizontal: false, vertical: true)
+
             ConsentCheckbox(
                 isChecked: $acknowledged,
                 text: "I understand this is permanent and I have exported anything I want to keep."

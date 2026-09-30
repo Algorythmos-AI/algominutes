@@ -23,6 +23,8 @@
 //                  staging is behind Vercel Authentication. It's sent only to the
 //                  site's own origin, never to Google or the api.
 //   E2E_READY_MS   how long a note may take to be ready (default 8 minutes)
+//   E2E_STRIPE     'true' to buy Pro with Stripe's test card 4242 before the deletion (RELEASE.md PR 28b),
+//                  once staging's billing has Stripe's test-mode keys; the deletion then cancels it
 //   E2E_BUDGET_MS  how long the journey may take in all, before the deletion (default 20 minutes);
 //                  every wait is cut to what's left, so the deletion always runs inside the job's timeout
 // Needs Playwright's Chromium and ffmpeg (the fake microphone, and the fake tab's
@@ -44,7 +46,13 @@ export function e2eConfig(env = process.env) {
   if (url.protocol !== 'https:' && !local) throw new Error(`e2e-web: SITE_URL must be https (got ${url.protocol})`);
   if (url.pathname !== '/' || url.search || url.hash) throw new Error('e2e-web: SITE_URL is an origin, with no path');
   const ms = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback);
-  return { siteUrl: url.origin, bypass: (env.VERCEL_BYPASS || '').trim(), readyMs: ms(env.E2E_READY_MS, 8 * 60_000), budgetMs: ms(env.E2E_BUDGET_MS, 20 * 60_000) };
+  return {
+    siteUrl: url.origin,
+    bypass: (env.VERCEL_BYPASS || '').trim(),
+    readyMs: ms(env.E2E_READY_MS, 8 * 60_000),
+    budgetMs: ms(env.E2E_BUDGET_MS, 20 * 60_000),
+    stripe: env.E2E_STRIPE === 'true',
+  };
 }
 
 /** Whether a request goes to the site itself: only those carry the bypass secret. */
@@ -60,6 +68,35 @@ export function isSiteRequest(requestUrl, siteUrl) {
 /** The headers that let automation through Vercel Authentication (and set its cookie for the rest of the run). */
 export const bypassHeaders = (bypass) => (bypass ? { 'x-vercel-protection-bypass': bypass, 'x-vercel-set-bypass-cookie': 'true' } : {});
 
+/** Whether a page is Stripe's (Checkout): its own console messages aren't ours to fail on. */
+export const isStripePage = (pageUrl) => {
+  try {
+    const { hostname } = new URL(pageUrl);
+    return hostname === 'stripe.com' || hostname.endsWith('.stripe.com');
+  } catch {
+    // silent-catch-ok: about:blank and the like aren't Stripe's
+    return false;
+  }
+};
+
+/**
+ * Pays on Stripe's hosted Checkout with the test card 4242 (Stripe's test mode charges nothing). Its fields
+ * are Stripe's: an email when Stripe asks for one, the card, a name, and a postcode where the country needs one.
+ */
+export async function payWithTestCard(page) {
+  const optional = async (selector, value) => {
+    const field = page.locator(selector);
+    if (await field.isVisible()) await field.fill(value);
+  };
+  await optional('#email', 'e2e-checkout@example.com');
+  await page.locator('#cardNumber').fill('4242 4242 4242 4242');
+  await page.locator('#cardExpiry').fill('12 / 34');
+  await page.locator('#cardCvc').fill('123');
+  await page.locator('#billingName').fill('AlgoMinutes E2E');
+  await optional('#billingPostalCode', '2000');
+  await page.locator('button[type="submit"]').click();
+}
+
 /** The fixture as a WAV, for Chromium's fake microphone. */
 export function fixtureWav(fixture = FIXTURE, run = execFileSync) {
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-web-')), 'speech.wav');
@@ -67,7 +104,7 @@ export function fixtureWav(fixture = FIXTURE, run = execFileSync) {
   return out;
 }
 
-export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_000, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, longMs = 180_000, write = (s) => process.stdout.write(s) }) {
+export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, budgetMs = 20 * 60_000, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, longMs = 180_000, write = (s) => process.stdout.write(s) }) {
   // Every wait is cut to what's left of the budget, and the fixed ones (not a note's summary, which waits
   // readyMs) also to longMs, so a test can bound the whole run. The deletion has its own waits, below.
   const deadline = Date.now() + budgetMs;
@@ -114,8 +151,9 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_0
   // Every click and fill waits at most this long for its element.
   page.setDefaultTimeout(actionMs);
   const problems = [];
-  page.on('console', (m) => m.type() === 'error' && problems.push(m.text().slice(0, 200)));
-  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message.slice(0, 200)}`));
+  // Ours only: Stripe's Checkout page logs its own.
+  page.on('console', (m) => m.type() === 'error' && !isStripePage(page.url()) && problems.push(m.text().slice(0, 200)));
+  page.on('pageerror', (e) => !isStripePage(page.url()) && problems.push(`pageerror: ${e.message.slice(0, 200)}`));
   const heading = (name, timeout = wait(30_000)) => within(page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout }));
   const toNote = () => within(page.waitForURL(/\/app\/notes\/[^/?#]+/, { timeout: wait(180_000) }));
 
@@ -190,6 +228,18 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, budgetMs = 20 * 60_0
     await page.waitForTimeout(recordMs);
     await page.getByRole('button', { name: 'Stop and save' }).click();
     check('a recorded call becomes a note with a summary', (await toNote()) && (await heading('Summary', Math.min(readyMs, left()))), page.url().replace(siteUrl, ''));
+
+    // RELEASE.md PR 28b: Pro on the web, with Stripe's test card, back to the app, and the plan is Pro.
+    // The deletion below then records the subscription, and billing's cancel-stripe task cancels it.
+    if (stripe) {
+      await page.goto(`${siteUrl}/app/settings`);
+      await page.getByRole('button', { name: 'Pro, monthly' }).click();
+      if (!check('Go Pro opens Stripe Checkout', await within(page.waitForURL((u) => isStripePage(String(u)), { timeout: wait(30_000) })))) return;
+      await payWithTestCard(page);
+      const back = await within(page.waitForURL(`${siteUrl}/app/billing/success`, { timeout: wait(90_000) }));
+      check('the test card pays, and Stripe sends the buyer back to the app', back, page.url().split('?')[0]);
+      check('the plan becomes Pro', back && (await heading('You’re on Pro', wait(60_000))));
+    }
   };
   try {
     await journey().catch((err) => check('the journey ran to the end', false, err?.message?.slice(0, 200)));
