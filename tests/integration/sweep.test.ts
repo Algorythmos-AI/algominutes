@@ -84,6 +84,19 @@ describe('sweep', () => {
     expect(sweep.STUCK_NOTE_MS).toBeGreaterThan(repo.IN_FLIGHT_STALE_MS);
   });
 
+  // RELEASE.md rev 11, H6b: the sweep offers held notes to the kickoff (held-notes.test.ts covers the resume).
+  it('offers a note held for minutes to the kickoff, and leaves it held while the minutes still fall short', async () => {
+    const f = fakes();
+    await repo.grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 10 });
+    await seedNote('held', 'ws-a', 'alice');
+    await pool.query(`UPDATE notes SET status = 'awaiting_minutes', source_type = 'recording', storage_path = 'recordings/ws-a/held.m4a',
+                             duration_sec_probed = 1200 WHERE id = 'held'`);
+    const counts = await runSweep(f.deps);
+    expect(counts.resume_held_notes).toEqual({ held: 1, resumed: 0, waiting: 1, leftHeld: 0 });
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'held'`)).rows[0].status).toBe('awaiting_minutes');
+    expect(errors).toEqual([]);
+  });
+
   it('retries pending purges past their grace; leaves fresh ones; flags stuck ones without running them', async () => {
     const f = fakes();
     await pool.query(

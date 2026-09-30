@@ -26,6 +26,10 @@ declare module '@algominutes/db/ledger-reversal.cjs' {
   const mod: unknown;
   export default mod;
 }
+declare module '@algominutes/db/note-terminal.cjs' {
+  const mod: unknown;
+  export default mod;
+}
 declare module '@algominutes/db/note-notices.cjs' {
   const mod: unknown;
   export default mod;
