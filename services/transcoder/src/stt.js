@@ -5,12 +5,31 @@
 // actual count) + word time offsets. Operations resolve via the polling
 // task; we never block the request waiting for STT to finish.
 
-let _client = null;
-function getClient() {
-  if (_client) return _client;
+// Where speech-to-text runs (RELEASE.md rev 11, N2): STT_LOCATION, set by Terraform to the region (Sydney), so
+// audio stays in Australia. Unset, it's `global`, as before. `long` in australia-southeast1 takes en-AU only
+// (probed 2026-10-01), so Terraform sets LANGUAGE_CODES with it.
+function sttLocation() {
+  return process.env.STT_LOCATION || 'global';
+}
+
+/** The SpeechClient options for a location: a regional endpoint, or the default for `global`. */
+function clientOptionsFor(location) {
+  return location && location !== 'global' ? { apiEndpoint: `${location}-speech.googleapis.com` } : {};
+}
+
+/** The location an operation runs in, from its name (projects/…/locations/{loc}/operations/…). */
+function operationLocation(operationName) {
+  const m = /\/locations\/([^/]+)\//.exec(String(operationName || ''));
+  return m ? m[1] : 'global';
+}
+
+const _clients = new Map();
+function getClient(location = sttLocation()) {
+  if (_clients.has(location)) return _clients.get(location);
   const { v2 } = require('@google-cloud/speech');
-  _client = new v2.SpeechClient();
-  return _client;
+  const client = new v2.SpeechClient(clientOptionsFor(location));
+  _clients.set(location, client);
+  return client;
 }
 
 function buildConfig({ recognizer, languageCodes, diarization = true }) {
@@ -63,7 +82,7 @@ function buildConfig({ recognizer, languageCodes, diarization = true }) {
   return config;
 }
 
-async function startLongRunning({ recognizer, gcsUri, languageCodes, log, client = getClient() }) {
+async function startLongRunning({ recognizer, gcsUri, languageCodes, log, client = getClient(recognizer ? operationLocation(recognizer) : sttLocation()) }) {
   const request = buildBatchRecognizeRequest({ recognizer, gcsUri, languageCodes, diarization: true });
   try {
     const [operation] = await client.batchRecognize(request);
@@ -103,7 +122,7 @@ function defaultSystemRecognizer() {
     || process.env.GCLOUD_PROJECT
     || process.env.GCP_PROJECT
     || process.env.TASKS_PROJECT;
-  return `projects/${projectId || '-'}/locations/global/recognizers/_`;
+  return `projects/${projectId || '-'}/locations/${sttLocation()}/recognizers/_`;
 }
 
 function isUnsupportedDiarizationError(err) {
@@ -116,7 +135,7 @@ function isUnsupportedDiarizationError(err) {
     && /invalid[_ ]argument|3|unsupported fields/i.test(haystack);
 }
 
-async function checkOperation(operationName, client = getClient()) {
+async function checkOperation(operationName, client = getClient(operationLocation(operationName))) {
   // `checkBatchRecognizeProgress` returns a single LROperation instance,
   // NOT a tuple. The previous `const [op] = await ...` destructure threw
   // "(intermediate value) is not iterable" on every poll, exhausting
@@ -221,6 +240,9 @@ function wordsToLines(words) {
 }
 
 module.exports = {
+  sttLocation,
+  clientOptionsFor,
+  operationLocation,
   startLongRunning,
   checkOperation,
   flattenWords,
