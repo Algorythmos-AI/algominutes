@@ -7,7 +7,7 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 // and the text-embedding-004 → gemini-embedding-001 migration (due before
 // 2027-04-01) re-embeds in place, so both kinds of row will coexist.
 const require = createRequire(import.meta.url);
-const { hybridSearch, handleSearch } = require('../../services/api/src/routes/search-and-chat.cjs');
+const { hybridSearch, handleSearch, handleChatStream, chatRequestBody } = require('../../services/api/src/routes/search-and-chat.cjs');
 const { EMBED_MODEL } = require('@algominutes/ai/models.cjs');
 const readPool = require('@algominutes/ai/pg-query.cjs').pool();
 
@@ -76,5 +76,34 @@ describe('the search log line', () => {
     lines.length = 0;
     await handleSearch({ uid: 'alice', body: { query: 'zzqx', noteId: 'not an id <script>' }, log: logger({}), embed: async () => unit(1) });
     expect(JSON.stringify(lines)).not.toContain('<script>');
+  });
+});
+
+// RELEASE.md rev 11, L4 and N7 (H9a).
+describe('search and chat limits', () => {
+  it('a question over 2,000 characters is refused before anything is embedded or asked', async () => {
+    let embedded = 0;
+    const embed = async () => { embedded++; return unit(1); };
+    expect((await handleSearch({ uid: 'alice', body: { query: 'q'.repeat(2001) }, log, embed })).status).toBe(400);
+    expect((await handleSearch({ uid: 'alice', body: { query: 'q'.repeat(2000) }, log, embed })).status).toBe(200);
+    expect(embedded).toBe(1);
+
+    const out = { status: 0, body: undefined as any };
+    const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.body = b; return this; } };
+    await handleChatStream({ uid: 'alice', body: { query: 'q'.repeat(2001) }, log, res });
+    expect(out).toEqual({ status: 400, body: { error: expect.stringMatching(/2,000 characters/) } });
+  });
+
+  it("a note whose run failed isn't searched: its embeddings and lines may be from an earlier run", async () => {
+    await pool.query(`UPDATE notes SET status = 'error' WHERE id = 'current'`);
+    await pool.query(`INSERT INTO transcript_lines (note_id, start_ms, end_ms, text) VALUES ('current', 0, 1000, 'zzqx planning budget')`);
+    const hits = await hybridSearch({ uid: 'alice', query: 'zzqx planning budget', k: 10, log, embed: async () => unit(1) });
+    expect(hits.map((h: { noteId: string }) => h.noteId)).not.toContain('current');
+  });
+
+  it("chat asks Vertex for a bounded answer, with the model's thinking capped", () => {
+    const body = chatRequestBody('the prompt');
+    expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'the prompt' }] }]);
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 1024 } });
   });
 });

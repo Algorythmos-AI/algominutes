@@ -194,6 +194,8 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
               WHERE e.workspace_id = ANY($2)
                 AND e.model = $4
                 AND n.deleted_at IS NULL
+                -- A failed run's note: its rows may be from an earlier run (rev 11 N7).
+                AND n.status <> 'error'
                 ${noteId ? 'AND e.note_id = $5' : ''}
               ORDER BY e.embedding <=> $1::vector
               LIMIT $3`,
@@ -223,6 +225,7 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
                     SELECT id FROM notes
                      WHERE workspace_id = ANY($2)
                        AND deleted_at IS NULL
+                       AND status <> 'error'
                   )
               AND t.text % $1
               ${noteId ? 'AND t.note_id = $4' : ''}
@@ -293,6 +296,20 @@ function noteLog(log, noteId) {
   return noteId && isValidId(noteId) && log && typeof log.child === 'function' ? log.child({ noteId }) : log;
 }
 
+// RELEASE.md rev 11, L4 (H9a): a question is at most this long. Nothing bounded it but the 1 MB body limit, so one
+// request could send a 250k-token prompt to the embedder and to Gemini.
+const MAX_QUESTION_CHARS = 2000;
+// A chat answer is a few paragraphs: bounded, with the model's thinking capped inside it.
+const CHAT_GENERATION_CONFIG = Object.freeze({ maxOutputTokens: 2048, thinkingConfig: Object.freeze({ thinkingBudget: 1024 }) });
+
+/** The Vertex request for a chat answer. */
+function chatRequestBody(prompt) {
+  return {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { ...CHAT_GENERATION_CONFIG, thinkingConfig: { ...CHAT_GENERATION_CONFIG.thinkingConfig } },
+  };
+}
+
 async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
   if (!postgresEnabled()) {
     return { status: 503, body: { error: 'Search is unavailable until Postgres is provisioned.' } };
@@ -301,6 +318,10 @@ async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
   const log = noteLog(requestLog, noteId);
   const rawQuery = String(body && body.query || '').trim();
   if (!rawQuery) return { status: 400, body: { error: 'query is required' } };
+  if (rawQuery.length > MAX_QUESTION_CHARS) {
+    log.warn({ uid, queryLen: rawQuery.length }, 'search_query_too_long');
+    return { status: 400, body: { error: 'Keep your search under 2,000 characters.' } };
+  }
   // CLAUDE.md §2: redact user input BEFORE it reaches the embedder (and
   // before logging). Prevents a user accidentally pasting an SSN or
   // Medicare number into the search box from poisoning the vector index
@@ -433,6 +454,11 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   }
   const noteId = body && body.noteId ? String(body.noteId) : undefined;
   const log = noteLog(requestLog, noteId);
+  if (rawQuestion.length > MAX_QUESTION_CHARS) {
+    log.warn({ uid, queryLen: rawQuestion.length }, 'chat_question_too_long');
+    res.status(400).json({ error: 'Keep your question under 2,000 characters.' });
+    return;
+  }
   // CLAUDE.md §2: redact user-supplied question before embedder, before
   // Gemini prompt construction, before logs. The chat retrieval path
   // already redacts retrieved chunks (buildChatPrompt below); PR-A4
@@ -507,9 +533,7 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
     const upstream = await fetch(url, {
       method: 'POST',
       headers: { Authorization: await vertexAuthHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      }),
+      body: JSON.stringify(chatRequestBody(prompt)),
     });
     if (!upstream.ok || !upstream.body) {
       // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
@@ -552,4 +576,4 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   }
 }
 
-module.exports = { handleSearch, handleChatStream, hybridSearch, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
