@@ -267,7 +267,8 @@ final class NotesRepository {
         ])
 
         do {
-            try await api.processAudio(request)
+            let answer = try await api.processAudio(request)
+            if APIClient.kickoffWasHeld(answer) { onQuotaExceeded?(nil) }
             return .queued
         } catch {
             let failure = KickoffFailure(error, fallback: "Could not queue this retry. Please try again.")

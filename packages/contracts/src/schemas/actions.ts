@@ -31,13 +31,20 @@ export const ProcessCachedResponse = z
   .object({ success: z.literal(true), noteId: z.string(), cached: z.literal(true) })
   .openapi('ProcessCachedResponse');
 
-/** A duplicate kickoff of a note already being processed: nothing was changed. */
+/**
+ * A duplicate kickoff of a note already being processed: nothing was changed.
+ * With `held` (RELEASE.md rev 11, H6c): an uploaded recording over the minutes
+ * left, held for them ('awaiting_minutes', uncharged) and processed once minutes
+ * arrive. `status` is null then, so a client that predates `held` still reads it
+ * as accepted.
+ */
 export const ProcessInFlightResponse = z
   .object({
     success: z.literal(true),
     noteId: z.string(),
     status: z.enum(['queued', 'chunking', 'transcribing', 'summarizing']).nullable(),
     inFlight: z.literal(true),
+    held: z.literal(true).optional(),
   })
   .openapi('ProcessInFlightResponse');
 

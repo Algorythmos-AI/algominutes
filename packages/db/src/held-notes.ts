@@ -46,8 +46,8 @@ export interface HeldNote {
   durationSec: number | null;
 }
 
-/** Held notes whose author is still in the workspace, oldest hold first. */
-export async function listHeldNotes(input: { limit: number }): Promise<HeldNote[]> {
+/** Held notes whose author is still in the workspace, oldest hold first; with `uid`, only that user's. */
+export async function listHeldNotes(input: { limit: number; uid?: string }): Promise<HeldNote[]> {
   if (!isPostgresEnabled()) return [];
   const { rows } = await getPool().query(
     `SELECT n.id AS "noteId", n.workspace_id AS "workspaceId", n.author_uid AS uid, n.source_type AS type,
@@ -56,9 +56,10 @@ export async function listHeldNotes(input: { limit: number }): Promise<HeldNote[
        FROM notes n
        JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.uid = n.author_uid
       WHERE n.status = 'awaiting_minutes' AND n.deleted_at IS NULL
+        AND ($2::text IS NULL OR n.author_uid = $2)
       ORDER BY n.updated_at, n.id
       LIMIT $1`,
-    [input.limit],
+    [input.limit, input.uid ?? null],
   );
   return rows;
 }
@@ -78,12 +79,14 @@ export async function resumeHeldNotes(input: {
   /** The sweep run's: every resume line and the kickoff it starts carry it. */
   traceId: string;
   limit?: number;
+  /** Only this user's held notes: the invite redeem resumes them at once, not at the next sweep. */
+  uid?: string;
   env?: NodeJS.ProcessEnv;
   /** The kickoff; a test passes its own. */
   queue?: (k: KickoffInput) => Promise<KickoffResult>;
 }): Promise<ResumeOutcome> {
   const queue = input.queue ?? queueNoteRun;
-  const held = await listHeldNotes({ limit: input.limit ?? 100 });
+  const held = await listHeldNotes({ limit: input.limit ?? 100, uid: input.uid });
   const out: ResumeOutcome = { held: held.length, resumed: 0, waiting: 0, leftHeld: 0 };
   const waitingUids = new Set<string>();
   for (const n of held) {

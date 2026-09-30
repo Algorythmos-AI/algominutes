@@ -485,7 +485,8 @@ describe('trial switched off (TRIAL_ON_FIRST_USE=off)', () => {
       uid: 'gina', authEmail: 'gina@test.invalid', log: captureLog().log, traceId: 't', headers: {},
       body: { noteId: 'n9', workspaceId: 'workspace_gina', type: 'recording', storagePath: 'recordings/workspace_gina/n9.m4a', durationSec: 120 },
     }, res);
-    expect(out.status).toBe(402);
+    // No minutes: the uploaded recording is held for them (RELEASE.md rev 11, H6c), and no trial was started.
+    expect(out).toMatchObject({ status: 202, body: { held: true, status: null, inFlight: true } });
     expect(await resolveEntitlement('gina')).toMatchObject({ state: 'free_floor' });
   });
 
@@ -504,19 +505,25 @@ describe('trial switched off (TRIAL_ON_FIRST_USE=off)', () => {
     expect(await resolveEntitlement('alice')).toMatchObject({ state: 'trialing' });
   });
 
-  it('a first recording is refused (402), the tester redeems, and the retry is queued', async () => {
+  // RELEASE.md rev 11, H6: the first recording is held, not refused, and redeeming the code runs it.
+  it('a first recording is held for minutes (202), the tester redeems, and it is queued by the redeem itself', async () => {
     process.env.TRIAL_ON_FIRST_USE = 'off';
     await seedWorkspace('workspace_alice', 'alice');
-    const refused = await kickoff('alice', 'n1', { 'x-device-attestation': 'token', 'x-device-platform': 'ios' });
-    expect(refused.status).toBe(402);
+    const held = await kickoff('alice', 'n1', { 'x-device-attestation': 'token', 'x-device-platform': 'ios' });
+    expect(held).toMatchObject({ status: 202, body: { held: true } });
     expect(enqueued).toHaveLength(0);
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'n1' AND status = 'awaiting_minutes'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(0);
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'awaiting_minutes' });
 
     await invite();
-    expect((await redeemOverHttp('alice', { code: CODE })).status).toBe(200);
-    const retried = await kickoff('alice', 'n1');
-    expect(retried).toMatchObject({ status: 200, body: { status: 'queued' } });
+    const redeemed = await redeemOverHttp('alice', { code: CODE }, { traceId: 'trace-redeem' });
+    expect(redeemed.status).toBe(200);
     expect(enqueued).toHaveLength(1);
     expect(await count(`SELECT 1 FROM notes WHERE id = 'n1' AND status = 'queued'`)).toBe(1);
+    // A client's retry now finds it running: nothing more is queued.
+    expect(await kickoff('alice', 'n1')).toMatchObject({ status: 202, body: { inFlight: true, status: 'queued' } });
+    expect(enqueued).toHaveLength(1);
   });
 });
 

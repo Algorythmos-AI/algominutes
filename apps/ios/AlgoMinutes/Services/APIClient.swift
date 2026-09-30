@@ -182,6 +182,14 @@ final class APIClient: Sendable {
         var durationSec: Double?
     }
 
+    /// A kickoff the server held for minutes (RELEASE.md rev 11, H6c): a 202
+    /// with `held: true`. The recording is uploaded and kept, uncharged, and is
+    /// processed once minutes arrive; the caller offers Pro or the invite code,
+    /// as it did for the 402 this replaces.
+    static func kickoffWasHeld(_ answer: [String: Any]) -> Bool {
+        answer["held"] as? Bool == true
+    }
+
     @discardableResult
     func processAudio(_ r: ProcessAudioRequest) async throws -> [String: Any] {
         var body: [String: Any] = [
