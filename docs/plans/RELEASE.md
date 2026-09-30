@@ -255,7 +255,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 
 | # | PR / step | What it does |
 |---|---|---|
-| 39 | `feat(infra,ci)` S3-PR4 | • the prod root finished, and `deploy-production.yml` (runs from `main` after a promotion, with migrate, vertex-smoke, rollout and both smokes)<br>• the Release origins in `project.yml`<br>• the prod CSP and `/__/auth` in `vercel.json`<br>• PITR and deletion protection on |
+| 39 | `feat(infra,ci)` S3-PR4 | **39a (done):** `deploy-production.yml`, deploy-staging's jobs for `main` in the `production` Environment, gated by `DEPLOY_PRODUCTION`, kept identical to staging's by `tests/deploy-production.test.ts`; the prod root already has PITR, deletion protection and Firestore `ABANDON`. **Still to do, once Apply P gives prod its addresses:** • the prod root finished, and `deploy-production.yml` (runs from `main` after a promotion, with migrate, vertex-smoke, rollout and both smokes)<br>• the Release origins in `project.yml`<br>• the prod CSP and `/__/auth` in `vercel.json`<br>• PITR and deletion protection on |
 | 40 | `fix(api,db)` S3-PR11 | • the api checks token revocation (`verifyIdToken(…, true)`, `middleware/auth.js:34`)<br>• shared workspaces on account deletion |
 | — | **Yours: Apply P** | • bootstrap `algominutes-prod-tfstate`, then apply<br>• prod Firebase: Blaze, providers, APNs key, iOS/web apps, VAPID<br>• a prod Apple Services ID return URL<br>• a prod Recall account<br>• Vercel Production env plus `APP_ENABLED`<br>• re-scope the prod budget |
 | — | **Yours: promotion P3** | Then the first prod deploy, the authenticated smoke, and a prod restore drill |

@@ -1,49 +1,33 @@
-name: deploy-staging
+name: deploy-production
 
-# Builds and deploys changed services to the STAGING Cloud Run services
-# Terraform created (infra/terraform/modules/environment/cloud-run.tf).
-# Branch model: `integration` (default) = staging, `main` =
-# production — so this runs on pushes to `integration`; deploy-production.yml
-# runs the same jobs for `main` (tests/deploy-production.test.ts keeps them one).
+# Builds and deploys changed services to PRODUCTION: the same pipeline as deploy-staging.yml, for `main`
+# (RELEASE.md PR 39, S3-PR4). Branch model: `integration` = staging, `main` = production, and `main` takes only
+# promotion PRs from `integration` (promotion-guard), so what reaches here has already deployed to staging.
 #
-# - Order: build → migrate + Vertex smoke → rollout in three waves → smoke. Every image is built first; the
-#   db-job `migrate` handler then applies migrations INSIDE the VPC (Cloud SQL
-#   is private-IP) from the image built at this commit, and must finish before
-#   any service image rolls out. That is safe because new migrations are
-#   expand-only or explicitly marked contract steps (the invariants gate
-#   scripts/check-migration-expand.mjs), so old images keep working on it. A failed migrate
-#   stops the deploy with every service still on its previous image.
-# - Rollout waves (RELEASE.md PR 26c, audit Q25): a service goes live only after
-#   every service it hands work to. Wave 1 is the workers (and billing and
-#   db-job, which take nobody's tasks); wave 2 is meetings, which queues the
-#   transcoder's runs; wave 3 is the api, which queues everyone's. So a task
-#   in a new shape is never sent to an old worker, and a wave that fails stops
-#   the ones after it, leaving the front on its previous image.
-# - Keyless: authenticates via Workload Identity Federation as gha-deployer.
-#   Every job that authenticates runs in the `staging` GitHub Environment: the
-#   WIF provider only accepts tokens from refs/heads/integration in that
-#   environment (infra/terraform/modules/environment/cloud-run.tf), so no other
-#   branch, PR or workflow can deploy.
-# - Image-only: `gcloud run services update --image` changes ONLY the image;
-#   env, service account, VPC and limits stay owned by Terraform (which ignores
-#   the image field, so the two never fight).
-# - Gated: does nothing until the repo variable DEPLOY_STAGING == 'true'
-#   (set it after the staging `terraform apply`; see
-#   docs/runbooks/resume-staging-and-deploy.md). Required repo variables:
-#   GCP_PROJECT_ID, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA. Required secret:
-#   STAGING_FIREBASE_API_KEY (the authenticated smoke signs up a test user).
-# - Prod: deploy-production.yml, the same jobs for `main` in the `production`
-#   Environment. Change a job here and there together, or the test fails.
+# The jobs are deploy-staging.yml's, with only these differences, and tests/deploy-production.test.ts fails
+# if the two drift apart in anything else:
+#   - it runs on pushes to `main`, in the `production` GitHub Environment, under its own concurrency group;
+#   - it's gated by the repo variable DEPLOY_PRODUCTION == 'true' (set it after the prod `terraform apply`,
+#     Apply P);
+#   - the authenticated smoke signs its test user up with the secret PROD_FIREBASE_API_KEY.
+# So: build → migrate + Vertex smoke → rollout in three waves (workers, then meetings, then the api) → the
+# reachability smoke and the authenticated smoke (a real user, end to end, then deleted) → the sweeper resumed.
+#
+# The `production` Environment holds prod's GCP_PROJECT_ID, GCP_WIF_PROVIDER and GCP_DEPLOYER_SA (environment
+# variables override the repo's staging ones of the same name) and the PROD_FIREBASE_API_KEY secret. Its WIF
+# provider accepts tokens only from refs/heads/main in that Environment (infra/terraform/envs/prod/main.tf), so
+# no other branch, PR or workflow can deploy to prod. Add required reviewers to the Environment if a person
+# should approve each prod deploy.
 on:
   push:
-    branches: [integration]
+    branches: [main]
     paths:
       - 'services/**'
       - 'packages/ai/**'
       - 'packages/db/**'
       - 'packages/contracts/**'
       - 'package-lock.json'
-      - '.github/workflows/deploy-staging.yml'
+      - '.github/workflows/deploy-production.yml'
       - 'scripts/smoke-staging.sh'
       - 'scripts/smoke-auth.mjs'
   workflow_dispatch:
@@ -54,7 +38,7 @@ on:
         required: true
 
 concurrency:
-  group: deploy-staging
+  group: deploy-production
   cancel-in-progress: false
 
 env:
@@ -66,7 +50,7 @@ permissions:
 
 jobs:
   changes:
-    if: vars.DEPLOY_STAGING == 'true'
+    if: vars.DEPLOY_PRODUCTION == 'true'
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.pick.outputs.services }}
@@ -170,7 +154,7 @@ jobs:
     needs: [changes, ci-gate]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -203,7 +187,7 @@ jobs:
     needs: [changes, build]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     timeout-minutes: 30
     permissions:
       contents: read
@@ -258,7 +242,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.wave1 != '[]'
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -291,7 +275,7 @@ jobs:
       !cancelled() && needs.changes.outputs.wave2 != '[]' && needs.migrate.result == 'success'
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -316,7 +300,7 @@ jobs:
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
       && (needs.rollout-meetings.result == 'success' || needs.rollout-meetings.result == 'skipped')
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -339,7 +323,7 @@ jobs:
       !cancelled() && needs.changes.outputs.services != '[]' && needs.migrate.result == 'success'
       && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -363,7 +347,7 @@ jobs:
       - name: Authenticated smoke
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
-          FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY }}
+          FIREBASE_API_KEY: ${{ secrets.PROD_FIREBASE_API_KEY }}
         run: |
           set -euo pipefail
           API_URL=$(gcloud run services describe api --region "$REGION" --project "$PROJECT" --format='value(status.url)')
