@@ -24,6 +24,14 @@ locals {
       severity  = "ERROR"
       doc       = "A note or account purge failed 10 times and is no longer retried: a deleted note's doc or audio still exists. See the sweep's storage_purge_stuck log line (purgeId, noteId, lastError) and runbook 'Deletion'."
     }
+    # An upload no note followed within 30 minutes (RELEASE.md rev 11, L2): the app died between the upload and
+    # the kickoff. Reported once per upload by the sweep.
+    upload_never_processed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "A recording was uploaded but never processed: no note followed it within 30 minutes (upload_never_processed: uid, noteId, storagePath). The audio is in Cloud Storage. The app re-sends the kickoff when it next runs; if the user doesn't come back, contact them, or run it from the admin tools."
+    }
     # The notetaker (RELEASE.md PR 19). The purge worker re-logs an exhausted purge every 30 minutes, so the
     # alert stays open until a person acts.
     recall_purge_exhausted = {

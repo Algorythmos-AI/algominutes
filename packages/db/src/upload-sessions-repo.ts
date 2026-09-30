@@ -120,3 +120,49 @@ export async function deleteExpiredUploadSessions(now: Date = new Date()): Promi
   const { rowCount } = await getPool().query('DELETE FROM upload_sessions WHERE expires_at < $1', [now]);
   return rowCount ?? 0;
 }
+
+/** Stamps an upload as complete (its object is in Cloud Storage). Idempotent: the first stamp stands. */
+export async function markUploadCompleted(input: { id: string; uid: string }): Promise<void> {
+  if (!isPostgresEnabled()) throw new UploadSessionsUnavailableError();
+  if (typeof input.id !== 'string' || !UUID.test(input.id)) return;
+  await getPool().query(
+    `UPDATE upload_sessions SET completed_at = COALESCE(completed_at, NOW()) WHERE id = $1 AND uid = $2`,
+    [input.id, input.uid],
+  );
+}
+
+export interface StrandedUpload {
+  id: string;
+  uid: string;
+  workspaceId: string;
+  noteId: string;
+  storagePath: string;
+  completedAt: Date;
+}
+
+/**
+ * Uploads completed at least `afterMs` ago that no note followed (RELEASE.md rev 11, L2): no note row, and not
+ * deleted before it ran. Each is returned once: it's stamped as reported in the same statement.
+ */
+export async function reportStrandedUploads(opts: { now?: Date; afterMs?: number; limit?: number } = {}): Promise<StrandedUpload[]> {
+  const now = opts.now ?? new Date();
+  const afterMs = opts.afterMs ?? 30 * 60 * 1000;
+  const { rows } = await getPool().query(
+    `UPDATE upload_sessions u SET stranded_reported_at = $1
+      WHERE u.id IN (
+        SELECT s.id FROM upload_sessions s
+         WHERE s.completed_at IS NOT NULL AND s.stranded_reported_at IS NULL
+           AND s.completed_at < $1::timestamptz - $2::bigint * INTERVAL '1 millisecond'
+           AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.id = s.note_id AND n.workspace_id = s.workspace_id)
+           AND NOT EXISTS (SELECT 1 FROM deleted_notes d WHERE d.note_id = s.note_id AND d.workspace_id = s.workspace_id)
+           AND NOT EXISTS (SELECT 1 FROM storage_purges p WHERE p.note_id = s.note_id AND p.workspace_id = s.workspace_id)
+         ORDER BY s.completed_at
+         LIMIT $3
+         FOR UPDATE SKIP LOCKED)
+     RETURNING u.id, u.uid, u.workspace_id, u.note_id, u.storage_path, u.completed_at`,
+    [now, afterMs, opts.limit ?? 50],
+  );
+  return rows.map((r) => ({
+    id: r.id, uid: r.uid, workspaceId: r.workspace_id, noteId: r.note_id, storagePath: r.storage_path, completedAt: new Date(r.completed_at),
+  }));
+}
