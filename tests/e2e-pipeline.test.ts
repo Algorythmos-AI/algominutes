@@ -66,7 +66,8 @@ function world(opts: {
     if (key === 'GET /v1/uploads/up-1') return json(200, { receivedBytes: held });
     if (key === 'POST /v1/uploads/up-1/complete') return held === total ? json(200, { complete: true }) : json(409, {});
     if (key.startsWith('POST FS?documentId=')) return json(200, { name: 'doc' });
-    if (key === 'POST /v1/process') return json(202, { success: true, noteId, status: 'queued' });
+    // The api's real answer: 200 with status queued (process-intelligence.js; tests/integration/process-kickoff.test.ts).
+    if (key === 'POST /v1/process') return json(200, { success: true, noteId, status: 'queued' });
     if (key.startsWith('GET FS/')) {
       polls += 1;
       const status = opts.ready === 'never' || polls < 2 ? 'processing' : opts.ready ?? 'ready';

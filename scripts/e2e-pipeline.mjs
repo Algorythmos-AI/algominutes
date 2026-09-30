@@ -214,7 +214,8 @@ export async function runPipelineE2E({
 
     const started = now();
     const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: 'audio/ogg', durationSec: minutes * 60 });
-    if (!check('POST /v1/process', kickoff.status === 202 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+    // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
+    if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
 
     let status = 'processing';
     let error = '';
