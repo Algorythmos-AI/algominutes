@@ -29,6 +29,10 @@ export function settingsFrom(env) {
   const webOrigins = String(env.EXT_WEB_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
     .map((o) => parseOrigin(o, 'EXT_WEB_ORIGINS'));
   if (!webOrigins.length) throw new Error('EXT_WEB_ORIGINS is not set');
+  // Any page on a web origin can hand the extension a sign-in code, so a build for testers trusts only the web
+  // app's own https origins: a localhost one only in a development build (EXT_DEV=1).
+  const local = webOrigins.filter((o) => new URL(o).protocol === 'http:');
+  if (local.length && env.EXT_DEV !== '1') throw new Error(`EXT_WEB_ORIGINS has ${local.join(', ')}: only a development build (EXT_DEV=1) may trust localhost`);
   const firebaseApiKey = String(env.EXT_FIREBASE_API_KEY ?? '').trim();
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(firebaseApiKey)) throw new Error('EXT_FIREBASE_API_KEY is not set, or not a key');
   return { apiOrigin, webOrigins, firebaseApiKey };

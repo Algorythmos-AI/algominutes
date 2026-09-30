@@ -21,6 +21,9 @@ EXT_FIREBASE_API_KEY=<the web app's VITE_FIREBASE_API_KEY> \
 npm run build -w apps/extension
 ```
 
+A build trusts only https web origins; add `EXT_DEV=1` to trust a local web app (`http://localhost:…`), and
+never ship that build: any page on a trusted origin can hand the extension a sign-in code.
+
 `dist/` is the extension. To try it, open `chrome://extensions` (or `edge://extensions`), turn on Developer
 mode, and choose **Load unpacked** with `apps/extension/dist`. For it to sign in:
 

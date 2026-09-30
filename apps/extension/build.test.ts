@@ -14,6 +14,12 @@ describe('the build settings', () => {
     expect(() => parseOrigin('https://api.example.test/v1', 'X')).toThrow('no path');
     expect(parseOrigin('http://localhost:8080', 'X')).toBe('http://localhost:8080');
   });
+
+  it('trusts a localhost web page only in a development build', () => {
+    const local = { ...env, EXT_WEB_ORIGINS: 'https://beta.example.test,http://localhost:5173' };
+    expect(() => settingsFrom(local)).toThrow('only a development build (EXT_DEV=1) may trust localhost');
+    expect(settingsFrom({ ...local, EXT_DEV: '1' }).webOrigins).toEqual(['https://beta.example.test', 'http://localhost:5173']);
+  });
 });
 
 describe('the manifest', () => {
