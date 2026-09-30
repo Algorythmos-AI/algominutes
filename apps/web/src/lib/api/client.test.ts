@@ -103,10 +103,11 @@ describe('every call sends the right request', () => {
     expect(s.headers['Content-Type']).toBe(body === undefined ? undefined : 'application/json');
   });
 
-  it('covers every operation in the published api contract (bar health and admin)', () => {
+  it('covers every operation in the published api contract (bar health, admin and the extension\'s own)', () => {
     const operations = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
       .flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ':p')}`))
-      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
+      // The web writes its own note doc; POST /v1/notes is for the extension, which doesn't (RELEASE.md PR 35).
+      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete' && op !== 'POST /v1/notes')
       .sort();
     const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
       .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)

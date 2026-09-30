@@ -234,7 +234,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 | 32 | `docs` ADR 0002 | The extension's design, permissions and data flow (`docs/decisions/` is created) |
 | 33 | `feat(contracts,api,web)` R3 progressive upload | `totalBytes` optional (unknown-length resumable). The web recorder uploads while recording, so the upload is done within 10 s of Stop |
 | 34 | `feat(api)` the extension's sign-in | `POST /v1/auth/extension-link`: a one-time code, 60 s, bound to the uid, the extension id and a verifier. It's exchanged for a Firebase custom token |
-| 35 | `feat(api,db)` `POST /v1/notes` | Reuses `createServerNote`, so the extension creates its note server-side |
+| 35 | `feat(api,db,contracts)` `POST /v1/notes` | The extension, which never writes Firestore, has its note created for it from its finished upload: the same doc the web and iOS write before their kickoff (`createClientNoteDoc`, beside `createServerNote`), then `/v1/process` as they do |
 | 36 | `feat(infra,api)` extension guards (**Apply C**) | `extension` in `MIN_SUPPORTED_CLIENTS`, the extension origins in `ALLOWED_ORIGINS`, and `extension` in `NOTETAKER_BUILT` |
 | 37 | `feat(extension)` `apps/extension` (MV3, Chrome and Edge) | • `tabCapture` in an offscreen document, with the mic and the tab on separate channels<br>• a popup, and a button on meet.google.com (record, or send the notetaker)<br>• the consent tick; progressive upload; status<br>• `externally_connectable` with a `sender.origin` check; `chrome.storage.session`<br>• CI: build, lint, unit tests, and Playwright with the extension loaded and fake media |
 | 38 | `docs(runbooks)` the extension beta | The store listing text, permission justifications, the privacy-practices answers, and the tester guide |

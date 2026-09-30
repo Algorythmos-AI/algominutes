@@ -1300,6 +1300,104 @@ export async function createServerNote(
   return { created: outcome.created };
 }
 
+// ── A client's note, created for it (the browser extension, RELEASE.md PR 35) ──
+
+export interface CreateClientNoteInput {
+  noteId: string;
+  workspaceId: string;
+  uid: string;
+  title: string;
+  type: 'recording';
+  mimeType: string;
+  /** Where the recording was uploaded: the upload session's path. */
+  storagePath: string;
+  durationSec?: number | null;
+}
+
+/**
+ * The note doc a client writes itself before its kickoff (the web's
+ * createNoteDoc, iOS's NotesRepository), written here for a client that never
+ * writes Firestore: the browser extension (ADR 0002 §2). The same fields and
+ * the same status, 'processing'. The kickoff (queueNoteRun) takes it from
+ * there, and the note enters Postgres then, as a web or iOS recording does.
+ *
+ * Postgres first, under the note lock: a deleted note (its tombstone) is never
+ * given a doc, nor is a deleted account, or a user no longer in the workspace
+ * (account deletion leaves no tombstone for a note Postgres never had). A note
+ * Postgres already has is the server's, so it's left as it is (the kickoff
+ * answers for it). Then the doc, created only if absent. A deletion that lands
+ * between the two leaves no orphan: both are checked again after the write,
+ * and the doc removed (a failure throws).
+ * Safe to repeat: a doc already there by this author is the same note.
+ */
+export async function createClientNoteDoc(
+  firestore: Firestore,
+  input: CreateClientNoteInput,
+  log: { error: (o: any, m?: string) => void },
+): Promise<{ created: boolean; deleted?: 'note' | 'account' }> {
+  if (!isPostgresEnabled()) throw new Error('createClientNoteDoc: Postgres is not enabled');
+  const fields = { noteId: input.noteId, workspaceId: input.workspaceId, userId: input.uid };
+  const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
+  const gone = async (client: import('pg').PoolClient): Promise<'note' | 'account' | null> => {
+    if (await isNoteDeleted(client, input)) return 'note';
+    const { rowCount } = await client.query(
+      `SELECT 1 FROM workspace_members
+        WHERE workspace_id = $1 AND uid = $2
+          AND NOT EXISTS (SELECT 1 FROM account_deletions WHERE uid = $2)`,
+      [input.workspaceId, input.uid],
+    );
+    return rowCount ? null : 'account';
+  };
+  const before = await withTx(async (client): Promise<'note' | 'account' | 'server' | 'absent'> => {
+    await lockNoteId(client, input.noteId);
+    const deleted = await gone(client);
+    if (deleted) return deleted;
+    const existing = await client.query('SELECT workspace_id FROM notes WHERE id = $1', [input.noteId]);
+    if (existing.rowCount) {
+      if (existing.rows[0].workspace_id !== input.workspaceId) {
+        throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
+      }
+      return 'server';
+    }
+    return 'absent';
+  }, { log, fields });
+  if (before === 'note' || before === 'account') return { created: false, deleted: before };
+  if (before === 'server') return { created: false };
+
+  const now = ISO_NOW();
+  let created = true;
+  try {
+    await noteDoc.create({
+      title: input.title,
+      status: 'processing',
+      type: input.type,
+      mimeType: input.mimeType,
+      storagePath: input.storagePath,
+      ...(input.durationSec ? { duration: input.durationSec } : {}),
+      workspaceId: input.workspaceId,
+      authorId: input.uid,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (err) {
+    // silent-catch-ok: ALREADY_EXISTS is a repeated request finding the doc it already created, checked below
+    if (!isFirestoreAlreadyExists(err)) throw err;
+    created = false;
+    const snap = await noteDoc.get();
+    if (snap.exists && snap.data()?.authorId !== input.uid) {
+      throw new WorkspaceBoundaryError(`note ${input.noteId} is another author's`);
+    }
+  }
+  // The note or the account deleted between the check and the write? Then the doc is an orphan: take it back
+  // out. (A deletion that commits after this check deletes the doc itself: the note's, or the workspace's.)
+  const deletedSince = await withTx(gone, { log, fields });
+  if (deletedSince) {
+    await noteDoc.delete();
+    return { created: false, deleted: deletedSince };
+  }
+  return { created };
+}
+
 /**
  * A notetaker that ended without a recording (docs/plans/MEETINGS.md). In one
  * transaction, under the bot's row lock:

@@ -3,6 +3,30 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The extension's note is the web's note, created for it (2026-09-30)
+
+- **Context.** The web and iOS write a new note's Firestore doc themselves, between their upload and their
+  kickoff; the note enters Postgres at the kickoff. The browser extension never writes Firestore (ADR 0002 §2),
+  so it needs the api to make that doc. RELEASE.md PR 35 said "reuses `createServerNote`", but that function is
+  the notetaker's: it's keyed to a bot, creates the Postgres row in `recording`, and the kickoff refuses a
+  `recording` note unless the notetaker's ingest asks.
+- **Decision** (RELEASE.md PR 35).
+  - `POST /v1/notes` takes the upload session's id and makes the same doc the web writes (`processing`, the same
+    fields), through `createClientNoteDoc` in the repo layer. The extension then calls `/v1/process`, and from
+    there its note is a web recording in every way.
+  - The note's id, workspace and storage path come from the caller's own upload session, never from the request,
+    so a caller can make a note only of its own upload. The audio must be there.
+  - Postgres is checked first, under the note lock: a deleted note never gets a doc (not even for a moment), and a
+    note Postgres already has is left to the kickoff. The tombstone is checked again after the write, so a
+    deletion in between leaves no orphan.
+  - No Postgres row is made here, as on the client path: the kickoff makes it.
+- **Rejected.**
+  - **A Postgres row in `recording` at the start of a recording**, like the notetaker's: the note would show while
+    recording, but the kickoff would need a new exception for it, and a recording abandoned mid-way would need
+    reconciling. Worth it later, if testers want to see an extension recording on their phone while it runs.
+  - **Creating the note and kicking it off in one call:** `/v1/process` already carries the quota, budget and
+    trial answers every client handles; one path is easier to keep right.
+
 ## The external beta runs on staging, with minutes from invite codes and the trial off (2026-09-29)
 
 - **Context.**

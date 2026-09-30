@@ -32,6 +32,7 @@ import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } f
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
 import { redeemInviteRoute } from './beta.js';
+import { createNoteRoute } from './create-note.js';
 import { appConfigRoute } from './app-config.js';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
@@ -96,6 +97,10 @@ export function buildRouter() {
 
   // ── POST /v1/process ── functions/index.js processIntelligence (async) ──
   router.post('/process', authed, wrap(processIntelligenceRoute));
+
+  // ── POST /v1/notes ── create-note.js: the note for a finished upload, for a client that
+  // never writes Firestore (the browser extension, RELEASE.md PR 35).
+  router.post('/notes', authed, wrap(createNoteRoute));
 
   // ── POST /v1/notes/read ── functions/note-read.cjs (also server.ts /api/note)
   router.post('/notes/read', authed, wrap(async (req, res) => {

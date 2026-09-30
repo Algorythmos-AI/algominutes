@@ -506,6 +506,23 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/notes`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Create the note for a finished upload, for a client that never writes Firestore (the browser extension). The note takes the upload session\'s id, workspace and storage path; kick it off with POST /v1/process. Repeating it returns the same note.',
+    request: { body: json(S.CreateNoteRequest) },
+    responses: {
+      200: { description: 'The note, created now or already there.', ...json(S.CreateNoteResponse) },
+      400: errorResponse('Not a valid request.'),
+      401: errorResponse('Missing or invalid token, or the account was deleted.'),
+      404: errorResponse('No such upload for this user (unknown, someone else\'s or expired).'),
+      409: errorResponse('The upload is not complete yet.'),
+      410: errorResponse('The note was deleted.'),
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many requests; try again later.'),
+      503: errorResponse('Notes can\'t be created right now.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'get', path: `${API_BASE_PATH}/config`, tags: ['config'], security: authed, parameters: commonHeaders,
     summary: 'Server-side feature switches the apps read at launch (e.g. broadcast capture).',
     responses: {
