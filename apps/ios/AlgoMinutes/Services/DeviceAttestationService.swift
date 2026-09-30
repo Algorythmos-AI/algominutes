@@ -5,16 +5,14 @@ import Foundation
 ///
 /// Generates an Apple DeviceCheck token that the client sends as the
 /// `X-Device-Attestation` header (with `X-Device-Platform: ios`) on the
-/// process/kickoff request. The server hashes it into `trial_device_hash` and
-/// refuses a second fresh trial from the same device. See
-/// `packages/contracts/src/schemas/compliance.ts` (`DeviceAttestation`).
+/// process/kickoff request. The server asks Apple with it whether this device
+/// has had a trial, and marks it when the trial starts (RELEASE.md PR 22;
+/// `services/api/src/device-check.js`), so a reinstall can't start another.
+/// See `packages/contracts/src/schemas/compliance.ts` (`DeviceAttestation`).
 ///
-/// TODO(A4-apple): real DeviceCheck validation requires the Apple DeviceCheck
-/// private key configured server-side; that half can't be exercised here. This
-/// wires the CLIENT token generation + header injection now. `generateToken`
-/// also returns nil on the Simulator and on devices where DeviceCheck is
-/// unsupported — the header is simply omitted in that case, and the server
-/// falls back to its account-level trial checks.
+/// `generateToken` returns nil on the Simulator and on devices where
+/// DeviceCheck is unsupported: the header is then omitted, and the server
+/// starts no trial on that device.
 enum DeviceAttestationService {
     static let platformHeaderValue = "ios"
 

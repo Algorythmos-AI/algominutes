@@ -16,7 +16,7 @@ import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { getNoteQueueState, markQueued, markError, markKickoffRejected } from './notes-repo';
 import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import { noteChargeStands } from './usage-repo';
-import { ensureTrial } from './subscriptions-repo';
+import { ensureTrial, type TrialDevice } from './subscriptions-repo';
 import { WorkspaceBoundaryError } from './workspace-access';
 import type { Entitlement } from './entitlements';
 
@@ -73,7 +73,7 @@ export interface KickoffInput {
    */
   quota?: boolean;
   /** For the trial's anti-abuse gate. */
-  trial?: { deviceHash?: string; platform?: 'ios' | 'android' | 'web'; emailPresent?: boolean };
+  trial?: { device?: TrialDevice; platform?: string; emailPresent?: boolean };
   /**
    * A note still 'recording' has nothing to process yet: a client kickoff is
    * refused. The notetaker's own ingest, which ends the recording, passes true.
@@ -206,7 +206,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       // never restarts it). A10 #7: a device already trialled gets no fresh
       // trial; web needs an email on the account.
       await ensureTrial(uid, {
-        deviceHash: input.trial?.deviceHash,
+        device: input.trial?.device,
         platform: input.trial?.platform,
         emailPresent: input.trial?.emailPresent,
         user: { email: input.email, name: input.name },

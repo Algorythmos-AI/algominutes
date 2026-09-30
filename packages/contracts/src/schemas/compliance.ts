@@ -38,9 +38,10 @@ export const SupportRequest = z
 
 // ── Trial anti-abuse (#7) ────────────────────────────────────────────────────
 // Sent on the first metered action to gate a fresh trial. Mobile carries a device
-// attestation token (iOS DeviceCheck / Android Play Integrity); the server hashes
-// it → trial_device_hash and refuses a second trial from the same device. Web
-// carries no token — the email requirement is enforced server-side from the account.
+// attestation token (iOS DeviceCheck / Android Play Integrity). For iOS the server
+// asks Apple whether the device has had a trial (DeviceCheck's bit0, which survives
+// reinstalls) and sets it when the trial starts. Web carries no token — the email
+// requirement is enforced server-side from the account.
 export const DeviceAttestation = z
   .object({
     platform: z.enum(['ios', 'android', 'web']),

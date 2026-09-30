@@ -276,6 +276,24 @@ resource "google_secret_manager_secret" "recall" {
   depends_on = [google_project_service.apis]
 }
 
+# The Apple key DeviceCheck is signed with (RELEASE.md PR 22): a .p8 PEM the owner
+# adds as a version. The api reads it at run time (services/api/src/device-check.js),
+# so a deploy never waits for it; with none, no new iOS user gets a trial.
+resource "google_secret_manager_secret" "devicecheck_key" {
+  project   = var.project_id
+  secret_id = "devicecheck-key"
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_secret_manager_secret_version" "db_password" {
   secret      = google_secret_manager_secret.db_password.id
   secret_data = random_password.db.result

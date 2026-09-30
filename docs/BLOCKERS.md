@@ -162,8 +162,22 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       logs; noncurrent object versions expire after 7 days (#70); the `_Default` log bucket keeps 30 days. All are
       stated in Terraform so they can't drift past the 30-day deletion promise, and DATA-RETENTION §4 shows how
       to verify them. The retention enforcer and trial-expiry sweep are also done (#81).
-- [ ] Server-side attestation verification (DeviceCheck key / Play Integrity) so the #7 device hash is
-      trusted, not just accepted; needs a real device to verify end-to-end.
+- [x] ~~Server-side attestation verification~~ **iOS done (RELEASE.md PR 22):** the api asks Apple's
+      DeviceCheck whether the device has had a trial (bit0) and sets it when one starts; the hash seam is
+      retired. Android (Play Integrity) opens new users on the free floor until A11. A real device proves it
+      end to end (Wave 2 proof 6).
+- [ ] **DeviceCheck follow-ups (PR 22):**
+  - An iPhone that fails to make a DeviceCheck token (rare; the app omits the header) opens its new user on the
+    free floor for good, since a user's row is never changed. The app could retry the token once first.
+  - Apple is asked before the kickoff checks for a deleted account, so during an Apple outage a deleted
+    account's kickoff answers 500 rather than 401.
+  - The trial now takes the caller's platform from the client-version gate (`X-AlgoMinutes-Client`, required
+    on `/v1`), not the optional `X-Device-Platform`: a kickoff that left it out, or named a platform nobody
+    ships, used to start a trial with no check at all.
+- [ ] **Owner, for DeviceCheck (PR 22), before `trial_on_first_use` goes back on:** create an Apple key with
+      DeviceCheck enabled (Certificates, Identifiers & Profiles → Keys), add its `.p8` as a version of the
+      `devicecheck-key` secret, and set `devicecheck_key_id` and `apple_team_id` in Terraform. Without them the
+      api logs `devicecheck_not_configured` and no new iOS user gets a trial.
 
 **Engineering follow-ups (no external input):**
 - [x] **One account-deletion path:** `/v1/account/delete` (#69; Postgres first, retried by the sweeper), and
@@ -276,10 +290,9 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
 ### ⚠️ Trial state-machine fragilities (you asked me to flag these)
   1. **Reinstall-restart abuse (the big one).** No-account-for-7-days + anonymous identity means a user can
      delete + reinstall to get a fresh anonymous uid and a new 7-day trial. The server keys the trial to
-     uid and `ensureTrial` is idempotent per-uid, but a *new* uid escapes it. The `trial_device_hash` column
-     is a **seam, not enforced.** Fix needs a durable device signal — iOS DeviceCheck/App Attest (1 bit per
-     device) and Android Play Integrity — or gating trial-start behind a lightweight identity. **Decision +
-     platform work required before launch.**
+     uid and `ensureTrial` is idempotent per-uid, but a *new* uid escapes it. **iOS fixed (RELEASE.md PR
+     22):** Apple's DeviceCheck bit0 marks a device that has had its trial, across reinstalls. Android waits
+     for Play Integrity (A11) and gets no trial until then.
   2. **Missed cancellation/expiry webhook → over-grant.** Entitlement is derived from `current_period_end`;
      if an EXPIRED/cancel webhook is dropped, the user stays `active` until the stored period lapses. Needs a
      periodic reconciliation job (poll Apple/Stripe/Google status) + the `expireElapsedTrials` sweep on a

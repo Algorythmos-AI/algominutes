@@ -73,7 +73,8 @@ async function kickoff(uid: string, body: Record<string, unknown>) {
   };
   const noop = () => {};
   const log = { info: noop, warn: noop, error: (o: any, m?: string) => { if (process.env.DEBUG_KICKOFF) console.error(m, o?.err?.message ?? o); }, child: () => log };
-  await processIntelligenceRoute({ uid, authEmail: `${uid}@test.invalid`, log, traceId: 'trace-1', headers: {}, body }, res);
+  // req.client as the client-version gate sets it: the web app, whose user has an email (the trial's rule).
+  await processIntelligenceRoute({ uid, authEmail: `${uid}@test.invalid`, log, traceId: 'trace-1', headers: {}, client: { platform: 'web', version: '1.0.0' }, body }, res);
   return out;
 }
 

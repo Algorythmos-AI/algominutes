@@ -375,3 +375,15 @@ variable "recall_region" {
   type        = string
   default     = "ap-northeast-1"
 }
+
+variable "devicecheck_key_id" {
+  description = "The Key ID of the Apple key with DeviceCheck enabled (RELEASE.md PR 22). Its .p8 goes into the devicecheck-key secret, never here. Empty: DeviceCheck is off, and a new iOS user gets no trial (turn trial_on_first_use on only once this is set)."
+  type        = string
+  default     = ""
+}
+
+variable "apple_team_id" {
+  description = "The Apple Developer Team ID that owns the DeviceCheck key (the JWT's issuer)."
+  type        = string
+  default     = ""
+}

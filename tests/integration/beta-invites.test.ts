@@ -47,7 +47,7 @@ vi.mock('@algominutes/ai/intelligence.cjs', async (importOriginal) => {
   return { default: { ...real, enforceUsageBudget: async () => {} } };
 });
 // @ts-expect-error: plain ESM route module, no type declarations
-const { processIntelligenceRoute } = await import('../../services/api/src/routes/process-intelligence.js');
+const { processIntelligenceRoute, setTrialDevicesForTests } = await import('../../services/api/src/routes/process-intelligence.js');
 // @ts-expect-error: plain ESM route module, no type declarations
 const { redeemInviteRoute } = await import('../../services/api/src/routes/beta.js');
 
@@ -353,29 +353,153 @@ describe('trial switched off (TRIAL_ON_FIRST_USE=off)', () => {
     };
     const { log } = captureLog();
     await processIntelligenceRoute({
-      uid, authEmail: null, log, traceId: 'trace-beta', headers,
+      // req.client as the client-version gate sets it (from X-AlgoMinutes-Client): the iPhone app.
+      uid, authEmail: null, log, traceId: 'trace-beta', headers, client: { platform: 'ios', version: '1.0.0' },
       body: { noteId, workspaceId: `workspace_${uid}`, type: 'recording', storagePath: `recordings/workspace_${uid}/${noteId}.m4a`, durationSec: 120 },
     }, res);
     return out;
   }
 
+  const unusedDevice = () => ({ trialUsed: async () => false, markTrialUsed: async () => {} });
+
   it("a new user opens on the free floor, even with a device token; switched on, they'd trial", async () => {
     process.env.TRIAL_ON_FIRST_USE = 'off';
     await seedUser('dan');
     expect(await resolveEntitlement('dan')).toMatchObject({ state: 'free_floor', includedMinutes: 0 });
-    await ensureTrial('dan', { platform: 'ios', deviceHash: 'dev-1' });
+    await ensureTrial('dan', { platform: 'ios', device: unusedDevice() });
     expect((await pool.query(`SELECT entitlement_state, trial_end FROM subscriptions WHERE uid = 'dan'`)).rows[0])
       .toEqual({ entitlement_state: 'free_floor', trial_end: null });
 
     delete process.env.TRIAL_ON_FIRST_USE;
     await seedUser('erin');
     expect(await resolveEntitlement('erin')).toMatchObject({ state: 'trialing' });
-    await ensureTrial('erin', { platform: 'ios', deviceHash: 'dev-2' });
+    await ensureTrial('erin', { platform: 'ios', device: unusedDevice() });
     expect(await resolveEntitlement('erin')).toMatchObject({ state: 'trialing' });
   });
 
+  // RELEASE.md PR 22: a new iOS user's trial is Apple's DeviceCheck to decide, and the device is marked once it
+  // starts, so a reinstall (a new uid on the same phone) can't start another.
+  function appleDevice(used: boolean, over: Partial<{ markFails: boolean; checkFails: boolean }> = {}) {
+    const calls: string[] = [];
+    return {
+      calls,
+      device: {
+        trialUsed: async () => { calls.push('check'); if (over.checkFails) throw new Error('devicecheck 503'); return used; },
+        markTrialUsed: async () => { calls.push('mark'); if (over.markFails) throw new Error('devicecheck 503'); },
+      },
+    };
+  }
+  const logLines = () => {
+    const lines: any[] = [];
+    return { lines, log: { error: (o: any, m: string) => lines.push({ level: 'error', m, ...o }), warn: (o: any, m: string) => lines.push({ level: 'warn', m, ...o }) } };
+  };
+
+  it('an iPhone Apple has never seen trial starts the trial and marks the device; one that has, opens on the free floor', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    const fresh = appleDevice(false);
+    await ensureTrial('dan', { platform: 'ios', device: fresh.device });
+    expect(fresh.calls).toEqual(['check', 'mark']);
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+
+    await seedUser('erin');
+    const reinstalled = appleDevice(true);
+    await ensureTrial('erin', { platform: 'ios', device: reinstalled.device });
+    expect(reinstalled.calls).toEqual(['check']);
+    expect((await pool.query(`SELECT entitlement_state, trial_end FROM subscriptions WHERE uid = 'erin'`)).rows[0])
+      .toEqual({ entitlement_state: 'free_floor', trial_end: null });
+  });
+
+  it('no device to ask (no token), or Android, opens on the free floor; the trial switched off never asks Apple', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    const { log, lines } = logLines();
+    await ensureTrial('dan', { platform: 'ios', log });
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'free_floor' });
+    expect(lines).toEqual([expect.objectContaining({ level: 'warn', m: 'trial_device_unverified', userId: 'dan' })]);
+    await seedUser('erin');
+    const android = appleDevice(false);
+    await ensureTrial('erin', { platform: 'android', device: android.device });
+    expect(await resolveEntitlement('erin')).toMatchObject({ state: 'free_floor' });
+    expect(android.calls).toEqual([]);
+    process.env.TRIAL_ON_FIRST_USE = 'off';
+    await seedUser('frank');
+    const off = appleDevice(false);
+    await ensureTrial('frank', { platform: 'ios', device: off.device });
+    expect(off.calls).toEqual([]);
+  });
+
+  it('Apple unreachable writes nothing, so a retry can still start the trial', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    await expect(ensureTrial('dan', { platform: 'ios', device: appleDevice(false, { checkFails: true }).device })).rejects.toThrow('devicecheck 503');
+    expect(await count(`SELECT 1 FROM subscriptions WHERE uid = 'dan'`)).toBe(0);
+    await ensureTrial('dan', { platform: 'ios', device: appleDevice(false).device });
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+  });
+
+  it('a device that can\'t be marked keeps its trial, and says so', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    const { log, lines } = logLines();
+    await ensureTrial('dan', { platform: 'ios', device: appleDevice(false, { markFails: true }).device, log });
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+    expect(lines).toEqual([expect.objectContaining({ level: 'error', m: 'trial_device_mark_failed', userId: 'dan' })]);
+  });
+
+  it('a user who already has a row is never asked about again', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await ensureTrial('alice', { platform: 'ios', device: appleDevice(false).device });
+    const again = appleDevice(false);
+    await ensureTrial('alice', { platform: 'ios', device: again.device });
+    expect(again.calls).toEqual([]);
+  });
+
+  it('the kickoff asks Apple about the iPhone it came from, and a new user\'s first recording starts the trial', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    const asked: any[] = [];
+    setTrialDevicesForTests(({ token, platform }: { token: string; platform?: string }) => {
+      asked.push({ token, platform });
+      return platform === 'ios' && token ? { trialUsed: async () => false, markTrialUsed: async () => { asked.push('marked'); } } : undefined;
+    });
+    try {
+      await seedUser('dan');
+      await seedWorkspace('workspace_dan', 'dan');
+      const out = await kickoff('dan', 'n1', { 'x-device-attestation': 'dc-token' });
+      expect(out).toMatchObject({ status: 200, body: { status: 'queued' } });
+      expect(asked).toEqual([{ token: 'dc-token', platform: 'ios' }, 'marked']);
+      expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+    } finally {
+      setTrialDevicesForTests(null);
+    }
+  });
+
+  it('a kickoff the client gate gave no platform gets no trial (the route never passes none)', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('gina');
+    await seedWorkspace('workspace_gina', 'gina');
+    docs.set('workspaces/workspace_gina/notes/n9', { authorId: 'gina', status: 'uploading' });
+    const out = { status: 0, body: undefined as any };
+    const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.status ||= 200; out.body = b; return this; } };
+    await processIntelligenceRoute({
+      uid: 'gina', authEmail: 'gina@test.invalid', log: captureLog().log, traceId: 't', headers: {},
+      body: { noteId: 'n9', workspaceId: 'workspace_gina', type: 'recording', storagePath: 'recordings/workspace_gina/n9.m4a', durationSec: 120 },
+    }, res);
+    expect(out.status).toBe(402);
+    expect(await resolveEntitlement('gina')).toMatchObject({ state: 'free_floor' });
+  });
+
+  it('a platform nobody ships, or none from the gate, gets no trial; only a direct repo caller may omit it', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    for (const [uid, platform] of [['dan', 'server'], ['erin', 'unknown'], ['frank', 'android']]) {
+      await seedUser(uid);
+      await ensureTrial(uid, { platform, device: unusedDevice() });
+      expect(await resolveEntitlement(uid), platform).toMatchObject({ state: 'free_floor' });
+    }
+  });
+
   it('never changes a user who already has a trial', async () => {
-    await ensureTrial('alice', { platform: 'ios', deviceHash: 'dev-3' });
+    await ensureTrial('alice', { platform: 'ios', device: unusedDevice() });
     process.env.TRIAL_ON_FIRST_USE = 'off';
     expect(await resolveEntitlement('alice')).toMatchObject({ state: 'trialing' });
   });
