@@ -48,6 +48,29 @@ export function levelOf(analyser: Pick<AnalyserNode, 'fftSize' | 'getFloatTimeDo
   return Math.min(1, Math.sqrt(sum / samples.length));
 }
 
+/** A live level meter on one stream (the microphone, when not recording a call): its level, 0..1, and a close. */
+export interface StreamMeter {
+  level(): number;
+  close(): void;
+}
+
+/**
+ * Meters a stream without touching what's recorded (RELEASE.md rev 11, UX6): a dead or muted microphone showed
+ * nothing in mic mode, and hours of silence could be recorded unnoticed. Null where the browser has no
+ * AudioContext: the recording goes on without a meter.
+ */
+export function meterStream(stream: MediaStream, Ctx: typeof AudioContext | undefined): StreamMeter | null {
+  if (!Ctx) return null;
+  const ctx = new Ctx();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  return {
+    level: () => levelOf(analyser),
+    close: () => void ctx.close().catch((err: unknown) => reportCrash('capture.closeMeter', err)),
+  };
+}
+
 /** Whether this browser can capture another tab's audio: desktop Chromium. */
 export function canCaptureCalls(nav: Navigator = navigator): boolean {
   if (typeof nav.mediaDevices?.getDisplayMedia !== 'function') return false;
