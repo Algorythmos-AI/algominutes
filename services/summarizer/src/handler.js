@@ -47,7 +47,11 @@ function pool() {
 }
 
 let _firestoreReady = false;
-function firestore() {
+// A caller's own Firestore (deps.firestore: the tests' fake), else the app's. The integration test of the
+// "No speech was found" failure used the real one, which with no credentials in CI waited on the network: once
+// 21 s, past the test's 20 s (2026-10-01).
+function firestore(deps) {
+  if (deps && deps.firestore) return deps.firestore;
   if (!_firestoreReady) {
     if (!getApps().length) initializeApp();
     _firestoreReady = true;
@@ -75,10 +79,10 @@ function fmtTime(ms) {
  * record the failure must not mask the original error. The one exception is
  * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null, deadLetter = null }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null, deadLetter = null, deps = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
-    firestore: firestore(),
+    firestore: firestore(deps),
     noteId, workspaceId, message, log,
     event: 'summarizer_mark_failed',
     retryOnPgError,
@@ -146,6 +150,7 @@ async function handle(payload, deps) {
       noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
       refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
       traceId,
+      deps,
     });
     return;
   }
@@ -256,7 +261,7 @@ async function handle(payload, deps) {
   // transaction), then the Firestore mirror: notes-repo markSummaryReady.
   // The generation read above is re-checked at the write, because the guard
   // before Gemini can't see a regenerate claimed during the call.
-  const result = await markSummaryReady(firestore(), {
+  const result = await markSummaryReady(firestore(deps), {
     noteId,
     workspaceId,
     summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions, chapters: safeChapters },

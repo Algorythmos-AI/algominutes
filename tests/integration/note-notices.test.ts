@@ -116,7 +116,8 @@ describe('a "failed" notice is written with the failure, once', () => {
 
   it('the summarizer\'s "No speech was found" tells the author', async () => {
     await pool.query(`UPDATE notes SET status = 'summarizing' WHERE id = 'n1'`);
-    const deps = { log, traceId: 'trace-5', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {} };
+    // A fake Firestore: the real one, with no credentials in CI, waited on the network (once past 20 s).
+    const deps = { log, traceId: 'trace-5', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {}, firestore: fsOk };
     await summarizer.handle({ noteId: 'n1', workspaceId: 'ws' }, deps);
     expect(await noticeKinds('n1')).toEqual(['note_failed']);
     expect(enqueued.map((e) => [e.payload.type, e.traceId])).toEqual([['note_failed', 'trace-5']]);
