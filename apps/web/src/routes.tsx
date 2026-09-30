@@ -40,6 +40,7 @@ export const routes: RouteObject[] = [
       { path: 'record', lazy: page(() => import('./app/record/RecordPage'), 'RecordPage') },
       { path: 'search', lazy: page(() => import('./app/search/SearchPage'), 'SearchPage') },
       { path: 'settings', lazy: page(() => import('./app/settings/SettingsPage'), 'SettingsPage') },
+      { path: 'connect-extension', lazy: page(() => import('./app/extension/ConnectExtensionPage'), 'ConnectExtensionPage') },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

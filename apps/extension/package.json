@@ -1,0 +1,17 @@
+{
+  "name": "@algominutes/extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The AlgoMinutes browser extension for Chrome and Edge (docs/decisions/0002-chrome-extension.md).",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.1"
+  }
+}

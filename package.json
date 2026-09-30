@@ -12,6 +12,7 @@
     "packages/*",
     "services/*",
     "apps/web",
+    "apps/extension",
     "apps/site"
   ],
   "scripts": {

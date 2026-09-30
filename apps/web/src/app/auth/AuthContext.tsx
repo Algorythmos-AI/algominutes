@@ -4,6 +4,7 @@ import { signInErrorMessage } from '../../lib/auth/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { codeOf } from '../../lib/auth/adapter';
 import { startTrace, traceMessage, type SignInTrace } from '../../lib/diagnostics/signInTrace';
+import { signOutExtensions } from '../../lib/extension/bridge';
 
 export type AuthStatus = 'loading' | 'signed-out' | 'signed-in';
 
@@ -84,6 +85,8 @@ export function AuthProvider({ adapter, children }: { adapter: AuthAdapter; chil
       linkGuest: async (p) => (await run(p, () => adapter.linkGuest(p), (r) => r.outcome === 'cancelled', 'link')) ?? { outcome: 'cancelled' },
       signOut: async () => {
         try {
+          // The extension goes with the web app (ADR 0002 §3); no extension installed answers nothing.
+          await signOutExtensions();
           await adapter.signOut();
         } catch (err) {
           setError('Signing out didn’t complete. Try again.');

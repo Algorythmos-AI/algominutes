@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AlgoMinutes</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; width: 260px; color: #1b1b1f; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      p { margin: 0 0 12px; }
+      button { font: inherit; width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #3715e0; background: #3715e0; color: #fff; cursor: pointer; }
+      button.secondary { background: transparent; color: #3715e0; }
+      [hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>AlgoMinutes</h1>
+    <section id="signed-out" hidden>
+      <p>Connect the extension to your AlgoMinutes account. You sign in on the AlgoMinutes web app, never here.</p>
+      <button id="connect" type="button">Connect to AlgoMinutes</button>
+    </section>
+    <section id="signed-in" hidden>
+      <p>Connected. Recording from a Google Meet tab comes in the next version.</p>
+      <button id="sign-out" class="secondary" type="button">Disconnect</button>
+    </section>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

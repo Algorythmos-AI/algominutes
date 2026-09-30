@@ -1,0 +1,36 @@
+import { describe, it, expect } from 'vitest';
+// @ts-expect-error: plain ESM build script, no type declarations
+import { settingsFrom, manifestFor, parseOrigin } from './build.mjs';
+
+const env = { EXT_API_ORIGIN: 'https://api.example.test', EXT_WEB_ORIGINS: 'https://beta.example.test, https://app.example.test', EXT_FIREBASE_API_KEY: 'test-firebase-web-key' };
+
+describe('the build settings', () => {
+  it('reads origins and the key, and refuses anything else', () => {
+    expect(settingsFrom(env)).toEqual({ apiOrigin: 'https://api.example.test', webOrigins: ['https://beta.example.test', 'https://app.example.test'], firebaseApiKey: 'test-firebase-web-key' });
+    expect(() => settingsFrom({ ...env, EXT_API_ORIGIN: '' })).toThrow('EXT_API_ORIGIN is not set');
+    expect(() => settingsFrom({ ...env, EXT_WEB_ORIGINS: '' })).toThrow('EXT_WEB_ORIGINS is not set');
+    expect(() => settingsFrom({ ...env, EXT_FIREBASE_API_KEY: 'x' })).toThrow('EXT_FIREBASE_API_KEY');
+    expect(() => parseOrigin('http://api.example.test', 'X')).toThrow('https');
+    expect(() => parseOrigin('https://api.example.test/v1', 'X')).toThrow('no path');
+    expect(parseOrigin('http://localhost:8080', 'X')).toBe('http://localhost:8080');
+  });
+});
+
+describe('the manifest', () => {
+  const m = manifestFor(settingsFrom(env), '1.0.0');
+
+  it('asks for nothing ADR 0002 doesn\'t list: storage, and the api\'s origin', () => {
+    expect(m.manifest_version).toBe(3);
+    expect(m.permissions).toEqual(['storage']);
+    expect(m.host_permissions).toEqual(['https://api.example.test/*']);
+    expect(JSON.stringify(m)).not.toMatch(/<all_urls>|"tabs"|"identity"|"scripting"|content_security_policy/);
+  });
+
+  it('only the web app\'s pages may message it', () => {
+    expect(m.externally_connectable).toEqual({ matches: ['https://beta.example.test/*', 'https://app.example.test/*'] });
+  });
+
+  it('is at least the api\'s floor for extensions (1.0.0), so its first build isn\'t turned away', () => {
+    expect(m.version).toBe('1.0.0');
+  });
+});
