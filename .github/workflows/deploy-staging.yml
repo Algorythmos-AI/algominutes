@@ -14,11 +14,17 @@ name: deploy-staging
 #   scripts/check-migration-expand.mjs), so old images keep working on it. A failed migrate
 #   stops the deploy with every service still on its previous image.
 # - Rollout waves (RELEASE.md PR 26c, audit Q25): a service goes live only after
-#   every service it hands work to. Wave 1 is the workers (and billing and
-#   db-job, which take nobody's tasks); wave 2 is meetings, which queues the
-#   transcoder's runs; wave 3 is the api, which queues everyone's. So a task
-#   in a new shape is never sent to an old worker, and a wave that fails stops
-#   the ones after it, leaving the front on its previous image.
+#   every service it hands work to. Wave 1 is the workers; wave 2 is meetings,
+#   which queues the transcoder's runs; wave 3 is the api, which queues
+#   everyone's. So a task in a new shape is never sent to an old worker, and a
+#   wave that fails stops the ones after it, leaving the front on its previous
+#   image. Billing and db-job take nobody's tasks, so they roll out on their
+#   own (`rollout-solo`) and gate nothing: a bad billing boot no longer holds
+#   the api back (RELEASE.md rev 11, H1b; it froze #280-#288).
+# - Preflight: before each rollout, the live service's env (Terraform's) is
+#   checked against the new image's src/env-spec.cjs (scripts/check-live-env.mjs),
+#   so an image needing env no apply has set fails there, naming the variable.
+# - A failed run opens (or comments on) a `deploy-failed` issue.
 # - Keyless: authenticates via Workload Identity Federation as gha-deployer.
 #   Every job that authenticates runs in the `staging` GitHub Environment: the
 #   WIF provider only accepts tokens from refs/heads/integration in that
@@ -45,6 +51,7 @@ on:
       - '.github/workflows/deploy-staging.yml'
       - 'scripts/smoke-staging.sh'
       - 'scripts/smoke-auth.mjs'
+      - 'scripts/check-live-env.mjs'
   workflow_dispatch:
     inputs:
       services:
@@ -73,6 +80,7 @@ jobs:
       wave1: ${{ steps.pick.outputs.wave1 }}
       wave2: ${{ steps.pick.outputs.wave2 }}
       wave3: ${{ steps.pick.outputs.wave3 }}
+      solo: ${{ steps.pick.outputs.solo }}
     steps:
       - uses: actions/checkout@v7
       - id: filter
@@ -112,9 +120,12 @@ jobs:
           echo "services=$out" >> "$GITHUB_OUTPUT"
           echo "Deploying: $out"
           # Wave 3 the api (it queues work for everyone), wave 2 meetings (it
-          # queues the transcoder's runs), wave 1 everything else.
+          # queues the transcoder's runs), wave 1 the workers. Billing takes
+          # nobody's tasks: solo, gating nothing. db-job has no rollout (the
+          # migrate job already points it at this commit's image).
           {
-            echo "wave1=$(printf '%s' "$out" | jq -c 'map(select(. != "api" and . != "meetings"))')"
+            echo "wave1=$(printf '%s' "$out" | jq -c 'map(select(IN("api","meetings","billing","db-job") | not))')"
+            echo "solo=$(printf '%s' "$out" | jq -c 'map(select(. == "billing"))')"
             echo "wave2=$(printf '%s' "$out" | jq -c 'map(select(. == "meetings"))')"
             echo "wave3=$(printf '%s' "$out" | jq -c 'map(select(. == "api"))')"
           } >> "$GITHUB_OUTPUT"
@@ -174,7 +185,8 @@ jobs:
       contents: read
       id-token: write
     strategy:
-      fail-fast: true
+      # Every image that can build does, so one failure doesn't hide another.
+      fail-fast: false
       max-parallel: 4
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
@@ -252,7 +264,7 @@ jobs:
           gcloud run jobs execute db-job --region "$REGION" --project "$PROJECT" --wait \
             --update-env-vars "JOB_NAME=vertex-smoke,TRACE_ID=${trace}"
 
-  # Wave 1: the workers, billing and db-job.
+  # Wave 1: the workers.
   rollout:
     needs: [changes, migrate]
     if: needs.changes.outputs.wave1 != '[]'
@@ -267,14 +279,57 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.wave1) }}
     steps:
+      - uses: actions/checkout@v7
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Preflight (the live env against this image's env-spec)
+        env:
+          SERVICE: ${{ matrix.service }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json \
+            | node scripts/check-live-env.mjs "$SERVICE"
       - name: Roll out image
-        # db-job already runs this commit's image (the migrate job updated it).
-        if: matrix.service != 'db-job'
+        env:
+          SERVICE: ${{ matrix.service }}
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/${{ matrix.service }}:${{ github.sha }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: gcloud run services update "$SERVICE" --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+
+  # Billing takes nobody's tasks, so no wave waits for it, and its failure
+  # fails the run without holding the api back.
+  rollout-solo:
+    needs: [changes, migrate]
+    if: needs.changes.outputs.solo != '[]'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.solo) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Preflight (the live env against this image's env-spec)
+        env:
+          SERVICE: ${{ matrix.service }}
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json \
+            | node scripts/check-live-env.mjs "$SERVICE"
+      - name: Roll out image
         env:
           SERVICE: ${{ matrix.service }}
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/${{ matrix.service }}:${{ github.sha }}
@@ -295,11 +350,20 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Preflight (the live env against this image's env-spec)
+        env:
+          SERVICE: meetings
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json \
+            | node scripts/check-live-env.mjs "$SERVICE"
       - name: Roll out image
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/meetings:${{ github.sha }}
@@ -320,11 +384,20 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Preflight (the live env against this image's env-spec)
+        env:
+          SERVICE: api
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json \
+            | node scripts/check-live-env.mjs "$SERVICE"
       - name: Roll out image
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/algominutes/api:${{ github.sha }}
@@ -332,11 +405,14 @@ jobs:
         run: gcloud run services update api --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
 
   smoke:
-    needs: [changes, migrate, rollout, rollout-meetings, rollout-api]
-    # After every wave that ran, and only if none failed (a skipped wave had nothing to deploy).
+    needs: [changes, migrate, rollout, rollout-solo, rollout-meetings, rollout-api]
+    # After every wave that ran, and only if none failed (a skipped wave had nothing to deploy). A failed solo
+    # rollout doesn't stop it: that service keeps serving its previous revision, which the smoke checks too,
+    # and the run is red either way.
     if: >-
       !cancelled() && needs.changes.outputs.services != '[]' && needs.migrate.result == 'success'
-      && !contains(needs.*.result, 'failure')
+      && needs.rollout.result != 'failure' && needs.rollout-meetings.result != 'failure'
+      && needs.rollout-api.result != 'failure'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -401,3 +477,34 @@ jobs:
             ENABLED) echo "db-sweep already running" ;;
             *) echo "db-sweep is in an unexpected state: '$state'"; cat "$err"; exit 1 ;;
           esac
+
+  # A red run opens a `deploy-failed` issue, or comments on the open one, so a
+  # stuck staging is seen the same hour, not days later (#280-#288).
+  report-failure:
+    needs: [changes, ci-gate, build, migrate, rollout, rollout-solo, rollout-meetings, rollout-api, smoke]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the deploy-failed issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed=$(jq -r 'to_entries | map(select(.value.result == "failure") | .key) | join(", ")' <<<"$RESULTS")
+          body="deploy-staging failed on ${SHA:0:7} ($RUN_URL). Failed: ${failed:-unknown}."
+          gh label create deploy-failed --color B60205 --description "A staging deploy failed" 2>/dev/null \
+            || echo "label deploy-failed exists"
+          open=$(gh issue list --label deploy-failed --state open --json number -q '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --label deploy-failed --title "Staging deploy failed on ${SHA:0:7}" \
+              --body "$body Close this once a deploy at the head is green."
+          fi

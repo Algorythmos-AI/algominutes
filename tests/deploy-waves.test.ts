@@ -4,7 +4,9 @@ import { execFileSync } from 'node:child_process';
 
 // RELEASE.md PR 26c (audit Q25): a service goes live only after every service it hands work to, so a task in
 // a new shape is never sent to an old worker. Wave 1 the workers, wave 2 meetings (it queues the
-// transcoder's runs), wave 3 the api (it queues everyone's); a failed wave stops the ones after it.
+// transcoder's runs), wave 3 the api (it queues everyone's); a failed wave stops the ones after it. Billing takes
+// nobody's tasks, so it rolls out solo and gates nothing (rev 11 H1b: its bad boot froze #280-#288); db-job has
+// no rollout, since the migrate job already points it at this commit.
 // Read as text, like the other workflow tests: each job is its block under `jobs:`.
 const text = fs.readFileSync('.github/workflows/deploy-staging.yml', 'utf8');
 const body = text.slice(text.indexOf('\njobs:\n'));
@@ -18,22 +20,46 @@ const pick = jobs.changes;
 /** The waves the pick step writes for `services`, by running its own jq filters. */
 function waves(services: string[]) {
   const out: Record<string, string[]> = {};
-  for (const n of [1, 2, 3]) {
-    const filter = new RegExp(`wave${n}=\\$\\(printf '%s' "\\$out" \\| jq -c '([^']+)'\\)`).exec(pick)![1];
-    out[`wave${n}`] = JSON.parse(execFileSync('jq', ['-c', filter], { input: JSON.stringify(services) }).toString());
+  for (const n of ['wave1', 'wave2', 'wave3', 'solo']) {
+    const filter = new RegExp(`${n}=\\$\\(printf '%s' "\\$out" \\| jq -c '([^']+)'\\)`).exec(pick)![1];
+    out[n] = JSON.parse(execFileSync('jq', ['-c', filter], { input: JSON.stringify(services) }).toString());
   }
   return out;
 }
 
 describe('the staging rollout', () => {
-  it('puts the api last, meetings before it, and every other service first, each exactly once', () => {
+  it('puts the api last, meetings before it, the workers first, billing solo, each exactly once', () => {
     const all = JSON.parse(/all='(\[[^']*\])'/.exec(pick)![1]) as string[];
     const w = waves(all);
     expect(w.wave3).toEqual(['api']);
     expect(w.wave2).toEqual(['meetings']);
-    expect([...w.wave1, ...w.wave2, ...w.wave3].sort()).toEqual([...all].sort());
-    expect(waves(['api', 'db-job'])).toEqual({ wave1: ['db-job'], wave2: [], wave3: ['api'] });
-    expect(waves(['transcoder', 'db-job'])).toEqual({ wave1: ['transcoder', 'db-job'], wave2: [], wave3: [] });
+    expect(w.solo).toEqual(['billing']);
+    expect([...w.wave1, ...w.wave2, ...w.wave3, ...w.solo, 'db-job'].sort()).toEqual([...all].sort());
+    expect(waves(['api', 'db-job'])).toEqual({ wave1: [], wave2: [], wave3: ['api'], solo: [] });
+    expect(waves(['transcoder', 'billing', 'db-job'])).toEqual({ wave1: ['transcoder'], wave2: [], wave3: [], solo: ['billing'] });
+  });
+
+  it('rolls billing out on its own: nothing waits for it, and its failure only reddens the run', () => {
+    expect(jobs['rollout-solo']).toContain('service: ${{ fromJSON(needs.changes.outputs.solo) }}');
+    expect(needs('rollout-solo')).toEqual(['changes', 'migrate']);
+    for (const job of ['rollout-meetings', 'rollout-api']) expect(needs(job)).not.toContain('rollout-solo');
+    expect(cond('smoke')).not.toContain('rollout-solo');
+  });
+
+  it('checks the live env against the new image before every rollout', () => {
+    for (const job of ['rollout', 'rollout-solo', 'rollout-meetings', 'rollout-api']) {
+      const j = jobs[job]!;
+      expect(j, job).toContain('uses: actions/checkout@');
+      expect(j.indexOf('node scripts/check-live-env.mjs'), job).toBeGreaterThan(-1);
+      expect(j.indexOf('node scripts/check-live-env.mjs'), job).toBeLessThan(j.indexOf('gcloud run services update'));
+    }
+  });
+
+  it('reports a red run as a deploy-failed issue', () => {
+    expect(cond('report-failure')).toBe('failure()');
+    expect(needs('report-failure')).toEqual(expect.arrayContaining(['ci-gate', 'build', 'migrate', 'rollout', 'rollout-solo', 'rollout-meetings', 'rollout-api', 'smoke']));
+    expect(jobs['report-failure']).toContain('issues: write');
+    expect(jobs['report-failure']).toContain('--label deploy-failed');
   });
 
   it('deploys each wave from its own list, and each after the one before', () => {
@@ -59,7 +85,7 @@ describe('the staging rollout', () => {
       for (const e of earlier) expect(c, `${job} after ${e}`).toContain(`(needs.${e}.result == 'success' || needs.${e}.result == 'skipped')`);
     }
     expect(needs('smoke')).toEqual(expect.arrayContaining(['migrate', 'rollout', 'rollout-meetings', 'rollout-api']));
-    expect(cond('smoke')).toContain("!contains(needs.*.result, 'failure')");
+    for (const w of ['rollout', 'rollout-meetings', 'rollout-api']) expect(cond('smoke')).toContain(`needs.${w}.result != 'failure'`);
     expect(cond('smoke')).toContain("needs.migrate.result == 'success'");
   });
 });
