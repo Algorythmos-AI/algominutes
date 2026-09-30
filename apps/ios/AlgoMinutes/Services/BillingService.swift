@@ -173,7 +173,9 @@ final class BillingService {
     func purchaseGate() async -> PurchaseGate {
         await refresh()
         guard let e = entitlement, e.isSubscription else { return .allowed }
-        AppLog.info("purchase_refused_subscribed rail=\(e.rail ?? "unknown")")
+        // The event only: which store bills them is the entitlement's, and stays off the device log
+        // (CodeQL swift/cleartext-logging); the server logs its own refusal with the rail.
+        AppLog.info("purchase_refused_subscribed")
         return .alreadySubscribed(managedInAppStore: e.isManagedInAppStore)
     }
 
