@@ -36,6 +36,11 @@ const FIRESTORE = 'https://firestore.googleapis.com/v1';
 export const FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/e2e-speech.ogg');
 /** The services a recording passes through, each of which must log the run's traceId. */
 export const TRACED_SERVICES = ['api', 'transcoder', 'summarizer', 'embedder'];
+// Ten minutes or less goes through the transcoder's fast path (services/transcoder/src/route.js,
+// FAST_PATH_MAX_SEC), which writes the summary itself: the summarizer never sees the note.
+export const FAST_PATH_MAX_MINUTES = 10;
+export const tracedServices = (minutes) =>
+  (minutes <= FAST_PATH_MAX_MINUTES ? TRACED_SERVICES.filter((s) => s !== 'summarizer') : TRACED_SERVICES);
 /** A recording this long or longer is summarised with chapters. */
 export const CHAPTERS_FROM_MINUTES = 15;
 
@@ -246,11 +251,12 @@ export async function runPipelineE2E({
     } else {
       // Log entries arrive a little after the lines are written.
       let services = new Set();
-      for (let i = 0; i < 3 && !TRACED_SERVICES.every((s) => services.has(s)); i++) {
+      const expected = tracedServices(minutes);
+      for (let i = 0; i < 3 && !expected.every((s) => services.has(s)); i++) {
         await sleep(logWaitMs);
         services = new Set(readLogs(`jsonPayload.traceId="${traceId}"`).map((e) => e.resource?.labels?.service_name).filter(Boolean));
       }
-      const missing = TRACED_SERVICES.filter((s) => !services.has(s));
+      const missing = expected.filter((s) => !services.has(s));
       check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');

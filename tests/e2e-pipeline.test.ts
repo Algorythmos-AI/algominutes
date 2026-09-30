@@ -153,6 +153,15 @@ describe('the pipeline e2e', () => {
     expect(r.fails).toEqual(['Postgres agrees: ready, a summary and a transcript']);
   });
 
+  // Staging, 2026-09-30 (run 36729415737): a 2-minute note was ready in 33 s, and the run failed "not in:
+  // summarizer". Ten minutes or less goes through the transcoder's fast path, which writes the summary itself.
+  it('follows the traceId through the services that length of recording uses', async () => {
+    const fast = ['api', 'transcoder', 'embedder'];
+    expect((await run(world({ services: fast }), { minutes: 2 })).fails).toEqual([]);
+    expect((await run(world({ services: fast, chapters: 4 }), { minutes: 15 })).fails).toEqual(['one traceId, followed through every service']);
+    expect((await run(world({ services: [...fast, 'summarizer'], chapters: 4 }), { minutes: 15 })).fails).toEqual([]);
+  });
+
   it('a recording of 15 minutes or more must have chapters', async () => {
     expect((await run(world({ chapters: 0 }), { minutes: 15 })).fails).toEqual(['a 15-minute recording has chapters']);
     expect((await run(world({ chapters: 4 }), { minutes: 15 })).fails).toEqual([]);
@@ -162,7 +171,7 @@ describe('the pipeline e2e', () => {
 
   it('a service the traceId never reached, or a dead letter, fails the run', async () => {
     const lost = await run(world({ services: ['api', 'transcoder'] }));
-    expect(lost.lines.find((l) => l.startsWith('FAIL one traceId'))).toMatch(/not in: summarizer, embedder/);
+    expect(lost.lines.find((l) => l.startsWith('FAIL one traceId'))).toMatch(/not in: embedder$|not in: embedder\)/);
     const dead = await run(world({ deadLetters: 1 }));
     expect(dead.fails).toEqual(['no dead letter for the note']);
   });
