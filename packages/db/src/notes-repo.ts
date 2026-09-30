@@ -264,6 +264,21 @@ export const IN_FLIGHT_STATUSES = ['queued', 'chunking', 'transcribing', 'summar
  */
 export const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000;
 
+/**
+ * How many of the user's notes are being processed right now (in flight, and not stale): the kickoff lets a
+ * user have at most MAX_IN_FLIGHT_PER_USER at once (RELEASE.md rev 11, L7).
+ */
+export async function countInFlightNotesForUser(uid: string, now: Date = new Date()): Promise<number> {
+  const { rows } = await getPool().query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM notes
+      WHERE author_uid = $1 AND deleted_at IS NULL
+        AND status = ANY($2::text[])
+        AND updated_at > $3::timestamptz - $4::bigint * INTERVAL '1 millisecond'`,
+    [uid, IN_FLIGHT_STATUSES as unknown as string[], now, IN_FLIGHT_STALE_MS],
+  );
+  return rows[0]?.n ?? 0;
+}
+
 export interface NoteQueueState {
   /** The id exists in ANOTHER workspace (Postgres note ids are global). */
   foreign: boolean;
