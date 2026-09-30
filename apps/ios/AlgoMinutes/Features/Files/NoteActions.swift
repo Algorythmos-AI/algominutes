@@ -25,6 +25,8 @@ struct NoteContextMenu: View {
     @Environment(AppEnvironment.self) private var env
     let note: Note
     @Binding var selectedNoteId: String?
+    /// Delete asks first: the list shows the confirmation (H13/UX4).
+    @Binding var pendingDelete: Note?
 
     var body: some View {
         Button {
@@ -52,11 +54,7 @@ struct NoteContextMenu: View {
         }
         Divider()
         Button(role: .destructive) {
-            let id = note.id
-            Task {
-                do { try await env.deleteNote(id: id) }
-                catch { env.alertMessage = "Couldn't delete this note. Please try again." }
-            }
+            pendingDelete = note
         } label: {
             Label("Delete", systemImage: "trash")
         }
