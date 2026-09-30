@@ -198,6 +198,11 @@ final class BackgroundUploadService: NSObject {
         }
         onProgress(100)
 
+        // Completing the session finishes even if the app has left the screen: the
+        // transfer that just ended may have woken it in the background (L10). The
+        // caller's kickoff takes its own time straight after.
+        let completeTime = BackgroundActivity.begin("upload-complete")
+        defer { completeTime.end() }
         let done = try await api.completeUpload(uploadId: uploadId)
         if let pending {
             store.setUploadState(fileName: pending.fileName, state: .processing, uploadedBytes: offset)
@@ -370,6 +375,14 @@ extension BackgroundUploadService: URLSessionDataDelegate {
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         let handler = backgroundCompletionHandler
         backgroundCompletionHandler = nil
-        DispatchQueue.main.async { handler?() }
+        // Calling the handler lets the system suspend the app. One main-actor turn
+        // later, so the work the finished transfers resumed (a waiting upload's
+        // complete and kickoff, or the orphan path) has begun its background
+        // time first (L10): it used to run after the handler, in an app already
+        // being suspended.
+        Task { @MainActor in
+            await Task.yield()
+            handler?()
+        }
     }
 }
