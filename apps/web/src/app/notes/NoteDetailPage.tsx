@@ -5,6 +5,7 @@ import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { displayTitle, formatClock, formatDate, formatDuration, notetakerAction, statusOf } from '../../lib/notes/format';
 import { workspaceIdFor } from '../../lib/notes/workspace';
+import { failureMessage, kickoffFailure } from '../../lib/uploads/kickoff';
 import { isSlow } from '../../lib/noteWatchdog';
 import { useApi } from '../ApiContext';
 import { useAuth } from '../auth/AuthContext';
@@ -41,6 +42,8 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const firestoreOnly = live?.type === 'scan_text';
 
   const [load, setLoad] = useState<Load>({ status: 'loading' });
+  // Try again on a failed note (rev 11, UX6): idle, sending, sent, or refused with the server's reason.
+  const [retry, setRetry] = useState<{ kind: 'idle' | 'sending' | 'sent' } | { kind: 'refused'; message: string }>({ kind: 'idle' });
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
@@ -156,6 +159,24 @@ function NoteDetail({ noteId }: { noteId: string }) {
   }
 
   const s = statusOf(live.status, live.notetaker);
+  // Only a note whose audio is ours can run again; a notetaker's meeting is re-run from its own page.
+  const canRetry = s.kind === 'failed' && !live.notetaker && (Boolean(live.storagePath) || (live.type === 'youtube' && Boolean(live.sourceUrl)));
+  const tryAgain = async () => {
+    if (!user || retry.kind === 'sending') return;
+    setRetry({ kind: 'sending' });
+    try {
+      await api.process({
+        noteId: live.id, workspaceId, type: live.type,
+        ...(live.storagePath ? { storagePath: live.storagePath } : {}),
+        ...(live.sourceUrl ? { sourceUrl: live.sourceUrl } : {}),
+        ...(live.mimeType ? { mimeType: live.mimeType } : {}),
+        ...(live.duration ? { durationSec: live.duration } : {}),
+      });
+      setRetry({ kind: 'sent' });
+    } catch (err) {
+      setRetry({ kind: 'refused', message: failureMessage(kickoffFailure(err, "It couldn't start again. Try again in a minute.")) });
+    }
+  };
   const botAction = live.status === 'recording' && live.notetaker ? notetakerAction(live.notetaker.status) : null;
   const meta = [formatDate(live.createdAt), formatDuration(live.duration)].filter(Boolean).join(' · ');
   const data = load.status === 'ready' ? load.data : null;
@@ -211,9 +232,21 @@ function NoteDetail({ noteId }: { noteId: string }) {
         </div>
       )}
       {s.kind === 'failed' && (
-        <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">
-          {live.errorMessage || 'This recording couldn’t be processed.'} It didn’t use any of your minutes.
-        </p>
+        <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4">
+          <p role="alert" className="text-body">
+            {live.errorMessage || 'This recording couldn’t be processed.'} It didn’t use any of your minutes.
+          </p>
+          {canRetry && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-heading" disabled={retry.kind === 'sending' || retry.kind === 'sent'} onClick={() => void tryAgain()}>
+                Try again
+              </button>
+              {retry.kind === 'sending' && <span role="status" className="text-muted">Starting…</span>}
+              {retry.kind === 'sent' && <span role="status" className="text-muted">Trying again. This page updates on its own.</span>}
+              {retry.kind === 'refused' && <span role="alert" className="text-body">{retry.message}</span>}
+            </div>
+          )}
+        </div>
       )}
 
       {ready && !fromDoc && load.status === 'loading' && <p role="status" className="text-muted">Loading the summary…</p>}

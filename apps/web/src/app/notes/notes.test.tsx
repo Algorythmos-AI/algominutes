@@ -151,6 +151,34 @@ describe('a note', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/The audio was silent\. It didn’t use any of your minutes/);
   });
 
+  // RELEASE.md rev 11, UX6 (H14): a failed note had only its message, and no way forward on the web.
+  it('a failed recording can be tried again: its audio is processed afresh, and the page says so', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', errorMessage: 'Transcription failed.', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm', mimeType: 'audio/webm', duration: 125 })]);
+    const s = server((url) => (url.endsWith('/v1/process') ? json({ success: true, noteId: 'n1', jobId: 'j', status: 'queued' }) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/Trying again/)).toBeTruthy();
+    expect(s.calls.find((c) => c.url.endsWith('/v1/process'))?.body).toEqual({
+      noteId: 'n1', workspaceId: 'workspace_u1', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm', mimeType: 'audio/webm', durationSec: 125,
+    });
+  });
+
+  it("a try that's refused says why, and can be tried again", async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm' })]);
+    const s = server((url) => (url.endsWith('/v1/process') ? json({ error: 'The service is busy. Try again in a minute.' }, 503) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/couldn’t start again|couldn't start again/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a failed note with no audio of ours to process offers no Try again', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', type: 'recording', storagePath: undefined, sourceUrl: undefined })]);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, feed);
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it("a note that isn't in the user's list isn't available", async () => {
     renderApp('/app/notes/nope', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([note('n1')]).feed);
     expect(await screen.findByRole('heading', { name: "This note isn't available" })).toBeTruthy();
