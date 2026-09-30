@@ -146,6 +146,18 @@ describe('uploading while recording', () => {
     await expect(up2.finish()).rejects.toThrow('no progress');
   });
 
+  it('tells the recorder what Cloud Storage hasn\'t acknowledged, whenever that changes', async () => {
+    const gcs = fakeGcs({ keep: (sent) => (sent > Q ? Q : sent) });
+    const tails: Array<{ start: number; size: number }> = [];
+    const up = new StreamUpload({ sessionUri: 'u', fetch: gcs.fetch, sleep: noSleep, onTail: (t) => tails.push({ start: t.start, size: t.data.size }) });
+    await up.push(bytes(100 * KiB));
+    await up.push(bytes(2 * Q, 100 * KiB));
+    expect(tails[0]).toEqual({ start: 0, size: 100 * KiB });
+    expect(tails.at(-1)).toEqual({ start: 2 * Q, size: 100 * KiB }); // two units acknowledged, the rest pending
+    await up.finish();
+    expect(tails.at(-1)).toEqual({ start: 2 * Q + 100 * KiB, size: 0 });
+  });
+
   it('nothing more once it has finished', async () => {
     const gcs = fakeGcs();
     const up = new StreamUpload({ sessionUri: 'u', fetch: gcs.fetch, sleep: noSleep });

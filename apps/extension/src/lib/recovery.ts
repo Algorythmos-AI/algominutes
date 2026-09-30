@@ -37,6 +37,7 @@ export async function recoverUnfinished(deps: Deps): Promise<Recovery> {
     const failed: RecordingState = { ...rec, phase: 'failed', error: WORDS[error] };
     await writeRecording(deps, failed);
     await deps.local.remove(UNFINISHED);
+    await deps.tails.delete(u.uploadId);
     await deps.setBadge('');
     return failed;
   };
@@ -50,9 +51,18 @@ export async function recoverUnfinished(deps: Deps): Promise<Recovery> {
       held = Number(((await asked.json()) as { size?: unknown }).size) || 0;
     } else if (asked.status === 308) {
       held = heldBytes(asked.headers.get('Range'));
-      if (held === 0) return fail('lost');
-      const done = await deps.fetch(u.sessionUri, { method: 'PUT', headers: { 'Content-Range': `bytes */${held}` } });
+      // The recorder's copy of what Cloud Storage hadn't acknowledged (37e): the rest, sent as the last chunk.
+      const tail = await deps.tails.get(u.uploadId);
+      const rest = tail && tail.start <= held && tail.start + tail.data.size > held ? tail.data.slice(held - tail.start) : null;
+      if (held === 0 && !rest) return fail('lost');
+      const total = held + (rest?.size ?? 0);
+      const done = await deps.fetch(u.sessionUri, {
+        method: 'PUT',
+        headers: { 'Content-Range': rest ? `bytes ${held}-${total - 1}/${total}` : `bytes */${held}` },
+        body: rest ?? undefined,
+      });
       if (done.status !== 200 && done.status !== 201) return fail('upload_failed');
+      held = total;
     } else {
       // Expired (a week) or gone: nothing can be saved.
       return fail('lost');

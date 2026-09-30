@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { startRecording, stopRecording, dismissRecording, readRecording, WORDS, type Deps, type OffscreenAnswer } from './recording';
 import { saveSession } from './session';
 import { fakeStorage, fakeFetch, json, idTokenFor, type Call } from './testing';
+import { memoryTailStore } from './tail-store';
 
 const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=x';
 
@@ -21,8 +22,9 @@ function world(opts: { api?: (c: Call) => Response | undefined; offscreen?: (m: 
   const sent: Array<{ type: string }> = [];
   const log: string[] = [];
   const local = fakeStorage();
+  const tails = memoryTailStore();
   const deps: Deps = {
-    storage, local, fetch: net.fetch, now: () => t,
+    storage, local, tails, fetch: net.fetch, now: () => t,
     streamIdFor: opts.streamId ?? (async (tabId) => `stream-for-${tabId}`),
     async toOffscreen(m) {
       sent.push(m);
@@ -32,7 +34,7 @@ function world(opts: { api?: (c: Call) => Response | undefined; offscreen?: (m: 
     async setBadge(text) { log.push(`badge:${text}`); },
     newNoteId: () => 'note-1',
   };
-  return { deps, storage, local, calls: net.calls, sent, log, advance: (ms: number) => { t += ms; } };
+  return { deps, storage, local, tails, calls: net.calls, sent, log, advance: (ms: number) => { t += ms; } };
 }
 const signIn = (w: ReturnType<typeof world>) => saveSession(w.deps, { idToken: idTokenFor('alice'), refreshToken: 'r1', expiresIn: 3600 });
 const paths = (calls: Call[]) => calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
@@ -45,7 +47,7 @@ describe('starting a recording', () => {
     expect(paths(w.calls)).toEqual(['POST /v1/uploads']);
     expect(JSON.parse(w.calls[0]!.body!)).toEqual({ noteId: 'note-1', workspaceId: 'workspace_alice', fileName: 'recording.webm', contentType: 'audio/webm' });
     expect(w.calls[0]!.headers.Authorization).toBe(`Bearer ${idTokenFor('alice')}`);
-    expect(w.sent).toEqual([{ type: 'start', streamId: 'stream-for-7', sessionUri: SESSION, chunkSize: 8388608 }]);
+    expect(w.sent).toEqual([{ type: 'start', streamId: 'stream-for-7', sessionUri: SESSION, chunkSize: 8388608, uploadId: 'up-1' }]);
     expect(await readRecording(w.deps)).toMatchObject({ phase: 'recording', noteId: 'note-1', uploadId: 'up-1', title: 'Call, 30 Sep', micIncluded: true });
     expect(w.log).toEqual(['badge:REC']);
     // What recovery needs if the browser closes mid-way, on disk: the upload, never the sign-in.
@@ -102,6 +104,7 @@ describe('stopping', () => {
     const w = world();
     await signIn(w);
     await startRecording(w.deps, { tabId: 7, title: 'Call, 30 Sep' });
+    await w.tails.put('up-1', { start: 0, data: new Blob(['x']) });
     w.calls.length = 0;
     expect(await stopRecording(w.deps)).toMatchObject({ phase: 'saved', noteId: 'note-1' });
     expect(w.sent.at(-1)).toEqual({ type: 'stop' });
@@ -110,6 +113,7 @@ describe('stopping', () => {
     expect(JSON.parse(w.calls[2]!.body!)).toEqual({ noteId: 'note-1', workspaceId: 'workspace_alice', type: 'recording', storagePath: 'recordings/workspace_alice/note-1.webm', durationSec: 1805 });
     expect(w.log).toEqual(['badge:REC', 'close', 'badge:']);
     expect(w.local.data.has('unfinished')).toBe(false);
+    expect(w.tails.data.size).toBe(0);
   });
 
   it('asked twice (Stop, and the tab closing), saves once', async () => {
@@ -148,9 +152,11 @@ describe('stopping', () => {
     await signIn(w);
     await startRecording(w.deps, { tabId: 7, title: 't' });
     w.calls.length = 0;
+    await w.tails.put('up-1', { start: 0, data: new Blob(['x']) });
     expect(await stopRecording(w.deps)).toMatchObject({ phase: 'failed', error: WORDS.upload_failed });
     expect(w.calls).toHaveLength(0);
     expect(w.local.data.has('unfinished')).toBe(false);
+    expect(w.tails.data.size).toBe(0);
   });
 
   it('the network failing while saving ends it as failed, not stuck saving', async () => {

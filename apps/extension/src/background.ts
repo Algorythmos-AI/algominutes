@@ -4,12 +4,14 @@ import { handleExternal } from './lib/messages';
 import { dismissRecording, startRecording, stopRecording, type Deps } from './lib/recording';
 import { notetakerAvailable, sendNotetaker } from './lib/notetaker';
 import { recoverUnfinished, type Deps as RecoveryDeps } from './lib/recovery';
+import { idbTailStore } from './lib/tail-store';
 
 const OFFSCREEN = 'offscreen.html';
 
 const deps: Deps & RecoveryDeps = {
   storage: chrome.storage.session,
   local: chrome.storage.local,
+  tails: idbTailStore(),
   recorderRunning: async () => (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length > 0,
   fetch: (...a: Parameters<typeof fetch>) => fetch(...a),
   now: () => Date.now(),

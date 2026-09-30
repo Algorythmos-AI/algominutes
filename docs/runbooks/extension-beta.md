@@ -40,7 +40,7 @@ your notetaker, everyone sees it, and the note appears in the app with the speak
 | "Install the AlgoMinutes extension first" on the connect page | Install it from your link, then reload the connect page. |
 | "Chrome didn't let the extension record this tab" | Open the popup from the meeting's own tab, not another one. |
 | "Your microphone isn't allowed yet" | **Allow it** in the popup, and allow the microphone in the tab that opens. |
-| "The browser closed while recording" | What was uploaded before it closed is saved (all but about the last 40 seconds). |
+| "The browser closed while recording" | The recording is saved, all but its last few seconds. |
 | "A recording was interrupted when the browser closed. Connect again…" | Connect again: the recording is then saved. |
 | "This version of the extension is out of date" | Chrome and Edge update extensions on their own; restart the browser, or remove and reinstall it from your link. |
 | "You're out of recording minutes" | Add minutes with an invite code in the app's Settings; the recording is kept. |
@@ -124,6 +124,8 @@ To be confirmed by the owner and legal before submitting. What the extension han
 - **Personal communications:** the audio of meetings the user chooses to record, sent to AlgoMinutes to be
   transcribed and summarised, as the privacy policy describes.
 - **Authentication information:** the user's AlgoMinutes session, kept in memory only.
+- While recording, the last seconds not yet uploaded are also kept in the extension's own browser storage
+  (IndexedDB), so a recording the browser closes on can still be saved; they're deleted once it's saved.
 - **Website content:** only a Google Meet tab's link, and only when the user sends the notetaker.
 - It does not collect web history, location, health or financial data, and it reads no page content.
 - Certify: not sold to third parties; not used or transferred for purposes unrelated to the single purpose; not

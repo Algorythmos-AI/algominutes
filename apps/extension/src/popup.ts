@@ -50,7 +50,7 @@ async function render(): Promise<void> {
   if (rec.phase === 'failed') $('failure').textContent = rec.error ?? WORDS.save_failed;
   if (rec.phase === 'saved') {
     $('saved-words').textContent = rec.recovered
-      ? 'The browser closed while recording. What was uploaded before it closed is saved, and your note will be ready in a few minutes.'
+      ? 'The browser closed while recording. The recording is saved, all but its last few seconds, and your note will be ready in a few minutes.'
       : 'Saved. Your note will be ready in a few minutes, in AlgoMinutes.';
   }
 }

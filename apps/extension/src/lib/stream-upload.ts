@@ -26,6 +26,11 @@ export interface StreamUploadOptions {
   /** Failed requests in a row before giving up. */
   maxRetries?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Told what Cloud Storage hasn't acknowledged, whenever that changes (37e): where it starts in the recording,
+   * and the bytes. The recorder keeps a copy, for recovery if the browser closes.
+   */
+  onTail?: (tail: { start: number; data: Blob }) => void;
 }
 
 /** `Range: bytes=0-N` → N + 1 bytes held; no header means none. */
@@ -60,6 +65,7 @@ export class StreamUpload {
   push(data: Blob): Promise<void> {
     if (this.done) throw new StreamUploadError('The upload has finished');
     this.pending = new Blob([this.pending, data]);
+    this.opts.onTail?.({ start: this.acked, data: this.pending });
     this.sending = this.sending.then(() => this.drain(false));
     return this.sending;
   }
@@ -146,5 +152,6 @@ export class StreamUpload {
     if (held > this.acked + this.pending.size) throw new StreamUploadError('Cloud Storage says it holds bytes never sent');
     this.pending = this.pending.slice(held - this.acked);
     this.acked = held;
+    this.opts.onTail?.({ start: this.acked, data: this.pending });
   }
 }

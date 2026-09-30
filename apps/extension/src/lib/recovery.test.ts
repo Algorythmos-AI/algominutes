@@ -3,12 +3,13 @@ import { recoverUnfinished } from './recovery';
 import { readRecording, WORDS, type Unfinished } from './recording';
 import { saveSession } from './session';
 import { fakeStorage, fakeFetch, json, idTokenFor, type Call } from './testing';
+import { memoryTailStore, type Tail } from './tail-store';
 
 const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=x';
 const U: Unfinished = { uploadId: 'up-1', sessionUri: SESSION, noteId: 'note-1', workspaceId: 'workspace_alice', storagePath: 'recordings/workspace_alice/note-1.webm', title: 'Call, 30 Sep', startedAt: 1_000 };
 
 /** Cloud Storage holding `held` bytes of the session (or answering `status`), and the api taking the rest. */
-function world(opts: { held?: number; status?: number; final?: number; api?: (c: Call) => Response | undefined; running?: boolean; net?: boolean } = {}) {
+function world(opts: { held?: number; status?: number; final?: number; api?: (c: Call) => Response | undefined; running?: boolean; net?: boolean; tail?: Tail } = {}) {
   const storage = fakeStorage();
   const local = fakeStorage();
   const net = fakeFetch((c) => {
@@ -19,20 +20,26 @@ function world(opts: { held?: number; status?: number; final?: number; api?: (c:
         if (opts.status) return new Response(opts.status === 200 ? JSON.stringify({ size: String(opts.held ?? 0) }) : '', { status: opts.status });
         return new Response('', { status: 308, headers: opts.held ? { Range: `bytes=0-${opts.held - 1}` } : {} });
       }
-      return new Response('{}', { status: opts.final ?? (range === `bytes */${opts.held}` ? 200 : 400) });
+      if (opts.final) return new Response('{}', { status: opts.final });
+      // The last chunk: the tail after what's held, with the total.
+      const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(range ?? '');
+      if (m) return new Response('{}', { status: Number(m[1]) === (opts.held ?? 0) && Number(m[2]) + 1 === Number(m[3]) ? 200 : 400 });
+      return new Response('{}', { status: range === `bytes */${opts.held}` ? 200 : 400 });
     }
     const custom = opts.api?.(c);
     if (custom) return custom;
     return json(200, { ok: true });
   });
   const log: string[] = [];
+  const tails = memoryTailStore();
+  if (opts.tail) tails.data.set('up-1', opts.tail);
   const deps = {
-    storage, local, fetch: net.fetch, now: () => 5_000,
+    storage, local, tails, fetch: net.fetch, now: () => 5_000,
     recorderRunning: async () => opts.running ?? false,
     streamIdFor: async () => 's', toOffscreen: async () => ({ ok: true }), closeOffscreen: async () => {},
     setBadge: async (t: string) => { log.push(`badge:${t}`); }, newNoteId: () => 'n',
   };
-  return { deps, local, calls: net.calls, log };
+  return { deps, local, tails, calls: net.calls, log };
 }
 const signIn = (w: ReturnType<typeof world>) => saveSession(w.deps, { idToken: idTokenFor('alice'), refreshToken: 'r', expiresIn: 3600 });
 const api = (calls: Call[]) => calls.filter((c) => c.url !== SESSION).map((c) => `${c.method} ${new URL(c.url).pathname}`);
@@ -76,6 +83,44 @@ describe('a recording the browser closed on', () => {
     expect(await readRecording(w.deps)).toMatchObject({ phase: 'saved', recovered: true });
   });
 
+  it('the recorder\'s copy of the unacknowledged tail is sent as the last chunk: nothing is lost', async () => {
+    const held = 262144;
+    // The copy was written when Cloud Storage held less (its start), and overlaps what it holds now.
+    const tail: Tail = { start: 200_000, data: new Blob([new Uint8Array(100_000)]) };
+    const w = world({ held, tail });
+    await signIn(w);
+    await w.local.set({ unfinished: U });
+    expect(await recoverUnfinished(w.deps)).toMatchObject({ phase: 'saved', recovered: true });
+    const last = w.calls.filter((c) => c.url === SESSION).at(-1)!;
+    expect(last.headers['Content-Range']).toBe(`bytes ${held}-${300_000 - 1}/300000`);
+    expect(JSON.parse(w.calls.find((c) => c.url.endsWith('/v1/notes'))!.body!).durationSec).toBe(Math.round(300_000 / 8000));
+    expect(w.tails.data.size).toBe(0);
+  });
+
+  it('nothing uploaded yet, but the recorder\'s copy has it all: saved, not lost', async () => {
+    const w = world({ held: 0, tail: { start: 0, data: new Blob([new Uint8Array(50_000)]) } });
+    await signIn(w);
+    await w.local.set({ unfinished: U });
+    expect(await recoverUnfinished(w.deps)).toMatchObject({ phase: 'saved' });
+    expect(w.calls.filter((c) => c.url === SESSION).at(-1)!.headers['Content-Range']).toBe('bytes 0-49999/50000');
+  });
+
+  it('a copy that starts past what Cloud Storage holds is never sent: that would leave a gap', async () => {
+    const w = world({ held: 1000, tail: { start: 262144, data: new Blob([new Uint8Array(500)]) } });
+    await signIn(w);
+    await w.local.set({ unfinished: U });
+    expect(await recoverUnfinished(w.deps)).toMatchObject({ phase: 'saved' });
+    expect(w.calls.filter((c) => c.url === SESSION).at(-1)!.headers['Content-Range']).toBe('bytes */1000');
+  });
+
+  it('a copy that ends before what Cloud Storage holds adds nothing: what\'s held is finalised', async () => {
+    const w = world({ held: 262144, tail: { start: 0, data: new Blob([new Uint8Array(1000)]) } });
+    await signIn(w);
+    await w.local.set({ unfinished: U });
+    expect(await recoverUnfinished(w.deps)).toMatchObject({ phase: 'saved' });
+    expect(w.calls.filter((c) => c.url === SESSION).at(-1)!.headers['Content-Range']).toBe('bytes */262144');
+  });
+
   it('already finalised (the last chunk went just as it closed): saved as it is', async () => {
     const w = world({ status: 200, held: 16000 });
     await signIn(w);
@@ -87,12 +132,14 @@ describe('a recording the browser closed on', () => {
 
   it('nothing uploaded, or the session gone: lost, said so, and forgotten; no note', async () => {
     for (const opts of [{ held: 0 }, { status: 404 }, { status: 410 }]) {
-      const w = world(opts);
+      // A copy of nothing: gone with the recording.
+      const w = world({ ...opts, tail: { start: 0, data: new Blob([]) } });
       await signIn(w);
       await w.local.set({ unfinished: U });
       expect(await recoverUnfinished(w.deps)).toMatchObject({ phase: 'failed', error: WORDS.lost });
       expect(api(w.calls)).toEqual([]);
       expect(w.local.data.has('unfinished')).toBe(false);
+      expect(w.tails.data.size).toBe(0);
     }
   });
 

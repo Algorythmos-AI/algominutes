@@ -3,6 +3,9 @@
 // records (lib/stream-upload.ts). The tab's sound is also played back, since a captured tab is otherwise
 // silent for the user. It hears only its own extension (sender.id) and messages addressed to it.
 import { StreamUpload } from './lib/stream-upload';
+import { idbTailStore } from './lib/tail-store';
+
+const tails = idbTailStore();
 
 interface Running {
   recorder: MediaRecorder;
@@ -21,7 +24,7 @@ function tabConstraints(streamId: string): MediaStreamConstraints {
   return { audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } }, video: false } as unknown as MediaStreamConstraints;
 }
 
-async function start(streamId: string, sessionUri: string, chunkSize: number) {
+async function start(streamId: string, sessionUri: string, chunkSize: number, uploadId: string) {
   if (running) return { ok: false, error: 'busy' };
   const tab = await navigator.mediaDevices.getUserMedia(tabConstraints(streamId));
   let mic: MediaStream | null = null;
@@ -38,7 +41,16 @@ async function start(streamId: string, sessionUri: string, chunkSize: number) {
   tabSource.connect(ctx.destination);
   if (mic) ctx.createMediaStreamSource(mic).connect(mix);
 
-  const upload = new StreamUpload({ sessionUri, fetch: (...a) => fetch(...a), maxChunk: chunkSize });
+  const upload = new StreamUpload({
+    sessionUri, fetch: (...a) => fetch(...a), maxChunk: chunkSize,
+    // A copy of what Cloud Storage hasn't acknowledged, for recovery if the browser closes (37e).
+    onTail: (tail) => {
+      tails.put(uploadId, tail).catch((err: unknown) => {
+        // silent-catch-ok: without the copy, a recording the browser closes on loses its last seconds only, as before 37e; the recording itself goes on
+        void err;
+      });
+    },
+  });
   const recorder = new MediaRecorder(mix.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 64_000 });
   const r: Running = { recorder, upload, streams: mic ? [tab, mic] : [tab], ctx, startedAt: Date.now(), micIncluded: !!mic, failed: null };
   recorder.ondataavailable = (e) => {
@@ -71,9 +83,9 @@ async function stop() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const m = message as { target?: string; type?: string; streamId?: string; sessionUri?: string; chunkSize?: number };
+  const m = message as { target?: string; type?: string; streamId?: string; sessionUri?: string; chunkSize?: number; uploadId?: string };
   if (sender.id !== chrome.runtime.id || m?.target !== 'offscreen') return false;
-  const work = m.type === 'start' && m.streamId && m.sessionUri ? start(m.streamId, m.sessionUri, Number(m.chunkSize) || 8 * 1024 * 1024)
+  const work = m.type === 'start' && m.streamId && m.sessionUri && m.uploadId ? start(m.streamId, m.sessionUri, Number(m.chunkSize) || 8 * 1024 * 1024, m.uploadId)
     : m.type === 'stop' ? stop()
     : Promise.resolve({ ok: false, error: 'invalid' });
   work.then(sendResponse, (err: unknown) => sendResponse({ ok: false, error: 'capture_failed', detail: err instanceof Error ? err.name : 'unknown' }));

@@ -17,8 +17,11 @@ RELEASE.md PR 37:
 - **37d:** a recording interrupted by the browser closing is saved from what was uploaded: its upload
   details are kept in `chrome.storage.local` (never the sign-in), and the next time the extension starts or
   its popup opens, what Cloud Storage holds is finalised and saved as the note. If the restart signed the
-  extension out, it's saved once it's connected again. Up to about the last 40 seconds (the part not yet in
-  a whole 256 KiB piece) is lost; keeping that tail in IndexedDB is a follow-up.
+  extension out, it's saved once it's connected again.
+- **37e:** the part Cloud Storage hasn't acknowledged yet (up to about 40 seconds: it takes only whole 256 KiB
+  pieces until the last one) is copied into the extension's IndexedDB as it changes, and recovery sends it as
+  the last chunk. Only the last few seconds still inside the recorder can be lost. The copy is deleted when the
+  recording is saved or fails.
 
 ## Build
 

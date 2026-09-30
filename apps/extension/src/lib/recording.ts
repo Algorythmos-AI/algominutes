@@ -8,6 +8,7 @@
 // Where it stands lives in chrome.storage.session, so the popup can show it.
 import { apiFetch, type Fetch } from './http';
 import { idToken, readSession, type Deps as SessionDeps } from './session';
+import type { TailStore } from './tail-store';
 
 export type Phase = 'recording' | 'saving' | 'saved' | 'failed';
 
@@ -53,10 +54,12 @@ export interface Deps extends SessionDeps {
   fetch: Fetch;
   /** chrome.storage.local: only the unfinished recording (above), to outlive the browser. */
   local: chrome.storage.StorageArea;
+  /** The recorder's copy of what Cloud Storage hasn't acknowledged (37e), dropped once a recording ends. */
+  tails: TailStore;
   /** chrome.tabCapture.getMediaStreamId for the tab. */
   streamIdFor(tabId: number): Promise<string>;
   /** Creates the offscreen document if it isn't there, then sends it a message and waits for its answer. */
-  toOffscreen(message: { type: 'start'; streamId: string; sessionUri: string; chunkSize: number } | { type: 'stop' }): Promise<OffscreenAnswer>;
+  toOffscreen(message: { type: 'start'; streamId: string; sessionUri: string; chunkSize: number; uploadId: string } | { type: 'stop' }): Promise<OffscreenAnswer>;
   closeOffscreen(): Promise<void>;
   setBadge(text: string): Promise<void>;
   newNoteId(): string;
@@ -122,7 +125,7 @@ export async function startRecording(deps: Deps, input: { tabId: number; title: 
     return { ok: false, error: 'upload_refused' };
   }
 
-  const started = await deps.toOffscreen({ type: 'start', streamId, sessionUri: up.sessionUri, chunkSize: Number(up.chunkSize) || 8 * 1024 * 1024 });
+  const started = await deps.toOffscreen({ type: 'start', streamId, sessionUri: up.sessionUri, chunkSize: Number(up.chunkSize) || 8 * 1024 * 1024, uploadId: up.uploadId });
   if (!started.ok) {
     await deps.closeOffscreen();
     return { ok: false, error: 'capture_failed' };
@@ -150,6 +153,7 @@ export async function stopRecording(deps: Deps): Promise<RecordingState | null> 
     const failed: RecordingState = { ...rec, phase: 'failed', error: WORDS[error] };
     await write(deps, failed);
     await deps.local.remove(UNFINISHED);
+    await deps.tails.delete(rec.uploadId);
     await deps.setBadge('');
     await deps.closeOffscreen();
     return failed;
@@ -198,6 +202,7 @@ export async function saveNote(
   const saved: RecordingState = { ...rec, phase: 'saved' };
   await write(deps, saved);
   await deps.local.remove(UNFINISHED);
+  await deps.tails.delete(rec.uploadId);
   await deps.setBadge('');
   return saved;
 }
