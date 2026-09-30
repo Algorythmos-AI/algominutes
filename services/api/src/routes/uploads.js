@@ -18,6 +18,7 @@ import { getStorage } from 'firebase-admin/storage';
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import storagePathsModule from '@algominutes/ai/storage-paths.cjs';
 import noteStorageModule from '@algominutes/ai/note-storage.cjs';
+import corsModule from '@algominutes/ai/cors.cjs';
 import { CreateUploadSessionRequest } from '@algominutes/contracts/schemas';
 import {
   createUploadSession,
@@ -123,9 +124,17 @@ export async function createUploadSessionRoute(req, res) {
     const bucket = getStorage().bucket();
     const file = bucket.file(storagePath);
     // createResumableUpload returns [uri]; the client uploads chunks to it.
-    // TODO(A11): verify against live GCS.
+    // A browser PUTs those chunks cross-origin, and Cloud Storage sends
+    // Access-Control-Allow-Origin on the answers only for the origin the
+    // session was created with (the bucket has no CORS policy). Without it the
+    // web app could send every byte and read no answer: it stalled at 0%.
+    // Only an origin on the api's own allowlist; iOS sends none, and needs none.
+    const origin = typeof req.headers?.origin === 'string' && corsModule.buildAllowedOriginSet().has(req.headers.origin)
+      ? req.headers.origin
+      : undefined;
     [sessionUri] = await file.createResumableUpload({
       metadata: { contentType },
+      ...(origin ? { origin } : {}),
     });
   } catch (err) {
     log.error({ err, storagePath }, 'create_resumable_upload_failed');

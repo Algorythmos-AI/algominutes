@@ -8,8 +8,10 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } fro
 // createUploadSession takes the note lock and refuses a note with a pending
 // purge, and the route cancels the session it had just minted.
 const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=new';
+// What each session was minted with (its options), for the browser-origin tests below.
+const minted: Array<Record<string, unknown>> = [];
 vi.mock('firebase-admin/storage', () => ({
-  getStorage: () => ({ bucket: () => ({ file: () => ({ createResumableUpload: async () => [SESSION] }) }) }),
+  getStorage: () => ({ bucket: () => ({ file: () => ({ createResumableUpload: async (opts: Record<string, unknown>) => { minted.push(opts); return [SESSION]; } }) }) }),
 }));
 // @ts-expect-error: plain ESM route module, no type declarations
 const { createUploadSessionRoute } = await import('../../services/api/src/routes/uploads.js');
@@ -20,6 +22,7 @@ const cancels: string[] = [];
 beforeEach(async () => {
   await resetDb();
   cancels.length = 0;
+  minted.length = 0;
   vi.stubGlobal('fetch', async (url: string, init: { method: string }) => {
     if (init?.method === 'DELETE') cancels.push(url);
     return { status: 499 };
@@ -39,13 +42,13 @@ const session = (noteId: string) => ({
   sessionUri: SESSION, totalBytes: 10, expiresAt: new Date(Date.now() + 3_600_000),
 });
 
-async function upload(noteId: string) {
+async function upload(noteId: string, origin?: string) {
   const out = { status: 0, body: undefined as any };
   const res = { status(c: number) { out.status = c; return this; }, json(b: unknown) { out.status ||= 200; out.body = b; return this; } };
   const noop = () => {};
   const log = { info: noop, warn: noop, error: noop, child: () => log };
   await createUploadSessionRoute({
-    uid: 'alice', log,
+    uid: 'alice', log, headers: origin ? { origin } : {},
     body: { noteId, workspaceId: 'workspace_alice', fileName: 'a.m4a', contentType: 'audio/mp4', totalBytes: 10 },
   }, res);
   return out;
@@ -98,5 +101,25 @@ describe('an upload session for a deleted note', () => {
     expect((await upload('n1')).status).toBe(200);
     await deleteNote(fs, { noteId: 'n1', workspaceId: 'workspace_alice', uid: 'alice' }, quietLog);
     expect((await pool.query(`SELECT upload_session_uris FROM storage_purges`)).rows).toEqual([{ upload_session_uris: [SESSION] }]);
+  });
+});
+
+// A browser PUTs the chunks straight to the session URI. Cloud Storage adds Access-Control-Allow-Origin to
+// those responses only for the origin the session was created with, so without it every web upload's
+// answers were unreadable, and the web app stalled at "Uploading... 0%" (staging, 2026-09-30). iOS sends no
+// Origin and needs none.
+describe('an upload session for a browser', () => {
+  it("is minted for the web app's origin, so the browser can read Cloud Storage's answers", async () => {
+    process.env.ALLOWED_ORIGINS = 'https://staging.algominutes.algorythmos.com';
+    expect((await upload('n1', 'https://staging.algominutes.algorythmos.com')).status).toBe(200);
+    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4' }, origin: 'https://staging.algominutes.algorythmos.com' }]);
+  });
+
+  it("isn't minted for an origin outside the allowlist, or with none (iOS)", async () => {
+    process.env.ALLOWED_ORIGINS = 'https://staging.algominutes.algorythmos.com';
+    expect((await upload('n1', 'https://evil.example')).status).toBe(200);
+    await seedNote('n2', 'workspace_alice', 'alice');
+    expect((await upload('n2')).status).toBe(200);
+    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4' } }, { metadata: { contentType: 'audio/mp4' } }]);
   });
 });
