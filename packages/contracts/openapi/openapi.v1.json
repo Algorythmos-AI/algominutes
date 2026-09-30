@@ -1604,6 +1604,12 @@
           "trialEndsAt": {
             "type": "string",
             "nullable": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/EntitlementSource"
+          },
+          "rail": {
+            "$ref": "#/components/schemas/SubscriptionRail"
           }
         },
         "required": [
@@ -1623,6 +1629,25 @@
           "active",
           "expired",
           "free_floor"
+        ]
+      },
+      "EntitlementSource": {
+        "type": "string",
+        "enum": [
+          "subscription",
+          "grant",
+          "trial",
+          "free"
+        ]
+      },
+      "SubscriptionRail": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "apple_storekit",
+          "stripe",
+          "google_play",
+          null
         ]
       },
       "ProcessRequest": {

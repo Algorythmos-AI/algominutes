@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { getPool, resolveEntitlement } from '@algominutes/db';
+import { getPool, resolveEntitlement, grantEntitlement } from '@algominutes/db';
 import { EntitlementResponse } from '@algominutes/contracts/schemas';
 // @ts-expect-error: plain ESM route module, no type declarations
 import { toEntitlementResponse } from '../../services/api/src/routes/entitlement.js';
@@ -56,5 +56,44 @@ describe('entitlement response satisfies the published contract', () => {
     const b = await body();
     expect(() => EntitlementResponse.parse(b)).not.toThrow();
     expect(b).toMatchObject({ state: 'free_floor', plan: 'free', trialEndsAt: null });
+  });
+});
+
+// RELEASE.md PR 26b: where an entitlement comes from. A grant reports `active` like a subscription, so the
+// clients key the purchase funnel and "Manage Subscription" off `source`, and manage one on its `rail`.
+describe('the entitlement says where it comes from', () => {
+  const future = () => new Date(Date.now() + 20 * 86_400_000);
+  const check = async (expected: Record<string, unknown>) => {
+    const b = await body();
+    expect(() => EntitlementResponse.parse(b)).not.toThrow();
+    expect(b).toMatchObject(expected);
+  };
+
+  it('the trial, and the free floor after it', async () => {
+    await check({ state: 'trialing', source: 'trial', rail: null });
+    await sub({ trial_started_at: new Date(Date.now() - 10 * 86_400_000), trial_end: new Date(Date.now() - 3 * 86_400_000) });
+    await check({ state: 'free_floor', source: 'free', rail: null });
+  });
+
+  it('a subscription, with the store it is billed on', async () => {
+    await sub({ status: 'active', entitlement_state: 'active', source: 'apple_storekit', current_period_end: future(), apple_original_transaction_id: '2000000000000001' });
+    await check({ state: 'active', plan: 'pro', source: 'subscription', rail: 'apple_storekit' });
+    await pool.query(`UPDATE subscriptions SET source = 'stripe', stripe_subscription_id = 'sub_1' WHERE uid = 'u1'`);
+    await check({ source: 'subscription', rail: 'stripe' });
+    // A rail this build doesn't know is no rail, never a wrong one.
+    await pool.query(`UPDATE subscriptions SET source = 'something_new' WHERE uid = 'u1'`);
+    await check({ source: 'subscription', rail: null });
+  });
+
+  it('a grant: active like a subscription, but not one', async () => {
+    await sub({ trial_started_at: new Date(Date.now() - 10 * 86_400_000), trial_end: new Date(Date.now() - 3 * 86_400_000) });
+    await grantEntitlement({ uid: 'u1', plan: 'pro', reason: 'invite:1' });
+    await check({ state: 'active', plan: 'pro', source: 'grant', rail: null });
+  });
+
+  it('a paid subscription wins over a grant', async () => {
+    await sub({ status: 'active', entitlement_state: 'active', source: 'stripe', current_period_end: future(), stripe_subscription_id: 'sub_1' });
+    await grantEntitlement({ uid: 'u1', plan: 'pro', reason: 'invite:1' });
+    await check({ state: 'active', source: 'subscription', rail: 'stripe' });
   });
 });

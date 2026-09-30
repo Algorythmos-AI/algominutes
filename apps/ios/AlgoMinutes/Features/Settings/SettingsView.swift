@@ -236,7 +236,9 @@ struct SettingsView: View {
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
-                    if env.billing.entitlement?.state == .active {
+                    // Only a subscription bought in the App Store is managed there: not
+                    // a grant, and not one billed on the web (RELEASE.md PR 26b).
+                    if env.billing.entitlement?.isManagedInAppStore == true {
                         Divider().overlay(Theme.borderSoft)
                         Button("Manage Subscription") {
                             Task { await env.billing.store.showManageSubscriptions() }
@@ -272,11 +274,15 @@ struct SettingsView: View {
         return "\(used.formatted()) of \(total.formatted()) minutes used this month"
     }
 
-    private var planLabel: String {
-        switch env.billing.entitlement?.state {
-        case .active?: return "Pro"
+    private var planLabel: String { Self.planLabel(env.billing.entitlement, trialDaysRemaining: env.billing.trialDaysRemaining) }
+
+    /// The plan, as the card's headline: a grant's minutes say so, so a tester
+    /// never takes them for a purchase.
+    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?) -> String {
+        switch entitlement?.state {
+        case .active?: return entitlement?.isGrant == true ? "Pro · beta minutes" : "Pro"
         case .trialing?:
-            if let days = env.billing.trialDaysRemaining {
+            if let days = trialDaysRemaining {
                 return "Free trial · \(days) day\(days == 1 ? "" : "s") left"
             }
             return "Free trial"

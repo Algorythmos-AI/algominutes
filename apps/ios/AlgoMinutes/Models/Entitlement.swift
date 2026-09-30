@@ -35,6 +35,24 @@ struct EntitlementResponse: Codable, Sendable {
     let remainingMinutes: Double?    // null when includedMinutes is null
     let overQuota: Bool
     let trialEndsAt: String?         // ISO; present while trialing
+    /// Where it comes from (RELEASE.md PR 26b): "subscription" | "grant" | "trial" |
+    /// "free". A String, like `plan`, so a new source doesn't break decoding; absent
+    /// from a server before it.
+    var source: String? = nil
+    /// The store a subscription is billed on: "apple_storekit" | "stripe" | "google_play".
+    var rail: String? = nil
+
+    /// A paid subscription. A grant (an invite code) reports `active` too, but it's
+    /// no purchase and there's nothing to manage. A server from before `source`
+    /// reports only the state, so `active` counts as before.
+    var isSubscription: Bool { source.map { $0 == "subscription" } ?? (state == .active) }
+
+    /// Managed in the App Store (Settings, Subscriptions): a subscription bought
+    /// here, not one billed on the web.
+    var isManagedInAppStore: Bool { isSubscription && (rail == nil || rail == "apple_storekit") }
+
+    /// Minutes from a grant: an invite code, or a tester's.
+    var isGrant: Bool { source == "grant" }
 
     /// Whole days left in the reverse trial, floored at 0. Drives the countdown
     /// banner. Returns nil when not trialing or the date can't be parsed.

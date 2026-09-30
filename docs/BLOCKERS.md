@@ -247,7 +247,11 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
   grants with the db-job `grant-tester` handler (runbook `resume-staging-and-deploy.md` §4); no tester
   email goes into git or the logs. Tested (grant, expiry, another user, usage, paid wins, revoke, account
   deletion, the handler); four mutations checked.
-  - [ ] **Queued (audit of that PR): say where an `active` entitlement comes from.** A grant reports
+  - [x] **Done (RELEASE.md PR 26b): say where an `active` entitlement comes from.** `EntitlementResponse` now
+    carries `source` (`subscription` | `grant` | `trial` | `free`) and, for a subscription, `rail`. iOS counts a
+    `purchase` only when the entitlement becomes a subscription (so a tester with beta minutes who buys does count),
+    no `cancellation` when a grant ends, and shows Manage Subscription only for an App Store one. Settings says
+    "beta minutes" on both clients. The original note: A grant reports
     `active` like a paid subscription, so iOS `BillingService` logs a `purchase` event when a grant starts
     (and `cancellation` when it ends), and the web paywall offers only "Manage subscription", whose portal
     answers 409 (no Stripe customer). Fix: an additive `source` field on `EntitlementResponse`
@@ -304,7 +308,10 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   3. **Cross-rail double-charge race.** The client hides "buy" when already entitled and the server logs
      `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
      can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
-     support. Consider a server pre-purchase entitlement check.
+     support. Consider a server pre-purchase entitlement check. **Web side done (RELEASE.md PR 26b):** Stripe
+     checkout answers 409 `Already subscribed` (with the rail) to anyone paying on any rail, before Stripe is
+     asked. **iOS side left for PR 27:** StoreKit buys on the device, so the paywall must re-read
+     `/v1/entitlement` and not offer a purchase when `source` is `subscription`.
   5. ~~**Client billing endpoint wiring (TODO(A9-infra)).**~~ **Resolved (checked 2026-09-29):** iOS verifies
      purchases on billing's own host (`v1/purchases/verify`, `APIClient.swift:663`) and reads `v1/entitlement` and
      posts `v1/events` on the api (`:672`).

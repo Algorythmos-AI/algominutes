@@ -59,6 +59,28 @@ describe('settings', () => {
     expect(await screen.findByText(/Pro plan\. 0 of 600 minutes used this month\./)).toBeTruthy();
   });
 
+  // RELEASE.md PR 26b: where the minutes come from.
+  it("says a grant's minutes are beta minutes, never a purchase", async () => {
+    handlers['/v1/entitlement'] = () => new Response(JSON.stringify({ ...ENT, plan: 'pro', source: 'grant', rail: null }), { status: 200 });
+    open();
+    expect(await screen.findByText(/Pro plan \(beta minutes\)\. 12 of 60 minutes used this month\./)).toBeTruthy();
+    expect(screen.queryByText(/Billed through the App Store/)).toBeNull();
+  });
+
+  it('says where an App Store subscription is managed', async () => {
+    handlers['/v1/entitlement'] = () => new Response(JSON.stringify({ ...ENT, plan: 'pro', source: 'subscription', rail: 'apple_storekit' }), { status: 200 });
+    open();
+    expect(await screen.findByText(/Pro plan\. 12 of 60/)).toBeTruthy();
+    expect(screen.getByText(/Billed through the App Store/)).toBeTruthy();
+  });
+
+  it('a subscription billed on the web is not sent to the App Store', async () => {
+    handlers['/v1/entitlement'] = () => new Response(JSON.stringify({ ...ENT, plan: 'pro', source: 'subscription', rail: 'stripe' }), { status: 200 });
+    open();
+    expect(await screen.findByText(/Pro plan\. 12 of 60/)).toBeTruthy();
+    expect(screen.queryByText(/Billed through the App Store/)).toBeNull();
+  });
+
   it('a refused invite code says why', async () => {
     handlers['/v1/beta/redeem'] = () => new Response(JSON.stringify({ error: 'invite_used_up' }), { status: 409 });
     open();
