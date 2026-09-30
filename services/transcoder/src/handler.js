@@ -372,22 +372,44 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       continue;
     }
 
-    const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
-    await ffmpeg.extractChunk({
-      inputPath: inputLocal,
-      startSec: slice.startSec,
-      endSec: slice.endSec,
-      outputPath: localChunk,
-    });
-    const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
-    fs.rmSync(localChunk, { force: true });
+    // One attempt starts a chunk's paid job (rev 11 L6): a second delivery of this kickoff, arriving while the
+    // first is still at work, must not start (and pay for) another. It's retried until the first has saved the
+    // operation, and then only polls; a claim left by an attempt that died goes stale and is taken over.
+    const cc = await db.pool().connect();
+    let claimed;
+    try { claimed = await db.claimChunkStt(cc, { chunkId }); }
+    finally { cc.release(); }
+    if (!claimed) {
+      log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_start_in_progress');
+      throw Object.assign(new Error(`chunk ${slice.idx} is being started by another attempt`), { code: 'CHUNK_START_IN_PROGRESS' });
+    }
 
-    const operationName = await stt.startLongRunning({
-      recognizer: env.STT_RECOGNIZER || null,
-      gcsUri,
-      languageCodes: (env.LANGUAGE_CODES || 'en-US').split(',').map((s) => s.trim()).filter(Boolean),
-      log,
-    });
+    let operationName;
+    try {
+      const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
+      await ffmpeg.extractChunk({
+        inputPath: inputLocal,
+        startSec: slice.startSec,
+        endSec: slice.endSec,
+        outputPath: localChunk,
+      });
+      const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
+      fs.rmSync(localChunk, { force: true });
+
+      operationName = await stt.startLongRunning({
+        recognizer: env.STT_RECOGNIZER || null,
+        gcsUri,
+        languageCodes: (env.LANGUAGE_CODES || 'en-US').split(',').map((s) => s.trim()).filter(Boolean),
+        log,
+      });
+    } catch (err) {
+      // Nothing started: give the claim back, so the retry needn't wait for it to go stale.
+      const rc = await db.pool().connect();
+      try { await db.releaseChunkStt(rc, { chunkId }); }
+      catch (releaseErr) { log.error({ err: releaseErr, noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_claim_release_failed'); }
+      finally { rc.release(); }
+      throw err;
+    }
     // Recorded as soon as the job exists, before its op id is saved: a crash in
     // between restarts (and pays for) the chunk again, and records it again; a
     // crash after the save re-polls it and records nothing more.

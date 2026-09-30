@@ -127,6 +127,30 @@ async function insertAudioChunkRow(client, { noteId, idx, startSec, endSec, stor
   return rows[0].id;
 }
 
+// How long a claim holds before another attempt may take the chunk over: an attempt that holds it only
+// extracts, uploads and starts one chunk (seconds), so a claim this old belongs to an attempt that died.
+const STT_CLAIM_STALE_MS = 2 * 60 * 1000;
+
+/**
+ * Claims a chunk's speech job for this attempt (RELEASE.md rev 11, L6). True when this attempt may start it:
+ * the chunk is pending, has no operation, and no other attempt holds a live claim. Atomic, so of two attempts
+ * racing for one chunk exactly one gets true.
+ */
+async function claimChunkStt(client, { chunkId, staleMs = STT_CLAIM_STALE_MS }) {
+  const { rowCount } = await client.query(
+    `UPDATE audio_chunks SET stt_claimed_at = NOW()
+      WHERE id = $1 AND status = 'pending' AND stt_operation_id IS NULL
+        AND (stt_claimed_at IS NULL OR stt_claimed_at < NOW() - $2::bigint * INTERVAL '1 millisecond')`,
+    [chunkId, staleMs],
+  );
+  return rowCount === 1;
+}
+
+/** Gives a claim back after the start failed, so a retry needn't wait for it to go stale. */
+async function releaseChunkStt(client, { chunkId }) {
+  await client.query('UPDATE audio_chunks SET stt_claimed_at = NULL WHERE id = $1 AND stt_operation_id IS NULL', [chunkId]);
+}
+
 async function setChunkOperation(client, { chunkId, operationName }) {
   await client.query('UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1', [chunkId, operationName]);
 }
@@ -434,6 +458,9 @@ module.exports = {
   upsertNoteStatus,
   insertAudioChunkRow,
   setChunkOperation,
+  claimChunkStt,
+  releaseChunkStt,
+  STT_CLAIM_STALE_MS,
   markChunkDone,
   claimSummarizerEnqueue,
   claimEmbedderEnqueue,
