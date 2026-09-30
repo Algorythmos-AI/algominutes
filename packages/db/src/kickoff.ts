@@ -13,6 +13,7 @@ import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 import spendGuardModule from '@algominutes/ai/spend-guard.cjs';
 import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
+import { withinLength, chargedMinutes } from './recording-length.js';
 import { getNoteQueueState, markQueued, markError, markKickoffRejected } from './notes-repo';
 import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import { noteChargeStands } from './usage-repo';
@@ -198,7 +199,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   // is the caller's estimate (the transcoder's ffprobe measures it later);
   // billing rounds partial minutes up.
   const durationSec = Number(input.durationSec ?? 0);
-  const minutes = Number.isFinite(durationSec) && durationSec > 0 ? Math.ceil(durationSec / 60) : 0;
+  let minutes = Number.isFinite(durationSec) && durationSec > 0 ? Math.ceil(durationSec / 60) : 0;
   if (input.quota !== false) {
     let ent: Entitlement;
     try {
@@ -225,12 +226,14 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     // One note holds at most the plan's longest recording. This is the
     // caller's own figure; the transcoder measures the audio itself.
     const maxSec = maxRecordingSecondsForPlan(ent.plan);
-    if (durationSec > maxSec) {
+    if (!withinLength(durationSec, maxSec)) {
       const message = `This recording is longer than ${maxSec / 3600} hours, the longest a note can be.`;
       await rejectNote(input, message, 'too_long');
       log.warn({ durationSec, maxSec, plan: ent.plan }, 'kickoff_too_long');
       return { kind: 'too_long', message };
     }
+    // A recording that hit the limit claims a fraction over it: it's charged the limit (rev 11 LM1).
+    minutes = chargedMinutes(durationSec, maxSec);
 
     // An early refusal, before anything is written. markQueued checks again in
     // the transaction that debits, which is the check that counts. A note whose

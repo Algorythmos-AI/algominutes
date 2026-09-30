@@ -143,13 +143,21 @@ describe('the quota is checked where the minutes are debited', () => {
 describe('one note holds at most the plan’s longest recording', () => {
   it('refuses a longer recording with 413, charging and queueing nothing', async () => {
     await grantEntitlement({ uid: 'alice', reason: 'test' }); // Pro: 4 hours
-    const out = await kickoff('long', 4 * 3600 + 60);
+    const out = await kickoff('long', 4 * 3600 + 61);
     expect(out).toMatchObject({ status: 413, body: { error: expect.stringMatching(/longer than 4 hours/) } });
     expect(await ledger()).toEqual([]);
     expect(enqueued).toHaveLength(0);
     expect(docs.get('workspaces/workspace_alice/notes/long')).toMatchObject({ status: 'error' });
     // Exactly the limit is fine.
     expect((await kickoff('max', 4 * 3600)).status).toBe(200);
+  });
+
+  // RELEASE.md rev 11, LM1 (H5a): a recording stopped at the limit claims a fraction over it.
+  it('accepts a recording that hit the limit, up to a minute over, and charges the limit, not a minute more', async () => {
+    await grantEntitlement({ uid: 'alice', reason: 'test' });
+    expect((await kickoff('hit', 4 * 3600 + 0.3)).status).toBe(200);
+    expect((await kickoff('hit2', 4 * 3600 + 60)).status).toBe(200);
+    expect(await ledger()).toEqual(['hit debit 240 ingest', 'hit2 debit 240 ingest']);
   });
 });
 
