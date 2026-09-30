@@ -45,13 +45,13 @@ describe('app config', () => {
   });
 
   it('the env alone cannot switch on a surface that is not built, nor for someone not allowlisted', async () => {
-    expect([...NOTETAKER_BUILT]).toEqual(['bot']);
+    expect([...NOTETAKER_BUILT]).toEqual(['bot', 'extension']);
     const all = { NOTETAKER: 'bot,calendar,zoomImport,extension' };
     // No uid, or a caller who isn't a notetaker tester: nothing.
     expect((await appConfig(all, null, { isTester: testers('alice') })).notetaker).toEqual(OFF);
     expect((await appConfig(all, 'bob', { isTester: testers('alice') })).notetaker).toEqual(OFF);
-    // An allowlisted tester: only what's built (the bot), never an unbuilt surface.
-    expect((await appConfig(all, 'alice', { isTester: testers('alice', 'carol') })).notetaker).toEqual({ ...OFF, bot: true });
+    // An allowlisted tester: only what's built (the bot, and the extension's button for it), never an unbuilt surface.
+    expect((await appConfig(all, 'alice', { isTester: testers('alice', 'carol') })).notetaker).toEqual({ ...OFF, bot: true, extension: true });
   });
 
   it('allowlisted but switched off is off; a failed lookup is off, and logged', async () => {

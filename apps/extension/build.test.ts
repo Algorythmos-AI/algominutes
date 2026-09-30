@@ -25,10 +25,11 @@ describe('the build settings', () => {
 describe('the manifest', () => {
   const m = manifestFor(settingsFrom(env), '1.0.0');
 
-  it('asks for nothing ADR 0002 doesn\'t list: storage, tab capture, an offscreen document, the api and Cloud Storage', () => {
+  it('asks for nothing ADR 0002 doesn\'t list: storage, tab capture, an offscreen document, the api, Cloud Storage and Meet', () => {
     expect(m.manifest_version).toBe(3);
     expect(m.permissions).toEqual(['storage', 'tabCapture', 'offscreen']);
-    expect(m.host_permissions).toEqual(['https://api.example.test/*', 'https://storage.googleapis.com/*']);
+    expect(m.host_permissions).toEqual(['https://api.example.test/*', 'https://storage.googleapis.com/*', 'https://meet.google.com/*']);
+    expect(m).not.toHaveProperty('content_scripts');
     expect(JSON.stringify(m)).not.toMatch(/<all_urls>|"tabs"|"identity"|"scripting"|content_security_policy/);
   });
 

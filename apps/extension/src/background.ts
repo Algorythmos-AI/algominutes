@@ -2,6 +2,7 @@
 // recordings for the popup (lib/recording.ts, 37b).
 import { handleExternal } from './lib/messages';
 import { dismissRecording, startRecording, stopRecording, type Deps } from './lib/recording';
+import { notetakerAvailable, sendNotetaker } from './lib/notetaker';
 
 const OFFSCREEN = 'offscreen.html';
 
@@ -45,12 +46,14 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const m = message as { target?: string; type?: string; tabId?: number; title?: string };
+  const m = message as { target?: string; type?: string; tabId?: number; title?: string; url?: string; requestId?: string };
   if (sender.id !== chrome.runtime.id || m?.target !== 'sw') return false;
   const work =
     m.type === 'start' && typeof m.tabId === 'number' ? serial(() => startRecording(deps, { tabId: m.tabId!, title: String(m.title ?? 'Meeting') }))
     : m.type === 'stop' || m.type === 'tab-ended' || m.type === 'upload-failed' ? serial(() => stopRecording(deps))
     : m.type === 'dismiss' ? serial(() => dismissRecording(deps))
+    : m.type === 'notetaker-available' ? notetakerAvailable(deps).then((available) => ({ ok: true, available }))
+    : m.type === 'send-notetaker' && typeof m.url === 'string' && typeof m.requestId === 'string' ? sendNotetaker(deps, { url: m.url, requestId: m.requestId })
     : Promise.resolve({ ok: false, error: 'invalid' });
   // The popup shows the outcome from chrome.storage.session; a failure here is the popup's to show too.
   work.then(sendResponse, (err: unknown) => sendResponse({ ok: false, error: 'failed', detail: err instanceof Error ? err.name : 'unknown' }));

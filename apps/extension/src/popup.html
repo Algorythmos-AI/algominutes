@@ -33,6 +33,13 @@
       <label><input id="consent-call" type="checkbox" /> <span>Everyone on the call has agreed to be recorded.</span></label>
       <button id="record" type="button" disabled>Tick both boxes to start</button>
       <p id="mic" class="note" hidden>Your microphone isn’t allowed yet, so only the other people would be recorded. <a href="#" id="allow-mic">Allow it</a></p>
+      <div id="notetaker" hidden>
+        <hr />
+        <p>Or send the AlgoMinutes notetaker to this meeting. It joins as your notetaker, and everyone sees it.</p>
+        <label><input id="consent-bot" type="checkbox" /> <span>I have permission from anyone whose voice may be captured. If others are present, I'll let them know the meeting is being recorded.</span></label>
+        <button id="send-bot" type="button" disabled>Tick the box to send it</button>
+        <p id="bot-status" class="note" role="status" hidden></p>
+      </div>
       <button id="sign-out" class="secondary" type="button">Disconnect</button>
     </section>
 

@@ -96,7 +96,7 @@ jobs:
         run: |
           node -e '
             const m = require("./apps/extension/dist/manifest.json");
-            const want = JSON.stringify({ permissions: ["storage", "tabCapture", "offscreen"], host_permissions: ["https://api.example.invalid/*", "https://storage.googleapis.com/*"] });
+            const want = JSON.stringify({ permissions: ["storage", "tabCapture", "offscreen"], host_permissions: ["https://api.example.invalid/*", "https://storage.googleapis.com/*", "https://meet.google.com/*"] });
             const got = JSON.stringify({ permissions: m.permissions, host_permissions: m.host_permissions });
             if (got !== want) { console.error("manifest permissions changed:", got); process.exit(1); }
           '

@@ -46,8 +46,9 @@ export function settingsFrom(env) {
  *   - storage: the session and the recording's state, in chrome.storage.session;
  *   - tabCapture: the meeting tab's sound (the other people);
  *   - offscreen: a document that holds the streams and records for the whole meeting;
- *   - the api's origin, and Cloud Storage's, where the recording is uploaded while it's made.
- * The Meet content script comes with the Meet button (37c).
+ *   - the api's origin, and Cloud Storage's, where the recording is uploaded while it's made;
+ *   - meet.google.com: knowing the popup's tab is a Meet, and its link, to send the notetaker (37c). There is
+ *     no content script: nothing is drawn into Meet's page.
  */
 export function manifestFor(settings, version) {
   return {
@@ -59,7 +60,7 @@ export function manifestFor(settings, version) {
     background: { service_worker: 'background.js', type: 'module' },
     action: { default_title: 'AlgoMinutes', default_popup: 'popup.html' },
     permissions: ['storage', 'tabCapture', 'offscreen'],
-    host_permissions: [`${settings.apiOrigin}/*`, 'https://storage.googleapis.com/*'],
+    host_permissions: [`${settings.apiOrigin}/*`, 'https://storage.googleapis.com/*', 'https://meet.google.com/*'],
     externally_connectable: { matches: settings.webOrigins.map((o) => `${o}/*`) },
   };
 }

@@ -3,7 +3,21 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
-## The browser extension signs in with a one-time code from the web app (2026-09-30)
+## The extension sends the notetaker from its popup, not from a button drawn into Meet (2026-09-30)
+
+- **Context.** ADR 0002 §1 and RELEASE.md PR 37 planned a button on meet.google.com (a content script) to send
+  the notetaker. Meet's page is Google's, and its markup changes without notice, so a drawn button breaks
+  silently; and recording can only start from the toolbar anyway (Chrome grants a tab's stream only to the
+  extension the user invoked).
+- **Decision** (RELEASE.md PR 37c). The popup, opened on a Meet tab, offers **Send the notetaker** next to
+  **Record this tab**. It reads the tab's link through the `https://meet.google.com/*` host permission (which
+  gives the extension a Meet tab's address, and nothing about other tabs), after the same affirmation ticked
+  every time (CONSENT §2.4), and calls the web app's `POST /v1/meetings/bots`. It's offered only when
+  `/v1/config` has both the `bot` and `extension` surfaces on for the user; the api still decides every send.
+  No content script, so nothing runs inside Meet's page.
+- **Rejected.** A content-script button: more fragile, a larger permission to justify in store review
+  (running code in every Meet page), and it couldn't start a recording.
+
 
 - **Context.** The Chrome and Edge extension (ADR 0002, RELEASE.md Wave 3) needs to act as the signed-in user.
   It must not ask for a password or run its own OAuth: a second sign-in flow would be a second Apple and Google

@@ -18,7 +18,8 @@ import { rootLogger } from '../middleware/trace.js';
 
 export const NOTETAKER_SURFACES = ['bot', 'calendar', 'zoomImport', 'extension'];
 // Surfaces with a server implementation. Each M-milestone PR adds its own.
-export const NOTETAKER_BUILT = new Set(['bot']);
+// `extension`: the browser extension's Send the notetaker (RELEASE.md PR 37c), which uses the bot.
+export const NOTETAKER_BUILT = new Set(['bot', 'extension']);
 
 export function notetakerSwitches(env = process.env, built = NOTETAKER_BUILT) {
   const named = new Set(

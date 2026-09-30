@@ -3,6 +3,7 @@
 import { config } from './config';
 import { readSession, signOut } from './lib/session';
 import { readRecording, WORDS, type RecordingState } from './lib/recording';
+import { meetLinkOf } from './lib/notetaker';
 
 const deps = { storage: chrome.storage.session, fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => Date.now() };
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -32,6 +33,7 @@ async function render(): Promise<void> {
   if (!rec) {
     show('ready');
     $('mic').hidden = await micAllowed();
+    await offerNotetaker();
     return;
   }
   show(rec.phase);
@@ -51,6 +53,39 @@ const ask = async (message: Record<string, unknown>) => {
   $('problem').hidden = !problem;
   await render();
 };
+
+// The notetaker, on a Meet tab, when /v1/config has it on for this user. One request id per popup, so a
+// retry never sends a second notetaker.
+const requestId = crypto.randomUUID();
+let meetUrl: string | null = null;
+async function offerNotetaker(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  meetUrl = meetLinkOf(tab?.url);
+  if (!meetUrl) return;
+  const a = (await chrome.runtime.sendMessage({ target: 'sw', type: 'notetaker-available' })) as { available?: boolean } | null;
+  $('notetaker').hidden = a?.available !== true;
+}
+$('consent-bot').addEventListener('change', () => {
+  const on = $<HTMLInputElement>('consent-bot').checked;
+  $<HTMLButtonElement>('send-bot').disabled = !on;
+  $('send-bot').textContent = on ? 'Send the notetaker' : 'Tick the box to send it';
+});
+$('send-bot').addEventListener('click', () => {
+  if (!meetUrl || !$<HTMLInputElement>('consent-bot').checked) return;
+  $<HTMLButtonElement>('send-bot').disabled = true;
+  void (async () => {
+    const r = (await chrome.runtime.sendMessage({ target: 'sw', type: 'send-notetaker', url: meetUrl, requestId })) as
+      { ok: true; noteId: string; already: boolean } | { ok: false; message: string } | null;
+    const status = $('bot-status');
+    status.hidden = false;
+    if (r?.ok) {
+      status.textContent = r.already ? 'Your notetaker is already on its way to this meeting.' : 'Your notetaker is on its way. It will ask to join the meeting.';
+      return;
+    }
+    status.textContent = r?.message ?? 'The notetaker couldn’t be sent. Try again.';
+    $<HTMLButtonElement>('send-bot').disabled = false;
+  })();
+});
 
 const ticked = () => $<HTMLInputElement>('consent-self').checked && $<HTMLInputElement>('consent-call').checked;
 for (const id of ['consent-self', 'consent-call']) {

@@ -34,8 +34,8 @@ declare namespace chrome {
   }
   namespace tabs {
     function create(props: { url: string }): Promise<unknown>;
-    // Without the "tabs" permission a tab's id is given, but not its url or title.
-    function query(q: { active: boolean; currentWindow: boolean }): Promise<Array<{ id?: number }>>;
+    // Without the "tabs" permission a tab's id is given, and its url only for a site in host_permissions (Meet).
+    function query(q: { active: boolean; currentWindow: boolean }): Promise<Array<{ id?: number; url?: string }>>;
   }
   namespace tabCapture {
     // Allowed once the user has invoked the extension on that tab (its toolbar button).

@@ -12,7 +12,9 @@ RELEASE.md PR 37:
   Stop (or when the tab closes) the upload finishes, and the note is made (`POST /v1/notes`) and processed
   (`POST /v1/process`), as a web recording is. The microphone is asked for once, on an extension page
   (`permission.html`); without it, only the other people are recorded, and the popup says so.
-- **37c:** the button on meet.google.com, and sending the notetaker.
+- **37c:** on a Google Meet tab, the popup also offers **Send the notetaker** (the web app's bot), after the
+  same affirmation, when the api has the notetaker on for this user. Nothing is drawn into Meet's page.
+- **37d:** a recording interrupted by the browser closing is saved from what was uploaded.
 
 ## Build
 
