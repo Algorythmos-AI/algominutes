@@ -37,7 +37,7 @@ export function NotesPage() {
       {visible.length > 0 && (
         <ul className="flex flex-col gap-3">
           {visible.map((n) => {
-            const s = statusOf(n.status);
+            const s = statusOf(n.status, n.notetaker);
             const slow = s.kind === 'working' && isSlow(n, now);
             const meta = [formatDate(n.createdAt), formatDuration(n.duration)].filter(Boolean).join(' · ');
             return (

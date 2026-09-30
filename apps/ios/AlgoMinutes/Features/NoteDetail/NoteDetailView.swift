@@ -16,6 +16,9 @@ struct NoteDetailView: View {
     @State private var viewModel = NoteDetailViewModel()
     /// A10 #4: present the support composer for a "bad transcript" report.
     @State private var reportingBadTranscript = false
+    /// A notetaker cancel or stop waiting for the user's confirmation: its bot and which.
+    @State private var notetakerAction: (String, NoteNotetaker.Action)?
+    @State private var notetakerBusy = false
 
     /// Re-derived every render rather than captured. The Firestore listener is
     /// the source of truth for the screen, so a mirror write — a status change,
@@ -149,6 +152,19 @@ struct NoteDetailView: View {
         } message: {
             Text("The recording, transcript and summary are removed. This cannot be undone.")
         }
+        .confirmationDialog(
+            notetakerAction?.1 == .stop ? "Stop the notetaker?" : "Cancel the notetaker?",
+            isPresented: Binding(get: { notetakerAction != nil }, set: { if !$0 { notetakerAction = nil } }),
+            titleVisibility: .visible,
+            presenting: notetakerAction
+        ) { pending in
+            Button(pending.1 == .stop ? "Stop it" : "Cancel it", role: .destructive) { endNotetaker(botId: pending.0, action: pending.1) }
+            Button("Keep it", role: .cancel) {}
+        } message: { pending in
+            Text(pending.1 == .stop
+                 ? "It leaves the meeting now. What it has recorded so far becomes this note."
+                 : "It won't join the meeting, and nothing is recorded or charged.")
+        }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { viewModel.alertMessage != nil },
             set: { if !$0 { viewModel.alertMessage = nil } }
@@ -192,10 +208,18 @@ struct NoteDetailView: View {
                         stage: NoteProcessingStage.from(
                             status: note.status,
                             progress: note.progress,
-                            uploadPercent: env.uploadProgress[note.id]
+                            uploadPercent: env.uploadProgress[note.id],
+                            notetaker: note.notetaker
                         ),
                         isSlow: env.notes.slowNoteIds.contains(note.id)
                     )
+                    if note.status == .recording, let bot = note.notetaker, let action = bot.action {
+                        Button(action == .stop ? "Stop the notetaker" : "Cancel the notetaker") {
+                            notetakerAction = (bot.botId, action)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(notetakerBusy)
+                    }
                 }
             }
             .padding(20)
@@ -346,6 +370,22 @@ struct NoteDetailView: View {
             catch { env.alertMessage = "Couldn't delete this note. Please try again." }
         }
         dismiss()
+    }
+
+    private func endNotetaker(botId: String, action: NoteNotetaker.Action) {
+        notetakerBusy = true
+        Task {
+            defer { notetakerBusy = false }
+            do {
+                try await env.api.cancelMeetingBot(botId: botId)
+                viewModel.alertMessage = action == .stop
+                    ? "The notetaker is leaving. What it recorded is on its way."
+                    : "The notetaker is cancelled."
+            } catch {
+                AppLog.error("notetaker_cancel_failed: \(error.localizedDescription)")
+                viewModel.alertMessage = "The notetaker wasn't stopped. Please try again."
+            }
+        }
     }
 
     private func retry(_ note: Note) {

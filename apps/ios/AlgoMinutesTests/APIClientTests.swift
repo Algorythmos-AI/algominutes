@@ -94,6 +94,16 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(last.headers["X-Device-Platform"], DeviceAttestationService.platformHeaderValue)
     }
 
+    func testCancellingANotetakerPostsToItsBot() async throws {
+        respond(#"{"botId":"b0a1b2c3-0000-4000-8000-000000000001","status":"cancelled"}"#)
+        let status = try await api.cancelMeetingBot(botId: "b0a1b2c3-0000-4000-8000-000000000001")
+        assertRequest("POST", "/v1/meetings/bots/b0a1b2c3-0000-4000-8000-000000000001/cancel")
+        XCTAssertEqual(status, "cancelled")
+        // A bot id can't reach another path.
+        _ = try? await api.cancelMeetingBot(botId: "../notes/delete")
+        XCTAssertEqual(last.url.path, "/v1/meetings/bots/..%2Fnotes%2Fdelete/cancel")
+    }
+
     func testUploadSessionRoutes() async throws {
         respond(#"{"uploadId":"u-1","sessionUri":"https://storage.googleapis.com/s","storagePath":"recordings/workspace_u/n1.m4a","chunkSize":8388608,"expiresAt":"2026-10-02T00:00:00Z"}"#)
         let created = try await api.createUploadSession(

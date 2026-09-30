@@ -4,7 +4,7 @@ import { fakeAuth, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, renderApp } from '../../test/renderApp';
 import type { NoteDoc } from '../../lib/notes/notesFeed';
 import { parseNotes } from '../../lib/notes/notesFeed';
-import { formatClock, formatDuration } from '../../lib/notes/format';
+import { formatClock, formatDuration, notetakerAction, notetakerLabel, statusOf } from '../../lib/notes/format';
 
 afterEach(() => {
   cleanup();
@@ -193,6 +193,68 @@ describe('a note', () => {
     fireEvent.error(document.querySelector('audio')!);
     expect(await screen.findByText("The recording couldn't be played.")).toBeTruthy();
     expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/audio-url'))).toHaveLength(3);
+  });
+});
+
+// RELEASE.md PR 23: a notetaker's note (sourceKind bot) says what its notetaker is doing, and lets the user
+// cancel it before it records or stop it while it does.
+describe('a notetaker note', () => {
+  const botNote = (status: string, extra: Partial<NoteDoc> = {}) => note('n1', {
+    status: 'recording', type: 'online_meeting', sourceKind: 'bot', duration: undefined, storagePath: undefined,
+    notetaker: { botId: 'b0a1b2c3-0000-4000-8000-000000000001', status, platform: 'google_meet' }, ...extra,
+  });
+
+  it('the list says what the notetaker is doing, not just "Recording"', async () => {
+    renderApp('/app', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('waiting_room')]).feed);
+    const section = (await screen.findByRole('heading', { level: 1, name: 'Your notes' })).closest('section')!;
+    const [item] = await within(section).findAllByRole('listitem');
+    expect(within(item).getByRole('link').textContent).toMatch(/Notetaker waiting to be let in/);
+  });
+
+  it('before it records: the note offers to cancel it, asks first, and cancels through the api', async () => {
+    const s = server((url) => (url.includes('/v1/meetings/bots/') ? json({ botId: 'b0a1b2c3-0000-4000-8000-000000000001', status: 'cancelled' }) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('joining')]).feed);
+    expect(await screen.findByText(/Notetaker joining… You can leave this page/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel the notetaker' }));
+    expect(screen.getByRole('dialog', { name: 'Cancel the notetaker?' }).textContent).toMatch(/nothing is recorded or charged/);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel it' }));
+    await waitFor(() => expect(s.calls.map((c) => c.url)).toContain('https://api.example.test/v1/meetings/bots/b0a1b2c3-0000-4000-8000-000000000001/cancel'));
+    expect(await screen.findByText('The notetaker is cancelled.')).toBeTruthy();
+  });
+
+  it('while it records: stopping keeps what it recorded; keeping it sends nothing', async () => {
+    const s = server(() => undefined);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('recording')]).feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop the notetaker' }));
+    expect(screen.getByRole('dialog', { name: 'Stop the notetaker?' }).textContent).toMatch(/What it has recorded so far becomes this note/);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(s.calls.filter((c) => c.url.includes('/v1/meetings/bots/'))).toEqual([]);
+  });
+
+  it('a refused cancel says why', async () => {
+    const s = server((url) => (url.includes('/v1/meetings/bots/') ? json({ error: 'The notetaker already left.' }, 409) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('in_call')]).feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel the notetaker' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel it' }));
+    expect(await screen.findByText(/^The notetaker wasn't stopped\./)).toBeTruthy();
+  });
+
+  it('once the meeting is over there is nothing to cancel; a failed one says why, with no minutes used', async () => {
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('processing')]).feed);
+    expect(await screen.findByText(/Meeting over: getting the recording/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /notetaker/ })).toBeNull();
+    cleanup();
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('failed', { status: 'error', errorMessage: 'The notetaker wasn’t let into the meeting.' })]).feed);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/wasn’t let into the meeting\. It didn’t use any of your minutes/);
+  });
+
+  it('a status this build doesn\'t know reads as in progress, never an error', () => {
+    expect(notetakerLabel('teleporting')).toBe('Notetaker in progress');
+    expect(notetakerAction('teleporting')).toBeNull();
+    expect(statusOf('recording', { botId: 'x', status: 'teleporting', platform: 'zoom' })).toEqual({ kind: 'working', label: 'Notetaker in progress' });
+    expect(statusOf('recording')).toEqual({ kind: 'working', label: 'Recording' });
+    expect(parseNotes([{ id: 'n1', data: { ...botNote('teleporting'), notetaker: { botId: 'x', status: 'teleporting', platform: 'hopin', rank: 45 } } }]).invalid).toEqual([]);
   });
 });
 
