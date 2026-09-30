@@ -1,0 +1,8 @@
+{
+  "trialing": { "state": "trialing", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 1500, "usedMinutes": 12.5, "remainingMinutes": 1487.5, "overQuota": false, "trialEndsAt": "2026-10-07T00:00:00.000Z", "source": "trial", "rail": null },
+  "beta_minutes": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 600, "usedMinutes": 0, "remainingMinutes": 600, "overQuota": false, "trialEndsAt": null, "source": "grant", "rail": null },
+  "app_store_subscriber": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 1500, "usedMinutes": 300, "remainingMinutes": 1200, "overQuota": false, "source": "subscription", "rail": "apple_storekit" },
+  "web_subscriber": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 1500, "usedMinutes": 0, "remainingMinutes": 1500, "overQuota": false, "source": "subscription", "rail": "stripe" },
+  "free_floor_over_quota": { "state": "free_floor", "plan": "free", "billingPeriod": "2026-09", "includedMinutes": 0, "usedMinutes": 0, "remainingMinutes": 0, "overQuota": true, "source": "free" },
+  "older_server": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": null, "usedMinutes": 10, "remainingMinutes": null, "overQuota": false }
+}

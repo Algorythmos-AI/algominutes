@@ -1,0 +1,5 @@
+{
+  "everything_on": { "broadcastCapture": true, "notetaker": { "bot": true, "calendar": false, "zoomImport": false, "extension": true }, "shareLinks": true },
+  "broadcast_off": { "broadcastCapture": false, "notetaker": { "bot": false, "calendar": false, "zoomImport": false, "extension": false }, "shareLinks": false },
+  "older_server": { "broadcastCapture": true }
+}
