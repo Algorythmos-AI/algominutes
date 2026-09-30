@@ -55,7 +55,7 @@ const { handleSharedNote } = sharedNoteModule;
 const { pool } = pgQueryModule;
 const readPool = pool;
 const { pingPool } = pgConfigModule;
-const { userRateLimit } = rateLimitModule;
+const { userRateLimit, aiRouteLimits } = rateLimitModule;
 
 const DOCX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -133,7 +133,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/search ── functions/search-and-chat.cjs handleSearch ──────
-  router.post('/search', authed, wrap(async (req, res) => {
+  router.post('/search', authed, ...aiRouteLimits('search'), wrap(async (req, res) => {
     const result = await handleSearch({
       uid: req.uid,
       body: req.body,
@@ -146,7 +146,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/chat ── functions/search-and-chat.cjs handleChatStream (SSE) ─
-  router.post('/chat', authed, wrap(async (req, res) => {
+  router.post('/chat', authed, ...aiRouteLimits('chat'), wrap(async (req, res) => {
     await handleChatStream({
       uid: req.uid,
       body: req.body,

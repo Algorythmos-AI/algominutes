@@ -133,3 +133,42 @@ describe('billing', () => {
     // test's time: on a cold transform cache, under a full parallel run, that alone can pass 5 s.
   }, 20_000);
 });
+
+// RELEASE.md rev 11, H9/L4: chat and search have their own hourly and daily budgets per user.
+describe('aiRouteLimits', () => {
+  const { aiRouteLimits } = createRequire(import.meta.url)('@algominutes/ai/rate-limit.cjs');
+  const saved = { ...process.env };
+  afterEach(() => { process.env = { ...saved }; });
+
+  it('chat: the hourly budget, per user', async () => {
+    process.env.RATE_LIMIT_CHAT_PER_HOUR = '2';
+    const get = await serve(appWith(...aiRouteLimits('chat')));
+    const alice = { 'x-test-uid': 'alice' };
+    expect((await get('/thing', alice)).status).toBe(200);
+    expect((await get('/thing', alice)).status).toBe(200);
+    expect((await get('/thing', alice)).status).toBe(429);
+    expect((await get('/thing', { 'x-test-uid': 'bob' })).status).toBe(200);
+  });
+
+  it('chat: the daily budget holds when the hourly one has room', async () => {
+    process.env.RATE_LIMIT_CHAT_PER_HOUR = '100';
+    process.env.RATE_LIMIT_CHAT_PER_DAY = '3';
+    const get = await serve(appWith(...aiRouteLimits('chat')));
+    const alice = { 'x-test-uid': 'alice' };
+    for (let i = 0; i < 3; i++) expect((await get('/thing', alice)).status).toBe(200);
+    expect((await get('/thing', alice)).status).toBe(429);
+  });
+
+  it('builds each kind\'s budget, and refuses an unknown kind', () => {
+    const [hour, day] = aiRouteLimits('chat');
+    const [search] = aiRouteLimits('search');
+    expect([hour, day, search].every((m: unknown) => typeof m === 'function')).toBe(true);
+    expect(() => aiRouteLimits('other')).toThrow(/unknown kind/);
+  });
+
+  it('the api mounts them on /v1/chat and /v1/search', () => {
+    const src = fs.readFileSync(new URL('../services/api/src/routes/index.js', import.meta.url), 'utf8');
+    expect(src).toMatch(/router\.post\('\/chat', authed, \.\.\.aiRouteLimits\('chat'\)/);
+    expect(src).toMatch(/router\.post\('\/search', authed, \.\.\.aiRouteLimits\('search'\)/);
+  });
+});

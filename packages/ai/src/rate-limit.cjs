@@ -72,6 +72,28 @@ function userRateLimit({
   });
 }
 
+const HOUR_MS = 60 * 60_000;
+
+/**
+ * The Gemini-backed routes' own budgets, per verified user (RELEASE.md rev 11,
+ * H9/L4): a chat answer or a search embedding costs real money, and the
+ * per-minute limit alone let one account ask 120 questions a minute, all day.
+ * Chat: 60 an hour and 200 a day; search: 300 an hour. Generous for a person,
+ * a ceiling for a script. Per instance, like every limit here.
+ */
+function aiRouteLimits(kind) {
+  if (kind === 'chat') {
+    return [
+      userRateLimit({ limit: envLimit('RATE_LIMIT_CHAT_PER_HOUR', 60), windowMs: HOUR_MS, event: 'rate_limited_chat' }),
+      userRateLimit({ limit: envLimit('RATE_LIMIT_CHAT_PER_DAY', 200), windowMs: 24 * HOUR_MS, event: 'rate_limited_chat_daily' }),
+    ];
+  }
+  if (kind === 'search') {
+    return [userRateLimit({ limit: envLimit('RATE_LIMIT_SEARCH_PER_HOUR', 300), windowMs: HOUR_MS, event: 'rate_limited_search' })];
+  }
+  throw new Error(`aiRouteLimits: unknown kind ${kind}`);
+}
+
 /**
  * How many proxies in front of the service to trust for req.ip. Cloud Run's
  * front end appends the real client address as the rightmost
@@ -83,4 +105,4 @@ function trustProxyHops() {
   return Number.isInteger(n) && n >= 0 ? n : 1;
 }
 
-module.exports = { clientRateLimit, userRateLimit, trustProxyHops };
+module.exports = { aiRouteLimits, clientRateLimit, userRateLimit, trustProxyHops };
