@@ -111,8 +111,10 @@ locals {
       # The key the api encrypts a notetaker's meeting link with (kms.tf).
       MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
     })
-    # Speech-to-text runs in the region (rev 11 N2), where `long` takes en-AU only (en-US and en-GB are refused).
-    transcoder = merge(local.db_env, local.spend_env, { GCS_BUCKET = local.region_bucket["recordings"], STT_LOCATION = var.region, LANGUAGE_CODES = "en-AU", STT_PROVIDER = "google" })
+    # Speech-to-text stays on Google's global endpoint (stt.js's default without STT_LOCATION) until Sydney is proven
+    # with the transcoder's own identity: `long` there takes en-AU only, and the only probe so far ran as a user,
+    # which reads files differently (RELEASE.md rev 11, N2; DECISIONS 2026-10-01).
+    transcoder = merge(local.db_env, local.spend_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
     # Must equal the summarize queue's max_attempts (main.tf queue_retry), so the
     # summarizer's dead-letter write fires on that queue's true last attempt.
     summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })

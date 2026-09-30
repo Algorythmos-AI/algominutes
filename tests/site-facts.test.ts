@@ -38,17 +38,14 @@ describe('where data is processed', () => {
     expect(byId['vertex-ai'].region).toBe(regionDefault);
   });
 
-  it('speech-to-text is Google, and the disclosure never claims more than the deployment does', () => {
-    // A different provider is a policy change: update processing.json with it.
+  it('speech-to-text is Google, on its global endpoint, and disclosed as possibly outside Australia', () => {
+    // A different provider or location is a policy change: update processing.json with it. The code can run it in
+    // a region (STT_LOCATION), but Terraform doesn't set one until Sydney is proven (RELEASE.md rev 11, N2).
     expect(/transcoder\s*=\s*merge\([^\n]*STT_PROVIDER\s*=\s*"(\w+)"/.exec(cloudRun)?.[1]).toBe('google');
-    // RELEASE.md rev 11, N2: Terraform runs it in the region (STT_LOCATION); the code falls back to global
-    // without it. Until an apply of that is verified on staging, the disclosure keeps the conservative
-    // statement (global, possibly outside Australia), which stays true either way; it moves to the region after.
-    expect(/transcoder\s*=\s*merge\([^\n]*STT_LOCATION\s*=\s*var\.region/.test(cloudRun)).toBe(true);
+    expect(/transcoder\s*=\s*merge\([^\n]*STT_LOCATION/.test(cloudRun)).toBe(false);
     expect(read('services/transcoder/src/stt.js')).toMatch(/process\.env\.STT_LOCATION \|\| 'global'/);
-    const d = byId['speech-to-text'];
-    if (d.region === 'global') expect(d.where).toMatch(/outside Australia/);
-    else expect(d.region).toBe(regionDefault);
+    expect(byId['speech-to-text'].region).toBe('global');
+    expect(byId['speech-to-text'].where).toMatch(/outside Australia/);
   });
 
   it('Recall.ai (the notetaker) is disclosed in the region the service is configured for, outside Australia', () => {
