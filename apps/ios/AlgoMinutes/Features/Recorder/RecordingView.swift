@@ -23,10 +23,6 @@ struct RecordingView: View {
 
     @State private var pulse = false
     @State private var isStopping = false
-    /// The finished recording, held while the user names it. Nothing is
-    /// uploaded until they confirm — but the file is already durable on disk
-    /// with its sidecar, so abandoning the sheet loses no audio.
-    @State private var pendingSave: RecorderService.StopResult?
 
     private var elapsed: Int { env.recorder.elapsedSeconds }
     private var remainingWarning: Bool { elapsed >= RecorderService.warnAfterSeconds }
@@ -167,8 +163,7 @@ struct RecordingView: View {
             isStopping = true
             env.alertMessage = autoStop.message
             if let result = autoStop.result {
-                pendingSave = result
-                isStopping = false
+                upload(result, title: AppEnvironment.defaultRecordingName())
             } else {
                 dismiss()
             }
@@ -185,8 +180,8 @@ struct RecordingView: View {
             // case when the failure happened before any audio was written.
             if let salvaged = env.recorder.salvageCurrentFile() {
                 env.alertMessage = "Recording stopped early: \(error) "
-                    + "We've kept what was recorded so far — save it on the next screen."
-                pendingSave = salvaged
+                    + "We've kept what was recorded so far, and it's being processed."
+                upload(salvaged, title: AppEnvironment.defaultRecordingName())
             } else {
                 env.alertMessage = "Recording stopped: \(error). Please try again."
                 env.recorder.deleteCurrentFile()
@@ -206,19 +201,6 @@ struct RecordingView: View {
         }
         .interactiveDismissDisabled()
         .sensoryFeedback(.impact(weight: .medium), trigger: env.recorder.isRecording)
-        .sheet(item: $pendingSave) { result in
-            NoteNameSheet(
-                title: "Save",
-                prompt: "Name this recording so you can find it later.",
-                initialName: AppEnvironment.defaultRecordingName(),
-                confirmLabel: "Save"
-            ) { name in
-                upload(result, title: name)
-                return true
-            }
-            .algoMinutesSheet([.medium])
-            .interactiveDismissDisabled()
-        }
     }
 
     private func startRecording() async {
@@ -255,9 +237,8 @@ struct RecordingView: View {
         guard !result.recordingFailed, result.sizeBytes >= RecorderService.minSalvageBytes else {
             if let salvaged = env.recorder.salvageCurrentFile() {
                 env.alertMessage = "That recording didn't finish cleanly, but we've kept "
-                    + "what was captured — save it on the next screen."
-                pendingSave = salvaged
-                isStopping = false
+                    + "what was captured, and it's being processed."
+                upload(salvaged, title: AppEnvironment.defaultRecordingName())
             } else {
                 env.alertMessage = "No audio was captured. Please try again."
                 env.recorder.deleteCurrentFile()
@@ -266,14 +247,16 @@ struct RecordingView: View {
             return
         }
 
-        // Name it before uploading. The recording is already durable on disk
-        // with its sidecar, so this is a naming step, not a risk window.
-        pendingSave = result
-        isStopping = false
+        // Saved at once, with no naming step (RELEASE.md rev 11, H13: UX2, N11).
+        // The sheet that asked for a name first was one more tap, and an app
+        // killed on it left a file with no note, which Home then offered to
+        // Delete next to Upload. The note takes the placeholder name, which
+        // TitleDeriver replaces with one drawn from the summary; Rename is on
+        // the note.
+        upload(result, title: AppEnvironment.defaultRecordingName())
     }
 
     private func upload(_ result: RecorderService.StopResult, title: String) {
-        pendingSave = nil
         // Dismiss from inside onNoteCreated, not here. Dismissing this cover
         // re-fires HomeView.onAppear -> checkForOrphan(), and until the sidecar
         // is written the file being uploaded still looks like an orphan — so
@@ -282,6 +265,7 @@ struct RecordingView: View {
         // immediately before onNoteCreated with no suspension between them, so
         // by the time we dismiss the association is on disk.
         Task {
+            var noteMade = false
             // Do NOT delete the file here — `uploadAndProcess` keeps it on
             // failure (for retry) and removes it only after a confirmed upload.
             await env.uploadAndProcess(
@@ -293,10 +277,17 @@ struct RecordingView: View {
                 durationSeconds: result.durationSeconds,
                 title: title,
                 onNoteCreated: { noteId in
+                    noteMade = true
                     dismiss()
                     onNoteCreated(noteId)
                 }
             )
+            // A save that ended before making a note (no workspace, or the note
+            // couldn't be created; its alert is up) closes the screen too: with
+            // Stop disabled there'd be no way out. The file stays, and Home offers
+            // to upload it. Only then: the upload can take minutes, and by its end
+            // this screen may be showing the next recording.
+            if !noteMade { dismiss() }
         }
     }
 }
