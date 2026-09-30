@@ -101,6 +101,16 @@ describe('repairNoteMirror', () => {
     expect(doc()).toMatchObject({ status: 'error', errorMessage: 'Transcription failed for this recording.' });
   });
 
+  // RELEASE.md rev 11, H6: a held note can sit for weeks, so a missed mirror write is repaired.
+  it("a note held for minutes whose doc still says in progress: status, with no error message", async () => {
+    await finish('awaiting_minutes', 20 * MIN);
+    setDoc({ status: 'chunking' });
+    expect(await repairNoteMirror(firestore, { noteId: 'n1', workspaceId: 'ws' })).toBe('repaired');
+    expect(doc()).toMatchObject({ status: 'awaiting_minutes', errorMessage: null });
+    expect(await listRecentlyFinishedNotes({ settledMs: 10 * MIN, windowMs: 30 * MIN, limit: 10 }))
+      .toEqual([{ noteId: 'n1', workspaceId: 'ws', status: 'awaiting_minutes' }]);
+  });
+
   it('a doc already in step is left alone', async () => {
     await readyInPostgres();
     setDoc({ status: 'ready' });

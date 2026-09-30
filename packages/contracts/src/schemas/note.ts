@@ -19,6 +19,11 @@ import { NoteNotetaker, NoteSourceKind } from './meetings';
  * The chunked pipeline maps onto: queued → chunking → transcribing →
  * summarizing → ready / error. Source: src/types.ts `NoteStatus` and
  * Note.swift `NoteStatus` (identical set).
+ *
+ * `awaiting_minutes` (RELEASE.md rev 11, H6): the recording is longer than the
+ * minutes left this month. It's kept, nothing is charged, and it's processed
+ * once minutes arrive. Not in progress and not failed. A client that doesn't
+ * know it shows it as processing (iOS `Note.init` falls back to `.processing`).
  */
 export const NoteStatus = z
   .enum([
@@ -30,6 +35,7 @@ export const NoteStatus = z
     'summarizing',
     'ready',
     'error',
+    'awaiting_minutes',
   ])
   .openapi('NoteStatus');
 

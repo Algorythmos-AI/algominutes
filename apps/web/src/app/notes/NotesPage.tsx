@@ -9,6 +9,7 @@ const BADGE: Record<string, string> = {
   ready: 'bg-success/15 text-success',
   working: 'bg-accent/15 text-heading',
   failed: 'bg-danger/15 text-danger',
+  held: 'bg-warning/15 text-warning',
 };
 
 export function NotesPage() {

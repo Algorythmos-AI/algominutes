@@ -341,6 +341,25 @@ describe('deleting a note', () => {
   });
 });
 
+// RELEASE.md rev 11, H6: longer than the minutes left is held, not failed.
+describe('a note held for minutes', () => {
+  it('says it is saved and uncharged, and reads nothing from the api', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'awaiting_minutes' })]);
+    const s = server(() => undefined);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    const held = await screen.findByText(/longer than the minutes you have left this month/);
+    expect(held.closest('[role="status"]')?.textContent).toMatch(/nothing was charged.*processed on its own once you have minutes/s);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/read'))).toEqual([]);
+  });
+
+  it('the list shows it as waiting for minutes', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'awaiting_minutes' })]);
+    renderApp('/app', fakeAuth(PERMANENT).adapter, undefined, feed);
+    expect(await screen.findByText('Waiting for minutes')).toBeTruthy();
+  });
+});
+
 describe('format', () => {
   it('durations and clocks', () => {
     expect(formatDuration(1500)).toBe('25 min');

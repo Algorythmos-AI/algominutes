@@ -203,6 +203,8 @@ struct NoteDetailView: View {
                         errorMessage: note.errorMessage,
                         diagnosticCode: note.diagnosticCode
                     ) { retry(note) }
+                case .awaitingMinutes:
+                    HeldForMinutesPane()
                 default:
                     ProcessingPane(
                         stage: NoteProcessingStage.from(

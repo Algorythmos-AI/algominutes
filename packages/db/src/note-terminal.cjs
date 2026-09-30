@@ -338,4 +338,85 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   return { failed, marked: pgOk, pgErrored, exists, refunded, superseded, notice, deadLetterId, deadLetterDuplicate };
 }
 
-module.exports = { markNoteFailed, isFinalAttempt };
+// The statuses a run is still being processed in before any paid work: the
+// transcoder's settle holds only these (measured-length.ts IN_PROGRESS).
+const HOLDABLE = ['queued', 'chunking', 'transcribing'];
+
+/**
+ * Holds a note for minutes (RELEASE.md rev 11, H6): the recording is longer
+ * than the minutes left this month, so it's kept, not refused. In one
+ * transaction under the note's row lock (the lock every refund and markQueued
+ * take): the note goes to 'awaiting_minutes' and the run's charge is reversed,
+ * so a held note is never charged. It's charged again when it's resumed (a
+ * new run, through the kickoff), once minutes cover it.
+ *
+ * Only a note still in progress is held: a run another attempt failed or
+ * finished is left alone. A replay finds the note held already and writes
+ * nothing (the refund is net-guarded and keyed per debit).
+ *
+ * Throws on a Postgres error, before anything is mirrored, so the task retries
+ * and decides again. The mirror is best-effort: a missed write is the sweep's
+ * mirror repair's (mirror-repair.ts covers 'awaiting_minutes').
+ *
+ * Returns `{ held, status }`: `held` when this write held it, else the status
+ * found (`null` when the note is gone from this workspace).
+ */
+async function holdNoteForMinutes({ pool, firestore, noteId, workspaceId, neededMinutes = null, measuredSec = null, log, traceId }) {
+  const client = await pool.connect();
+  let held = false;
+  let status = null;
+  let uid = null;
+  let minutesReversed = 0;
+  try {
+    await client.query('BEGIN');
+    try {
+      const { rows: [note] } = await client.query(
+        `SELECT status, author_uid FROM notes
+          WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+          FOR NO KEY UPDATE`,
+        [noteId, workspaceId],
+      );
+      status = note ? note.status : null;
+      uid = note ? note.author_uid : null;
+      if (note && HOLDABLE.includes(note.status)) {
+        await client.query(
+          // The measured length is kept: the resume charges it (the transcoder
+          // saves it only once it routes a run, which a held run never reaches).
+          `UPDATE notes SET status = 'awaiting_minutes', error_message = NULL, updated_at = NOW(),
+                  duration_sec_probed = COALESCE($3::numeric, duration_sec_probed)
+            WHERE id = $1 AND workspace_id = $2`,
+          [noteId, workspaceId, measuredSec],
+        );
+        const r = await reverseNoteUsage(client, {
+          noteId, reason: 'refund:held_for_minutes', idempotencyKey: `${noteId}:refund:held`,
+        });
+        minutesReversed = r.minutesReversed;
+        held = true;
+        status = 'awaiting_minutes';
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, traceId, ...(uid && { userId: uid }), noteId, workspaceId }, 'note_hold_rollback_failed'));
+      throw err;
+    }
+  } finally {
+    client.release();
+  }
+  if (!held) {
+    // userId only when found: a null would hide the task's own on the bound logger.
+    log.info({ traceId, ...(uid && { userId: uid }), noteId, workspaceId, status }, 'note_hold_skipped');
+    return { held, status };
+  }
+  log.warn({ traceId, userId: uid, noteId, workspaceId, neededMinutes, minutesReversed }, 'note_held_for_minutes');
+  try {
+    // update(), never set(): a note deleted meanwhile mustn't come back as a doc.
+    await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).update(
+      { status: 'awaiting_minutes', errorMessage: null, updatedAt: new Date().toISOString() },
+    );
+  } catch (err) {
+    log.error({ err, traceId, userId: uid, noteId, workspaceId }, 'note_hold_mirror_failed');
+  }
+  return { held, status };
+}
+
+module.exports = { markNoteFailed, holdNoteForMinutes, isFinalAttempt };

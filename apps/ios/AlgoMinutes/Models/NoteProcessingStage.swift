@@ -113,7 +113,7 @@ struct NoteProcessingStage: Equatable, Sendable {
                 label: status.label, detail: nil
             )
 
-        case .ready, .error:
+        case .ready, .error, .awaitingMinutes:
             // Not rendered by the processing pane; mapped so the type stays
             // total rather than trapping on a status the caller mis-routed.
             return NoteProcessingStage(

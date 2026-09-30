@@ -231,6 +231,12 @@ function NoteDetail({ noteId }: { noteId: string }) {
           )}
         </div>
       )}
+      {s.kind === 'held' && (
+        <div role="status" className="rounded-2xl border border-warning/40 bg-warning/10 p-4 text-body">
+          <p>This recording is longer than the minutes you have left this month. It’s saved, and nothing was charged.</p>
+          <p className="mt-2">It’s processed on its own once you have minutes: add an invite code in <Link to="/settings">Settings</Link>, or it runs when your minutes renew next month.</p>
+        </div>
+      )}
       {s.kind === 'failed' && (
         <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4">
           <p role="alert" className="text-body">

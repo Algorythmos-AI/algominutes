@@ -5,6 +5,7 @@
 //   transcribing → STT (or Gemini for short clips)
 //   summarizing → after STT, Gemini composing summary
 //   ready / error → terminal
+//   awaiting_minutes → held until the user has minutes (not in progress, not failed)
 export type NoteStatus =
   | 'recording'
   | 'processing'
@@ -13,7 +14,9 @@ export type NoteStatus =
   | 'transcribing'
   | 'summarizing'
   | 'ready'
-  | 'error';
+  | 'error'
+  // Longer than the minutes left: kept, uncharged, processed when minutes arrive (RELEASE.md rev 11, H6).
+  | 'awaiting_minutes';
 export type NoteType = 'recording' | 'import_audio' | 'import_pdf' | 'youtube' | 'scan_text' | 'online_meeting';
 
 export interface TranscriptLine {
