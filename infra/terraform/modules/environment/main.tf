@@ -196,6 +196,14 @@ resource "google_sql_database_instance" "pg" {
       ssl_mode = "ENCRYPTED_ONLY"
     }
 
+    # Updates land in a quiet hour: Sunday 16:00 UTC is Monday 02:00–03:00 in Sydney (rev 11, H7). Without a
+    # window, Google picks any time, and a restart mid-meeting drops the pools' connections.
+    maintenance_window {
+      day          = 7
+      hour         = 16
+      update_track = "stable"
+    }
+
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = var.db_point_in_time_recovery
@@ -393,10 +401,14 @@ locals {
   # 2026-09-28). 10 attempts with backoffs 5,10,20,40,80,160,240,320,400s is about
   # 21 min of waiting plus up to 10 x the ladder's 240s budget: about an hour.
   # transcode keeps 5: a transcode retry can re-run paid speech-to-text.
+  #
+  # Every queue now backs off up to 600 s (RELEASE.md rev 11, H7): 5 attempts in about 75 s dropped transcode,
+  # embed and notify work over a short outage. transcode's retries no longer re-pay speech-to-text: a chunk's
+  # job is started by one attempt, and a retry polls it (migration 036, claimChunkStt).
   queue_retry = {
     for q in local.queues : q => {
       max_attempts = q == "summarize" ? var.summarize_max_attempts : var.task_max_attempts
-      max_backoff  = q == "summarize" ? "600s" : "300s"
+      max_backoff  = "600s"
     }
   }
 }

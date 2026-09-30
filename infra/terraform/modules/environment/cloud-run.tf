@@ -27,7 +27,7 @@ locals {
   # concurrency 1 (one CPU-bound chunk job per instance); the rest are modest.
   service_config = {
     api        = { cpu = "1", memory = "512Mi", timeout = 60, concurrency = 80, sa = "run-api" }
-    transcoder = { cpu = "2", memory = "2Gi", timeout = 3600, concurrency = 1, sa = "run-transcoder" }
+    transcoder = { cpu = "2", memory = "2Gi", timeout = 1800, concurrency = 1, sa = "run-transcoder" }
     summarizer = { cpu = "1", memory = "1Gi", timeout = 900, concurrency = 4, sa = "run-summarizer" }
     embedder   = { cpu = "1", memory = "512Mi", timeout = 600, concurrency = 4, sa = "run-embedder" }
     extractor  = { cpu = "1", memory = "1Gi", timeout = 900, concurrency = 4, sa = "run-extractor" }
