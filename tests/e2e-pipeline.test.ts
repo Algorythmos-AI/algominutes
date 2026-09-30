@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // @ts-expect-error: a plain .mjs script, no types
-import { e2eConfig, runPipelineE2E, TRACED_SERVICES } from '../scripts/e2e-pipeline.mjs';
+import { e2eConfig, runPipelineE2E, TRACED_SERVICES, formatFor, makeRecording, meetingScript, readyTargetSec } from '../scripts/e2e-pipeline.mjs';
 
 // The pipeline e2e (scripts/e2e-pipeline.mjs), against a fake Identity Toolkit,
 // api, GCS and Firestore that behave like the real ones.
@@ -26,6 +26,11 @@ function world(opts: {
   ready?: 'ready' | 'error' | 'never';
   pgStatus?: string;
   chapters?: number;
+  /** Where the chapters start, as a fraction of `spanMin` minutes (evenly spread when absent). */
+  chapterSpan?: number;
+  spanMin?: number;
+  readyAfterPolls?: number;
+  salvaged?: number;
   redeem?: number;
   services?: string[];
   deadLetters?: number;
@@ -51,7 +56,8 @@ function world(opts: {
     if (key === 'POST /v1/uploads') {
       noteId = call.body.noteId;
       total = call.body.totalBytes;
-      return json(200, { uploadId: 'up-1', sessionUri: opts.sessionUri ?? SESSION, chunkSize: 256 * 1024, storagePath: `recordings/workspace_${UID}/${noteId}.ogg` });
+      const ext = String(call.body.fileName).split('.').pop();
+      return json(200, { uploadId: 'up-1', sessionUri: opts.sessionUri ?? SESSION, chunkSize: 256 * 1024, storagePath: `recordings/workspace_${UID}/${noteId}.${ext}` });
     }
     if (key === 'PUT SESSION') {
       if (opts.putFailsOnce && !putFailed && held > 0) {
@@ -70,13 +76,19 @@ function world(opts: {
     if (key === 'POST /v1/process') return json(200, { success: true, noteId, status: 'queued' });
     if (key.startsWith('GET FS/')) {
       polls += 1;
-      const status = opts.ready === 'never' || polls < 2 ? 'processing' : opts.ready ?? 'ready';
+      const status = opts.ready === 'never' || polls < (opts.readyAfterPolls ?? 2) ? 'processing' : opts.ready ?? 'ready';
       return json(200, { fields: { status: { stringValue: status }, ...(status === 'error' ? { errorMessage: { stringValue: 'transcription failed' } } : {}) } });
     }
     if (key === 'POST /v1/notes/read') {
       return json(200, {
         note: { status: opts.pgStatus ?? 'ready' },
-        summary: { gist: 'The team agreed the launch date.', chapters: Array.from({ length: opts.chapters ?? 0 }, (_, i) => ({ title: `c${i}` })) },
+        summary: {
+          gist: 'The team agreed the launch date.',
+          chapters: Array.from({ length: opts.chapters ?? 0 }, (_, i) => ({
+            title: `c${i}`,
+            startMs: Math.round((i / Math.max(1, (opts.chapters ?? 1) - 1)) * (opts.chapterSpan ?? 0.95) * (opts.spanMin ?? 0) * 60_000),
+          })),
+        },
         transcript: { lines: [{ text: 'hello' }] },
       });
     }
@@ -88,6 +100,7 @@ function world(opts: {
   };
   const readLogs = (filter: string) => {
     if (filter.includes('dead_letter_recorded')) return Array.from({ length: opts.deadLetters ?? 0 }, () => ({}));
+    if (filter.includes('summary_salvaged_partial')) return Array.from({ length: opts.salvaged ?? 0 }, () => ({}));
     return (opts.services ?? TRACED_SERVICES).map((s: string) => ({ resource: { labels: { service_name: s } } }));
   };
   return { fetch, readLogs, calls, deleted: () => deleted, noteId: () => noteId };
@@ -162,6 +175,61 @@ describe('the pipeline e2e', () => {
     expect((await run(world({ services: [...fast, 'summarizer'], chapters: 4 }), { minutes: 15 })).fails).toEqual([]);
   });
 
+  // RELEASE.md rev 11, LM3 (H12): long meetings, proven.
+  describe('a long meeting', () => {
+    const long = (over: Parameters<typeof world>[0] = {}) => world({ chapters: 10, spanMin: 60, ...over });
+    it('passes with 8 or more chapters reaching its last quarter, whole, and inside the time bar', async () => {
+      const r = await run(long(), { minutes: 60, format: 'webm' });
+      expect(r.fails).toEqual([]);
+      expect(r.out).toMatch(/ready within the bar \(10 min for 60 min\)/);
+    });
+
+    it('uploads as the format the apps make', async () => {
+      const w = long();
+      await run(w, { minutes: 60, format: 'webm' });
+      expect(w.calls.find((c) => c.url.endsWith('/v1/uploads'))!.body).toMatchObject({ fileName: 'recording.webm', contentType: 'audio/webm' });
+      expect(w.calls.find((c) => c.url.endsWith('/v1/process'))!.body.mimeType).toBe('audio/webm');
+    });
+
+    it('fails with too few chapters, chapters that stop early, a salvaged summary, or a slow run', async () => {
+      expect((await run(long({ chapters: 7 }), { minutes: 60 })).fails).toEqual(['at least 8 chapters']);
+      expect((await run(long({ chapterSpan: 0.5 }), { minutes: 60 })).fails).toEqual(['the chapters reach the last quarter of the meeting']);
+      expect((await run(long({ salvaged: 1 }), { minutes: 60 })).fails).toEqual(['the summary came back whole, not salvaged']);
+      // 45 polls of 15 s is over the 10-minute bar for an hour.
+      expect((await run(long({ readyAfterPolls: 45 }), { minutes: 60, readyMs: 60 * 60_000 })).fails).toEqual(['ready within the bar']);
+    });
+
+    it('the time bar is 10 min for an hour, 15 for two, 25 up to four', () => {
+      expect([60, 120, 180, 240].map(readyTargetSec)).toEqual([600, 900, 1500, 1500]);
+    });
+
+    it('each length goes as the format an app makes, the long ones alternating Chrome and iPhone', () => {
+      expect([2, 15, 60, 120, 180, 240].map(formatFor)).toEqual(['ogg', 'adts', 'webm', 'adts', 'webm', 'adts']);
+    });
+  });
+
+  describe('the meeting it speaks', () => {
+    it('never repeats a sentence, moves through topics, and is long enough to fill the recording', () => {
+      const text = meetingScript(60);
+      const sentences = text.split(/(?<=\.)\s+/);
+      expect(new Set(sentences).size).toBe(sentences.length);
+      expect(text.split(/\s+/).length).toBeGreaterThanOrEqual(60 * 150);
+      expect((text.match(/Next item/g) ?? []).length).toBeGreaterThanOrEqual(8);
+    });
+
+    it('with espeak-ng, the recording is that speech, encoded as the format; without it, the fixture looped', () => {
+      const calls: Array<[string, string[]]> = [];
+      const run = ((cmd: string, args: string[]) => { calls.push([cmd, args]); return Buffer.from(''); }) as never;
+      makeRecording(60, 'fixture.ogg', run, 'adts', { speech: true, write: () => {} });
+      expect(calls.map(([c]) => c)).toEqual(['espeak-ng', 'ffmpeg']);
+      expect(calls[1][1]).toEqual(expect.arrayContaining(['-t', '3600', '-c:a', 'aac', '-f', 'adts']));
+      calls.length = 0;
+      makeRecording(15, 'fixture.ogg', run, 'webm', { speech: false, write: () => {} });
+      expect(calls.map(([c]) => c)).toEqual(['ffmpeg']);
+      expect(calls[0][1]).toEqual(expect.arrayContaining(['-stream_loop', '-1', '-i', 'fixture.ogg', '-f', 'webm']));
+    });
+  });
+
   it('a recording of 15 minutes or more must have chapters', async () => {
     expect((await run(world({ chapters: 0 }), { minutes: 15 })).fails).toEqual(['a 15-minute recording has chapters']);
     expect((await run(world({ chapters: 4 }), { minutes: 15 })).fails).toEqual([]);
@@ -204,12 +272,14 @@ describe('its workflow', () => {
   const wf = fs.readFileSync('.github/workflows/e2e.yml', 'utf8');
   const job = wf.slice(wf.indexOf('\n  e2e:\n'));
 
-  it('runs 2 and 15 minutes nightly, 180 minutes weekly, and any of them by hand', () => {
+  // RELEASE.md rev 11, LM3: an hour every night, two and four hours every week, with real speech (espeak-ng).
+  it('runs 2, 15 and 60 minutes nightly, 120 and 240 weekly, and any of them by hand', () => {
     expect(wf).toMatch(/- cron: '47 17 \* \* \*'/);
     expect(wf).toMatch(/- cron: '7 15 \* \* 6'/);
-    expect(wf).toContain("elif [ \"$SCHEDULE\" = \"7 15 * * 6\" ]; then minutes='[180]'");
-    expect(wf).toContain("else minutes='[2,15]'; fi");
-    expect(wf).toMatch(/options: \['2', '15', '180'\]/);
+    expect(wf).toContain("elif [ \"$SCHEDULE\" = \"7 15 * * 6\" ]; then minutes='[120,240]'");
+    expect(wf).toContain("else minutes='[2,15,60]'; fi");
+    expect(wf).toMatch(/options: \['2', '15', '60', '120', '180', '240'\]/);
+    expect(wf).toMatch(/apt-get install -y -q ffmpeg espeak-ng/);
   });
 
   it('runs in the staging environment (the only one the deployer trusts), one length at a time', () => {

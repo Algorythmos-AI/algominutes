@@ -44,6 +44,75 @@ export const tracedServices = (minutes) =>
 /** A recording this long or longer is summarised with chapters. */
 export const CHAPTERS_FROM_MINUTES = 15;
 
+// RELEASE.md rev 11, LM3 (H12): long meetings, proven. From an hour, a meeting must come back with at least 8
+// chapters, the last past three quarters of the way through (chapters come last in the summary, so they're what
+// a cut-off answer loses), no salvaged summary, and inside the time bar (rev 11, R11.3).
+export const LONG_FROM_MINUTES = 60;
+export const LONG_MIN_CHAPTERS = 8;
+/** Seconds from the kickoff to ready, at most: 1 h in 10 min, 2 h in 15, up to 4 h in 25. */
+export const readyTargetSec = (minutes) => (minutes <= 60 ? 600 : minutes <= 120 ? 900 : 1500);
+
+/** What each length is uploaded as: the formats the apps make (Chrome WebM Opus, the iPhone's ADTS AAC). */
+export const FORMATS = {
+  ogg: { ext: 'ogg', mime: 'audio/ogg', codec: ['-c:a', 'libopus', '-b:a', '24k'] },
+  webm: { ext: 'webm', mime: 'audio/webm', codec: ['-c:a', 'libopus', '-b:a', '32k', '-f', 'webm'] },
+  adts: { ext: 'aac', mime: 'audio/aac', codec: ['-c:a', 'aac', '-b:a', '64k', '-f', 'adts'] },
+};
+export const formatFor = (minutes) => ({ 2: 'ogg', 15: 'adts', 60: 'webm', 120: 'adts', 180: 'webm', 240: 'adts' })[minutes] ?? 'ogg';
+
+// A meeting's worth of talk that never repeats, moving through distinct topics, so the summarizer has real
+// chapters to find. Deterministic, so a failure can be rerun.
+const TOPICS = [
+  ['the quarterly budget', 'spending', 'forecast', 'invoices', 'the finance team'],
+  ['hiring for the support team', 'candidates', 'interviews', 'offers', 'onboarding'],
+  ['the product roadmap', 'features', 'priorities', 'the release', 'customer feedback'],
+  ['the office move', 'the new lease', 'furniture', 'the moving date', 'parking'],
+  ['the security review', 'passwords', 'access', 'the audit', 'backups'],
+  ['the marketing campaign', 'the launch video', 'social posts', 'the newsletter', 'the budget for ads'],
+  ['customer complaints', 'refunds', 'response times', 'the help desk', 'the survey'],
+  ['the supplier contract', 'pricing', 'delivery dates', 'penalties', 'the renewal'],
+  ['training for managers', 'workshops', 'coaching', 'the schedule', 'feedback'],
+  ['the website redesign', 'the home page', 'navigation', 'accessibility', 'testing'],
+  ['the charity event', 'volunteers', 'the venue', 'sponsors', 'the raffle'],
+  ['the annual report', 'the board', 'the highlights', 'the design', 'the deadline'],
+];
+const VERBS = ['review', 'agree on', 'finish', 'check', 'confirm', 'share', 'plan', 'update', 'discuss', 'approve'];
+const PEOPLE = ['Alex', 'Priya', 'Sam', 'Jordan', 'Mei', 'Tom', 'Aisha', 'Lucas'];
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+/** About `minutes` of spoken meeting (at ~150 words a minute), in topics that each last a stretch. */
+export function meetingScript(minutes) {
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 48271) % 2147483647; return seed % n; };
+  const words = minutes * 150;
+  const topicCount = Math.max(1, Math.min(TOPICS.length * 4, Math.round(minutes / 6)));
+  const perTopic = Math.ceil(words / topicCount);
+  const out = [];
+  let n = 0;
+  for (let t = 0; t < topicCount; t++) {
+    const [topic, ...parts] = TOPICS[t % TOPICS.length];
+    const round = Math.floor(t / TOPICS.length) + 1;
+    out.push(`Next item, part ${round}: ${topic}.`);
+    let said = 0;
+    while (said < perTopic) {
+      const s = `${PEOPLE[rnd(PEOPLE.length)]} will ${VERBS[rnd(VERBS.length)]} ${parts[rnd(parts.length)]} for ${topic} by ${DAYS[rnd(DAYS.length)]}, item ${++n}.`;
+      out.push(s);
+      said += s.split(' ').length;
+    }
+  }
+  return out.join(' ');
+}
+
+const hasEspeak = (run) => {
+  try {
+    run('espeak-ng', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    // silent-catch-ok: no espeak-ng means the looped fixture is used, and makeRecording says so
+    return false;
+  }
+};
+
 
 /** A GCS resumable-upload session URL, or null: https on storage.googleapis.com only. */
 export function gcsUploadUrl(raw) {
@@ -77,10 +146,26 @@ export function e2eConfig(env = process.env) {
   };
 }
 
-/** The fixture looped to `minutes`, as Ogg Opus (what Chrome's recorder makes is WebM Opus; both go the same way). */
-export function makeRecording(minutes, fixture = FIXTURE, run = execFileSync) {
-  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-pipeline-')), `e2e-${minutes}min.ogg`);
-  run('ffmpeg', ['-loglevel', 'error', '-y', '-stream_loop', '-1', '-i', fixture, '-t', String(minutes * 60), '-ac', '1', '-c:a', 'libopus', '-b:a', '24k', out]);
+/**
+ * `minutes` of recording in `format`. With espeak-ng (CI installs it), real, non-repeating speech
+ * (meetingScript), padded or cut to the length; without it, the short fixture looped, which is enough for the
+ * pipeline's plumbing but not for chapters.
+ */
+export function makeRecording(minutes, fixture = FIXTURE, run = execFileSync, format = 'ogg', { speech = hasEspeak(run), write = (s) => process.stdout.write(s) } = {}) {
+  const f = FORMATS[format];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-pipeline-'));
+  const out = path.join(dir, `e2e-${minutes}min.${f.ext}`);
+  let input = ['-stream_loop', '-1', '-i', fixture];
+  if (speech) {
+    const text = path.join(dir, 'meeting.txt');
+    const wav = path.join(dir, 'meeting.wav');
+    fs.writeFileSync(text, meetingScript(minutes));
+    run('espeak-ng', ['-s', '150', '-f', text, '-w', wav]);
+    input = ['-i', wav, '-af', 'apad'];
+  } else {
+    write(`note: no espeak-ng, so the ${minutes}-minute recording is the fixture looped (no real chapters)\n`);
+  }
+  run('ffmpeg', ['-loglevel', 'error', '-y', ...input, '-t', String(minutes * 60), '-ac', '1', ...f.codec, out]);
   return out;
 }
 
@@ -112,6 +197,7 @@ export async function runPipelineE2E({
   readyMs,
   logProject = '',
   recording,
+  format = 'ogg',
   readLogs = (filter) => gcloudLogs(logProject, filter),
   fetch = globalThis.fetch,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -175,9 +261,10 @@ export async function runPipelineE2E({
     if (!check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`)) return { ok: false, results };
 
     const bytes = fs.readFileSync(recording);
-    const created = await api('POST', '/uploads', { noteId, workspaceId, fileName: 'recording.ogg', contentType: 'audio/ogg', totalBytes: bytes.length });
+    const { ext, mime } = FORMATS[format];
+    const created = await api('POST', '/uploads', { noteId, workspaceId, fileName: `recording.${ext}`, contentType: mime, totalBytes: bytes.length });
     const session = created.body;
-    if (!check('POST /v1/uploads', created.status === 200 && session.sessionUri && session.storagePath === `recordings/${workspaceId}/${noteId}.ogg`, `HTTP ${created.status}`)) return { ok: false, results };
+    if (!check('POST /v1/uploads', created.status === 200 && session.sessionUri && session.storagePath === `recordings/${workspaceId}/${noteId}.${ext}`, `HTTP ${created.status}`)) return { ok: false, results };
     // The fixture's bytes go only to Cloud Storage's own upload host, over HTTPS: never wherever a response says.
     const sessionUrl = gcsUploadUrl(session.sessionUri);
     if (!check('upload session is Cloud Storage', sessionUrl != null, 'the session URI is not an https://storage.googleapis.com URL')) return { ok: false, results };
@@ -206,7 +293,7 @@ export async function runPipelineE2E({
         title: str(`E2E ${minutes} min`),
         status: str('processing'),
         type: str('recording'),
-        mimeType: str('audio/ogg'),
+        mimeType: str(mime),
         storagePath: str(session.storagePath),
         duration: { integerValue: String(minutes * 60) },
         workspaceId: str(workspaceId),
@@ -218,7 +305,7 @@ export async function runPipelineE2E({
     if (!check("the note's doc, written as the apps write it", doc.status === 200, `HTTP ${doc.status}`)) return { ok: false, results };
 
     const started = now();
-    const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: 'audio/ogg', durationSec: minutes * 60 });
+    const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
     // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
     if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
 
@@ -234,7 +321,8 @@ export async function runPipelineE2E({
     }
     const took = Math.round((now() - started) / 1000);
     if (!check(`ready within ${Math.round(readyMs / 60_000)} min (Firestore)`, status === 'ready', status === 'error' ? `failed: ${error}` : `${status} after ${took} s`)) return { ok: false, results };
-    write(`     time to summary: ${took} s for ${minutes} min recorded\n`);
+    write(`     time to summary: ${took} s for ${minutes} min recorded (${format})\n`);
+    if (minutes >= LONG_FROM_MINUTES) check(`ready within the bar (${readyTargetSec(minutes) / 60} min for ${minutes} min)`, took <= readyTargetSec(minutes), `${took} s`);
 
     const read = await api('POST', '/notes/read', { noteId, workspaceId });
     const pg = read.body;
@@ -245,6 +333,12 @@ export async function runPipelineE2E({
       `HTTP ${read.status}, ${pg.note?.status}, ${pg.transcript?.lines?.length ?? 0} lines`,
     );
     if (chaptersWanted) check(`a ${minutes}-minute recording has chapters`, (pg.summary?.chapters?.length ?? 0) >= 2, `${pg.summary?.chapters?.length ?? 0} chapters`);
+    if (minutes >= LONG_FROM_MINUTES) {
+      const chapters = pg.summary?.chapters ?? [];
+      const lastStart = Math.max(0, ...chapters.map((c) => Number(c.startMs) || 0));
+      check(`at least ${LONG_MIN_CHAPTERS} chapters`, chapters.length >= LONG_MIN_CHAPTERS, `${chapters.length}`);
+      check('the chapters reach the last quarter of the meeting', lastStart >= 0.75 * minutes * 60_000, `last starts at ${Math.round(lastStart / 60_000)} min of ${minutes}`);
+    }
 
     if (!logProject) {
       skip('the traceId in every service, and no dead letters', 'LOG_PROJECT not set');
@@ -260,6 +354,10 @@ export async function runPipelineE2E({
       check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
+      if (minutes >= CHAPTERS_FROM_MINUTES) {
+        const salvaged = readLogs(`jsonPayload.msg="summary_salvaged_partial" AND jsonPayload.noteId="${noteId}"`);
+        check('the summary came back whole, not salvaged', salvaged.length === 0, salvaged.length ? 'summary_salvaged_partial' : '');
+      }
     }
   } catch (err) {
     check('the run went to the end', false, String(err?.message ?? err).slice(0, 200));
@@ -272,7 +370,8 @@ export async function runPipelineE2E({
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const config = e2eConfig();
-  const recording = makeRecording(config.minutes);
-  const { ok } = await runPipelineE2E({ ...config, recording });
+  const format = formatFor(config.minutes);
+  const recording = makeRecording(config.minutes, FIXTURE, execFileSync, format);
+  const { ok } = await runPipelineE2E({ ...config, recording, format });
   process.exit(ok ? 0 : 1);
 }

@@ -16,8 +16,8 @@ name: e2e
 
 on:
   schedule:
-    - cron: '47 17 * * *' # nightly, 03:47 Sydney: 2 and 15 minutes
-    - cron: '7 15 * * 6' # Sunday, 01:07 Sydney: 180 minutes
+    - cron: '47 17 * * *' # nightly, 03:47 Sydney: 2, 15 and 60 minutes
+    - cron: '7 15 * * 6' # Sunday, 01:07 Sydney: 120 and 240 minutes (RELEASE.md rev 11, LM3)
   workflow_dispatch:
     inputs:
       minutes:
@@ -25,7 +25,7 @@ on:
         required: true
         default: '2'
         type: choice
-        options: ['2', '15', '180']
+        options: ['2', '15', '60', '120', '180', '240']
 
 permissions:
   contents: read
@@ -46,8 +46,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then minutes="[$CHOSEN]"
-          elif [ "$SCHEDULE" = "7 15 * * 6" ]; then minutes='[180]'
-          else minutes='[2,15]'; fi
+          elif [ "$SCHEDULE" = "7 15 * * 6" ]; then minutes='[120,240]'
+          else minutes='[2,15,60]'; fi
           echo "minutes=$minutes" >> "$GITHUB_OUTPUT"
 
   e2e:
@@ -72,8 +72,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Install ffmpeg (the recording is the fixture, looped)
-        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      # espeak-ng speaks a generated, non-repeating meeting (scripts/e2e-pipeline.mjs meetingScript), so a long
+      # recording has real topics to find chapters in; ffmpeg encodes it as the apps do (WebM Opus, ADTS AAC).
+      - name: Install ffmpeg and espeak-ng
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg espeak-ng
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
