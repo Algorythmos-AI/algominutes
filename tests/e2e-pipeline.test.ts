@@ -35,6 +35,8 @@ function world(opts: {
   services?: string[];
   deadLetters?: number;
   putFailsOnce?: boolean;
+  replayQueuesAgain?: boolean;
+  kickoffsEnqueued?: number;
   sessionUri?: string;
 } = {}) {
   const calls: Call[] = [];
@@ -44,6 +46,7 @@ function world(opts: {
   let polls = 0;
   let deleted = false;
   let putFailed = false;
+  let processCalls = 0;
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
   const fetch = async (url: string, init: RequestInit = {}) => {
     const call: Call = { method: init.method ?? 'GET', url, headers: (init.headers ?? {}) as Record<string, string>, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body };
@@ -73,7 +76,12 @@ function world(opts: {
     if (key === 'POST /v1/uploads/up-1/complete') return held === total ? json(200, { complete: true }) : json(409, {});
     if (key.startsWith('POST FS?documentId=')) return json(200, { name: 'doc' });
     // The api's real answer: 200 with status queued (process-intelligence.js; tests/integration/process-kickoff.test.ts).
-    if (key === 'POST /v1/process') return json(200, { success: true, noteId, status: 'queued' });
+    if (key === 'POST /v1/process') {
+      processCalls += 1;
+      // A second kickoff of the note in flight is answered 202 (process-intelligence.js), unless a test says otherwise.
+      if (processCalls > 1) return opts.replayQueuesAgain ? json(200, { success: true, noteId, status: 'queued' }) : json(202, { success: true, noteId, status: 'queued', inFlight: true });
+      return json(200, { success: true, noteId, status: 'queued' });
+    }
     if (key.startsWith('GET FS/')) {
       polls += 1;
       const status = opts.ready === 'never' || polls < (opts.readyAfterPolls ?? 2) ? 'processing' : opts.ready ?? 'ready';
@@ -101,6 +109,7 @@ function world(opts: {
   const readLogs = (filter: string) => {
     if (filter.includes('dead_letter_recorded')) return Array.from({ length: opts.deadLetters ?? 0 }, () => ({}));
     if (filter.includes('summary_salvaged_partial')) return Array.from({ length: opts.salvaged ?? 0 }, () => ({}));
+    if (filter.includes('kickoff_enqueued')) return Array.from({ length: opts.kickoffsEnqueued ?? 1 }, () => ({}));
     return (opts.services ?? TRACED_SERVICES).map((s: string) => ({ resource: { labels: { service_name: s } } }));
   };
   return { fetch, readLogs, calls, deleted: () => deleted, noteId: () => noteId };
@@ -144,6 +153,20 @@ describe('the pipeline e2e', () => {
     const r = await run(w);
     expect(r.fails).toEqual([]);
     expect(w.calls.some((c) => c.url === `${API}/v1/uploads/up-1`)).toBe(true);
+  });
+
+  // RELEASE.md rev 11, §4.6: the failure cases the nightly proves on staging.
+  it('probes the upload after its first chunk, as a cut-off upload would resume', async () => {
+    const w = world();
+    const r = await run(w);
+    expect(r.out).toMatch(/ok +a cut-off upload resumes from what GCS holds/);
+    expect(w.calls.some((c) => c.url === `${API}/v1/uploads/up-1`)).toBe(true);
+  });
+
+  it('a replayed kickoff must be answered in flight, and the note run once', async () => {
+    expect((await run(world())).fails).toEqual([]);
+    expect((await run(world({ replayQueuesAgain: true }))).fails).toContain('a replayed kickoff is answered in flight, not queued again');
+    expect((await run(world({ kickoffsEnqueued: 2 }))).fails).toContain('the note was run once: the replay enqueued nothing');
   });
 
   it('a note that fails says why, and the account is still deleted', async () => {

@@ -274,6 +274,14 @@ export async function runPipelineE2E({
     let sent = 0;
     let failures = 0;
     let finished = false;
+    // An upload cut off mid-way resumes from what the api says GCS holds (RELEASE.md rev 11, §4.6): after the
+    // first chunk of a multi-chunk file, the probe must say exactly what was sent.
+    if (bytes.length > chunk) {
+      const first = await fetch(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${chunk - 1}/${bytes.length}` }, body: bytes.subarray(0, chunk) });
+      const probe = await api('GET', `/uploads/${session.uploadId}`);
+      check('a cut-off upload resumes from what GCS holds (the status probe)', first.status === 308 && probe.body?.receivedBytes === chunk, `PUT ${first.status}, probe says ${probe.body?.receivedBytes}`);
+      if (first.status === 308) sent = probe.body?.receivedBytes ?? chunk;
+    }
     while (!finished && failures <= 3) {
       const end = Math.min(sent + chunk, bytes.length);
       const res = await fetch(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes ${sent}-${end - 1}/${bytes.length}` }, body: bytes.subarray(sent, end) });
@@ -308,6 +316,9 @@ export async function runPipelineE2E({
     const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
     // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
     if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+    // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
+    const replay = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
+    check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
 
     let status = 'processing';
     let error = '';
@@ -354,6 +365,8 @@ export async function runPipelineE2E({
       check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
+      const enqueuedRuns = readLogs(`jsonPayload.msg="kickoff_enqueued" AND jsonPayload.noteId="${noteId}"`);
+      check('the note was run once: the replay enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
       if (minutes >= CHAPTERS_FROM_MINUTES) {
         const salvaged = readLogs(`jsonPayload.msg="summary_salvaged_partial" AND jsonPayload.noteId="${noteId}"`);
         check('the summary came back whole, not salvaged', salvaged.length === 0, salvaged.length ? 'summary_salvaged_partial' : '');
