@@ -291,6 +291,12 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     untestable here (`TODO(A11)`).
   - **App Review 3.1.3:** iOS paywall shows StoreKit pricing only (no web-pricing reference) — safe
     globally; if you later want to surface the cheaper web rail on iOS it's US-storefront-only (see DECISIONS).
+  - **StoreKitTest can't run under command-line xcodebuild here (RELEASE.md PR 27).** An `SKTestSession`
+    loads `apps/ios/StoreKit/AlgoMinutes.storekit`, but storekitd refuses its configuration
+    (`SKInternalErrorDomain 3`, "Error saving configuration file"), signed or unsigned, after a simulator reboot, on
+    Xcode 26.3. So purchase, restore, renewal and Ask to Buy have no XCTest; their proof is the sandbox purchase on a
+    device (Wave 2 proof 4). The pre-purchase check and the paywall's invite-code handoff are unit-tested. The
+    `.storekit` file still serves Debug runs from Xcode. Retry on the next Xcode, or in Xcode Cloud.
 
 ### ⚠️ Trial state-machine fragilities (you asked me to flag these)
   1. **Reinstall-restart abuse (the big one).** No-account-for-7-days + anonymous identity means a user can
