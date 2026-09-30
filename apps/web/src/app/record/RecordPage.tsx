@@ -412,6 +412,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   };
 
   const left = capSeconds - elapsed;
+  // The minutes this month's plan has left, when the server said (RELEASE.md rev 11, H6d). A recording that runs
+  // past them isn't lost: it's held, uncharged, and processed when minutes arrive. Said before, and while, it does.
+  const minutesLeft = ent?.remainingMinutes ?? null;
+  const pastMinutes = minutesLeft != null && minutesLeft > 0 && elapsed > minutesLeft * 60;
   return (
     <section aria-labelledby="rec-title" className="flex max-w-xl flex-col gap-4">
       <p><Link to="/">← Your notes</Link></p>
@@ -447,6 +451,11 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
               <input type="checkbox" checked={callAgreed} onChange={(e) => setCallAgreed(e.target.checked)} />
               Everyone on the call has agreed to be recorded.
             </label>
+          )}
+          {minutesLeft != null && minutesLeft > 0 && (
+            <p className="mt-4 text-sm text-muted">
+              You have {Math.floor(minutesLeft).toLocaleString('en-AU')} recording {Math.floor(minutesLeft) === 1 ? 'minute' : 'minutes'} left this month. A longer recording is kept, and processed when you have more.
+            </p>
           )}
           {noMinutesLeft(ent) && (
             <div className="mt-4 rounded-xl border border-border bg-bg p-4">
@@ -497,6 +506,11 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
           <p className="text-sm font-semibold tracking-wide text-danger">● RECORDING</p>
           <p className="mt-2 font-mono text-5xl text-heading" aria-label={`Recorded ${formatClock(elapsed * 1000)}`}>{formatClock(elapsed * 1000)}</p>
           {left <= WARN_BEFORE_CAP_S && <p className="mt-2 text-body">{formatClock(left * 1000)} left: recording stops on its own at {formatClock(capSeconds * 1000)}.</p>}
+          {pastMinutes && (
+            <p className="mt-2 text-body">
+              This recording is now longer than the minutes you have left this month. It’s kept, and processed when you have minutes: add an invite code in Settings, or it runs when your minutes renew.
+            </p>
+          )}
           <p className="mt-2 text-sm text-muted">Keep this tab open. Everything recorded is saved in this browser as you go.</p>
           <p className="mt-1 text-sm text-muted">Keep your laptop awake and plugged in for a long meeting: closing the lid stops the recording.</p>
           {levels && (
