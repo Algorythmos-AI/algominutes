@@ -50,32 +50,36 @@
 /* ── Reset & Base ───────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+/* Element defaults, in the base layer (RELEASE.md rev 11, C14): unlayered, they beat every Tailwind utility,
+   so a text-red on a <p> or <span> rendered in the body colour. */
+@layer base {
+  html { scroll-behavior: smooth; }
 
-body {
-  background-color: var(--color-bg);
-  color: var(--color-body);
-  /* TODO(brand): final typeface — provisional system stack (typography.fontFamily.body) */
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  /* a11y (A6.9): rem so the base body size honors the user's browser font-size
-     preference. 0.9375rem == 15px at the default 16px root. */
-  font-size: 0.9375rem;
-  line-height: 1.6;
-  margin: 0;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-body);
+    /* TODO(brand): final typeface — provisional system stack (typography.fontFamily.body) */
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    /* a11y (A6.9): rem so the base body size honors the user's browser font-size
+       preference. 0.9375rem == 15px at the default 16px root. */
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    /* TODO(brand): final typeface — provisional system stack (typography.fontFamily.heading) */
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color: var(--color-heading);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+  }
+
+  p, span, li { color: var(--color-body); }
 }
-
-h1, h2, h3, h4, h5, h6 {
-  /* TODO(brand): final typeface — provisional system stack (typography.fontFamily.heading) */
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  color: var(--color-heading);
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.01em;
-}
-
-p, span, li { color: var(--color-body); }
 
 /* ── Background mesh ────────────────────────── */
 .owll-bg {
