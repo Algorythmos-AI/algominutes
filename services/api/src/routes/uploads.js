@@ -27,6 +27,7 @@ import {
   UploadSessionsUnavailableError,
   WorkspaceBoundaryError,
   isAccountDeleted,
+  markUploadCompleted,
 } from '@algominutes/db';
 
 const { isValidId, MAX_AUDIO_BYTES } = intelligenceModule;
@@ -264,6 +265,9 @@ export async function completeUploadRoute(req, res) {
     return res.status(502).json({ error: "We couldn't finalize your upload. Please try again." });
   }
 
+  // What lets the sweep find an upload no note followed (rev 11, L2). Not fatal: the upload is complete either way.
+  await markUploadCompleted({ id: session.id, uid: req.uid })
+    .catch((err) => log.error({ err, storagePath }, 'upload_completed_mark_failed'));
   log.info({ storagePath }, 'upload_completed');
   return res.json({ uploadId: session.id, storagePath, complete: true });
 }

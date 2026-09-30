@@ -43,16 +43,18 @@ function fakes({ storageFails = false } = {}) {
 }
 
 const errors: Array<{ o: any; m: string }> = [];
+const warns: Array<{ o: any; m: string }> = [];
 const log = {
-  info: () => {}, warn: () => {},
+  info: () => {}, warn: (o: any, m: string) => void warns.push({ o, m }),
   error: (o: any, m: string) => void errors.push({ o, m }),
   child() { return log; },
 };
-const runSweep = (deps: unknown) => sweep.run({ log, env: {}, traceId: 't-sweep', deps, repo, noteTerminal });
+const runSweep = (deps: unknown, now?: Date) => sweep.run({ log, env: {}, traceId: 't-sweep', deps, repo, noteTerminal, ...(now ? { now } : {}) });
 
 beforeEach(async () => {
   await resetDb();
   errors.length = 0;
+  warns.length = 0;
   await seedUser('alice');
   await seedWorkspace('ws-a', 'alice');
 });
@@ -62,6 +64,21 @@ afterAll(async () => {
 });
 
 describe('sweep', () => {
+  // RELEASE.md rev 11, L2 (H2d).
+  it('reports an upload no note followed within 30 minutes, once, with what finds it', async () => {
+    const id = await repo.createUploadSession({
+      uid: 'alice', workspaceId: 'ws-a', noteId: 'lost', storagePath: 'recordings/ws-a/lost.aac',
+      sessionUri: 'https://storage.googleapis.com/upload/x?upload_id=lost', totalBytes: 10, expiresAt: new Date(Date.now() + 7 * 86_400_000),
+    }, quietLog);
+    await repo.markUploadCompleted({ id, uid: 'alice' });
+    await runSweep(fakes().deps, new Date(Date.now() + 31 * 60_000));
+    const reported = warns.filter((w) => w.m === 'upload_never_processed');
+    expect(reported.map((w) => w.o)).toEqual([expect.objectContaining({ uid: 'alice', userId: 'alice', workspaceId: 'ws-a', noteId: 'lost' })]);
+    warns.length = 0;
+    await runSweep(fakes().deps, new Date(Date.now() + 61 * 60_000));
+    expect(warns.filter((w) => w.m === 'upload_never_processed')).toEqual([]);
+  });
+
   it('uses the same in-flight stale window as the kickoff (IN_FLIGHT_STALE_MS)', () => {
     expect(sweep.IN_FLIGHT_STALE_MS).toBe(repo.IN_FLIGHT_STALE_MS);
     expect(sweep.STUCK_NOTE_MS).toBeGreaterThan(repo.IN_FLIGHT_STALE_MS);

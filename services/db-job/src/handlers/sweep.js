@@ -131,7 +131,7 @@ async function run({
   const deps = injected || firebaseDeps(env);
   const {
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
-    recordDeadLetter, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
+    recordDeadLetter, deleteExpiredUploadSessions, reportStrandedUploads, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
     listUnsentNotices, abandonStaleNotices, pruneOldNotices, claimLostSummaries, claimLostEmbeds,
@@ -341,6 +341,17 @@ async function run({
       const pruned = await pruneOldNotices({ olderThanDays: TOMBSTONE_DAYS });
       if (failedEnqueues) throw new Error(`${failedEnqueues} notice enqueue(s) failed`);
       return { enqueued, abandoned: abandoned.length, pruned };
+    });
+
+    // An upload no note followed within 30 minutes (rev 11, L2): the app died between the upload and the
+    // kickoff, and its audio sits in Cloud Storage with nothing to run it. Reported once each, for the alert and
+    // for support; the app re-sends the kickoff when it next runs (H3).
+    await step('stranded_uploads', async () => {
+      const stranded = await reportStrandedUploads({ now });
+      for (const u of stranded) {
+        log.warn({ uid: u.uid, userId: u.uid, workspaceId: u.workspaceId, noteId: u.noteId, storagePath: u.storagePath, completedAt: u.completedAt }, 'upload_never_processed');
+      }
+      return { reported: stranded.length };
     });
 
     await step('upload_sessions', () => deleteExpiredUploadSessions(now));
