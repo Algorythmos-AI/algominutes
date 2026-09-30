@@ -15,7 +15,7 @@ const transcoderDb = require('../../services/transcoder/src/db.js');
 const noop = () => {};
 const log: any = { info: noop, warn: noop, error: noop, child: () => log };
 
-function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = async () => {} } = {}) {
+function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = async () => {}, beforeStart = async (_idx: number) => {} } = {}) {
   const extracted: number[] = [];
   const started: number[] = [];
   const enqueued: Array<{ payload: any; delay: number; taskId?: string }> = [];
@@ -39,6 +39,7 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
       startLongRunning: async ({ gcsUri }: { gcsUri: string }) => {
         const idx = Number(/chunk-(\d+)\.flac$/.exec(gcsUri)![1]);
         if (idx === sttFailOn) throw new Error('stt start failed');
+        await beforeStart(idx);
         started.push(idx);
         return `op-${idx}-${op++}`;
       },
@@ -78,6 +79,55 @@ afterAll(async () => {
 });
 
 describe('transcoder kickoff, replayed', () => {
+  // RELEASE.md rev 11, L6 (H2b). The transcoder can run 3600 s, but a task's dispatch deadline is 1800 s, so a
+  // long kickoff can be delivered again while the first attempt is still extracting. Both read "no op id" for a
+  // chunk and both started (and paid for) a speech job. A chunk is now claimed before its job starts: the
+  // second attempt starts nothing, and is retried until the first has saved its op id.
+  it('two deliveries of one kickoff at once start each chunk once', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const first = deps({ beforeStart: (idx) => (idx === 0 ? gate : Promise.resolve()) });
+    const second = deps();
+    const a = handler.handle(kickoff, first.d);
+    // The first attempt holds chunk 0's claim, and hasn't saved its op id.
+    for (let i = 0; i < 100 && (await count(`SELECT 1 FROM audio_chunks WHERE stt_claimed_at IS NOT NULL`)) === 0; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await expect(handler.handle(kickoff, second.d)).rejects.toMatchObject({ code: 'CHUNK_START_IN_PROGRESS' });
+    expect(second.started).toEqual([]);
+    release();
+    await a;
+    expect(first.started).toEqual([0, 1, 2]);
+
+    // Its retry, once the op ids are saved, only polls.
+    const retry = deps();
+    await handler.handle(kickoff, retry.d);
+    expect(retry.started).toEqual([]);
+    expect(new Set((await chunks()).map((r) => r.stt_operation_id)).size).toBe(3);
+  });
+
+  it("a start that fails releases its claim, so the retry needn't wait", async () => {
+    const failed = deps({ sttFailOn: 0 });
+    await expect(handler.handle(kickoff, failed.d)).rejects.toThrow(/stt start failed/);
+    const retry = deps();
+    await handler.handle(kickoff, retry.d);
+    expect(retry.started).toEqual([0, 1, 2]);
+  });
+
+  it("a claim left by an attempt that died is taken over once it's stale", async () => {
+    const failed = deps({ sttFailOn: 0 });
+    await expect(handler.handle(kickoff, failed.d)).rejects.toThrow(/stt start failed/);
+    // What a crash between the claim and the op id leaves behind.
+    await pool.query(`UPDATE audio_chunks SET stt_claimed_at = NOW() WHERE note_id = 'n1' AND idx = 0`);
+    const next = deps();
+    await expect(handler.handle(kickoff, next.d)).rejects.toMatchObject({ code: 'CHUNK_START_IN_PROGRESS' });
+    expect(next.started).toEqual([]);
+    await pool.query(`UPDATE audio_chunks SET stt_claimed_at = NOW() - INTERVAL '3 minutes'`);
+    const later = deps();
+    await handler.handle(kickoff, later.d);
+    expect(later.started).toEqual([0, 1, 2]);
+  });
+
   it('a first kickoff starts every chunk once and names each first poll task', async () => {
     const f = deps();
     await handler.handle(kickoff, f.d);
