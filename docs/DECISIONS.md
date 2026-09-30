@@ -23,6 +23,11 @@ choices made during the automated A2/A3 run so they are auditable from the git l
     `Package.resolved` (both workflows).
   - A new push to a PR cancels that PR's run still going on its previous commit, in both macOS workflows; queue
     and push runs are never cancelled.
+  - The Swift scan builds the dependencies once without CodeQL's tracer, into a build folder kept in the Actions
+    cache per `Package.resolved` and Xcode, then removes our two targets' outputs, so the traced build compiles
+    our code and only our code. (Checked locally: after the removal a rebuild compiles all 101 of the app's Swift
+    files and the extension's, and none of the dependencies' 1,648 compile steps.) If the traced build compiled
+    none of our code, CodeQL finds no Swift and the job fails: it can't pass on less.
 - **Rejected.** Dropping the scan from the queue altogether: a queue with another iOS change ahead of the PR is
   new code, and must be scanned.
 

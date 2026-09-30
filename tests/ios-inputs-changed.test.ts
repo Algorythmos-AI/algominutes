@@ -175,4 +175,27 @@ describe('the workflows', () => {
     expect(resolve).toBeLessThan(init);
     expect(swift.slice(init)).toContain('-clonedSourcePackagesDirPath "$HOME/spm-packages" \\\n            -disableAutomaticPackageResolution');
   });
+
+  it('the dependencies are built before CodeQL traces, from a cache, and only our targets are rebuilt under it', () => {
+    const swift = read('.github/workflows/codeql-swift.yml');
+    const cache = swift.indexOf("name: Cache the dependencies' build");
+    const prebuild = swift.indexOf('name: Build the dependencies (not traced)');
+    const init = swift.indexOf('uses: github/codeql-action/init@v4');
+    const traced = swift.indexOf('name: Build (traced, unsigned, simulator)');
+    expect(cache).toBeGreaterThan(0);
+    expect(cache).toBeLessThan(prebuild);
+    expect(prebuild).toBeLessThan(init);
+    expect(init).toBeLessThan(traced);
+    const pre = swift.slice(prebuild, init);
+    // Both builds share one build folder, so the traced one finds the dependencies done.
+    expect(pre).toContain('-derivedDataPath "$HOME/codeql-dd"');
+    expect(swift.slice(traced)).toContain('-derivedDataPath "$HOME/codeql-dd"');
+    // Our two targets are removed from it, so they're compiled again under the tracer, for CodeQL.
+    for (const ours of ['Build/Intermediates.noindex/AlgoMinutes.build', 'Build/Products/Debug-iphonesimulator/AlgoMinutes.app', 'Build/Products/Debug-iphonesimulator/BroadcastExtension.appex']) {
+      expect(pre).toContain(`"$HOME/codeql-dd/${ours}"`);
+    }
+    // And the app's targets are the two there are.
+    const targets = [...read('apps/ios/project.yml').matchAll(/\n    type: (application|app-extension)\n/g)].length;
+    expect(targets).toBe(2);
+  });
 });

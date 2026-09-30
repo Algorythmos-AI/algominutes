@@ -98,6 +98,38 @@ jobs:
       - name: Resolve packages (not traced)
         working-directory: apps/ios
         run: xcodebuild -resolvePackageDependencies -project AlgoMinutes.xcodeproj -scheme AlgoMinutes -clonedSourcePackagesDirPath "$HOME/spm-packages"
+      # The dependencies' build (Firebase, Google Sign-In, leveldb, …), kept in the Actions cache per package
+      # versions and Xcode. Compiled under CodeQL's tracer they were about 17 of the job's minutes, and CodeQL
+      # doesn't scan them: it scans our code.
+      - name: Cache the dependencies' build
+        uses: actions/cache@v6
+        with:
+          # Not our own targets' outputs: they're rebuilt every run.
+          path: |
+            ~/codeql-dd
+            !~/codeql-dd/Build/Intermediates.noindex/AlgoMinutes.build
+            !~/codeql-dd/Build/Products/Debug-iphonesimulator/AlgoMinutes.app
+            !~/codeql-dd/Build/Products/Debug-iphonesimulator/BroadcastExtension.appex
+          key: codeql-dd-${{ runner.os }}-xcode26.3-${{ hashFiles('apps/ios/AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      # Everything built once without the tracer (from the cache, the dependencies are up to date), then our own
+      # targets' outputs removed, so the traced build below compiles our code, and only our code, for CodeQL.
+      # If it compiled none of it, CodeQL finds no Swift and the analysis fails: it can't pass on less.
+      - name: Build the dependencies (not traced)
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -scheme AlgoMinutes \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$HOME/codeql-dd" \
+            -clonedSourcePackagesDirPath "$HOME/spm-packages" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+          # Our targets (the app and its broadcast extension): the project's own intermediates and products.
+          rm -rf "$HOME/codeql-dd/Build/Intermediates.noindex/AlgoMinutes.build" \
+            "$HOME/codeql-dd/Build/Products/Debug-iphonesimulator/AlgoMinutes.app" \
+            "$HOME/codeql-dd/Build/Products/Debug-iphonesimulator/BroadcastExtension.appex"
       - uses: github/codeql-action/init@v4
         with:
           languages: swift
@@ -109,6 +141,7 @@ jobs:
           xcodebuild build \
             -scheme AlgoMinutes \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$HOME/codeql-dd" \
             -clonedSourcePackagesDirPath "$HOME/spm-packages" \
             -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
