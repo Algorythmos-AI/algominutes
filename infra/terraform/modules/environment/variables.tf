@@ -75,7 +75,7 @@ variable "db_activation_policy" {
 variable "task_max_attempts" {
   description = "Max Cloud Tasks delivery attempts per queue. Single source of truth: services are deployed with MAX_TASK_ATTEMPTS set to this same value so the DLQ write fires on the true last attempt."
   type        = number
-  default     = 5
+  default     = 10
 }
 
 variable "summarize_max_attempts" {
@@ -400,4 +400,10 @@ variable "app_store_key_id" {
   description = "The Key ID of that In-App Purchase key."
   type        = string
   default     = ""
+}
+
+variable "sql_connections_alert" {
+  description = "Cloud SQL connections above which an alert fires (alerting-pipeline.tf). Staging's db-f1-micro allows 25."
+  type        = number
+  default     = 20
 }

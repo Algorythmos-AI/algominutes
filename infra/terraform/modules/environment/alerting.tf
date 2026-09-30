@@ -211,6 +211,14 @@ locals {
       severity  = "WARNING"
       doc       = "The sweep re-drove a summary or an embed whose task was lost after its claim (lost_work_redriven: noteId, worker). The note recovers; find why the task was lost (redrive_enqueue_failed, chunk_complete_enqueue_failed, a crash) under the note's traceId."
     }
+    # A Gemini answer was cut off at maxOutputTokens (RELEASE.md rev 11, LM4): the summary salvaged what it
+    # could, and the chapters, which come last, are what goes.
+    gemini_output_truncated = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "A Gemini answer hit maxOutputTokens (gemini_output_truncated: model, promptTokens, outputTokens, thoughtsTokens). The note is ready, but its summary may have lost its chapters. If thoughtsTokens is large, lower the thinking budget; if outputTokens is at the cap, raise it (services/summarizer/src/handler.js)."
+    }
     # Someone asked for help in the app (Settings → Help & Support, or a bad transcript/summary report).
     support_request_created = {
       threshold = 0
