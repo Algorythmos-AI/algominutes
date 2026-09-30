@@ -14,7 +14,7 @@ import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 import spendGuardModule from '@algominutes/ai/spend-guard.cjs';
 import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { withinLength, chargedMinutes } from './recording-length.js';
-import { getNoteQueueState, markQueued, markError, markKickoffRejected } from './notes-repo';
+import { getNoteQueueState, markQueued, markError, markKickoffRejected, countInFlightNotesForUser } from './notes-repo';
 import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import { noteChargeStands } from './usage-repo';
 import { ensureTrial, type TrialDevice } from './subscriptions-repo';
@@ -135,6 +135,9 @@ async function rejectNote(input: KickoffInput, userMsg: string, event: string): 
   }
 }
 
+/** The most notes one user may have in the pipeline at once (rev 11, L7). */
+export const MAX_IN_FLIGHT_PER_USER = 5;
+
 const isAccountDeleted = (err: any) => err?.code === 'ACCOUNT_DELETED';
 
 export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> {
@@ -163,6 +166,23 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   if (queueState.inFlight) {
     log.info({ status: queueState.status }, 'process_already_in_flight');
     return { kind: 'in_flight', status: queueState.status };
+  }
+
+  // At most this many of a user's notes are processed at once (rev 11, L7): one account can't fill the
+  // pipeline, and the beta's capacity (2 transcoders) stays shared. A notetaker's ingest is exempt: its minutes
+  // were reserved when the bot was sent, and it's retried by its task.
+  if (input.quota !== false) {
+    let inFlight = 0;
+    try {
+      inFlight = await countInFlightNotesForUser(uid);
+    } catch (err) {
+      log.error({ err }, 'in_flight_count_failed');
+      return { kind: 'failed', message: TRY_AGAIN };
+    }
+    if (inFlight >= MAX_IN_FLIGHT_PER_USER) {
+      log.warn({ inFlight }, 'kickoff_too_many_in_flight');
+      return { kind: 'rate_limited', message: `${MAX_IN_FLIGHT_PER_USER} recordings are being processed. Try again when one of them finishes.` };
+    }
   }
 
   // ── Size (drives the bytes budget) ──
@@ -238,7 +258,9 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     // An early refusal, before anything is written. markQueued checks again in
     // the transaction that debits, which is the check that counts. A note whose
     // earlier charge still stands isn't charged again, so it needs no headroom.
-    if (ent.includedMinutes != null && ent.usedMinutes + minutes > ent.includedMinutes) {
+    // At least a minute: billing rounds up, and a claim of none (an import) is charged what it measures. Without
+    // this, a zero claim at zero minutes left passed, and paid to download and measure before being refused.
+    if (ent.includedMinutes != null && ent.usedMinutes + Math.max(minutes, 1) > ent.includedMinutes) {
       let stands = false;
       try {
         stands = await noteChargeStands(noteId, workspaceId);

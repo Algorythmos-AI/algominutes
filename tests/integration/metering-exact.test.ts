@@ -140,6 +140,28 @@ describe('the quota is checked where the minutes are debited', () => {
   });
 });
 
+// RELEASE.md rev 11, L7 (H2c).
+describe('the kickoff guards what it lets through to paid work', () => {
+  it('with no minutes left, a recording that claims no length is refused too: it will be charged at least a minute', async () => {
+    await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 3 });
+    expect((await kickoff('n1', 180)).status).toBe(200); // uses all 3
+    const out = await kickoff('n2', 0);
+    expect(out.status).toBe(402);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it("five notes in flight at once is the most: the sixth waits, and another user's don't count", async () => {
+    await grantEntitlement({ uid: 'alice', reason: 'test' });
+    for (let i = 1; i <= 5; i++) expect((await kickoff(`n${i}`, 60)).status).toBe(200);
+    const sixth = await kickoff('n6', 60);
+    expect(sixth.status).toBe(429);
+    expect(sixth.body.error).toMatch(/5 recordings are being processed/);
+    // One finishes: there's room again.
+    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'n1'`);
+    expect((await kickoff('n6', 60)).status).toBe(200);
+  });
+});
+
 describe('one note holds at most the plan’s longest recording', () => {
   it('refuses a longer recording with 413, charging and queueing nothing', async () => {
     await grantEntitlement({ uid: 'alice', reason: 'test' }); // Pro: 4 hours
