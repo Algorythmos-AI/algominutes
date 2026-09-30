@@ -113,8 +113,8 @@ It prints the code (for the testers only: it's stored nowhere) and the command t
 staging. Set the label and limits in that command before running it:
 
 - **Reviewer:** `INVITE_LABEL=beta review,INVITE_USES=5,INVITE_DAYS=30`.
-- **A cohort:** `INVITE_LABEL=cohort 1,INVITE_USES=25,INVITE_DAYS=30`. The default is 600 minutes each
-  (`INVITE_MINUTES`).
+- **A cohort:** `INVITE_LABEL=cohort 1,INVITE_USES=25,INVITE_DAYS=30`. The default is Pro's monthly minutes,
+  1,500 each (`beta-invites-repo.ts`); set `INVITE_MINUTES` to give fewer.
 - From Wave 2, add `INVITE_NOTETAKER=true` to let the cohort send the notetaker.
 
 `JOB_NAME=beta-invite,MODE=list` lists codes with their uses; `MODE=revoke,INVITE_ID=<id>` stops one. Codes

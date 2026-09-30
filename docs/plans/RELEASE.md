@@ -1,7 +1,456 @@
-# Release plan: a great beta on iPhone and Chrome, then production ready (rev 10, 2026-09-29)
+# Release plan: a great beta on iPhone and Chrome, then production ready (rev 11, 2026-09-30)
 
-> Approved by the owner on 2026-09-29. The waves, PR order and gates below are the plan of record; update this
-> file in the PR that changes them. Evidence for each step goes into `docs/BLOCKERS.md`.
+> Rev 11 was approved by the owner on 2026-09-30 and leads this file: it re-orders the remaining work around
+> robustness, long meetings and ease of use. The rev 10 sections after it (approved 2026-09-29) keep the detail of
+> each wave; where they disagree, rev 11 wins. Update this file in the PR that changes the plan. Evidence for each
+> step goes into `docs/BLOCKERS.md`.
+
+## Rev 11 (2026-09-30): robust, easy, and built for long meetings
+
+> Approved by the owner on 2026-09-30. Rev 11 re-orders the remaining work around five audits plus a line-by-line
+> re-check at integration `078fe43`: the server pipeline, iOS, web/infra/e2e, a 1–4 hour meeting traced through
+> every layer, and a first-time user's walk through both apps. **Where this section and the rev 10 sections below
+> disagree, this section wins.** The rev 10 waves, their PR tables and proofs still hold as the detail of what
+> each wave ships. Evidence for each item goes into `docs/BLOCKERS.md` §0.
+
+**Decisions taken on 2026-09-30:**
+- **A recording over the minutes left is held, never refused.** Its audio is kept, the note waits in "Waiting
+  for minutes", and it processes by itself when minutes arrive.
+- **Quality first.** Cohort 1 waits for every P0 gate: about **2026-10-24**, not 10-10 to 10-13. The Gemini
+  proof date (10-15) stays pinned regardless.
+
+### R11.1 Looking back: the loopholes in how we work
+
+38 PRs merged since rev 10 (#250–#288). What went wrong, and the rule from now on:
+
+| # | Loophole | What it cost | Rule |
+|---|---|---|---|
+| 1 | Merges were tracked, not deploys | **Every staging deploy since #280 (2026-09-30 01:02 UTC) has failed.**<br>• #280: `ci-gate` stopped it, because `ci.yml` went red on `integration` after the merge queue had passed it. A flaky test: `apps/web/src/app/settings/settings.test.tsx:135-147` calls `answer()` before the mocked fetch has run.<br>• #281 onward: `rollout (billing)` fails, since billing requires `BILLING_URL` and `JOBS_SA_EMAIL`, which only Apply B sets.<br>So `rollout-api`, `rollout-meetings` and `smoke` are skipped, and the api is stuck on 539ad93. | **A merge is done when staging runs it.** The train follows each deploy; a red deploy stops the line. |
+| 2 | One service's boot failure freezes all the others | `deploy-staging.yml:176` builds with `fail-fast: true`. Waves 2–3 (`rollout-meetings`, `rollout-api`, `smoke`) need all of wave 1 (`:289-291,313-316`). | The api waits only on the services it calls |
+| 3 | Boot-fatal config merged before its apply | The same outage | New config is **fail-soft until applied**, and a deploy preflight checks the **live** revision's env |
+| 4 | Safety nets merged but never switched on | • The nightly e2e ran once, and failed without `E2E_INVITE_CODE`.<br>• The `e2e` job of web-e2e has been skipped in every run (no `VERCEL_AUTOMATION_BYPASS_SECRET`, or a red deploy). | A safety net is closed by its **first green run**, not by its merge |
+| 5 | Nothing has reached a tester | `main` is 90 commits behind; 0 of 11 Wave 1 proofs recorded | Stage 1's gate is testers using the app |
+| 6 | Long meetings have never run | The chunked path (over 10 min) hasn't run on staging in 30 days. The weekly 180-minute e2e has never run, and its only fixture is a 9-second Ogg clip, looped: never WebM (Chrome) or ADTS (iPhone). | A duration is supported only once it's proven, by e2e and on a device |
+| 7 | Failure paths untested end to end | The P0s below live in long-merged code. The iOS upload loop has **no tests at all**. | Every fix starts with a failing test; the nightly gains failure cases |
+| 8 | Your queue of steps grows faster than it drains | About 20 open | One ordered list per stage (R11.5) |
+
+### R11.2 Where we stand, and how far from the target
+
+| Target | Code | Live | Proven | Blocked on |
+|---|---|---|---|---|
+| **Wave 1:** iPhone and Chrome, invite codes | Built, less the P0s in R11.4 | Staging stale since #280; no beta host | 0 / 11 | The P0s, Apply B, the e2e secrets, the Vercel beta, P1, Staging → Beta, Beta App Review |
+| **Wave 2:** notetaker, Pro in the sandbox | About 90%; 24, 25, 29 queued | Not applied | 0 / 8 | Apply B, Recall, Apple products and keys, Stripe test keys, the legal opinion on bots |
+| **Wave 3:** extension | Built (33a–38 queued); 33b paused | None | 0 / 4 | Your go-ahead on 33b, Apply C, store review |
+| **Prod-ready** | 39a and 40 queued; the rest of 39, and 41, not started | No prod | None | Apply P, prod Firebase, P3 |
+| **App Store 1.0** | 8 blockers (A1–A8) | None | None | The decisions (R11.9), the listing, legal |
+
+**Dates** (if your Stage 0 steps happen this week):
+- cohort 1 about **10-24**;
+- Wave 2 about mid-November;
+- the extension late November to early December;
+- 1.0 submission-ready about mid to late December.
+
+**Fixed dates:**
+
+| Date | Event | Guard |
+|---|---|---|
+| 10-15 | A real 45–60 minute meeting summarised on **gemini-3.5-flash alone** | `gemini_ok` must name gemini-3.5-flash with `finishReason: STOP`. A fallback to 2.5 is not proof for after 10-20. |
+| 10-20 | gemini-2.5-flash retires. `activeLadder()` (`packages/ai/src/models.cjs`) drops it automatically, leaving **one model, no fallback**. | H8 merged first; a second rung from spike S1, or the risk recorded in DECISIONS |
+| 11-14 | The GCP credit ends; staging runs on real money | Budget alert verified before then |
+| 12-06 | Domain renewal | Your calendar |
+
+### R11.3 The bar: what "great" means, in numbers
+
+Measured from Stage 2 on; every gate checks them.
+
+| Measure | Target | Source |
+|---|---|---|
+| Recordings that reach **ready, "waiting for minutes", or a retryable error** | ≥ 99%. None lost, none spinning forever. | `upload_sessions` joined to `notes` (daily digest) |
+| **A meeting is one note:** splits caused by an interruption | 0 | iOS `recording_interrupted` / `recording_resumed` pairs |
+| Time to notes, from `notes.queued_at` | 1 h ≤ 10 min, 2 h ≤ 15 min, 4 h ≤ 25 min (p95) | `summarizer_complete.timeToSummarySec`. `docs/SLO.md` objective 4 (half the length + 5 min) is tightened in the PR that changes the code's `time_to_summary_slo_missed` objective, so the doc and the alert never disagree. |
+| Stop → uploaded, on Wi-Fi | 1 h ≤ 2 min (p95) | `upload_complete` minus the client's stop time |
+| Longest meeting | **4 h on Pro, trial and invite; 2 h on free** (`packages/contracts/src/limits.ts:12-14`), each proven on iPhone, web, extension and notetaker | e2e and device proofs |
+| Crash-free users | ≥ 99.5%, **counting jetsam, hang and background-task kills** | Crashlytics plus MetricKit (H15) |
+| Taps from Home to recording | **2** after the first run (today 4; 5 on first run) | XCUITest |
+| Open P0/P1 at a gate | 0 | BLOCKERS |
+| Reds on `integration` after the merge queue passed | 0 unexplained; each fixed the same day | CI |
+
+### R11.4 What's broken, by pillar
+
+Every item is reproduced by a failing test before it's fixed, or closed with evidence if it doesn't reproduce. All
+were verified in the code on 2026-09-30.
+
+**Pillar A: nothing lost, stuck, doubled or double-paid (P0)**
+
+| ID | Problem | Where | PR |
+|---|---|---|---|
+| L1 | Staging deploys fail (loopholes 1–3) | `services/billing/src/env-spec.cjs`, `deploy-staging.yml` | Apply B, H0, H1 |
+| L2 | **A note can spin forever.** iOS deletes the recording after upload but before `/v1/process` is accepted (`AppEnvironment.swift:394` before `:397-405`; also `reupload` `:614`). If the app dies there, the note stays "processing" with no Postgres row. The sweep never sees it (`listStuckNotes` is Postgres-only), and Try again is offered only on an error. The audio is safe in GCS. | iOS; `notes-repo.ts:1098-1111` | H2 (server), H3 (iOS) |
+| L3 | **Trying again doubles a long note's transcript**, and the summary and embeddings are built from the doubled text. A Cloud Tasks retry is safe; it's a second `markQueued` (a user's Try again, or the 3 h stale re-queue, `notes-repo.ts:265`) that deletes the chunks (`:430`) while their lines survive with `chunk_id NULL` (`001_init.sql:90`, a partial unique index). Each re-run also re-pays all speech-to-text. | `notes-repo.ts`, `pipeline-repo.cjs:309-311` | H2 |
+| L4 | Chat and search are uncapped: no length limit in the contract (`z.string().min(1)`), no `generationConfig` on chat (`search-and-chat.cjs:506-512`), no quota or spend count, only 120 requests a minute | `search-and-chat.cjs`, `contracts/.../{chat,search}.ts` | H9 |
+| L5 | Pipeline work can be dropped: 5 attempts in about 75 s for transcode, embed and notify (`main.tf:396-426`); lost kickoffs and polls aren't re-driven; the sweep's *absence* isn't alerted | `main.tf`, `redrive-repo.ts`, `sweep.js` | H7 |
+| L6 | **No lease on the kickoff.** The transcoder's 3600 s timeout outlives the 1800 s dispatch deadline, so a long kickoff (extracting 24 chunks for 4 h) can be delivered again while it's still running. Both can start speech-to-text for the same chunk before either saves its op id (`handler.js:385-397`). Minutes are safe (advisory lock plus ledger key); Google is paid twice. | `cloud-run.tf:30,55`, `transcoder/src/handler.js` | H2, H7 |
+| L7 | A zero-second claim passes the quota check; YouTube downloads are unbounded; nothing caps a user's notes in flight | `kickoff.ts:~198`, `youtube.js` | H2 |
+| L8 | A captured call can land in another account on the same phone: sign-out never clears the App Group (`AppEnvironment.swift:249-264`) | iOS | H11 |
+| L9 | After any consent earlier in the session, a Control Center capture uploads with no prompt (`ConsentGate.swift:52-64`, a per-process flag) | iOS | H11 |
+| L10 | "Leave the app, you'll get a notification" isn't reliable: the completion handler runs before complete and kickoff (`BackgroundUploadService.swift:312-316`); the orphan path's background task has no expiration handler (`AppEnvironment.swift:98`) and the in-process path has none; a cold background launch runs before auth is ready (`:285`) | iOS | H3 |
+| L11 | Uploads:<br>• a second caller replaces the first one's continuation, so the first hangs (`BackgroundUploadService.swift:246-259`);<br>• a 308 on the final chunk counts as success (`:303-309`);<br>• Wi-Fi-only waits silently (`:89-91`);<br>• **stuck uploads never time out**: `UploadStallPolicy` is tested but never used, and the resource timeout is 7 days;<br>• imports aren't durable (`ImportSheet.swift:84,122`) | iOS | H3 |
+| N1 | **A phone call longer than 5 minutes ends the recording**, so one meeting becomes two notes, or loses its second half. The watchdog gives up at 300 s (`RecorderWatchdog.swift:38`); an `.ended` interruption without `.shouldResume` stops at once (`RecorderService.swift:643-647`). | iOS | H4 |
+| N2 | **Speech-to-text runs in `locations/global`, not Sydney** (`stt.js:~96-101`, `STT_RECOGNIZER` unset), against the residency decision (DECISIONS A4) that `models.cjs` enforces for Vertex | transcoder | S1, H10 (before any external tester) |
+| N3 | **The web caps a Pro user at 2 h** when its one plan fetch fails: it starts at the free cap and never retries (`RecordPage.tsx:106,170-177`) | web | H5 |
+| N4 | Broadcast: a new capture **deletes the unclaimed previous one** (`SampleHandler.swift:~104`); the extension's `.m4a` is unreadable if the extension is killed, and the app then deletes it (`BroadcastHandoff.swift:135-137`); `finishWriting` doesn't check `writer.status`; no cap or disk check | iOS extension | H11 (P0 if broadcast ships in the beta) |
+
+**Pillar A (P1)**
+
+| Area | Items | PR |
+|---|---|---|
+| iOS recording | `record()`'s result unchecked in `start()` (`RecorderService.swift:236,252`); the clock loses time after a watchdog or route restart (`:454`) | H4 |
+| iOS accounts | A guest's pending recordings lost on an account switch; 401 `account_deleted` unhandled; sign-out leaves the cache, playback and the entitlement | H11 |
+| iOS failures invisible | No MetricKit, so jetsam, hangs and background-task-expiry kills aren't counted; no non-fatals; no crash reporting in the broadcast extension | H15 |
+| Purchases | The paywall shows success when the server rejected the purchase; a Pro user out of minutes loops | H17 |
+| Push | Registers only after a first recording; the pre-prompt shows on every launch | H17 |
+| Logs | The player's error description may carry the signed URL (`AudioPlayerService.swift:125`) | H17 |
+| Search | Returns embeddings from notes in error | H9 |
+| Embedding | `wordsToLines` has no length cap. A line over 2,000 characters becomes an oversized chunk, a batch 400s, and the note is permanently unsearchable. | H10 |
+| Transcoder memory | Up to 500 MB is downloaded into in-memory `/tmp` in a 2 GiB service (`ffmpeg.js:141-145`) | H7 |
+| Money | One tester can exhaust the global daily cap; the spend guard fails open, unalerted; chat isn't counted; the prod cap is unset | H9, H23 |
+| Stripe | A second checkout creates an untracked subscription; a partial refund revokes Pro; events out of order; the webhook's API version; secrets outside Terraform | H21 |
+| Security | Share links can't be revoked; 10 of 12 service accounts can read every secret; the unused extractor has `objectAdmin` on all three buckets and has no dead-letter path, and nothing enqueues to its queue | H20, H22 |
+| Observability | Alert emails exist (two channels), but there's no alert for sweep absence, queue age, scheduler failures, Cloud SQL CPU and connections, or Gemini truncation (`gemini_output_truncated` is logged, not alerted); no paging | H7, H8, H22 |
+| Scale (100 testers) | Staging api max 1; 2 transcoders shared by polls and kickoffs; `db-f1-micro`; no pool acquire timeout | H23 |
+
+**Pillar A (P2, tracked in BLOCKERS):**
+- the upload size isn't enforced at `/complete`;
+- notes that live only in Firestore are outside retention and backups;
+- no full re-mirror after a PITR;
+- the sweep's step order doesn't fit its 900 s limit;
+- deploys have no canary;
+- CORS allows localhost, `capacitor://` and `ionic://` in every environment, prod included (`packages/ai/src/cors.cjs:16-22`; credentials are off, so low risk, but fixed before prod);
+- share-link IP hashes are unsalted;
+- yt-dlp is unpinned;
+- code-scanning alert #131.
+
+**Pillar B: long meetings, 1 to 4 hours, every time**
+
+| Layer | Today | 1 h | 2 h | 3 h | 4 h |
+|---|---|---|---|---|---|
+| Length check (server) | `durationSec > maxSec` and `measuredSec > maxSec`, with zero slack (`kickoff.ts:~228`, `measured-length.ts:~91`) | ok | ok | ok | **fails** |
+| Over the minutes left | Refused, with a refund, after the meeting (`transcoder handler.js:230-251`); notetaker notes are exempt | at risk | at risk | at risk | at risk |
+| iOS interruptions | A call over 5 min ends the recording (N1); the clock loses time (`RecorderService.swift:454`) | at risk | at risk | at risk | fails |
+| Speaker labels | The long path uses the system recognizer, with no diarization: every line over 10 minutes says "Speaker" | poor | poor | poor | poor |
+| Summary | One call, a 16,384-token cap shared with **uncapped thinking**, and a 240 s total budget (`intelligence.cjs:8`). Chapters come last and are the first thing cut. | ok | ok | at risk | at risk |
+| Web recording | 2 h cap until the plan loads (N3); a retry after 5 failures restarts from byte 0 (`importAudio.ts:102-106`); Chrome's WebM has no seek index; laptop sleep ends capture (the wake lock only holds the screen); no mic meter outside call mode | ok | at risk | at risk | fails |
+| After the meeting | The iOS audio link expires after 15 min and is never refreshed (`AudioPlayerService.swift:65,84-86`). Exports read the 200-line Firestore mirror. | at risk | at risk | at risk | at risk |
+| Capacity | 2 transcode slots shared by kickoffs and 60 s polls | ok | ok | at risk under load | at risk |
+
+Not a risk (checked): the Firestore 1 MiB document limit. The mirror caps a transcript at 200 lines
+(`firestore-mirror.js:43-56`), and the full transcript lives in Postgres.
+
+| ID | Fix | Proof |
+|---|---|---|
+| LM1 (P0) | Accept a recording that hits the limit: 60 s of server slack, with the charge capped at the plan's limit; the apps stop 5 s early; the web rounds down; the web retries the plan fetch and never stops a recording because the plan is unknown | A 240-min charge measured at 14,400.3 s is accepted and charged 240 min. A failed plan fetch doesn't stop a Pro recording at 2 h. |
+| LM2 (P0) | **A meeting is one note.** An interruption pauses, for as long as the call lasts (up to the cap), and never stops. A failed reactivation starts a new segment of the same file; ADTS frames concatenate byte for byte. The clock banks time before every restart. | XCTest: a 20-minute interruption, an `.ended` without `shouldResume`, and a watchdog restart each give one file with the right length |
+| LM3 (P0) | **Prove it.** Real, non-repeating speech at 60, 120, 180 and 240 min, in **ADTS and WebM**. Nightly 60, weekly 120/240, and a manual dispatch for the gate. | ≥ 8 chapters, the last past 75% of the recording; no salvage; no dead letters; time to notes within R11.3. Plus the 3 h locked-screen device run with a 30-minute call in the middle. |
+| LM4 (P1) | Room for long summaries:<br>• a thinking cap (the parameter name from S1: the 3.x family uses `thinkingLevel`);<br>• a 32–65k output cap when chapters are asked for;<br>• the ladder's time budget scaled by transcript length;<br>• `finishReason` and token counts logged, and the truncation alert;<br>• the fast path gets the summarize queue's retry window;<br>• chat gets a `generationConfig`. | A real 3 h transcript summarised in Sydney |
+| LM5 (P1) | Speaker labels on long recordings. S1 finds a diarization-capable recognizer in `australia-southeast1`; if none, the AssemblyAI switch (D7) is your call (US processing, a privacy change). | 2- and 3-person fixtures: speaker changes found; rename works |
+| LM6 (P1) | Minutes are never a surprise: held-for-minutes (H6); minutes left on the record screen; a warning when a recording passes them; the notetaker's remaining time; the invite docs match the code | XCTest and vitest per state |
+| LM7 (P1) | After the meeting: iOS refreshes the audio link and exports the full transcript paged from the api; web recordings get a seekable AAC rendition iOS can play | Play past 20 min; seek to the last chapter of a 3 h note on both clients |
+| LM8 (P1) | Web uploads: a retry resumes the same upload session. 33b (uploading while recording) resumes with your go-ahead. | Kill the network mid-upload on a 2 h file: it resumes, with one note |
+| LM9 (P2) | Capacity: speech-to-text polls on their own queue; more transcoders (H23) | The load test (31): 10 two-hour notes at once, all within the target |
+| LM10 (P2) | Chat on a long note also sees the summary and chapters | A chat eval on a 3 h note |
+
+**Pillar C: easy for people to use**
+
+The foundations are good: a guest records without signing in, recordings are protected, progress is honest, and
+the web catches a tab shared without audio. The friction around them:
+- 4 taps before every recording (Home → Continue → tick → Start), and a Ready step that adds nothing;
+- a naming sheet after Stop that can't be skipped and has no Discard. Killing the app there leaves a file with no
+  note (the comment at `RecordingView.swift:26-28` is wrong);
+- the back arrow **stops** the recording (`RecordingView.swift:38-39`);
+- no pause;
+- Home never shows your notes;
+- three places delete without asking;
+- raw error codes;
+- on the web: no Try again on a failed note, and no mic meter outside call mode.
+
+| # | Change | Where | Effort |
+|---|---|---|---|
+| UX1 | Confirm or undo every delete (swipe and long-press in Files, web Discard, the retention change); destructive actions in red | `FilesView.swift:247-259`, `NoteActions.swift:54-62`, `RetentionSettingsCard.swift:100-116`, `RecordPage.tsx:524` | S |
+| UX2 | One consent sheet, full height and scrollable, with Start pinned (also fixes a likely hidden Start on an SE at large text) | `RecorderFlow.swift:27-69` | S |
+| UX3 | No forced naming after Stop: straight to the note, auto-titled (`TitleDeriver`), with a confirmed Discard; one title rule for iOS, web and captures | `RecordingView.swift:209-221` | S |
+| UX4 | Back minimises and never stops; Pause/Resume; "Paused for your call" | `RecordingView.swift:37-46`, `RecorderService.swift` | M |
+| UX5 | Home shows recent notes with live status ("Uploading 40%", "Ready in about 3 min") and the example note; the account prompt waits until a summary has been read | `HomeView.swift`, `FilesView.swift`, `BillingService.swift:214-225` | M |
+| UX6 | Web: Try again on failed notes; a mic meter and silence warning in **both** modes (reuse `callCapture.ts`'s meter); `displaySurface: 'browser'` and call tips; "keep the lid open and plug in" for recordings over 1 h; move `index.css:78`'s unlayered `p, span, li` rule into `@layer base` (today it beats every Tailwind colour utility: the red "● RECORDING" at `RecordPage.tsx:448` renders in the body colour) | `NoteDetailPage.tsx:213-217`, `RecordPage.tsx`, `callCapture.ts:63`, `index.css:78` | S–M |
+| UX7 | Plain words everywhere: server and system codes mapped to sentences (reusing the web's `lib/api/errors.ts`); one vocabulary on both apps (Record, Stop, Notes, Getting started, Couldn't process, Summary, Transcript, Ask); an estimate while processing | `ChatView.swift`, `APIClient.swift:33`, `ProcessingPane.swift` | S |
+| UX8 | Search finds transcript words as you type, doesn't say "no match" before it has searched, and opens a result at the moment it matched | `FilesView.swift`, `ChatView.swift` | S |
+| UX9 | Chat answers you can use: Copy, Share, Open in Mail for the follow-up; 3 starter questions; "Ask about this meeting" | `ChatView.swift` | S |
+| UX10 | Minutes are clear: one server figure, a bar and the reset date; the invite code always on the paywall; an automatic retry after redeeming | `SettingsView.swift`, `PaywallView.swift` | S |
+| UX11 | "Record a call (Zoom, Teams, Meet)" as its own entry, with 3 numbered steps and "turn Microphone on" | `RecorderFlow.swift:83-129` | S |
+| UX12 | The note screen: the summary first, duplicate tiles removed, Edit summary on iOS, speaker rename by tapping the name, find in transcript, checkable action items | `NoteDetailView.swift`, `TranscriptPane.swift`, `SummaryPane.swift` | M |
+| UX13 | Accessibility: `Theme.tertiary` (about 3.0:1, `Theme.swift:45-46`) → `Theme.muted` for readable text (`LoginView.swift:98`, `HomeView.swift:243`, `SettingsView.swift:326`, `ChatView.swift:147`); 44 pt targets; Reduce Motion on the Home dot; VoiceOver values and announcements; focus handling in the web dialogs | iOS, web | S |
+
+**The "wow" features, recommended before 1.0** (decision 3):
+- **Live Activity and Dynamic Island**, about a week. Timer, pause, stop and bookmark from the lock screen. There is no widget target today, so this is a new extension target.
+- **Bookmarks while recording**, about a week. A marked moment shows in the transcript and guides the summary.
+- **A follow-up ready to send**, 3–5 days. Action items by owner, opened in Mail.
+
+After 1.0: calendar-aware titles and attendees, and a live transcript.
+
+### R11.5 How bugs stay out
+
+1. **Definition of done, for every PR:**
+   - a failing test first, then the fix;
+   - a mutation check that reverts the fix and turns the test red (with a no-op control);
+   - the CLAUDE.md sub-agents;
+   - two-account tenancy tests for new queries, and a replay test for new async handlers;
+   - evidence in the PR body.
+
+   A PR is **done when staging runs it**: deploy green, every image at the head, smoke passing.
+2. **The train** (`scripts/train.sh`, H1b) follows each merge to its deploy and smoke, and stops the line on red.
+   One PR open at a time. No attribution.
+3. **Flake policy:**
+   - A red on `integration` after the merge queue passed is a P1, fixed that day and never retried away.
+   - A new async UI test runs 20 times locally before its PR.
+4. **Config never boots fatal before its apply:**
+   - new required env is fail-soft (`<service>_config_missing`) until Terraform sets it;
+   - the preflight compares each service's `env-spec` with the live revision.
+5. **A safety net is closed by its first green run**: the nightly e2e, web-e2e, and each alert (fired once as a test).
+6. **The nightly gains failure cases:**
+   - a replayed kickoff;
+   - a Try again that must not double;
+   - an over-quota hold and release;
+   - an interrupted upload.
+7. **Kill switches are drilled:** `broadcast_capture`, `notetaker_surfaces`, the paywall, `shareLinks`, chat. Each is
+   flipped on staging once in Stage 2, with the client behaviour recorded.
+
+### R11.6 The plan, by stage
+
+#### Stage 0: stop the line (10-01 → 10-02)
+
+| Step | What | Closes |
+|---|---|---|
+| **H0** `test(web)` | The settings test waits for the mocked fetch before `answer()`; 50 repeats green | Loophole 1 |
+| **H1** `fix(billing,ci)` | • Billing boots without `BILLING_URL`/`JOBS_SA_EMAIL`, logs `billing_config_missing`, and refuses only the tasks that need them.<br>• The build matrix is `fail-fast: false`.<br>• `rollout-api` and `rollout-meetings` wait only on the services they call.<br>• A preflight compares `env-spec` with `gcloud run services describe`.<br>• A failed deploy opens a `deploy-failed` issue. | L1, loopholes 2–3 |
+| **H1b** `chore(scripts)` | `train.sh`: merge → deploy run → image SHAs → smoke; non-zero on red | Loophole 1 |
+| **You** | 1. **Apply B.** I re-plan it at the head, you apply it, and I redeploy every service (a saved plan resets the images).<br>2. `E2E_INVITE_CODE`.<br>3. `VERCEL_AUTOMATION_BYPASS_SECRET`. | Loophole 4 |
+| **Spike S1** (me, 1 day on staging, nothing merged) | 1. Which speech-to-text recognizers and models serve in `australia-southeast1`, and which diarize.<br>2. Which Gemini models serve in Sydney, as a second rung after 10-20.<br>3. gemini-3.5-flash's thinking parameter and output cap.<br>The results go in DECISIONS. | Unblocks H8, H10, H24 |
+
+**Evidence:**
+- a green deploy at the head, with the api's image at the head;
+- smoke passing;
+- one green nightly;
+- one web-e2e run whose `e2e` job actually ran.
+
+#### Stage 1: the quality sprint (10-02 → about 10-20), then cohort 1 (about 10-24)
+
+**Before cohort 1, in this order:**
+
+| H | PR | Closes | Fails first |
+|---|---|---|---|
+| H2 | `fix(db,transcoder)`: re-runs replace, and a duplicate can't double-pay.<br>• `markQueued` deletes the note's `transcript_lines` in its transaction.<br>• A per-note transcoder lease (the `034_job_leases` pattern).<br>• The op id saved before `startLongRunning`.<br>• Refuse a zero-length claim.<br>• Cap notes in flight per user.<br>• Bound yt-dlp.<br>• A never-kicked-off detector: an `upload_sessions` row completed with no `notes` row after 30 min is re-driven or reported. | L2 (server), L3, L6, L7 | Run, Try again: the line count is one run's. Two concurrent kickoffs give one speech-to-text op per chunk. |
+| H3 | `fix(ios)`: a note is never stuck.<br>• Keep the file until the kickoff is accepted, and re-send on launch.<br>• Try again on a slow note.<br>• A background task with an expiration handler on both paths.<br>• The completion handler after complete and kickoff; wait for auth.<br>• One in-flight upload per note, with many waiters.<br>• Ask for the status on a 308.<br>• `UploadStallPolicy` wired in, and "Waiting for Wi-Fi".<br>• Import sidecars.<br>• **The upload loop's first tests.** | L2, L10, L11 | A stubbed URLProtocol: a 308 on the final chunk, two callers, a kill between upload and kickoff |
+| H4 | `fix(ios)`: a meeting is one note | N1, LM2 | See LM2 |
+| H5 | `fix(db,web,ios)`: 4 h passes | LM1, N3 | See LM1 |
+| H6 | `feat(contracts,db,api,ios,web)`: **held for minutes.** A three-client contract change, additive.<br>• A new status, `awaiting_minutes`. The audio is kept while held, then follows retention.<br>• Nothing is charged.<br>• Resumed automatically on an invite redeem, a purchase, a grant, or the monthly reset (a db-job step).<br>• A warning before recording (minutes left) and during it (passing them).<br>• Notetaker notes keep "never refused". | LM6 (core) | Over quota → held → a grant → processed once; a replay is safe |
+| H7 | `fix(infra,transcoder,db-job)`: the pipeline never drops work.<br>• Longer retry windows for transcode, embed and notify.<br>• Re-drive idle notes and stale polls.<br>• Transcoder timeout ≤ the 1800 s deadline, with the kickoff's wall time measured at 4 h.<br>• ffmpeg reads a signed URL instead of a `/tmp` copy (or memory sized from a 500 MB test).<br>• A Cloud SQL maintenance window.<br>• **Alerts:** sweep failure *and absence*, queue age, scheduler failures, Cloud SQL CPU and connections.<br>Then **Apply B′**. | L5, L6, P1 memory and alerts | tf-env-contract; a replayed poll; a 500 MB import on staging |
+| H8 | `fix(ai,summarizer,api)`: Gemini ready for long meetings and 10-20 | LM4 | A salvage keeps chapters at 3 h; a real 3 h transcript in Sydney |
+| H9 | `fix(api,contracts)`: chat and search caps. A three-client contract change (an additive `maxLength`).<br>• 2,000 characters and `maxOutputTokens`.<br>• A daily chat quota for guests and zero-minute accounts.<br>• Chat counted by `spend-guard.cjs`.<br>• Search returns only ready notes. | L4, P1 search | 2,001 characters → 400; an errored note's chunk is never returned |
+| H10 | `fix(transcoder,embedder)`: Sydney speech-to-text and safe chunks.<br>• The regional recognizer from S1 as `STT_RECOGNIZER`.<br>• `wordsToLines` splits at about 30 s or 1,000 characters.<br>• The embedder splits an oversized chunk. | N2, P1 embedding | A 5,000-character line gives ≤ 2,000-character chunks; the staging log shows the `australia-southeast1` recognizer |
+| H11 | `fix(ios)`: accounts and captures.<br>• Sign-out clears the App Group and consent.<br>• Every capture asks.<br>• A capture queue instead of delete-on-new.<br>• The extension writes ADTS (survives a kill), checks `writer.status`, has a 4 h cap and a disk check.<br>• A timer heartbeat.<br>• A guest's uploads survive an account switch. | L8, L9, N4, P1 accounts | XCTest per path |
+| H12 | `test(e2e)`: long-meeting proofs, and the failure cases in R11.5 | LM3 | The e2e itself |
+| H13 | `feat(ios)`: recording made easy | UX1–UX4 | XCUITest: 2 taps to record; no orphan file after a kill |
+| H14 | `feat(web)`: the web made easy | UX6, LM8 | Vitest and a Playwright journey |
+| H15 | `feat(ios)`: we see every failure. MetricKit (jetsam, hangs, background-task expiry) forwarded to Crashlytics; non-fatals with a hashed user id; the broadcast extension instrumented. | P1 iOS failures | A simulated MetricKit payload reaches Crashlytics on staging |
+
+**Your steps for Wave 1, in order:**
+1. Apply B.
+2. The two secrets.
+3. **This week: a real 45–60 minute meeting.** It's the 10-15 proof, and it counts only on gemini-3.5-flash.
+4. The Vercel beta project and domain, the auth settings, and the VAPID key.
+5. The restore drill (`docs/runbooks/restore-drill.md`).
+6. P1 (I prepare it).
+7. The Staging → Beta workflow, the external group, Test Information and the reviewer's code. **Submit for Beta
+   App Review once H3, H4, H5, H11 and H13 are in a build** (about 10-20).
+8. Proofs 1–11 (below), plus **a real 2-hour meeting** on iPhone and in Chrome.
+9. **Legal, today:** the Terms, the Privacy Policy and `CONSENT.md`, including where speech-to-text runs (N2).
+
+**Cohort 1 gate:**
+- proofs 1–11 and the 2-hour meeting pass;
+- the nightly is green 3 nights running, and a 120/240 run has passed once;
+- staging deploys have been green for 3 days, and web-e2e has *run* green;
+- H0–H15 are merged and running on staging, with evidence;
+- no unexplained dead letters for 48 h;
+- the `broadcast_capture` kill switch has been drilled;
+- Beta App Review has approved.
+
+**Proof changes:**
+- Proof 6's "the level meter moves" holds in call mode, which proof 6 uses. H14 adds the meter to mic mode.
+- Proof 11 (3 h locked, a call mid-way) now requires **one note**, with a **30-minute** call.
+
+**During cohort 1, before widening:**
+
+| H | PR | Closes |
+|---|---|---|
+| H16 | `feat(ios)`: Home and plain words | UX5, UX7 |
+| H17 | `feat(ios)`: notes you can trust.<br>• The full-transcript export and the audio link refreshed (LM7 iOS).<br>• No signed URL in logs.<br>• Search as you type, and chat answers you can use.<br>• The paywall shows a rejection.<br>• Push at launch. | UX8, UX9, LM7, P1 |
+| H18 | `feat(ios,web)`: minutes that never surprise | UX10, the rest of LM6 |
+| H19 | `feat(ios)`: record a call, and accessibility | UX11, UX13 |
+| H20 | `feat(api,web,ios)`: list and revoke share links, before `shareLinks` turns on | P1 security |
+
+**Then the queued branches:**
+- 24, 25, 29 (with H20), 30a–d, 31 (the load test), 32, the rate-limit test fix, 40 and 39a;
+- the extension stack last.
+
+#### Stage 2: find loopholes with testers
+
+- **A beta health dashboard** (Terraform) with every R11.3 measure:
+  - the funnel: started, uploaded, kicked off, ready, held;
+  - time to notes in 1 h, 2 h and 4 h buckets;
+  - stuck and failed notes by reason;
+  - interruption splits;
+  - dead letters, spend, and crash-free users.
+- **A daily digest email** (a db-job), and support messages carrying the version, build and last traceId.
+- **Journeys:** XCUITest against a Debug-only fake backend (first run, record, Stop, the note, rename, delete), and
+  Playwright on the beta host.
+- **Chaos drill on staging:**
+  - kill a transcoder mid-run;
+  - restart Cloud SQL;
+  - drop the network mid-upload on a 2 h file;
+  - replay a kickoff;
+  - flip each kill switch.
+
+  Each must end with one ready note, nothing duplicated, and one speech-to-text op per chunk.
+- **Test charters:**
+  - interruptions: a 30-minute phone call, Siri, AirPods, another app;
+  - lock and leave; force-quit at each stage; airplane mode; Wi-Fi-only; low disk;
+  - 1, 2 and 3 h meetings;
+  - accounts: a guest upgrading mid-upload; switching accounts; deleting;
+  - over quota, then a code;
+  - the sandbox: buy, restore, refund;
+  - the 426 gate;
+  - Chrome: closing and reloading the tab, the laptop lid closed, the plan fetch offline.
+- **Matrix:** iOS 17, a current iPhone and an SE at large text; Chrome and Edge; one low-memory Chromebook.
+- **Triage:** every 48 h into `beta` issues, P0–P3. Every P0/P1 gets a regression test. A bad build is expired;
+  switches are kill switches only.
+- **Widening gate:** the R11.3 bar met for 7 days, with no P0/P1.
+
+#### Stage 3: Wave 2 (the notetaker and Pro), and the P1 hardening
+
+- **H21** `fix(billing)`: Stripe you can trust.
+  - cancel a duplicate subscription;
+  - an idempotency key per user;
+  - a partial refund keeps Pro;
+  - events ordered by fetching the subscription;
+  - both payload shapes read;
+  - secrets as Terraform references.
+- **H22** `fix(infra)`: least privilege.
+  - secret access per secret;
+  - the extractor removed;
+  - paging through the Google Cloud app.
+- **H23** `fix(infra)`: sized for 100 testers.
+  - api min 1 / max 3;
+  - a separate poll queue;
+  - db-g1-small;
+  - a pool acquire timeout;
+  - a per-user daily minute cap.
+
+  The load test (31) passes after it.
+- **H24** `feat(transcoder)`: speaker labels on long recordings (from S1, or AssemblyAI if you choose it).
+- **H25** `feat(transcoder,web)`: a seekable AAC rendition of web recordings. Then 33b, with your go-ahead.
+- **H26** `feat(ios)`: the note screen (UX12).
+
+**Your steps for Wave 2:**
+- Recall: the accounts, the DPA and the spike;
+- Apple: the Paid Apps agreement, products, keys and sandbox testers;
+- Stripe: test keys, and the webhook pinned to 2024-06-20;
+- `FREE_FLOOR_MINUTES` from the measured cost;
+- P2;
+- the legal opinion before bots join meetings outside the allowlist.
+
+**Proofs:** the Wave 2 list below, plus:
+- a double checkout ends with one subscription;
+- a renewal is recorded (Stripe test clock);
+- a 2-hour notetaker meeting has real speaker names.
+
+#### Stage 4: Wave 3 (the extension)
+
+As in the Wave 3 section below, plus:
+- the 4 h cap, and a local copy while uploading;
+- 33b only with your go-ahead;
+- a 2-hour Meet recorded from the extension.
+
+#### Stage 5: the wow features, production, and 1.0
+
+1. **The wow features** (decision 3), tested on devices through the cohorts.
+2. **Production** as in the Prod-ready section below. Before prod, also:
+   - CORS per environment;
+   - Cloud SQL REGIONAL;
+   - Firestore protection and backups;
+   - paging;
+   - the caps (decision 9).
+
+   Stripe and StoreKit go live only after legal sign-off and a measured cost per minute.
+3. **The App Store blockers:**
+
+| A | Issue | Guideline | Plan |
+|---|---|---|---|
+| A1 | The Release build has no API origins, and nothing checks it carries prod's Firebase plist | — | After Apply P: set the origins, and fail the build unless `PROJECT_ID` matches |
+| A2 | Release `UPDATE_URL` is `itms-beta://`, so it opens TestFlight (`project.yml:72`) | — | `itms-apps://apps.apple.com/app/id6816333591` |
+| A3 | "Enter an invite code" is unconditional in Release (`SettingsView.swift:230`), and running out of quota opens it (`BillingService.swift:121-127`) | 3.1.1 | Compile it out of Release; use App Store Offer Codes |
+| A4 | Web Pro is honoured, but Release has no in-app purchase | 3.1.1 / 3.1.3(b) | Ship 1.0 with the paywall live |
+| A5 | The App Privacy answers in `STORE-COMPLIANCE.md` and `DATA-RETENTION.md` contradict the manifest and the code | 5.1.2 | Rewrite both, and the published policy, from `PrivacyInfo.xcprivacy` |
+| A6 | Broadcast sits behind a server switch that defaults to off, yet Control Center can start it | 2.3.1 | If proof 5 passes after H11: on for review and described in the notes, the switch a kill switch only. Otherwise removed from 1.0. |
+| A7 | A reviewer's device may already have used its trial | 2.1 | A free floor for every new account, regardless of DeviceCheck |
+| A8 | A failed Apple token revocation is ignored | 5.1.1(v) | Verify Apple's key in prod Firebase, and prove a deletion |
+
+Plus:
+- **Listing:** screenshots (6.9") and a preview; the listing text, keywords and URLs; the age rating, answered
+  honestly about AI; the EULA link.
+- **Build:** Mac availability off; `aps-environment` set to production.
+- **Review and release:** review notes (consent, guest start, broadcast, AI); a phased release; the 426 floor tested;
+  the candidate build at ≥ 99.5% crash-free for 7 days.
+
+### R11.7 Risks
+
+| Risk | Mitigation |
+|---|---|
+| S1 finds no in-region speech-to-text | Decision 4: keep `global` and disclose it, or wait; the Privacy Policy is updated before any external tester either way |
+| Only one Gemini model after 10-20 | S1's second rung, or the risk recorded in DECISIONS, with the truncation and `gemini_transient` alerts watched |
+| One PR at a time slips 10-24 | The gate holds and the date moves |
+| Beta App Review questions broadcast | Honest notes; `broadcast_capture=off` for the version if rejected |
+| Staging on real money after 11-14 | Budget alerts verified; H23's cost recorded in DECISIONS before it's applied |
+
+### R11.8 Verification
+
+| Level | What |
+|---|---|
+| **Per PR** | The definition of done (R11.5). Sub-agents: `dual-write-auditor` (db, api), `pii-scrub-compliance` (H8, H9, H10), `log-fields-auditor`, `silent-catch-detector`. |
+| **Per merge** | `train.sh`: deploy green, image SHAs at the head, smoke passing |
+| **Long meetings** | The H12 e2e (ADTS and WebM; 60 nightly, 120/240 weekly). Device runs: a 2 h meeting on iPhone and in Chrome, and a 3 h locked recording with a 30-minute call that ends as **one** note. Times recorded against R11.3. |
+| **Ease of use** | XCUITest (2 taps), Playwright journeys, VoiceOver and axe, an SE at large text |
+| **Per stage** | The gate's evidence in BLOCKERS §0: traceIds, query results, run ids |
+
+### R11.9 Decisions (my recommendation first)
+
+1. **Taken:** over-quota recordings are held (H6).
+2. **Taken:** quality first; cohort 1 about 10-24.
+3. Pause, minimise and "record a call" in the beta; Live Activity, bookmarks and the follow-up before 1.0. **Yes.**
+   This reverses rev 8, and the "Not in this plan" list below.
+4. If S1 finds no in-region speech-to-text: keep `global` and disclose it in the Privacy Policy, or wait. **Decide
+   after S1.**
+5. Speaker labels: S1 first; AssemblyAI (US processing) only if it fails.
+6. Invite minutes: **1,500 a month** (Pro's monthly minutes, the code's default) with the 4 h cap. The daily cap,
+   and H23's per-user daily cap, hold the cost. The runbook's "600" was wrong and is corrected.
+7. Money in 1.0: in-app purchase live, invite codes out of Release, web Pro honoured. **Yes.**
+8. Broadcast in 1.0: decided by proof 5, after H11.
+9. Staging for 100 testers: db-g1-small and api min 1 before cohort 2, about A$40–70 a month more (an estimate).
+   Prod caps: A$60 a day, and a A$500-a-month budget alert.
+10. Paging: the Google Cloud app on your phone for P0 alerts.
+
+
+---
+
+# Rev 10 (2026-09-29): the waves in detail
 
 ## Context
 
@@ -305,7 +754,8 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
   (US$0.0042 at the startup rate).
 - **Example:** 25 testers × 10 hours a month is about A$450 of pipeline, plus about US$125 if every minute is a
   bot.
-- **Caps:** the staging daily cap (your figure), 600 minutes per invite per 30 days, and the notetaker defaults of
+- **Caps:** the staging daily cap (your figure), 1,500 minutes per invite per 30 days (Pro's monthly minutes, the code's
+  default; rev 11 decision 6), and the notetaker defaults of
   600 minutes a month and 20 concurrent bots.
 - **GCP credit** (~US$411) ends 2026-11-14.
 
@@ -321,6 +771,9 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 | Hygiene | • Rotate the staging Browser key<br>• rotate the leaked Gemini key (source repo)<br>• `uuid` alert decision |
 
 ## Not in this plan (post-launch, on purpose)
+
+Rev 11 decision 3 proposes moving pause into the beta, and Live Activity, bookmarks and the follow-up before 1.0.
+
 
 - Android (v1.1; `apps/android` has only the ported audio layer) and iPad.
 - Live Activity, pause and bookmarks, the follow-up sender.
