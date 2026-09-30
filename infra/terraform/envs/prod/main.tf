@@ -133,7 +133,10 @@ module "environment" {
 
   # The api's CORS allowlist (the public site) and its operator/kill-switch
   # settings. A blank allowed_origins fails the plan (the api can't boot on it).
-  allowed_origins   = "https://algominutes.algorythmos.com"
+  allowed_origins = "https://algominutes.algorythmos.com"
+  # The browser extension's Chrome Web Store and Edge Add-ons ids, once it's submitted (RELEASE.md PR 37/38).
+  # Each lets that extension call the api and sign in (ADR 0002 §6).
+  extension_ids     = []
   admin_uids        = var.admin_uids
   broadcast_capture = var.broadcast_capture
 

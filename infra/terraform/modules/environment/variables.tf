@@ -115,6 +115,17 @@ variable "allowed_origins" {
   }
 }
 
+variable "extension_ids" {
+  description = "The browser extension's store ids: the Chrome Web Store's and Edge Add-ons' (RELEASE.md PR 36, ADR 0002 §6). Each becomes a chrome-extension://<id> origin in the api's ALLOWED_ORIGINS, which is also what lets that extension sign in (POST /v1/auth/extension-link, PR 34). Empty: no extension can call the api."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.extension_ids : can(regex("^[a-p]{32}$", id))])
+    error_message = "Each extension id is 32 letters a-p, as the stores give it."
+  }
+}
+
 variable "site_uptime_host" {
   description = "Host of the public site to watch with uptime checks (monitoring.tf), or \"\" for none. Exactly one environment watches it: staging until prod exists, then prod."
   type        = string

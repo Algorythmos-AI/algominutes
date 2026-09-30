@@ -141,8 +141,16 @@ describe('the api env', () => {
   });
 
   it.each(ENVS.flatMap((env) => [['api', env], ['billing', env]]))('%s, %s: gets a real CORS origin', (svc, env) => {
-    const r = resolve(envOfService(svc).ALLOWED_ORIGINS, env);
+    // The api's list is these web origins and the extension's (checked below).
+    const r = resolve(svc === 'api' ? 'var.allowed_origins' : envOfService(svc).ALLOWED_ORIGINS, env);
     expect(r.kind).toBe('literal');
     expect((r as { value: string }).value).toMatch(/^https:\/\/[^,\s]+(,https:\/\/[^,\s]+)*$/);
+  });
+
+  it('the api allows the web origins and the browser extension\'s, and nothing else (RELEASE.md PR 36)', () => {
+    expect(envOfService('api').ALLOWED_ORIGINS).toBe('local.api_allowed_origins');
+    expect(locals.replace(/\s+/g, ' ')).toContain(
+      'api_allowed_origins = join(",", concat( [for o in split(",", var.allowed_origins) : trimspace(o) if trimspace(o) != ""], [for id in var.extension_ids : "chrome-extension://${id}"], ))',
+    );
   });
 });

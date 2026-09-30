@@ -93,6 +93,10 @@ locals {
   # Per-service extra plain env, merged over common_env. Every name a service's
   # src/env-spec.cjs requires must be set here, non-blank
   # (tests/tf-env-contract.test.ts).
+  api_allowed_origins = join(",", concat(
+    [for o in split(",", var.allowed_origins) : trimspace(o) if trimspace(o) != ""],
+    [for id in var.extension_ids : "chrome-extension://${id}"],
+  ))
   service_env = {
     api = merge(local.db_env, local.admin_env, local.spend_env, {
       STORAGE_BUCKET = local.region_bucket["recordings"]
@@ -102,9 +106,10 @@ locals {
       DEVICECHECK_KEY_ID = var.devicecheck_key_id
       APPLE_TEAM_ID      = var.apple_team_id
       DEVICECHECK_ENV    = "production"
-      ALLOWED_ORIGINS    = var.allowed_origins
-      PUBLIC_SITE_URL    = var.public_site_url
-      BROADCAST_CAPTURE  = var.broadcast_capture
+      # The web origins, and the browser extension's (ADR 0002 §6): one list for CORS and the extension's sign-in.
+      ALLOWED_ORIGINS   = local.api_allowed_origins
+      PUBLIC_SITE_URL   = var.public_site_url
+      BROADCAST_CAPTURE = var.broadcast_capture
       # The notetaker's surfaces (off unless named) and where its tasks go.
       NOTETAKER    = var.notetaker_surfaces
       MEETINGS_URL = local.service_url["meetings"]

@@ -35,9 +35,15 @@ describe('the client-version gate', () => {
   });
 
   it('lets an unknown platform through, and answers 400 for a missing or malformed header', async () => {
-    expect((await call('extension/0.1.0')).status).toBe(200);
+    expect((await call('desktop/0.1.0')).status).toBe(200);
     expect(await call(undefined)).toMatchObject({ status: 400, body: { error: 'client_version_required' } });
     expect(await call('garbage')).toMatchObject({ status: 400, body: { error: 'invalid_client_version' } });
+  });
+
+  it('gates the browser extension from its first release (RELEASE.md PR 36)', async () => {
+    expect(MIN_SUPPORTED_CLIENT.extension).toBe('1.0.0');
+    expect((await call('extension/1.0.0')).status).toBe(200);
+    expect(await call('extension/0.9.9')).toMatchObject({ status: 426, body: { error: 'please_update' } });
   });
 
   it('leaves a CORS preflight to the CORS layer', async () => {

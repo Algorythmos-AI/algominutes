@@ -143,7 +143,10 @@ module "environment" {
   # and its operator/kill-switch settings. A blank allowed_origins fails the
   # plan (the api can't boot on it).
   allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com,https://beta.algominutes.algorythmos.com"
-  admin_uids      = var.admin_uids
+  # The browser extension's Chrome Web Store and Edge Add-ons ids, once it's submitted (RELEASE.md PR 37/38).
+  # Each lets that extension call the api and sign in (ADR 0002 §6).
+  extension_ids = []
+  admin_uids    = var.admin_uids
   # The public site's uptime checks live here until prod exists (S3-PR4).
   site_uptime_host   = "algominutes.algorythmos.com"
   broadcast_capture  = var.broadcast_capture

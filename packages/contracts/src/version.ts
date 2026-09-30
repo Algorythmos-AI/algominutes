@@ -20,7 +20,8 @@ export const API_BASE_PATH = `/${API_VERSION}` as const;
 export const CLIENT_VERSION_HEADER = 'X-AlgoMinutes-Client';
 
 /** The client platforms that send the version header. */
-export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
+// `extension`: the Chrome and Edge extension (RELEASE.md PR 36, ADR 0002 §6), gated from its first release.
+export const CLIENT_PLATFORMS = ['ios', 'android', 'web', 'extension'] as const;
 export type ClientPlatform = (typeof CLIENT_PLATFORMS)[number];
 
 /**
@@ -37,6 +38,7 @@ export const MIN_SUPPORTED_CLIENT: Record<ClientPlatform, string> = {
   ios: '1.0.0',
   android: '1.0.0',
   web: '1.0.0',
+  extension: '1.0.0',
 };
 
 /** The message the server returns when it refuses a stale client. */
