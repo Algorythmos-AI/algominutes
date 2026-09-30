@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -35,6 +35,12 @@ describe.each([
   ['the api', '../services/api/src/app.js', '/v1/process'],
   ['billing', '../services/billing/src/app.js', '/v1/billing/checkout'],
 ])('%s', (_name, path, route) => {
+  // The first import of a whole service app (Stripe's SDK, firebase-admin, the repo layer) can pass vitest's 5 s
+  // default on a cold transform cache under a full parallel run (it did, 2026-10-01). It's paid here, once, with
+  // room; each test then times only its own work.
+  // @ts-expect-error: plain ESM modules, no type declarations
+  beforeAll(async () => { await import(path); }, 30_000);
+
   it('lets the beta web origin call it, with the headers the web sends', async () => {
     const base = await serve(path);
     const r = await preflight(base, route, BETA);
