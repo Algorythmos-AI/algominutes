@@ -256,6 +256,12 @@ final class AppEnvironment {
         // Don't carry one user's recording-consent acknowledgement into the
         // next user's session on a shared device.
         consentGate.reset()
+        // Nor their capture of another app's audio, waiting in the App Group:
+        // the next account to sign in would have claimed it (H11/L8).
+        if broadcast.hasFinishedCapture {
+            AppLog.error("sign_out_discarding_broadcast_capture")
+            broadcast.discardFinished()
+        }
         let pending = recordingStore.allPending()
         if !pending.isEmpty {
             AppLog.error("sign_out_discarding_pending count=\(pending.count)")
@@ -467,6 +473,8 @@ final class AppEnvironment {
         case .claim:
             break
         }
+        // This capture uses up the acknowledgement that covered it (H11/L9).
+        if broadcast.hasFinishedCapture { consentGate.consume(.appAudio) }
         switch await broadcast.claim() {
         case .none:
             break
@@ -489,7 +497,7 @@ final class AppEnvironment {
     /// the app: record that on the consent gate, then make the note.
     func confirmBroadcastConsent() async {
         isBroadcastConsentPending = false
-        consentGate.acknowledge()
+        consentGate.acknowledge(for: .appAudio)
         await claimBroadcastCapture()
     }
 

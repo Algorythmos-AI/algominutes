@@ -51,25 +51,43 @@ final class SessionConsentGate: ConsentGate {
     /// Whether the pre-recording notice has been acknowledged this session.
     private(set) var acknowledgedThisSession = false
 
+    /// Whether the notice was acknowledged for capturing another app's audio,
+    /// and not yet used (RELEASE.md rev 11, H11/L9). A capture can start from
+    /// Control Center, outside the app, so one acknowledgement covers one
+    /// capture: the microphone's, or an earlier capture's, never covers it.
+    private(set) var appAudioAcknowledged = false
+
     /// Called by `RecorderConsentFlow` when the user ticks the mandatory box
-    /// and taps "Start recording". This is the single v1.0 input to the gate.
-    func acknowledge() {
-        acknowledgedThisSession = true
+    /// and taps "Start recording" (`.microphone`, for the session), or
+    /// "Capture audio from another app" / confirms a capture made outside the
+    /// app (`.appAudio`, for the next capture). The single v1.0 input to the gate.
+    func acknowledge(for kind: CaptureKind = .microphone) {
+        switch kind {
+        case .microphone: acknowledgedThisSession = true
+        case .appAudio: appAudioAcknowledged = true
+        }
+    }
+
+    /// The capture an app-audio acknowledgement covered was taken: the next one asks again.
+    func consume(_ kind: CaptureKind) {
+        if kind == .appAudio { appAudioAcknowledged = false }
     }
 
     /// Clear the acknowledgement — e.g. on sign-out, so a shared device does
     /// not carry one user's affirmation into the next user's session.
     func reset() {
         acknowledgedThisSession = false
+        appAudioAcknowledged = false
     }
 
     func satisfied(for kind: CaptureKind) async -> Bool {
         // v1.0: the only thing that satisfies the gate is an acknowledged
         // notice. §4 will replace this body (jurisdiction resolution,
         // per-participant consent, announcement trigger, consent-log write).
-        if !acknowledgedThisSession {
+        let ok = kind == .microphone ? acknowledgedThisSession : appAudioAcknowledged
+        if !ok {
             AppLog.info("consent_gate_blocked kind=\(kind)")
         }
-        return acknowledgedThisSession
+        return ok
     }
 }
