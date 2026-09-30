@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// A7.2 — resumable, reboot-surviving uploads over a `URLSession` **background**
 /// configuration.
@@ -52,18 +53,42 @@ final class BackgroundUploadService: NSObject {
     private let store: RecordingStore
     private let api: APIClient
 
-    // Bridges each delegate-driven task back to its awaiting caller. Keyed by
+    // Bridges each delegate-driven task back to its awaiting callers. Keyed by
     // task identifier and guarded by `lock` because the delegate fires on the
-    // session's private queue, not the main actor.
+    // session's private queue, not the main actor. A list per task: a second
+    // caller that joins a running task (send) waits alongside the first, where
+    // it used to replace the first one's continuation and leave it hanging.
     private let lock = NSLock()
-    nonisolated(unsafe) private var continuations: [Int: CheckedContinuation<Void, Error>] = [:]
+    nonisolated(unsafe) private var continuations: [Int: [CheckedContinuation<Void, Error>]] = [:]
     nonisolated(unsafe) private var progressHandlers: [Int: @Sendable (Int64) -> Void] = [:]
+
+    // Whether the network can carry an upload now, for the stall watch: a
+    // background session waits for connectivity without telling its delegate.
+    private let pathMonitor = NWPathMonitor()
+    nonisolated(unsafe) private var networkUsable = true
+    // Tasks the stall watch cancelled: their cancellation reads as timedOut.
+    nonisolated(unsafe) private var stalledTasks = Set<Int>()
 
     init(store: RecordingStore, api: APIClient) {
         self.store = store
         self.api = api
         super.init()
         Self.shared = self
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.networkChanged(
+                connected: path.status == .satisfied,
+                onWifi: path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            )
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "algominutes.upload-network"))
+    }
+
+    /// The path monitor's queue: whether the network can carry an upload now.
+    nonisolated private func networkChanged(connected: Bool, onWifi: Bool) {
+        let usable = UploadStallPolicy.networkAllowsUpload(connected: connected, onWifi: onWifi, wifiOnly: UploadPreferences.wifiOnly)
+        lock.lock()
+        networkUsable = usable
+        lock.unlock()
     }
 
     /// How a failed POST /v1/uploads reaches the caller. Its only 404 is a deleted
@@ -252,12 +277,37 @@ final class BackgroundUploadService: NSObject {
             task = session.uploadTask(with: request, fromFile: file)
             task.taskDescription = uploadId
         }
+        // The transfer is watched while this caller waits: one that stops moving
+        // is cancelled, so the wait always ends and the caller's retry continues
+        // from the server's byte count. It used to wait out URLSession's 7-day
+        // resource timeout, with the note's upload progress stuck on screen.
+        let watcher = Task { [weak self] in await self?.watch(task, uploadId: uploadId) }
+        defer { watcher.cancel() }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             lock.lock()
-            continuations[task.taskIdentifier] = cont
+            continuations[task.taskIdentifier, default: []].append(cont)
             progressHandlers[task.taskIdentifier] = onSent
             lock.unlock()
             task.resume()
+        }
+    }
+
+    /// Cancels `task` once UploadStallPolicy says it has stopped: no bytes for
+    /// `stallSeconds` while the network could carry them, or past the ceiling.
+    /// Reads the system's own byte count, not delegate events, which arrive late
+    /// after a suspension.
+    private func watch(_ task: URLSessionTask, uploadId: String) async {
+        var w = UploadStallPolicy.Watch(bytes: task.countOfBytesSent, now: Date())
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(UploadStallPolicy.checkIntervalSeconds))
+            if Task.isCancelled || task.state != .running { return }
+            let usable = lock.withLock { networkUsable }
+            let verdict = UploadStallPolicy.step(&w, bytesSent: task.countOfBytesSent, networkUsable: usable, now: Date())
+            guard verdict != .healthy else { continue }
+            AppLog.error("bg_upload_\(verdict == .stalled ? "stalled" : "past_ceiling") uploadId=\(uploadId) sent=\(task.countOfBytesSent)")
+            _ = lock.withLock { stalledTasks.insert(task.taskIdentifier) }
+            task.cancel()
+            return
         }
     }
 
@@ -283,30 +333,38 @@ extension BackgroundUploadService: URLSessionDataDelegate {
         _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
     ) {
         lock.lock()
-        let cont = continuations.removeValue(forKey: task.taskIdentifier)
+        let waiting = continuations.removeValue(forKey: task.taskIdentifier) ?? []
         progressHandlers.removeValue(forKey: task.taskIdentifier)
+        let stalled = stalledTasks.remove(task.taskIdentifier) != nil
         lock.unlock()
 
         // Nobody in this process is waiting: it was started before the app was
         // killed, and the system relaunched the app to deliver it. Hand it to the
         // resume path, which reads the session's state from the server and
         // finishes (or retries) the upload.
-        if cont == nil {
+        if waiting.isEmpty {
             Task { @MainActor [weak self] in self?.onOrphanUploadFinished?() }
             return
         }
 
-        if let error {
-            cont?.resume(throwing: error)
-            return
-        }
-        // GCS resumable: 308 = chunk accepted, session still open; 2xx = finalised.
         let status = (task.response as? HTTPURLResponse)?.statusCode
-        if let status, !(200...299).contains(status), status != 308 {
-            cont?.resume(throwing: UploadError.failed)
-            return
+        let outcome: Error? = stalled ? UploadError.timedOut : Self.outcome(error: error, status: status)
+        for cont in waiting {
+            if let failure = outcome { cont.resume(throwing: failure) } else { cont.resume() }
         }
-        cont?.resume()
+    }
+
+    /// What a finished PUT means: nil when GCS finalised the object (2xx), else
+    /// the error the caller's retry works from. Each PUT sends the rest of the
+    /// file, so a 308 (the session still open) means GCS didn't take it all: the
+    /// caller asks the server how far it got and sends the rest. It used to count
+    /// as done, and `complete` then failed on an unfinished object.
+    nonisolated static func outcome(error: Error?, status: Int?) -> Error? {
+        if let error { return error }
+        guard let status else { return UploadError.failed }
+        if (200...299).contains(status) { return nil }
+        if status == 308 { return UploadError.incomplete }
+        return UploadError.failed
     }
 
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
