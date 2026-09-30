@@ -427,6 +427,11 @@ export async function markQueued(
           throw new WorkspaceBoundaryError(`note ${input.noteId} belongs to a different workspace`);
         }
         // Safe only after the boundary check above, in the same transaction.
+        // A new run re-transcribes from scratch, so the last run's lines go with
+        // its chunks: they'd otherwise survive with chunk_id NULL (ON DELETE SET
+        // NULL), which the (chunk_id, idx) upsert never matches, and a Try again
+        // would double the transcript, the summary and the embeddings (rev 11 L3).
+        await client.query('DELETE FROM transcript_lines WHERE note_id = $1', [input.noteId]);
         await client.query('DELETE FROM audio_chunks WHERE note_id = $1', [input.noteId]);
         if (input.meetingBotId) {
           await client.query('UPDATE meeting_bots SET run_queued_at = NOW(), updated_at = NOW() WHERE id = $1', [input.meetingBotId]);
