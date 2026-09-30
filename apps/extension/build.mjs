@@ -11,6 +11,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The service worker, the popup, the offscreen recorder, and the page that asks for the microphone.
+export const ENTRIES = ['background', 'popup', 'offscreen', 'permission'];
+export const PAGES = ['popup.html', 'offscreen.html', 'permission.html'];
 const out = resolve(here, 'dist');
 
 /** An origin as the extension uses it: https (http only for localhost), no path. */
@@ -39,9 +42,12 @@ export function settingsFrom(env) {
 }
 
 /**
- * The manifest. Every permission is one ADR 0002 §5 lists and explains; 37a needs only storage (the session,
- * in chrome.storage.session) and the api's origin. tabCapture, offscreen and the Meet content script come
- * with capture (37b).
+ * The manifest. Every permission is one ADR 0002 §5 lists and explains:
+ *   - storage: the session and the recording's state, in chrome.storage.session;
+ *   - tabCapture: the meeting tab's sound (the other people);
+ *   - offscreen: a document that holds the streams and records for the whole meeting;
+ *   - the api's origin, and Cloud Storage's, where the recording is uploaded while it's made.
+ * The Meet content script comes with the Meet button (37c).
  */
 export function manifestFor(settings, version) {
   return {
@@ -52,8 +58,8 @@ export function manifestFor(settings, version) {
     minimum_chrome_version: '116',
     background: { service_worker: 'background.js', type: 'module' },
     action: { default_title: 'AlgoMinutes', default_popup: 'popup.html' },
-    permissions: ['storage'],
-    host_permissions: [`${settings.apiOrigin}/*`],
+    permissions: ['storage', 'tabCapture', 'offscreen'],
+    host_permissions: [`${settings.apiOrigin}/*`, 'https://storage.googleapis.com/*'],
     externally_connectable: { matches: settings.webOrigins.map((o) => `${o}/*`) },
   };
 }
@@ -64,7 +70,7 @@ async function main() {
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   await build({
-    entryPoints: { background: resolve(here, 'src/background.ts'), popup: resolve(here, 'src/popup.ts') },
+    entryPoints: Object.fromEntries(ENTRIES.map((e) => [e, resolve(here, `src/${e}.ts`)])),
     outdir: out,
     bundle: true,
     format: 'esm',
@@ -79,7 +85,7 @@ async function main() {
       __EXT_VERSION__: JSON.stringify(version),
     },
   });
-  await copyFile(resolve(here, 'src/popup.html'), resolve(out, 'popup.html'));
+  for (const page of PAGES) await copyFile(resolve(here, `src/${page}`), resolve(out, page));
   await writeFile(resolve(out, 'manifest.json'), `${JSON.stringify(manifestFor(settings, version), null, 2)}\n`);
   process.stdout.write(`built dist/ for ${settings.apiOrigin} (${settings.webOrigins.join(', ')}), version ${version}\n`);
 }

@@ -7,7 +7,11 @@ RELEASE.md PR 37:
   password: the web app's "Connect the extension" page (`/app/connect-extension`) asks the api for a code bound
   to a verifier only the extension holds, and hands the code over. The session lives in
   `chrome.storage.session` only. Signing out of the web app signs the extension out.
-- **37b:** recording the Meet tab and the microphone in an offscreen document, uploaded while recording.
+- **37b:** recording a meeting tab and the microphone in an offscreen document, uploaded while recording.
+  The popup asks for the web app's two consent ticks every time, then records the tab it was opened on. At
+  Stop (or when the tab closes) the upload finishes, and the note is made (`POST /v1/notes`) and processed
+  (`POST /v1/process`), as a web recording is. The microphone is asked for once, on an extension page
+  (`permission.html`); without it, only the other people are recorded, and the popup says so.
 - **37c:** the button on meet.google.com, and sending the notetaker.
 
 ## Build
@@ -30,6 +34,19 @@ mode, and choose **Load unpacked** with `apps/extension/dist`. For it to sign in
 - its id (shown on that page) must be in Terraform's `extension_ids` for the environment, applied (PR 36), so
   the api allows it;
 - the web app's build must list the same id in `VITE_EXTENSION_IDS`, so the connect page can find it.
+
+## Try a recording (the checks ADR 0002 leaves to a real browser)
+
+1. Load it unpacked and connect it (above).
+2. Open the popup, choose **Allow it** under the microphone line, and allow it in the tab that opens.
+3. Join a Google Meet. From the meeting's tab, open the popup, tick both boxes and choose **Record this
+   tab**. The toolbar shows REC, and you still hear the call.
+4. Talk for a few minutes, then **Stop and save** (or close the Meet tab). The note appears in AlgoMinutes
+   and is processed with both sides of the call.
+
+This proves what unit tests can't: that Chrome grants the tab's stream from the popup, that the offscreen
+document can use the microphone once it's allowed, and that Cloud Storage accepts the upload from the
+extension.
 
 ## Test
 

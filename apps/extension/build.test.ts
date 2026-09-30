@@ -25,10 +25,10 @@ describe('the build settings', () => {
 describe('the manifest', () => {
   const m = manifestFor(settingsFrom(env), '1.0.0');
 
-  it('asks for nothing ADR 0002 doesn\'t list: storage, and the api\'s origin', () => {
+  it('asks for nothing ADR 0002 doesn\'t list: storage, tab capture, an offscreen document, the api and Cloud Storage', () => {
     expect(m.manifest_version).toBe(3);
-    expect(m.permissions).toEqual(['storage']);
-    expect(m.host_permissions).toEqual(['https://api.example.test/*']);
+    expect(m.permissions).toEqual(['storage', 'tabCapture', 'offscreen']);
+    expect(m.host_permissions).toEqual(['https://api.example.test/*', 'https://storage.googleapis.com/*']);
     expect(JSON.stringify(m)).not.toMatch(/<all_urls>|"tabs"|"identity"|"scripting"|content_security_policy/);
   });
 

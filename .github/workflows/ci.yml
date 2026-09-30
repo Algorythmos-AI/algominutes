@@ -92,11 +92,11 @@ jobs:
           EXT_API_ORIGIN: https://api.example.invalid
           EXT_WEB_ORIGINS: https://beta.example.invalid
           EXT_FIREBASE_API_KEY: ci-build-not-a-real-key
-      - name: The built manifest asks only for storage and the api
+      - name: The built manifest asks only for what ADR 0002 lists
         run: |
           node -e '
             const m = require("./apps/extension/dist/manifest.json");
-            const want = JSON.stringify({ permissions: ["storage"], host_permissions: ["https://api.example.invalid/*"] });
+            const want = JSON.stringify({ permissions: ["storage", "tabCapture", "offscreen"], host_permissions: ["https://api.example.invalid/*", "https://storage.googleapis.com/*"] });
             const got = JSON.stringify({ permissions: m.permissions, host_permissions: m.host_permissions });
             if (got !== want) { console.error("manifest permissions changed:", got); process.exit(1); }
           '

@@ -4,24 +4,58 @@
     <meta charset="utf-8" />
     <title>AlgoMinutes</title>
     <style>
-      body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; width: 260px; color: #1b1b1f; }
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; width: 280px; color: #1b1b1f; }
       h1 { font-size: 15px; margin: 0 0 8px; }
       p { margin: 0 0 12px; }
-      button { font: inherit; width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #3715e0; background: #3715e0; color: #fff; cursor: pointer; }
+      label { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px; }
+      label input { margin-top: 3px; }
+      button { font: inherit; width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #3715e0; background: #3715e0; color: #fff; cursor: pointer; margin-bottom: 8px; }
+      button:disabled { opacity: 0.5; cursor: default; }
       button.secondary { background: transparent; color: #3715e0; }
-      [hidden] { display: none; }
+      button.stop { background: #d93025; border-color: #d93025; }
+      .timer { font-size: 22px; font-variant-numeric: tabular-nums; margin: 4px 0 12px; }
+      .note { color: #5f5b66; font-size: 12px; }
+      a { color: #3715e0; }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <h1>AlgoMinutes</h1>
+
     <section id="signed-out" hidden>
       <p>Connect the extension to your AlgoMinutes account. You sign in on the AlgoMinutes web app, never here.</p>
       <button id="connect" type="button">Connect to AlgoMinutes</button>
     </section>
-    <section id="signed-in" hidden>
-      <p>Connected. Recording from a Google Meet tab comes in the next version.</p>
+
+    <section id="ready" hidden>
+      <p>Record this tab’s call, with your microphone.</p>
+      <label><input id="consent-self" type="checkbox" /> <span>I have permission from anyone whose voice may be captured. If others are present, I'll let them know the meeting is being recorded.</span></label>
+      <label><input id="consent-call" type="checkbox" /> <span>Everyone on the call has agreed to be recorded.</span></label>
+      <button id="record" type="button" disabled>Tick both boxes to start</button>
+      <p id="mic" class="note" hidden>Your microphone isn’t allowed yet, so only the other people would be recorded. <a href="#" id="allow-mic">Allow it</a></p>
       <button id="sign-out" class="secondary" type="button">Disconnect</button>
     </section>
+
+    <section id="recording" hidden>
+      <p>Recording this call.</p>
+      <div id="timer" class="timer">0:00</div>
+      <p id="no-mic" class="note" hidden>Your microphone isn’t included.</p>
+      <button id="stop" class="stop" type="button">Stop and save</button>
+    </section>
+
+    <section id="saving" hidden><p>Saving…</p></section>
+
+    <section id="saved" hidden>
+      <p>Saved. Your note will be ready in a few minutes, in AlgoMinutes.</p>
+      <button id="done-saved" class="secondary" type="button">Done</button>
+    </section>
+
+    <section id="failed" hidden>
+      <p id="failure"></p>
+      <button id="done-failed" class="secondary" type="button">Done</button>
+    </section>
+
+    <p id="problem" class="note" role="alert" hidden></p>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

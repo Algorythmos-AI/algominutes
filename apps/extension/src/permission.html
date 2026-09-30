@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AlgoMinutes: your microphone</title>
+    <style>body { font: 15px/1.5 system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #1b1b1f; }</style>
+  </head>
+  <body>
+    <h1>Your microphone</h1>
+    <p id="ask">Chrome is asking whether AlgoMinutes may use your microphone, so your own voice is in the recording along with the call.</p>
+    <p id="allowed" hidden>Your microphone is allowed. You can close this tab and record from the extension.</p>
+    <p id="refused" hidden>Your microphone isn’t allowed, so recordings have the other people only. You can change this in Chrome’s site settings for the extension.</p>
+    <script type="module" src="permission.js"></script>
+  </body>
+</html>
