@@ -16,6 +16,13 @@
 //   exact:    { [name]: string }
 //             // must equal the value exactly, e.g. { WRITE_POSTGRES: 'true' } —
 //             // catches a flag that is unset AND one set to the wrong value
+//   soft:     string[]
+//             // config a later Terraform apply sets: checkEnv holds it to the
+//             // `required` rule (so the Terraform contract test and a saved plan
+//             // must set it), but at boot a missing one is only returned, for the
+//             // service to log and to refuse just the work that needs it. An
+//             // image merged before its apply then deploys instead of
+//             // crash-looping every rollout (RELEASE.md rev 11, H1a).
 //
 // On failure it logs a single structured `env_validation_failed` line naming
 // every problem, then exits 78 (EX_CONFIG) so the Cloud Run revision is marked
@@ -34,7 +41,7 @@ function present(env, name) {
 function checkEnv(spec, env) {
   const problems = [];
 
-  for (const name of spec.required || []) {
+  for (const name of [...(spec.required || []), ...(spec.soft || [])]) {
     if (!present(env, name)) problems.push(`missing required env ${name}`);
   }
 
@@ -56,12 +63,17 @@ function checkEnv(spec, env) {
   return problems;
 }
 
+/**
+ * Exits (or throws) on any hard problem; returns the soft names that are
+ * missing, for the caller to log as `<service>_config_missing`.
+ */
 function requireEnv(service, spec, opts) {
   const { logger, exit = true } = opts || {};
   if (!logger || typeof logger.error !== 'function') {
     throw new Error('requireEnv: a structured logger is required');
   }
-  const problems = checkEnv(spec, process.env);
+  const { soft = [], ...hard } = spec || {};
+  const problems = checkEnv(hard, process.env);
 
   if (problems.length > 0) {
     logger.error({ service, problems }, 'env_validation_failed');
@@ -70,6 +82,7 @@ function requireEnv(service, spec, opts) {
     }
     throw new Error(`env_validation_failed for ${service}: ${problems.join('; ')}`);
   }
+  return soft.filter((name) => !present(process.env, name));
 }
 
 module.exports = { requireEnv, checkEnv };

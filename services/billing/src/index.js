@@ -21,11 +21,12 @@ const PORT = Number(process.env.PORT) || 8080;
 // product ids are still A11 stubs (services/billing/README) and become required
 // when real verification lands (PR-27); validating them here now would block
 // boot before that work exists.
-requireEnv(
+const configMissing = requireEnv(
   'billing',
   envSpec,
   { logger: rootLogger },
 );
+if (configMissing.length > 0) rootLogger.error({ missing: configMissing }, 'billing_config_missing');
 
 // Needed to verify the client's Firebase ID token on the authed endpoints.
 initFirebase();
