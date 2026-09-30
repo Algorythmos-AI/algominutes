@@ -15,6 +15,12 @@ on:
   schedule:
     - cron: '41 17 * * 0' # weekly (Mon 03:41 Sydney)
 
+# A new push to a PR cancels that PR's run still going on its previous commit: macOS runners are scarce, and
+# one held by a superseded commit is one the train waits for. Queue and push runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -25,36 +31,29 @@ jobs:
   # because macOS minutes bill ~10x.
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The merge-queue skip reads the queued PR's head and its checks.
+      pull-requests: read
+      checks: read
     outputs:
       ios: ${{ steps.diff.outputs.ios }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # scripts/ios-inputs-changed.sh: runs when these inputs changed; in the merge queue, skips when the
+      # queue's commit has exactly the inputs of the PR head that already passed this check.
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          case "$EVENT" in
-            pull_request) base="$PR_BASE" ;;
-            merge_group) base="$QUEUE_BASE" ;;   # the queue's group vs integration
-            push) base="$BEFORE" ;;
-            *) echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0 ;;   # schedule, manual: always
-          esac
-          # A new branch or a force-push has no usable "before": check everything.
-          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "ios=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if git diff --name-only "$base" "$GITHUB_SHA" | grep -qE '^(apps/ios/|\.github/workflows/codeql-swift\.yml$)'; then
-            echo "ios=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ios=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "iOS changed: $(grep -o 'ios=.*' "$GITHUB_OUTPUT" | tail -1)"
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ios-inputs-changed.sh 'analyze (swift)' apps/ios .github/workflows/codeql-swift.yml scripts/ios-inputs-changed.sh
 
   analyze:
     name: analyze (swift)
@@ -87,6 +86,18 @@ jobs:
           set -euo pipefail
           XCODEGEN=$(sh scripts/install-xcodegen.sh)
           "$XCODEGEN" generate
+      # The Swift packages (Firebase, Google Sign-In and theirs), cloned once per Package.resolved and kept in
+      # the Actions cache: cloning them every run took 2 minutes, and 11 under CodeQL's tracer.
+      - name: Cache Swift packages
+        uses: actions/cache@v6
+        with:
+          path: ~/spm-packages
+          key: spm-${{ runner.os }}-xcode26.3-${{ hashFiles('apps/ios/AlgoMinutes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-xcode26.3-
+      # Before CodeQL starts tracing: fetching packages under the tracer was about 11 of the job's minutes.
+      - name: Resolve packages (not traced)
+        working-directory: apps/ios
+        run: xcodebuild -resolvePackageDependencies -project AlgoMinutes.xcodeproj -scheme AlgoMinutes -clonedSourcePackagesDirPath "$HOME/spm-packages"
       - uses: github/codeql-action/init@v4
         with:
           languages: swift
@@ -98,6 +109,8 @@ jobs:
           xcodebuild build \
             -scheme AlgoMinutes \
             -destination 'generic/platform=iOS Simulator' \
+            -clonedSourcePackagesDirPath "$HOME/spm-packages" \
+            -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO
       - uses: github/codeql-action/analyze@v4

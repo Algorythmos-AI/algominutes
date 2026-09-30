@@ -3,7 +3,29 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
-## The external beta runs on staging, with minutes from invite codes and the trial off (2026-09-29)
+## The merge queue doesn't re-run an iOS check on inputs it already passed (2026-09-30)
+
+- **Context.** Each iOS PR ran the Swift CodeQL scan (about 40 minutes) and the iOS tests (about 15) on the PR,
+  again in the merge queue, and a third time on the push to integration. In the serial PR train, the queue's
+  copy was the long pole: #278 and #283 each waited 40 minutes there for an answer already given. The scan's
+  build itself spent about 11 of its minutes fetching Swift packages under CodeQL's tracer.
+- **Decision.**
+  - `scripts/ios-inputs-changed.sh`, shared by `ios.yml` and `codeql-swift.yml`: a job runs when its inputs
+    changed (`apps/ios`, and for the tests `packages/contracts`, and the workflow itself). In the merge queue
+    it's also skipped when the queue's commit has exactly the inputs of the queued PR's head and that head passed
+    the same check: the check could only answer as it did. Anything ahead in the queue that touched the inputs
+    makes them differ, and it runs; any doubt runs it. A skipped job satisfies the required check.
+  - After the merge, the push to integration skips the iOS tests by the same rule (the merged PR's head passed them
+    on the same inputs): re-running them only held one of the org's few macOS runners while the next PR waited for
+    it. The Swift scan still runs on that push, so the default branch's code-scanning results are the merged
+    code's.
+  - The Swift packages are fetched before CodeQL starts tracing, into a directory kept in the Actions cache per
+    `Package.resolved` (both workflows).
+  - A new push to a PR cancels that PR's run still going on its previous commit, in both macOS workflows; queue
+    and push runs are never cancelled.
+- **Rejected.** Dropping the scan from the queue altogether: a queue with another iOS change ahead of the PR is
+  new code, and must be scanned.
+
 
 - **Context.**
   - The owner wants external testers as soon as possible, on staging, before prod exists
