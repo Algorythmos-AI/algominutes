@@ -421,3 +421,11 @@ variable "share_viewer_origin" {
   type        = string
   default     = ""
 }
+
+# --- Session check ---------------------------------------------------------------
+
+variable "session_check" {
+  description = "Refuse a disabled account or revoked sessions within a minute (RELEASE.md PR 40): \"on\" has the api and billing ask Firebase Auth about each active user once a minute; anything else leaves verifyIdToken alone. The grant it needs (firebaseauth.users.get) is made either way, so turn it on in a second apply, or the same one."
+  type        = string
+  default     = "off"
+}
