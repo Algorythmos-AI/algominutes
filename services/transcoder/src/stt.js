@@ -168,10 +168,24 @@ async function checkOperation(operationName, client = getClient(operationLocatio
   }
   return {
     done: op.done === true,
-    error: op.error || decodeError,
+    error: op.error || decodeError || fileError(result),
     result,
     metadata: op.metadata || null,
   };
+}
+
+// A job can finish with no operation error while its one file failed (no read access to the chunk, audio it
+// can't decode): the file's error is in results[uri].error, and its transcript is empty. Returned as the chunk's
+// error, so it fails like any other, instead of being saved as silence (RELEASE.md rev 11, found 2026-10-01).
+function fileError(result) {
+  if (!result || !result.results) return null;
+  for (const file of Object.values(result.results)) {
+    const err = file && file.error;
+    if (err && Number(err.code) !== 0) {
+      return { code: Number(err.code), message: `stt_file_failed: ${String(err.message || '').slice(0, 300)}` };
+    }
+  }
+  return null;
 }
 
 // Flatten batchRecognize response into word objects ready for
