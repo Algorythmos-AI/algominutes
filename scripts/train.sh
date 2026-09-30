@@ -66,7 +66,13 @@ fi
 token=$(gcloud auth print-access-token "${account[@]}")
 registry="https://${REGION}-docker.pkg.dev/v2/${PROJECT}/algominutes"
 fail=0
-for svc in $(jq -r '.jobs[] | select(.name | startswith("image (")) | .name | capture("image \\((?<s>[^)]+)\\)").s' <<<"$jobs"); do
+# Only images this run built: a run with nothing to deploy skips the matrix, whose job keeps its unexpanded name.
+built=$(jq -r '.jobs[] | select((.name | startswith("image (")) and .conclusion == "success") | .name | capture("image \\((?<s>[^)]+)\\)").s' <<<"$jobs")
+if [ -z "$built" ]; then
+  echo "train: run $run built no image (nothing deployable changed): done"
+  exit 0
+fi
+for svc in $built; do
   [ "$svc" = "db-job" ] && continue
   read -r ready created < <(gcloud run services describe "$svc" --region "$REGION" --project "$PROJECT" "${account[@]}" \
     --format='value(status.latestReadyRevisionName,status.latestCreatedRevisionName)')
