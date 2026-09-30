@@ -5,9 +5,12 @@
 // actual count) + word time offsets. Operations resolve via the polling
 // task; we never block the request waiting for STT to finish.
 
-// Where speech-to-text runs (RELEASE.md rev 11, N2): STT_LOCATION, set by Terraform to the region (Sydney), so
-// audio stays in Australia. Unset, it's `global`, as before. `long` in australia-southeast1 takes en-AU only
-// (probed 2026-10-01), so Terraform sets LANGUAGE_CODES with it.
+// Where speech-to-text runs (RELEASE.md rev 11, N2): STT_LOCATION, or `global` when unset, as staging runs today.
+// Sydney keeps audio in Australia, but Terraform sets it only once a batchRecognize there is proven as the
+// transcoder's own service account (DECISIONS, S1 correction). `long` in australia-southeast1 takes en-AU only
+// (probed 2026-10-01), so LANGUAGE_CODES has to change with it.
+const { lineIsFull } = require('./providers/neutral');
+
 function sttLocation() {
   return process.env.STT_LOCATION || 'global';
 }
@@ -224,13 +227,15 @@ function durToMs(d) {
 }
 
 // Group consecutive same-speaker words into transcript lines.
-// Each line gets startMs/endMs from the first/last word.
+// Each line gets startMs/endMs from the first/last word. A line ends on a new
+// speaker, a pause over 1.5 s, or once it's full (neutral.lineIsFull: 30 s or
+// 1,000 characters), the same rule as the whole-file providers.
 function wordsToLines(words) {
   if (!words.length) return [];
   const lines = [];
   let current = null;
   for (const w of words) {
-    if (!current || current.speakerTag !== w.speakerTag || w.startMs - current.endMs > 1500) {
+    if (!current || current.speakerTag !== w.speakerTag || w.startMs - current.endMs > 1500 || lineIsFull(current, w)) {
       if (current) lines.push(current);
       current = {
         speakerTag: w.speakerTag || 0,
