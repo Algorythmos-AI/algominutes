@@ -13,8 +13,8 @@ import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, isStripePage, runW
 
 describe('its settings', () => {
   it('defaults to staging, and takes only an https origin', () => {
-    expect(e2eConfig({})).toEqual({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000, budgetMs: 1_200_000, stripe: false });
-    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000', E2E_BUDGET_MS: '2000' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000, budgetMs: 2000, stripe: false });
+    expect(e2eConfig({})).toEqual({ siteUrl: 'https://staging.algominutes.algorythmos.com', bypass: '', readyMs: 480_000, budgetMs: 1_200_000, stripe: false, inviteCode: '' });
+    expect(e2eConfig({ SITE_URL: 'https://example.test/', VERCEL_BYPASS: ' s ', E2E_READY_MS: '1000', E2E_BUDGET_MS: '2000', E2E_INVITE_CODE: ' BETA-X ' })).toEqual({ siteUrl: 'https://example.test', bypass: 's', readyMs: 1000, budgetMs: 2000, stripe: false, inviteCode: 'BETA-X' });
     // RELEASE.md PR 28b: the Stripe step runs only when asked, once staging has Stripe's test-mode keys.
     expect(e2eConfig({ E2E_STRIPE: 'true' }).stripe).toBe(true);
     expect(e2eConfig({ E2E_STRIPE: '1' }).stripe).toBe(false);
@@ -70,7 +70,8 @@ describe('its workflow', () => {
 
 // The stand-in: each page the journey visits, with the real app's roles and names.
 const PAGES: Record<string, string> = {
-  '/app': `<h1>Sign in to AlgoMinutes</h1><button onclick="location='/app/notes-list'">Try it as a guest</button>`,
+  // Signed in, /app is the notes list, as in the app: a guest stays a guest across a reload (until the deletion).
+  '/app': `<script>if (localStorage.getItem('guest')) location.replace('/app/notes-list');</script><h1>Sign in to AlgoMinutes</h1><button onclick="localStorage.setItem('guest', '1'); location='/app/notes-list'">Try it as a guest</button>`,
   // A recording cut off by a reload is "cut" until it's uploaded (as n3), the way IndexedDB keeps it in the app.
   '/app/notes-list': `<main><h1>Your notes</h1><a href="/app/import">Import a recording</a><div id="left" hidden><p>A recording wasn’t uploaded</p><a href="/app/record">Upload it</a></div><ul id="notes"></ul></main>
     <script>document.getElementById('left').hidden = !localStorage.getItem('cut');
@@ -96,8 +97,10 @@ const PAGES: Record<string, string> = {
       <button onclick="onbeforeunload = null; localStorage.removeItem('cut'); location = window.call ? '/app/notes/n4' : '/app/notes/n2'">Stop and save</button></div>
     <div id="left" hidden><button onclick="localStorage.removeItem('cut'); localStorage.setItem('uploaded', '1'); location='/app/notes/n3'">Upload it</button></div>
     <script>document.getElementById('left').hidden = !localStorage.getItem('cut');</script>`,
-  '/app/settings': `<h1>Settings</h1><button onclick="document.getElementById('d').hidden=false">Delete my account</button>
-    <form id="d" hidden onsubmit="event.preventDefault(); fetch('/deleted', { method: 'POST' }).then(() => location='/app')"><label>Type DELETE to confirm: <input></label><button type="submit">Delete account</button></form>`,
+  '/app/settings': `<h1>Settings</h1>
+    <form onsubmit="event.preventDefault(); fetch('/redeem', { method: 'POST', body: document.getElementById('ic').value }).then(() => { document.getElementById('ok').textContent = 'You have 600 recording minutes for this beta.'; })"><label for="ic">Invite code</label><input id="ic"><button type="submit">Add minutes</button></form><p role="status" id="ok"></p>
+    <button onclick="document.getElementById('d').hidden=false">Delete my account</button>
+    <form id="d" hidden onsubmit="event.preventDefault(); fetch('/deleted', { method: 'POST' }).then(() => { localStorage.removeItem('guest'); location='/app'; })"><label>Type DELETE to confirm: <input></label><button type="submit">Delete account</button></form>`,
 };
 
 let site: Server;
@@ -119,6 +122,7 @@ beforeAll(async () => {
     const path = (req.url ?? '/').split('?')[0];
     seen.push({ path, headers: req.headers });
     if (path === '/deleted') return void res.writeHead(204).end();
+    if (path === '/redeem') return void res.writeHead(204).end();
     const body = PAGES[path];
     if (!body || broken.has(path)) return void res.writeHead(500).end('broken');
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(`<!doctype html><script>window.PROBE=${JSON.stringify(otherUrl)}</script>${body}`);
@@ -138,7 +142,8 @@ beforeEach(() => {
   broken = new Set();
 });
 
-const run = (lines: string[]) => runWebE2E({ siteUrl, bypass: 'the-secret', readyMs: 5000, chromium, recordMs: 50, actionMs: 3000, longMs: 4000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) });
+const CODE = 'BETA-TEST1-TEST2-TEST3';
+const run = (lines: string[], over: Record<string, unknown> = {}) => runWebE2E({ siteUrl, bypass: 'the-secret', inviteCode: CODE, ...over, readyMs: 5000, chromium, recordMs: 50, actionMs: 3000, longMs: 4000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) });
 
 describe('the journey, in a real browser', () => {
   it('walks every step, sends the bypass to the site only, and deletes the account', async () => {
@@ -147,7 +152,11 @@ describe('the journey, in a real browser', () => {
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
     expect(ok).toBe(true);
     expect(lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
-    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(18);
+    expect(lines.filter((l) => l.startsWith('ok'))).toHaveLength(20);
+    expect(lines.some((l) => l.startsWith('ok   the guest redeems the invite code in Settings'))).toBe(true);
+    // The code is a bearer of minutes: it never reaches the output.
+    expect(lines.join('')).not.toContain(CODE);
+    expect(seen.some((r) => r.path === '/redeem')).toBe(true);
     for (const step of ['reloading mid-recording asks first', 'the cut-off recording is kept, and shown on the notes list', 'uploaded once: three notes, and nothing left to upload', "the call's meter hears it", 'a recorded call becomes a note with a summary']) {
       expect(lines.some((l) => l.startsWith(`ok   ${step}`)), step).toBe(true);
     }
@@ -155,6 +164,14 @@ describe('the journey, in a real browser', () => {
     for (const r of seen) expect(r.headers['x-vercel-protection-bypass'], r.path).toBe('the-secret');
     expect(otherSeen.length).toBeGreaterThan(0);
     for (const h of otherSeen) expect(h['x-vercel-protection-bypass']).toBeUndefined();
+    expect(seen.some((r) => r.path === '/deleted')).toBe(true);
+  }, 60_000);
+
+  // The first real run on staging failed every step that processes a note: its guest had no minutes.
+  it('with no invite code it stops at once, saying so, and the account is still deleted', async () => {
+    const lines: string[] = [];
+    expect(await run(lines, { inviteCode: '' })).toBe(false);
+    expect(lines.some((l) => l.startsWith('FAIL an invite code is set for the guest'))).toBe(true);
     expect(seen.some((r) => r.path === '/deleted')).toBe(true);
   }, 60_000);
 
@@ -201,7 +218,7 @@ describe('the journey, in a real browser', () => {
       const lines: string[] = [];
       const started = Date.now();
       // Long waits allowed (60 s, 120 s), but a 3-second budget for everything.
-      expect(await runWebE2E({ siteUrl, bypass: '', readyMs: 60_000, budgetMs: 3000, chromium, recordMs: 50, actionMs: 3000, longMs: 180_000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) })).toBe(false);
+      expect(await runWebE2E({ siteUrl, bypass: '', inviteCode: CODE, readyMs: 60_000, budgetMs: 3000, chromium, recordMs: 50, actionMs: 3000, longMs: 180_000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) })).toBe(false);
       expect(Date.now() - started).toBeLessThan(30_000);
       expect(seen.some((r) => r.path === '/deleted')).toBe(true);
       expect(lines.some((l) => l.startsWith('ok   the account is deleted from Settings'))).toBe(true);

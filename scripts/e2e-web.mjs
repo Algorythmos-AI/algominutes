@@ -23,6 +23,9 @@
 //                  staging is behind Vercel Authentication. It's sent only to the
 //                  site's own origin, never to Google or the api.
 //   E2E_READY_MS   how long a note may take to be ready (default 8 minutes)
+//   E2E_INVITE_CODE the invite code the guest redeems in Settings (the pipeline e2e's): staging's guests start
+//                  with no minutes (TRIAL_ON_FIRST_USE=off), so without it nothing they record can process.
+//                  Never printed.
 //   E2E_STRIPE     'true' to buy Pro with Stripe's test card 4242 before the deletion (RELEASE.md PR 28b),
 //                  once staging's billing has Stripe's test-mode keys; the deletion then cancels it
 //   E2E_BUDGET_MS  how long the journey may take in all, before the deletion (default 20 minutes);
@@ -52,6 +55,7 @@ export function e2eConfig(env = process.env) {
     readyMs: ms(env.E2E_READY_MS, 8 * 60_000),
     budgetMs: ms(env.E2E_BUDGET_MS, 20 * 60_000),
     stripe: env.E2E_STRIPE === 'true',
+    inviteCode: (env.E2E_INVITE_CODE || '').trim(),
   };
 }
 
@@ -104,7 +108,7 @@ export function fixtureWav(fixture = FIXTURE, run = execFileSync) {
   return out;
 }
 
-export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, budgetMs = 20 * 60_000, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, longMs = 180_000, write = (s) => process.stdout.write(s) }) {
+export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, inviteCode = '', budgetMs = 20 * 60_000, chromium, micWav, fixture = FIXTURE, recordMs = 12_000, actionMs = 30_000, longMs = 180_000, write = (s) => process.stdout.write(s) }) {
   // Every wait is cut to what's left of the budget, and the fixed ones (not a note's summary, which waits
   // readyMs) also to longMs, so a test can bound the whole run. The deletion has its own waits, below.
   const deadline = Date.now() + budgetMs;
@@ -165,6 +169,16 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, budg
     // A guest may exist from here, even if the notes never show: the deletion runs whatever happens next.
     guest = true;
     if (!check('a guest gets their notes', await heading('Your notes'))) return;
+
+    // Staging's guests have no minutes (TRIAL_ON_FIRST_USE=off): the first real run failed every step that
+    // processes a note for want of them. The guest redeems the e2e's invite code in Settings, as a tester would.
+    if (!check('an invite code is set for the guest (E2E_INVITE_CODE)', inviteCode !== '')) return;
+    await page.goto(`${siteUrl}/app/settings`);
+    await page.getByLabel('Invite code').fill(inviteCode);
+    await page.getByRole('button', { name: 'Add minutes' }).click();
+    if (!check('the guest redeems the invite code in Settings', await within(page.getByRole('status').filter({ hasText: /recording minutes|Recording is on/ }).first().waitFor({ timeout: wait(30_000) })))) return;
+    await page.goto(`${siteUrl}/app`);
+    await heading('Your notes');
 
     await page.getByRole('link', { name: 'Import a recording' }).first().click();
     await page.getByLabel('Audio file').setInputFiles(fixture);
