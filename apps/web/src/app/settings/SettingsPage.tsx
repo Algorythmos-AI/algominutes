@@ -12,6 +12,7 @@ import { useNotice } from '../Notice';
 import { SITE_URL } from '../site';
 import { usePush } from '../push/PushContext';
 import { InviteCodeForm } from '../billing/InviteCodeForm';
+import { resetDate } from '../../lib/billing/minutes';
 import { ProOffer } from '../billing/ProOffer';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
@@ -46,6 +47,20 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Settings, as on iOS: account, plan, data retention, help, about, and deleting the account. */
+// RELEASE.md rev 11, H18: the month's minutes at a glance, with the day they renew, from the server's one figure.
+function MinutesBar({ used, included, period }: { used: number; included: number; period: string }) {
+  const fraction = Math.min(1, Math.max(0, used / included));
+  const renews = resetDate(period);
+  return (
+    <div className="mt-2">
+      <div role="meter" aria-label="Minutes used this month" aria-valuemin={0} aria-valuemax={Math.round(included)} aria-valuenow={Math.round(Math.min(used, included))} className="h-2 w-full overflow-hidden rounded-full bg-border">
+        <div className={`h-full ${fraction >= 1 ? 'bg-danger' : fraction >= 0.8 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${Math.round(fraction * 100)}%` }} />
+      </div>
+      {renews && <p className="mt-1 text-sm text-muted">{Math.max(0, Math.round(included - used))} left. Your minutes renew on {renews}.</p>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   if (!user) return null;
@@ -145,6 +160,7 @@ function PlanCard() {
             {plan} plan{from}.{' '}
             {ent.includedMinutes == null ? 'Unmetered.' : `${Math.round(ent.usedMinutes)} of ${Math.round(ent.includedMinutes)} minutes used this month.`}
           </p>
+          {ent.includedMinutes != null && ent.includedMinutes > 0 && <MinutesBar used={ent.usedMinutes} included={ent.includedMinutes} period={ent.billingPeriod} />}
           {ent.source === 'subscription' && ent.rail === 'apple_storekit' && (
             <p className="mt-2 text-body">Billed through the App Store. Manage it on your iPhone: Settings, your name, then Subscriptions.</p>
           )}
