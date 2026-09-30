@@ -3,7 +3,38 @@
 Batched list of everything that needs a human decision or credential. Nothing here stopped the A2/A3
 run; each item has a safe reversible default already applied. Grouped by type.
 
-## 0. The release plan (rev 10, 2026-09-29)
+## 0. The release plan (rev 11, 2026-09-30; rev 10, 2026-09-29)
+
+Rev 11 leads `docs/plans/RELEASE.md`: Stage 0 stops the line, then the quality sprint (H0–H15) comes before
+cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries follow.
+
+- [ ] **Staging deploys have failed since #280 (2026-09-30 01:02 UTC); the api is stuck on 539ad93.**
+  - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
+    merge queue had passed it. The cause is a flaky test: `apps/web/src/app/settings/settings.test.tsx:135-147`
+    calls `answer()` before the mocked fetch has run (`TypeError: answer is not a function`). → **H0.**
+  - #281 onward (run 36655399482 and later): `rollout (billing)` fails at boot. `env-spec.cjs` requires
+    `BILLING_URL` and `JOBS_SA_EMAIL`, which only Apply B sets. Because `rollout-meetings`, `rollout-api` and
+    `smoke` need every wave-1 rollout, they're skipped, so #280–#288 aren't live. → **H1**, then **Apply B**.
+  - Done when a deploy at the head is green, the api's image is at the head, and smoke passes.
+- [ ] **Safety nets not yet switched on:**
+  - The nightly e2e has run once (36633880052) and failed: `E2E_INVITE_CODE is not set`.
+  - web-e2e's `e2e` job has been skipped in every run: no `VERCEL_AUTOMATION_BYPASS_SECRET`, or the last deploy
+    was red.
+  - Done at the first green run of each.
+- [ ] **P0s found by the rev 11 audits** (RELEASE.md R11.4). Each closes with a failing-then-passing test and
+  staging evidence here:
+  - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3.
+  - L3: Try again doubles the transcript (`markQueued` leaves the old lines) → H2.
+  - L6: no kickoff lease, so a duplicate can double-pay speech-to-text → H2.
+  - N1: a phone call over 5 minutes ends an iPhone recording → H4.
+  - N2: speech-to-text runs in `locations/global`, not Sydney → S1, H10.
+  - N3: the web caps Pro at 2 h when the plan fetch fails → H5.
+  - LM1: a 4 h recording fails the zero-slack length check → H5.
+  - N4, L8–L11: broadcast captures and uploads → H3, H11.
+- [x] **Invite minutes corrected in the docs (2026-09-30):** the code's default is Pro's monthly minutes, 1,500
+  (`beta-invites-repo.ts:149`). The runbook and RELEASE.md said 600. The e2e code below is explicitly made with 600.
+
+### Rev 10 (2026-09-29)
 
 The order of work to the beta and production is `docs/plans/RELEASE.md`: three beta waves (iPhone and Chrome;
 the notetaker and Pro; the Chrome extension), then prod-ready. It supersedes rev 9. Evidence for each wave's
