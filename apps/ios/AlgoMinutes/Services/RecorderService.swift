@@ -1,4 +1,5 @@
 import AVFoundation
+import CallKit
 import Foundation
 import UIKit
 
@@ -101,6 +102,14 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     private var divergedSince: Date?
     private var lastResumeAttempt: Date?
     private var hasWarnedAboutDivergence = false
+    /// An interruption began and hasn't ended (RELEASE.md rev 11, N1): a call holds the microphone.
+    private var interruptedByCall = false
+    /// Whether a call is live, for when iOS never sends the interruption's end (the app was suspended).
+    private let callObserver = CXCallObserver()
+    /// A call holds the microphone: the recording waits for it, however long it lasts.
+    private var inCall: Bool {
+        interruptedByCall || callObserver.calls.contains { !$0.hasEnded }
+    }
 
     private let store: RecordingStore
 
@@ -247,6 +256,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             divergedSince = nil
             lastResumeAttempt = nil
             hasWarnedAboutDivergence = false
+            interruptedByCall = false
             lastDiskCheck = nil
             startedAt = Date()
             isRecording = true
@@ -396,14 +406,19 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
                 divergedSince = nil
                 lastResumeAttempt = nil
                 hasWarnedAboutDivergence = false
-                if notice == RecorderWatchdog.divergedNotice { notice = nil }
+                if notice == RecorderWatchdog.divergedNotice || notice == RecorderWatchdog.pausedForCallNotice { notice = nil }
             }
             return
         }
 
         if divergedSince == nil {
             divergedSince = now
-            AppLog.info("recording_diverged elapsed=\(elapsedSeconds)s")
+            // Bank what was recorded before the recorder stopped (rev 11, LM2): a resume restarts the live span,
+            // and the time before it was lost, so the note's length came out short and the 4 h cap fired late.
+            // After an interruption's .began it's already banked (startedAt is nil).
+            accumulatedSeconds = RecorderWatchdog.banked(accumulated: accumulatedSeconds, startedAt: startedAt, until: now)
+            startedAt = nil
+            AppLog.info("recording_diverged elapsed=\(accumulatedSeconds)s inCall=\(inCall)")
         }
 
         let decision = RecorderWatchdog.decide(
@@ -412,12 +427,13 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             divergedSince: divergedSince,
             lastResumeAttempt: lastResumeAttempt,
             alreadyWarned: hasWarnedAboutDivergence,
+            inCall: inCall,
             now: now
         )
 
         if decision.warnUser {
             hasWarnedAboutDivergence = true
-            notice = RecorderWatchdog.divergedNotice
+            notice = inCall ? RecorderWatchdog.pausedForCallNotice : RecorderWatchdog.divergedNotice
             AppLog.info("recording_divergence_warned")
         }
         if decision.attemptResume {
@@ -633,6 +649,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
             switch type {
             case .began:
                 AppLog.info("recording_interrupted")
+                self.interruptedByCall = true
                 // Pause elapsed-time accounting while interrupted.
                 if let startedAt = self.startedAt {
                     self.accumulatedSeconds += Int(Date().timeIntervalSince(startedAt))
@@ -640,12 +657,16 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
                 }
             case .ended:
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue ?? 0)
-                guard options.contains(.shouldResume) else {
-                    // System won't auto-resume — stop and keep the partial rather
-                    // than discard it.
-                    AppLog.info("recording_not_resumable")
-                    self.autoStop(reason: .interruptionNotResumable)
-                    return
+                self.interruptedByCall = false
+                // The give-up clock starts again from the call's end, not its start: otherwise a call longer
+                // than giveUpSeconds would end the recording the moment the call did.
+                self.divergedSince = nil
+                self.lastResumeAttempt = nil
+                // Without .shouldResume it used to stop here, ending the meeting's note at the call (rev 11,
+                // N1). The recorder is only paused: record() appends to the same file, so it tries, and a
+                // refusal goes to the watchdog, which keeps trying on the usual timing.
+                if !options.contains(.shouldResume) {
+                    AppLog.info("recording_not_resumable_trying_anyway")
                 }
                 // Do not auto-stop if this fails. A refused resume is exactly
                 // what the watchdog is for: it keeps retrying and gives the
