@@ -131,6 +131,52 @@ describe('recording in the browser', () => {
     expect(await screen.findByRole('heading', { name: 'Opened' }, { timeout: 3000 })).toBeTruthy();
   });
 
+  it('stops 5 seconds before the limit, so the recording measures inside it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    setup();
+    fireEvent.click(await screen.findByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    await screen.findByText('● RECORDING');
+    FakeRecorder.last!.emit('audio');
+    vi.setSystemTime(start + (2 * 3600 - 4) * 1000);
+    expect(await screen.findByRole('heading', { name: 'Opened' }, { timeout: 3000 })).toBeTruthy();
+  });
+
+  // RELEASE.md rev 11, N3 (H5b). The page started at the free plan's 2 hours, asked for the plan once, and on
+  // a failure kept that cap for the whole visit: a Pro user's meeting was cut off at 2:00:00.
+  it("a plan that couldn't be read doesn't stop a recording at 2 hours: the longest plan's cap holds until it's known", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    setup({ sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) }, undefined, { '/v1/entitlement': () => new Response('{}', { status: 503 }) });
+    fireEvent.click(await screen.findByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    await screen.findByText('● RECORDING');
+    FakeRecorder.last!.emit('audio');
+    // A minute before 2 hours: a page holding the free plan's cap warns that it stops at 2:00:00.
+    vi.setSystemTime(start + (2 * 3600 - 60) * 1000);
+    await new Promise((r) => setTimeout(r, 1200)); // the page's clock ticks every 500 ms
+    expect(screen.getByText(/1:59:00/)).toBeTruthy();
+    expect(screen.queryByText(/recording stops on its own at 2:00:00/)).toBeNull();
+    expect(screen.getByText('● RECORDING')).toBeTruthy();
+  });
+
+  it('asks for the plan again after a failure, and then holds its cap', async () => {
+    let answers = 0;
+    const { calls } = setup({ sleep: async () => {} }, undefined, {
+      '/v1/entitlement': () => (++answers === 1 ? new Response('{}', { status: 503 }) : new Response(JSON.stringify(ENT), { status: 200 })),
+    });
+    fireEvent.click(await screen.findByRole('checkbox'));
+    await waitFor(() => expect(calls.filter((c) => c === '/v1/entitlement').length).toBeGreaterThanOrEqual(2));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    await screen.findByText('● RECORDING');
+    FakeRecorder.last!.emit('audio');
+    vi.setSystemTime(start + (2 * 3600 - 60) * 1000);
+    expect(await screen.findByText(/left: recording stops on its own at 2:00:00/)).toBeTruthy();
+  });
+
   it('leaving the page while recording asks first, and keeps recording unless told to stop', async () => {
     setup();
     fireEvent.click(await screen.findByRole('checkbox'));
