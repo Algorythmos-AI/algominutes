@@ -44,6 +44,19 @@ describe('search', () => {
     expect(link.textContent).toMatch(/1:15.*the budget is fine/);
   });
 
+  // RELEASE.md rev 11, L4 (H9b): the api refuses a question over 2,000 characters; the box stops there first.
+  it('holds a question to 2,000 characters, and sends no more', async () => {
+    let sent = '';
+    const f = route({ '/v1/search': (b) => { sent = String(b.query); return new Response(JSON.stringify({ hits: [] }), { status: 200 }); } });
+    openSearch(f);
+    const box = (await screen.findByLabelText('Search your notes')) as HTMLInputElement;
+    expect(box.maxLength).toBe(2000);
+    fireEvent.change(box, { target: { value: 'q'.repeat(2500) } });
+    expect(box.value).toHaveLength(2000);
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(sent).toHaveLength(2000));
+  });
+
   it('says when nothing was found, and when search fails', async () => {
     let fail = false;
     const f = route({ '/v1/search': () => (fail ? new Response('{"error":"internal"}', { status: 500 }) : new Response(JSON.stringify({ hits: [] }), { status: 200 })) });

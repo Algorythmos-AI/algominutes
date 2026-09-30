@@ -90,3 +90,6 @@ export const PRIVACY_VERSION = '2026-09-29';
 // null = keep until the user deletes (with the soft-delete + 30-day backup window).
 export const DEFAULT_RETENTION_DAYS: number | null = null;
 export const RETENTION_OPTIONS_DAYS = [30, 90, 180, 365] as const; // user-selectable + "keep until deleted"
+
+/** The longest search or chat question, in characters (RELEASE.md rev 11, L4): the api refuses longer with a 400. */
+export const MAX_QUESTION_CHARS = 2000;

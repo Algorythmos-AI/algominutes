@@ -3,13 +3,14 @@
 // stream. The event payload shapes are modelled here so clients can type the
 // stream, even though the transport is text/event-stream rather than a body.
 import { z } from './zod';
+import { MAX_QUESTION_CHARS } from '../limits';
 import { SearchHit } from './search';
 
 /** Request body. `noteId` scopes the conversation to one note (and makes an
  * unreachable note a hard 404). Source: handleChatStream body parse. */
 export const ChatRequest = z
   .object({
-    query: z.string().min(1),
+    query: z.string().min(1).max(MAX_QUESTION_CHARS), // rev 11 L4: the api refuses longer (H9a)
     noteId: z.string().optional(),
   })
   .openapi('ChatRequest');

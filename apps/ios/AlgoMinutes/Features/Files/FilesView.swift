@@ -425,7 +425,7 @@ struct FilesView: View {
         searchError = nil
         defer { isSearching = false }
         do {
-            transcriptHits = try await env.api.search(query: trimmed, k: 12)
+            transcriptHits = try await env.api.search(query: QuestionLimit.cap(trimmed), k: 12)
         } catch {
             transcriptHits = []
             searchError = (error as? APIError)?.errorDescription ?? "Search failed"
