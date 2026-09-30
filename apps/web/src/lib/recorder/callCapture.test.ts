@@ -56,6 +56,17 @@ describe('capturing a call in another tab', () => {
     expect([tabAudio.stopped, tabVideo.stopped, micTrack.stopped, FakeCtx.last.closed]).toEqual([true, true, true, true]);
   });
 
+  // RELEASE.md rev 11, UX6 (H14): a Meet is a tab, so Chrome's share picker opens on its tab list.
+  it("asks Chrome's picker to open on tabs, with their audio, and never offers this tab", async () => {
+    // The parameter is declared so the mock's calls are typed; it's read by the assertion below, not here.
+    const getDisplayMedia = vi.fn(async (o: DisplayMediaStreamOptions) => {
+      void o;
+      return stream(new FakeTrack('video'), new FakeTrack('audio'));
+    });
+    await captureCall({ getDisplayMedia, getUserMedia: async () => stream(new FakeTrack('audio')), AudioContext: FakeCtx as unknown as typeof AudioContext });
+    expect(getDisplayMedia.mock.calls[0][0]).toMatchObject({ video: expect.objectContaining({ displaySurface: 'browser' }), selfBrowserSurface: 'exclude', systemAudio: 'include' });
+  });
+
   it("the browser's Stop sharing tells the recording to end", async () => {
     const tabAudio = new FakeTrack('audio');
     const c = await captureCall({ getDisplayMedia: async () => stream(new FakeTrack('video'), tabAudio), getUserMedia: async () => stream(new FakeTrack('audio')), AudioContext: FakeCtx as unknown as typeof AudioContext });
@@ -152,7 +163,7 @@ describe('a call capture you can trust', () => {
   it("asks for the tab's video small and at one frame a second: it's never recorded", async () => {
     const { display } = await start();
     const asked = (display.mock.calls[0] as unknown as [DisplayMediaStreamOptions])[0];
-    expect(asked.video).toEqual({ frameRate: { max: 1 }, width: { max: 320 }, height: { max: 180 } });
+    expect(asked.video).toEqual({ displaySurface: 'browser', frameRate: { max: 1 }, width: { max: 320 }, height: { max: 180 } });
     expect(asked.audio).toBeTruthy();
   });
 });
