@@ -65,6 +65,8 @@ import {
   CancelMeetingBotResponse,
   RedeemInviteRequest,
   RedeemInviteResponse,
+  ExtensionLinkRequest,
+  ExtensionLinkResponse,
 } from '@algominutes/contracts';
 import { CLIENT_HEADER_VALUE, type ApiOrigins } from './config';
 import { ApiError, errorFor } from './errors';
@@ -190,6 +192,8 @@ export function createApiClient(opts: ApiClientOptions) {
     entitlement: () => get('/v1/entitlement', EntitlementResponse),
     // A beta invite code: time-limited Pro minutes (docs/plans/RELEASE.md PR 2).
     redeemInvite: (body: RedeemInviteRequest) => post('/v1/beta/redeem', body, RedeemInviteResponse),
+    // A one-time code that signs the browser extension in as this user (RELEASE.md PR 34).
+    extensionLink: (body: ExtensionLinkRequest) => post('/v1/auth/extension-link', body, ExtensionLinkResponse),
     appConfig: () => get('/v1/config', AppConfigResponse),
     acceptTerms: (body: AcceptTermsRequest) => post('/v1/account/accept-terms', body, OkResponse),
     retention: () => get('/v1/account/retention', RetentionResponse),

@@ -22,7 +22,7 @@ export function buildRegistry(): OpenAPIRegistry {
     type: 'http',
     scheme: 'bearer',
     bearerFormat: 'Firebase ID token',
-    description: 'Firebase Auth ID token. Absent only on the public routes: POST /v1/shares/read and POST /v1/client-error.',
+    description: 'Firebase Auth ID token. Absent only on the public routes: POST /v1/shares/read, POST /v1/client-error and POST /v1/auth/extension-token.',
   });
 
   // ── shared header parameter (every client must send it) ─────────────────
@@ -502,6 +502,34 @@ export function buildRegistry(): OpenAPIRegistry {
       410: { description: 'The code has expired.', ...json(S.RedeemInviteError) },
       426: errorResponse('Client too old — please update.'),
       429: errorResponse('Too many attempts; try again later.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/auth/extension-link`, tags: ['auth'], security: authed, parameters: commonHeaders,
+    summary: 'The signed-in web app asks for a one-time code that signs the browser extension in as the same user. The code lives 60 seconds and is bound to the extension and the hash of a verifier only the extension holds.',
+    request: { body: json(S.ExtensionLinkRequest) },
+    responses: {
+      200: { description: 'A code, for the web app to pass to the extension.', ...json(S.ExtensionLinkResponse) },
+      400: { description: 'Not a valid request, or an extension this service does not allow (`extension_unknown`).', ...json(S.ExtensionAuthError) },
+      401: errorResponse('Missing or invalid token, or the account was deleted.'),
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many codes; try again later.'),
+      503: { description: 'No extension is allowed yet (`feature_disabled`).', ...json(S.ExtensionAuthError) },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/auth/extension-token`, tags: ['auth'], security: [], parameters: commonHeaders,
+    summary: 'PUBLIC: the extension trades a one-time code and its verifier for a Firebase custom token. The code is spent by the first attempt, right or wrong.',
+    request: { body: json(S.ExtensionTokenRequest) },
+    responses: {
+      200: { description: 'A custom token for signInWithCustomToken.', ...json(S.ExtensionTokenResponse) },
+      400: { description: 'An unknown, spent, expired or mismatched code (`extension_link_invalid`), or a malformed request.', ...json(S.ExtensionAuthError) },
+      401: errorResponse('The account was deleted after the code was made.'),
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many requests; try again later.'),
+      503: { description: 'No extension is allowed yet (`feature_disabled`).', ...json(S.ExtensionAuthError) },
     },
   });
 

@@ -53,6 +53,7 @@ const settle = <T,>(p: Promise<T>) => p.then((v) => ({ ok: true as const, v }), 
 const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unknown>; method: string; url: string; body?: unknown; auth?: boolean }> = [
   { name: 'entitlement', run: (c) => c.entitlement(), method: 'GET', url: `${ORIGINS.api}/v1/entitlement` },
   { name: 'appConfig', run: (c) => c.appConfig(), method: 'GET', url: `${ORIGINS.api}/v1/config` },
+  { name: 'extensionLink', run: (c) => c.extensionLink({ extensionId: 'abcdefghijklmnopabcdefghijklmnop', verifierHash: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' }), method: 'POST', url: `${ORIGINS.api}/v1/auth/extension-link`, body: { extensionId: 'abcdefghijklmnopabcdefghijklmnop', verifierHash: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM' } },
   { name: 'redeemInvite', run: (c) => c.redeemInvite({ code: 'BETA-7K2QX-M9D4R-TW8HN' }), method: 'POST', url: `${ORIGINS.api}/v1/beta/redeem`, body: { code: 'BETA-7K2QX-M9D4R-TW8HN' } }, // gitleaks:allow
   { name: 'acceptTerms', run: (c) => c.acceptTerms({ termsVersion: 't', privacyVersion: 'p' }), method: 'POST', url: `${ORIGINS.api}/v1/account/accept-terms`, body: { termsVersion: 't', privacyVersion: 'p' } },
   { name: 'retention', run: (c) => c.retention(), method: 'GET', url: `${ORIGINS.api}/v1/account/retention` },
@@ -103,10 +104,11 @@ describe('every call sends the right request', () => {
     expect(s.headers['Content-Type']).toBe(body === undefined ? undefined : 'application/json');
   });
 
-  it('covers every operation in the published api contract (bar health and admin)', () => {
+  it('covers every operation in the published api contract (bar health, admin and the extension\'s own)', () => {
     const operations = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
       .flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ':p')}`))
-      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
+      // The extension, not the web app, trades its sign-in code (RELEASE.md PR 34).
+      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete' && op !== 'POST /v1/auth/extension-token')
       .sort();
     const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
       .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)

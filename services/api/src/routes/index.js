@@ -32,6 +32,7 @@ import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } f
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
 import { redeemInviteRoute } from './beta.js';
+import { extensionLinkRoute, extensionTokenRoute } from './extension-auth.js';
 import { appConfigRoute } from './app-config.js';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
@@ -228,6 +229,17 @@ export function buildRouter() {
     userRateLimit({ limit: 10, windowMs: 60 * 60_000, event: 'rate_limited_redeem' }),
     wrap(redeemInviteRoute),
   );
+  // The browser extension's sign-in (docs/plans/RELEASE.md PR 34), extension-auth.js.
+  // The signed-in web app asks for a one-time code (10 in 10 minutes per user)...
+  router.post(
+    '/auth/extension-link',
+    authed,
+    userRateLimit({ limit: 10, windowMs: 10 * 60_000, event: 'rate_limited_extension_link' }),
+    wrap(extensionLinkRoute),
+  );
+  // ...and the extension trades it and its verifier for a custom token. Public: the
+  // code and the verifier are the credential, and the client IP limit (app.js) covers it.
+  router.post('/auth/extension-token', wrap(extensionTokenRoute));
   // Server-side feature switches (broadcast capture's kill switch).
   router.get('/config', authed, wrap(appConfigRoute));
   // ── online meetings (docs/plans/MEETINGS.md) ── meetings.js ─────────────

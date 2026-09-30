@@ -3,6 +3,34 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The browser extension signs in with a one-time code from the web app (2026-09-30)
+
+- **Context.** The Chrome and Edge extension (ADR 0002, RELEASE.md Wave 3) needs to act as the signed-in user.
+  It must not ask for a password or run its own OAuth: a second sign-in flow would be a second Apple and Google
+  setup, and a password field in an extension is a phishing target.
+- **Decision** (RELEASE.md PR 34, ADR 0002 §3).
+  - `POST /v1/auth/extension-link` (signed in, from the web app): a code of 256 random bits, one use and 60
+    seconds, bound to the user, the extension's id and `base64url(SHA-256(verifier))`. The verifier is made by the
+    extension and never leaves it (PKCE's S256). Only the code's SHA-256 is stored (`extension_links`, 035), and
+    the rows go with the account.
+  - `POST /v1/auth/extension-token` (public, from the extension): the code, the verifier and the extension's id,
+    for a Firebase custom token (`createCustomToken`, signed by run-api's own identity through signBlob, which it
+    already may do for audio URLs, so no IAM change).
+  - **The first attempt spends the code, right or wrong.** A code seen by anyone else is dead as soon as they try
+    it, and two attempts at once can't both succeed (one `UPDATE … RETURNING`).
+  - **A browser page can't trade a code**, even one it saw: an `Origin` header other than the extension's own is
+    refused. A caller that sends none (not a browser) still needs the code and the verifier.
+  - **Which extensions may sign in:** the `chrome-extension://` origins in `ALLOWED_ORIGINS`, the allowlist CORS
+    already uses. An extension may sign in exactly when it may call the api, and one list is kept, not two. With
+    none (today), both routes answer 503 `feature_disabled`. Apply C adds the store ids.
+  - No code, verifier or token is logged; a test checks every line both routes log.
+- **Rejected.**
+  - **`chrome.identity.launchWebAuthFlow`** with Google or Apple: a second OAuth client per provider and store,
+    and guests couldn't connect.
+  - **Passing the web app's ID token to the extension:** it lasts an hour and can't be refreshed by the
+    extension; a refresh token passed around would outlive the web session.
+  - **A separate `EXTENSION_IDS` env:** a second list that must agree with `ALLOWED_ORIGINS`.
+
 ## The external beta runs on staging, with minutes from invite codes and the trial off (2026-09-29)
 
 - **Context.**

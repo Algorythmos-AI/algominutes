@@ -21,3 +21,4 @@ export * from './actions';
 export * from './appConfig';
 export * from './meetings';
 export * from './beta';
+export * from './extensionAuth';

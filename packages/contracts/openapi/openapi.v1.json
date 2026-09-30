@@ -21,7 +21,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "Firebase ID token",
-        "description": "Firebase Auth ID token. Absent only on the public routes: POST /v1/shares/read and POST /v1/client-error."
+        "description": "Firebase Auth ID token. Absent only on the public routes: POST /v1/shares/read, POST /v1/client-error and POST /v1/auth/extension-token."
       }
     },
     "schemas": {
@@ -1973,6 +1973,94 @@
         },
         "required": [
           "code"
+        ]
+      },
+      "ExtensionLinkResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          }
+        },
+        "required": [
+          "code",
+          "expiresAt"
+        ]
+      },
+      "ExtensionAuthError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "extension_link_invalid",
+              "extension_unknown",
+              "feature_disabled"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ExtensionLinkRequest": {
+        "type": "object",
+        "properties": {
+          "extensionId": {
+            "type": "string",
+            "pattern": "^[a-p]{32}$",
+            "example": "abcdefghijklmnopabcdefghijklmnop"
+          },
+          "verifierHash": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "example": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+          }
+        },
+        "required": [
+          "extensionId",
+          "verifierHash"
+        ]
+      },
+      "ExtensionTokenResponse": {
+        "type": "object",
+        "properties": {
+          "customToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "customToken"
+        ]
+      },
+      "ExtensionTokenRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "verifier": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+          },
+          "extensionId": {
+            "type": "string",
+            "pattern": "^[a-p]{32}$",
+            "example": "abcdefghijklmnopabcdefghijklmnop"
+          }
+        },
+        "required": [
+          "code",
+          "verifier",
+          "extensionId"
         ]
       },
       "AppConfigResponse": {
@@ -4331,6 +4419,180 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/extension-link": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "The signed-in web app asks for a one-time code that signs the browser extension in as the same user. The code lives 60 seconds and is bound to the extension and the hash of a verifier only the extension holds.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionLinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A code, for the web app to pass to the extension.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionLinkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid request, or an extension this service does not allow (`extension_unknown`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAuthError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token, or the account was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many codes; try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No extension is allowed yet (`feature_disabled`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAuthError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/extension-token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "PUBLIC: the extension trades a one-time code and its verifier for a Firebase custom token. The code is spent by the first attempt, right or wrong.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A custom token for signInWithCustomToken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown, spent, expired or mismatched code (`extension_link_invalid`), or a malformed request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAuthError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The account was deleted after the code was made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests; try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No extension is allowed yet (`feature_disabled`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAuthError"
                 }
               }
             }
