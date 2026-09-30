@@ -1070,6 +1070,103 @@
           "revoked"
         ]
       },
+      "ShareListRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
+      },
+      "ShareListItem": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExportScope"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          },
+          "expiresAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "revokedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "lastReadAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "readCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shareId",
+          "scope",
+          "createdAt",
+          "expiresAt",
+          "revokedAt",
+          "lastReadAt",
+          "readCount",
+          "live"
+        ]
+      },
+      "ShareListResponse": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShareListItem"
+            }
+          }
+        },
+        "required": [
+          "shares"
+        ]
+      },
       "SharedNoteRequest": {
         "type": "object",
         "properties": {
@@ -3374,6 +3471,85 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShareRevokeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shares/list": {
+      "post": {
+        "summary": "The caller's links for a note, to see and revoke (never the token).",
+        "tags": [
+          "share"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareListRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The links, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareListResponse"
                 }
               }
             }

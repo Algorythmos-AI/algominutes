@@ -81,6 +81,9 @@ export function buildRegistry(): OpenAPIRegistry {
     ['ShareCreateResponse', S.ShareCreateResponse],
     ['ShareRevokeRequest', S.ShareRevokeRequest],
     ['ShareRevokeResponse', S.ShareRevokeResponse],
+    ['ShareListRequest', S.ShareListRequest],
+    ['ShareListItem', S.ShareListItem],
+    ['ShareListResponse', S.ShareListResponse],
     ['SharedNoteRequest', S.SharedNoteRequest],
     ['SharedSummary', S.SharedSummary],
     ['SharedNoteResponse', S.SharedNoteResponse],
@@ -329,6 +332,22 @@ export function buildRegistry(): OpenAPIRegistry {
     request: { body: json(S.ShareRevokeRequest) },
     responses: {
       200: { description: 'Revoke result.', ...json(S.ShareRevokeResponse) },
+      400: errorResponse('Missing or invalid fields.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      503: errorResponse('Postgres not provisioned.'),
+    },
+  });
+  registry.registerPath({
+    method: 'post',
+    path: `${API_BASE_PATH}/shares/list`,
+    summary: "The caller's links for a note, to see and revoke (never the token).",
+    tags: ['share'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.ShareListRequest) },
+    responses: {
+      200: { description: 'The links, newest first.', ...json(S.ShareListResponse) },
       400: errorResponse('Missing or invalid fields.'),
       401: errorResponse('Missing or invalid token.'),
       403: errorResponse('Workspace mismatch.'),
