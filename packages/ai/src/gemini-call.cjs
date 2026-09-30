@@ -143,12 +143,19 @@ async function callGeminiWithLadder({
         if (!rawText || !rawText.trim() || rawText.trim() === '{}') {
           throw new Error('Empty Gemini response');
         }
+        // What the answer used: a truncation's cause (thinking that ate the budget, or a long answer) is in these.
+        const usage = (data && data.usageMetadata) || {};
+        const tokens = {
+          promptTokens: usage.promptTokenCount ?? null,
+          outputTokens: usage.candidatesTokenCount ?? null,
+          thoughtsTokens: usage.thoughtsTokenCount ?? null,
+        };
         // MAX_TOKENS means structured output was cut off (thinking tokens count
         // toward maxOutputTokens). Callers salvage what they can; make it visible.
         if (finishReason === 'MAX_TOKENS') {
-          log.warn({ model: modelName, finishReason }, 'gemini_output_truncated');
+          log.warn({ model: modelName, finishReason, ...tokens }, 'gemini_output_truncated');
         }
-        log.info({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs, finishReason }, 'gemini_ok');
+        log.info({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs, finishReason, ...tokens }, 'gemini_ok');
         return { rawText, model: modelName, finishReason, error: null };
       } catch (err) {
         if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {

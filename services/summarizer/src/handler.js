@@ -20,6 +20,16 @@ const summaryOutput = loadShared('summary-output.cjs');
 // Past this, a recording has sections worth navigating: the summary gets
 // chapters. (The transcoder's fast path, which writes its own summary, covers
 // everything shorter.)
+// Summary generation limits (RELEASE.md rev 11, LM4): both ladder rungs accept these (spike S1).
+const MAX_OUTPUT_TOKENS = 16384;
+const MAX_OUTPUT_TOKENS_WITH_CHAPTERS = 65536;
+const THINKING_BUDGET = 2048;
+// The ladder's time: the base budget, plus 2 ms a transcript character (a 4-hour meeting is about 220k), up to
+// 600 s, inside the service's 900 s timeout.
+const SUMMARY_DEADLINE_MAX_MS = 600_000;
+function summaryDeadlineMs(transcriptChars, baseMs) {
+  return Math.min(SUMMARY_DEADLINE_MAX_MS, baseMs + transcriptChars * 2);
+}
 const CHAPTERS_MIN_MS = 10 * 60 * 1000;
 // The final write goes through the repo layer (CLAUDE.md §1): this service
 // runs under tsx, so it imports @algominutes/db's TypeScript directly.
@@ -196,14 +206,21 @@ async function handle(payload, deps) {
   // transcript back. The new prompt drops the echo; responseSchema
   // pins the shape so a degraded model can't sneak through; the
   // bumped budget gives genuinely long bullet/decision lists room.
+  //
+  // RELEASE.md rev 11, LM4. gemini-3.5-flash's thinking tokens count toward maxOutputTokens, and were uncapped:
+  // on a long meeting they ate the room the chapters (written last) needed. Thinking is capped, a meeting with
+  // chapters gets the model's whole output cap, and the ladder gets time in proportion to the transcript (the
+  // service's own timeout is 900 s). thinkingBudget, not thinkingLevel: gemini-2.5-flash, the fallback until
+  // 2026-10-20, refuses thinkingLevel with a 400 (spike S1, DECISIONS 2026-09-30).
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts,
-    deadlineMs: sharedIntelligence.RETRY_DEADLINE_MS,
+    deadlineMs: summaryDeadlineMs(transcriptStr.length, sharedIntelligence.RETRY_DEADLINE_MS),
     log,
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: wantChapters ? sharedTemplates.withChapters(chosen.responseSchema) : chosen.responseSchema,
-      maxOutputTokens: 16384,
+      maxOutputTokens: wantChapters ? MAX_OUTPUT_TOKENS_WITH_CHAPTERS : MAX_OUTPUT_TOKENS,
+      thinkingConfig: { thinkingBudget: THINKING_BUDGET },
     },
   });
   if (!rawText) throw error || new Error('gemini_empty');

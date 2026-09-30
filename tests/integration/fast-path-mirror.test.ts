@@ -41,7 +41,7 @@ beforeEach(async () => {
   await seedWorkspace('ws', 'u');
   await seedNote('n1', 'ws', 'u');
   await pool.query(`UPDATE notes SET status = 'chunking' WHERE id = 'n1'`);
-  geminiCall.callGeminiWithLadder = async () => ({
+  geminiCall.callGeminiWithLadder = async (req: any) => (lastRequest = req, {
     model: 'gemini-3.5-flash',
     rawText: JSON.stringify({ transcript: [{ speaker: 'A', text: 'hello', time: '00:05' }], gist: 'g', actionItems: ['a'], keyDecisions: [] }),
   });
@@ -51,6 +51,18 @@ afterAll(async () => {
   await transcoderDb.pool().end();
   await pool.end();
   await getPool().end();
+});
+
+let lastRequest: any;
+
+// RELEASE.md rev 11, LM4: the fast path asks one call for a 10-minute transcript and its summary, inside 16,384
+// tokens shared with the model's thinking. Its thinking is capped as the summarizer's is (both rungs take it).
+describe('fast path: the Gemini request', () => {
+  it('caps thinking with thinkingBudget, which both ladder rungs accept', async () => {
+    await (await run(async () => {})).done;
+    expect(lastRequest.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 2048 });
+    expect(lastRequest.generationConfig.maxOutputTokens).toBe(16384);
+  });
 });
 
 describe("fast path: an earlier run's chapters", () => {
