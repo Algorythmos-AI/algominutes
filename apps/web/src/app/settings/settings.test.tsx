@@ -137,6 +137,8 @@ describe('settings', () => {
     handlers['GET /v1/account/retention'] = () => new Promise<Response>((r) => { answer = r; });
     open();
     fireEvent.click(await screen.findByLabelText('Delete after 90 days'));
+    // The radios render before the GET is sent; answer it only once it has been.
+    await waitFor(() => expect(answer).toBeTypeOf('function'));
     answer(json({ retentionDays: 30 }));
     await waitFor(() => expect(localStorage.getItem('retention_days.u1')).toBe('30'));
     expect((screen.getByLabelText('Delete after 90 days') as HTMLInputElement).checked).toBe(true);
