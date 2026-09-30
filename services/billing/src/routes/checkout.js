@@ -15,6 +15,7 @@ import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 import { getStripe } from '../lib/stripe.js';
 import { productById } from '../lib/plans.js';
+import { webAppOrigin } from '../lib/return-origin.js';
 
 const { publicSiteUrl } = siteUrlModule;
 
@@ -50,10 +51,12 @@ export async function checkoutRoute(req, res) {
   // returning user does not get a duplicate customer record.
   const customerId = existing?.stripe_customer_id || null;
 
-  // URLs are config, not secrets: the public site's billing pages unless an
-  // override is set.
-  const successUrl = process.env.BILLING_SUCCESS_URL || `${publicSiteUrl()}/billing/success`;
-  const cancelUrl = process.env.BILLING_CANCEL_URL || `${publicSiteUrl()}/billing/cancel`;
+  // Back to the web app the buyer came from, when its origin is one we serve
+  // (lib/return-origin.js): its success page waits for the webhook and shows the
+  // plan. Otherwise the public site's pages, or an override.
+  const app = webAppOrigin(req.headers?.origin);
+  const successUrl = app ? `${app}/app/billing/success` : process.env.BILLING_SUCCESS_URL || `${publicSiteUrl()}/billing/success`;
+  const cancelUrl = app ? `${app}/app/billing/cancel` : process.env.BILLING_CANCEL_URL || `${publicSiteUrl()}/billing/cancel`;
 
   // TODO(A11): verify against live Stripe (real secret key + price ids).
   const session = await stripe.checkout.sessions.create({

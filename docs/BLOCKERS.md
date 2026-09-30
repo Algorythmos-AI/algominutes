@@ -291,6 +291,13 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     untestable here (`TODO(A11)`).
   - **App Review 3.1.3:** iOS paywall shows StoreKit pricing only (no web-pricing reference) — safe
     globally; if you later want to surface the cheaper web rail on iOS it's US-storefront-only (see DECISIONS).
+  - [ ] **Deleting an account doesn't cancel its Stripe subscription (found in RELEASE.md PR 28).** Account
+    deletion removes the `subscriptions` row, but nothing asks Stripe to cancel, so a web subscriber who deletes
+    their account keeps being charged. Harmless while Stripe is in test mode (the beta); **a ship-blocker for live
+    Stripe.** Fix (PR 28b): the deletion records the Stripe subscription, and billing cancels it with retries. The
+    Stripe e2e step (test card 4242) goes with it, since its account deletion is the cleanup. App Store
+    subscriptions can't be cancelled by us: the deletion page and the app must say to cancel in the App Store
+    (Guideline 5.1.1(v)).
   - **StoreKitTest can't run under command-line xcodebuild here (RELEASE.md PR 27).** An `SKTestSession`
     loads `apps/ios/StoreKit/AlgoMinutes.storekit`, but storekitd refuses its configuration
     (`SKInternalErrorDomain 3`, "Error saving configuration file"), signed or unsigned, after a simulator reboot, on
