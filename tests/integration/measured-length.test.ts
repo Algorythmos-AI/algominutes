@@ -94,11 +94,26 @@ describe('settleMeasuredLength', () => {
     expect(await settle(10 * 60)).toMatchObject({ kind: 'settled', deltaMinutes: 10 });
   });
 
-  it("refuses a recording longer than the plan's longest, writing nothing", async () => {
+  it("refuses a recording more than a minute longer than the plan's longest, writing nothing", async () => {
     await charge(0);
-    expect(await settle(4 * 3600 + 1)).toEqual({ kind: 'too_long', maxSec: 4 * 3600 });
+    expect(await settle(4 * 3600 + 61)).toEqual({ kind: 'too_long', maxSec: 4 * 3600 });
     expect(await ledger()).toEqual(['debit 0 ingest']);
-    expect((await settle(4 * 3600)).kind).toBe('settled');
+  });
+
+  // RELEASE.md rev 11, LM1 (H5a). An app stops at the plan's limit, but the audio it uploads measures a
+  // fraction over (container framing, encoder padding, timer rounding): 14,400.3 s for a 4-hour recording.
+  // The check had zero slack, so every recording that hit the limit was refused after the meeting.
+  it("accepts a recording that hit the limit, measured up to a minute over, and charges the limit", async () => {
+    await charge(240);
+    expect(await settle(4 * 3600 + 0.3)).toEqual({ kind: 'settled', chargedMinutes: 240, deltaMinutes: 0 });
+    expect(await settle(4 * 3600 + 59)).toEqual({ kind: 'settled', chargedMinutes: 240, deltaMinutes: 0 });
+    expect(await ledger()).toEqual(['debit 240 ingest']);
+  });
+
+  it('an import that claimed no length and measures just over the limit is charged the limit', async () => {
+    await charge(0);
+    expect(await settle(4 * 3600 + 30)).toMatchObject({ kind: 'settled', chargedMinutes: 240 });
+    expect(await net()).toBe(240);
   });
 
   it("settles a notetaker's meeting but never refuses it: its minutes were reserved when the bot was sent", async () => {
@@ -212,7 +227,7 @@ describe('the transcoder settles before any paid work', () => {
     await charge(0);
     const said: string[] = [];
     const heard: any = { info: noop, warn: (_o: unknown, m: string) => void said.push(m), error: (_o: unknown, m: string) => void said.push(m), child: () => heard };
-    await handler.handle(kickoff, { ...deps(4 * 3600 + 60), log: heard });
+    await handler.handle(kickoff, { ...deps(4 * 3600 + 61), log: heard });
     // The user's recording, refused: not a pipeline failure for the note_failed alert (RELEASE.md PR 15b).
     expect(said).toContain('note_refused');
     expect(said).not.toContain('note_failed');

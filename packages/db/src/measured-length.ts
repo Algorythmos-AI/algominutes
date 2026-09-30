@@ -22,6 +22,7 @@ import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { isPostgresEnabled, withTx } from './db.js';
 import { resolveEntitlement, type Entitlement } from './entitlements.js';
 import { usedMinutes } from './usage-repo.js';
+import { withinLength, chargedMinutes } from './recording-length.js';
 
 export type SettleResult =
   | { kind: 'settled'; chargedMinutes: number; deltaMinutes: number }
@@ -76,7 +77,7 @@ export async function settleMeasuredLength(input: {
     if (!anchor) return { kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 };
     const net = Number(led.net);
 
-    const delta = measured - net;
+    let delta = measured - net;
     // Already settled (a replay), or the claim was right: this length was
     // accepted when it was charged, so a plan change since doesn't refuse it.
     if (delta === 0) return { kind: 'settled', chargedMinutes: net, deltaMinutes: 0 };
@@ -88,7 +89,13 @@ export async function settleMeasuredLength(input: {
     const refusable = !NOT_REFUSED.has(note.source_type);
     const ent = await resolveEntitlement(anchor.uid, { db: client });
     const maxSec = maxRecordingSecondsForPlan(ent.plan);
-    if (refusable && measuredSec > maxSec) return { kind: 'too_long', maxSec };
+    if (refusable && !withinLength(measuredSec, maxSec)) return { kind: 'too_long', maxSec };
+    // A recording that hit the limit measures a fraction over it: it's charged the limit (rev 11 LM1). A
+    // notetaker's meeting isn't capped: its minutes were reserved for the whole meeting.
+    if (refusable) {
+      delta = chargedMinutes(measuredSec, maxSec) - net;
+      if (delta === 0) return { kind: 'settled', chargedMinutes: net, deltaMinutes: 0 };
+    }
     if (delta > 0 && refusable && ent.includedMinutes != null) {
       // The adjustment lands in the run's own billing month (as its refund
       // would), so that month's usage is what it must fit.
@@ -121,6 +128,6 @@ export async function settleMeasuredLength(input: {
         `${input.noteId}:measured:${anchor.id}:${n}`,
       ],
     );
-    return { kind: 'settled', chargedMinutes: measured, deltaMinutes: delta };
+    return { kind: 'settled', chargedMinutes: net + delta, deltaMinutes: delta };
   }, { log: input.log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } });
 }
