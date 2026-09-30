@@ -49,9 +49,29 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
   - [x] The pipeline e2e: the owner set `E2E_INVITE_CODE` (2026-09-30). After #295 fixed what it expected of a
     short recording, both sizes passed on staging: 2 minutes (run 36742148442, the fast path) and 15 minutes (run
     36742160404, the long path, the first time it ran on this staging).
-  - [ ] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`. Its `e2e` job has yet to run green on a
-    deploy (run 36746303857, on bddc7cd, was still pending at 02:50 AEST).
+  - [ ] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`, and its `e2e` job ran for the first time
+    (run 36746303857, bddc7cd). It failed every step that processes a note (the import, search, the browser
+    recording, the cut-off recording's upload), and passed the rest. Staging's guests start with no minutes
+    (`TRIAL_ON_FIRST_USE=off`), so the web app refused before uploading. Fix: `fix/web-e2e-invite` (the guest
+    redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
   - Done at the first green run of each, and the nightly schedule's first green night.
+- [ ] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
+  was CLEAN, with auto-merge on, but never entered the queue. `gh pr merge` only turns auto-merge on, and its
+  trigger was missed. Enqueuing it directly (the GraphQL `enqueuePullRequest`) worked. The overnight train runs
+  a watcher that does this for any PR still waiting after two looks, 2 minutes apart.
+- **H6, held for minutes, as built (2026-10-01; four PRs in the train):**
+  - H6a `feat/held-for-minutes`: the transcoder's settle holds a note over the minutes left
+    (`awaiting_minutes`, uncharged, its measured length kept); the web and iOS say so; mirror repair covers it.
+  - H6b `feat/resume-held-notes`: the db-sweep step `resume_held_notes` queues a held note through the kickoff
+    once its author has minutes, oldest first per user, and only while it's still held (checked under the
+    note's lock).
+  - H6c `feat/kickoff-holds`: an uploaded recording over the minutes left is held at the kickoff (202, shaped as
+    the in-flight answer so every client reads it as accepted; `held: true` for the ones that know). iOS still
+    offers Pro or the invite code, as it did for the 402. A YouTube link keeps the 402. Redeeming an invite
+    resumes the user's held notes at once. A note held at the kickoff has no measured length: its resume is
+    charged 0, and the transcoder's settle charges the measured length or holds it again.
+  - H6d `feat/web-minutes-left`: the web record page says the minutes left, and that a recording past them is
+    kept. iOS's equivalent is still open.
 - [ ] **P0s found by the rev 11 audits** (RELEASE.md R11.4). Each closes with a failing-then-passing test and
   staging evidence here:
   - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3.
