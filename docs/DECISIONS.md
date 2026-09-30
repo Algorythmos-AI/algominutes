@@ -3,6 +3,48 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Speech-to-text can run in Sydney, but can't tell speakers apart there (spike S1, 2026-09-30)
+
+- **Context.**
+  - The transcoder's long path (over 10 minutes) calls speech-to-text v2 at `locations/global`, with the system
+    recognizer and the `long` model (`stt.js`, `STT_RECOGNIZER` unset). That's outside Sydney, against residency
+    (A4), and it has no speaker separation, so every line of a long note says "Speaker" (RELEASE.md rev 11, N2 and
+    LM5).
+  - Spike S1 probed the Sydney endpoint (`australia-southeast1-speech.googleapis.com`) on staging with the 9 s e2e
+    fixture, as the owner's account. Results:
+
+    | Model | Sydney | Speaker separation |
+    |---|---|---|
+    | `long`, `latest_long`, `short`, `latest_short`, `telephony` | serves | refused ("unsupported fields") |
+    | `chirp`, `chirp_2`, `chirp_3`, `telephony_short` | "does not exist in the location" | — |
+    | v1 `speech:recognize` (any model) | 501, not served | — |
+
+  - Gemini in Sydney: a fresh probe confirms the 2026-09-28 finding. Only gemini-3.5-flash and gemini-2.5-flash
+    answer. 3.5-flash accepts **both** `thinkingConfig.thinkingLevel` (`MINIMAL` gave 0 thought tokens, `LOW` 183,
+    `HIGH` 351 on the same prompt) and `thinkingBudget` (`0` gave 0, `512` gave 180). It accepts
+    `maxOutputTokens` up to **65,536**; 65,537 is refused.
+- **Decision (proposed; the owner decides with RELEASE.md rev 11 decisions 4–5).**
+  - **H10:** the long path moves to the Sydney recognizer with the same `long` model, so transcripts stay in
+    Australia. Same model, so quality doesn't change. This closes N2 without any privacy change.
+  - **H24 (speaker labels on long notes):** Google can't separate speakers in Sydney. The in-region route is Gemini
+    audio per chunk, which the fast path already does for notes of 10 minutes or less (its lines carry
+    `speaker`). The open problem is keeping a speaker's label consistent across 10-minute chunks (the 30 s overlap
+    is the bridge). The alternative, AssemblyAI (D7), processes in the US and changes the privacy page.
+  - **H8:** summaries cap thinking with `thinkingBudget: 2048`, and set `maxOutputTokens` to 65,536 when chapters
+    are asked for. The cap stops thought tokens eating the output budget that chapters (written last) need.
+    **Not `thinkingLevel`:** gemini-2.5-flash, the fallback until 2026-10-20, answers it with a 400 ("thinking_level
+    is not supported by this model"), which the ladder treats as non-retryable, so it would have disabled the
+    fallback. Both rungs accept `thinkingBudget` 2048 with a 65,536 cap (probed 2026-10-01).
+- **Rejected.** Keeping `global` for speech-to-text: it's the only place Google offers Chirp and speaker
+  separation, but it moves the audio out of Australia for one feature.
+- **Correction (2026-10-01).** The Sydney move doesn't ship yet. A batchRecognize probe run as the owner's user
+  account failed on the speech service agent's read of the chunk, and that was wrongly taken to mean the long path
+  was broken for everyone. The transcoder's own service account reads its chunks fine: the 15-minute e2e (run
+  36742160404) passed in `global`. #297's Terraform (Sydney plus a speech-agent grant) was never applied and is
+  reverted. H10 moves to Sydney only after a batchRecognize there passes **as the transcoder's service account**,
+  and only with `LANGUAGE_CODES=en-AU`, the one language Sydney's `long` model takes. Probes that stand in for a
+  service must run as that service's identity.
+
 ## The merge queue doesn't re-run an iOS check on inputs it already passed (2026-09-30)
 
 - **Context.** Each iOS PR ran the Swift CodeQL scan (about 40 minutes) and the iOS tests (about 15) on the PR,

@@ -410,6 +410,39 @@ Plus:
 - **Review and release:** review notes (consent, guest start, broadcast, AI); a phased release; the 426 floor tested;
   the candidate build at ≥ 99.5% crash-free for 7 days.
 
+### R11.6a H6 in detail: held for minutes (design for the owner's review, 2026-10-01)
+
+The decision stands: a recording over the minutes left is held, never refused. Working through the code, it's a
+change to three flows that rely on today's 402, so it lands as four PRs, not one.
+
+**What happens today:**
+- **The kickoff** refuses with a 402 before anything is written (`kickoff.ts` quota check). The web keeps the
+  recording in the browser and offers the invite code, then an upload later (`RecordPage` "still saved in this
+  browser"). iOS turns it into the paywall or the invite prompt, and the audio stays in Cloud Storage.
+- **The transcoder's settle** (`measured-length.ts` `over_quota`) is where a recording is truly lost: it
+  already uploaded, is refused with a refund, and the note fails.
+
+**The PRs:**
+1. **H6a** `feat(contracts,db)`: a note status `awaiting_minutes`.
+   - Postgres keeps the kickoff's inputs, with no debit.
+   - The mirror shows it. Old clients read an unknown status as in progress: iOS `Note.swift:231` falls back
+     to `.processing`, and the web's `statusOf` too.
+   - The settle's `over_quota` holds instead of failing. The audio stays, and nothing is charged.
+2. **H6b** `feat(db-job,api)`: a held note resumes, oldest first and while the minutes cover it, when minutes
+   arrive: an invite redeemed (`/v1/beta/redeem`), a grant, a purchase (billing), or the month turning over
+   (a sweep step). It's queued exactly as a kickoff would be: `queueNoteRun`, charged then.
+3. **H6c** `feat(api,web,ios)`: the kickoff's 402 becomes a hold for an **uploaded** recording, answered 202
+   `{ status: 'awaiting_minutes' }`, so no client marks it failed. The web's pre-upload check keeps the
+   recording local, as today, and offers the code first.
+4. **H6d** `feat(web,ios)`: "Waiting for minutes" on the note, with the invite code or Go Pro; minutes left on
+   the record screen; a warning when a recording passes them.
+
+**Rules:**
+- A held note is never charged.
+- Retention applies from when it's held.
+- A deleted held note purges its audio as any other.
+- Notetaker notes keep "never refused".
+
 ### R11.7 Risks
 
 | Risk | Mitigation |
