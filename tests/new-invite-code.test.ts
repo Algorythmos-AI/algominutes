@@ -19,10 +19,12 @@ describe('scripts/new-invite-code.sh', () => {
       const command = out.slice(out.indexOf('gcloud'));
       expect(command).not.toContain(code);
     }
-  });
+    // 70 runs of the script between these two tests, each its own bash, od and shasum (a Perl script on
+    // macOS): under a full parallel run on a busy machine that can pass vitest's 5 s default.
+  }, 20_000);
 
   it('makes a different code every time', () => {
     const codes = new Set(Array.from({ length: 50 }, () => run().match(/BETA-[0-9A-Z-]{17}/)![0]));
     expect(codes.size).toBe(50);
-  });
+  }, 20_000);
 });
