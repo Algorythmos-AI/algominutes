@@ -14,7 +14,11 @@ RELEASE.md PR 37:
   (`permission.html`); without it, only the other people are recorded, and the popup says so.
 - **37c:** on a Google Meet tab, the popup also offers **Send the notetaker** (the web app's bot), after the
   same affirmation, when the api has the notetaker on for this user. Nothing is drawn into Meet's page.
-- **37d:** a recording interrupted by the browser closing is saved from what was uploaded.
+- **37d:** a recording interrupted by the browser closing is saved from what was uploaded: its upload
+  details are kept in `chrome.storage.local` (never the sign-in), and the next time the extension starts or
+  its popup opens, what Cloud Storage holds is finalised and saved as the note. If the restart signed the
+  extension out, it's saved once it's connected again. Up to about the last 40 seconds (the part not yet in
+  a whole 256 KiB piece) is lost; keeping that tail in IndexedDB is a follow-up.
 
 ## Build
 

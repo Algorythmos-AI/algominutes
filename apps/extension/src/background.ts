@@ -3,11 +3,14 @@
 import { handleExternal } from './lib/messages';
 import { dismissRecording, startRecording, stopRecording, type Deps } from './lib/recording';
 import { notetakerAvailable, sendNotetaker } from './lib/notetaker';
+import { recoverUnfinished, type Deps as RecoveryDeps } from './lib/recovery';
 
 const OFFSCREEN = 'offscreen.html';
 
-const deps: Deps = {
+const deps: Deps & RecoveryDeps = {
   storage: chrome.storage.session,
+  local: chrome.storage.local,
+  recorderRunning: async () => (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length > 0,
   fetch: (...a: Parameters<typeof fetch>) => fetch(...a),
   now: () => Date.now(),
   streamIdFor: (tabId) => chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }),
@@ -37,11 +40,18 @@ function serial<T>(work: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// A recording the browser closed on is saved from what was uploaded (37d): whenever the service worker
+// starts, and after the extension is connected again (a browser restart signs it out). It never touches a
+// recording the offscreen recorder is still making.
+const recover = () => serial(() => recoverUnfinished(deps));
+void recover();
+
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   // A failure goes back to the page that asked, which shows it and reports it (apps/web ConnectExtensionPage).
-  handleExternal({ ...deps, extensionId: chrome.runtime.id }, message, sender).then(sendResponse, (err: unknown) =>
-    sendResponse({ ok: false, error: 'failed', detail: err instanceof Error ? err.name : 'unknown' }),
-  );
+  handleExternal({ ...deps, extensionId: chrome.runtime.id }, message, sender).then((answer) => {
+    sendResponse(answer);
+    if (answer.ok && (message as { type?: string }).type === 'link') void recover();
+  }, (err: unknown) => sendResponse({ ok: false, error: 'failed', detail: err instanceof Error ? err.name : 'unknown' }));
   return true;
 });
 
@@ -52,6 +62,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     m.type === 'start' && typeof m.tabId === 'number' ? serial(() => startRecording(deps, { tabId: m.tabId!, title: String(m.title ?? 'Meeting') }))
     : m.type === 'stop' || m.type === 'tab-ended' || m.type === 'upload-failed' ? serial(() => stopRecording(deps))
     : m.type === 'dismiss' ? serial(() => dismissRecording(deps))
+    : m.type === 'recover' ? recover().then((r) => ({ ok: true, recovery: typeof r === 'string' ? r : r.phase }))
     : m.type === 'notetaker-available' ? notetakerAvailable(deps).then((available) => ({ ok: true, available }))
     : m.type === 'send-notetaker' && typeof m.url === 'string' && typeof m.requestId === 'string' ? sendNotetaker(deps, { url: m.url, requestId: m.requestId })
     : Promise.resolve({ ok: false, error: 'invalid' });

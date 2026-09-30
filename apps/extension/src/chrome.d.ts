@@ -30,6 +30,8 @@ declare namespace chrome {
     }
     // In memory only, cleared when the browser closes, and not readable by content scripts.
     const session: StorageArea;
+    // On disk: only an unfinished recording's upload details (lib/recording.ts), never the session.
+    const local: StorageArea;
     const onChanged: { addListener(cb: (changes: Record<string, unknown>, area: string) => void): void };
   }
   namespace tabs {

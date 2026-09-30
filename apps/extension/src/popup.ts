@@ -4,8 +4,9 @@ import { config } from './config';
 import { readSession, signOut } from './lib/session';
 import { readRecording, WORDS, type RecordingState } from './lib/recording';
 import { meetLinkOf } from './lib/notetaker';
+import { readUnfinished } from './lib/recovery';
 
-const deps = { storage: chrome.storage.session, fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => Date.now() };
+const deps = { storage: chrome.storage.session, local: chrome.storage.local, fetch: (...a: Parameters<typeof fetch>) => fetch(...a), now: () => Date.now() };
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const SECTIONS = ['signed-out', 'ready', 'recording', 'saving', 'saved', 'failed'] as const;
 let ticker: ReturnType<typeof setInterval> | undefined;
@@ -28,7 +29,10 @@ async function micAllowed(): Promise<boolean> {
 
 async function render(): Promise<void> {
   clearInterval(ticker);
-  if (!(await readSession(deps))) return show('signed-out');
+  if (!(await readSession(deps))) {
+    $('interrupted').hidden = !(await readUnfinished(deps));
+    return show('signed-out');
+  }
   const rec: RecordingState | null = await readRecording(deps);
   if (!rec) {
     show('ready');
@@ -44,6 +48,11 @@ async function render(): Promise<void> {
     ticker = setInterval(tick, 1000);
   }
   if (rec.phase === 'failed') $('failure').textContent = rec.error ?? WORDS.save_failed;
+  if (rec.phase === 'saved') {
+    $('saved-words').textContent = rec.recovered
+      ? 'The browser closed while recording. What was uploaded before it closed is saved, and your note will be ready in a few minutes.'
+      : 'Saved. Your note will be ready in a few minutes, in AlgoMinutes.';
+  }
 }
 
 const ask = async (message: Record<string, unknown>) => {
@@ -116,4 +125,6 @@ $('sign-out').addEventListener('click', () => void signOut(deps).then(render));
 chrome.storage.onChanged.addListener((_changes, area) => {
   if (area === 'session') void render();
 });
+// Opening the popup also finishes a recording the browser closed on, if there is one.
+void chrome.runtime.sendMessage({ target: 'sw', type: 'recover' }).then(render);
 void render();

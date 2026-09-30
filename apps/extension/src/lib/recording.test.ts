@@ -20,8 +20,9 @@ function world(opts: { api?: (c: Call) => Response | undefined; offscreen?: (m: 
   });
   const sent: Array<{ type: string }> = [];
   const log: string[] = [];
+  const local = fakeStorage();
   const deps: Deps = {
-    storage, fetch: net.fetch, now: () => t,
+    storage, local, fetch: net.fetch, now: () => t,
     streamIdFor: opts.streamId ?? (async (tabId) => `stream-for-${tabId}`),
     async toOffscreen(m) {
       sent.push(m);
@@ -31,7 +32,7 @@ function world(opts: { api?: (c: Call) => Response | undefined; offscreen?: (m: 
     async setBadge(text) { log.push(`badge:${text}`); },
     newNoteId: () => 'note-1',
   };
-  return { deps, storage, calls: net.calls, sent, log, advance: (ms: number) => { t += ms; } };
+  return { deps, storage, local, calls: net.calls, sent, log, advance: (ms: number) => { t += ms; } };
 }
 const signIn = (w: ReturnType<typeof world>) => saveSession(w.deps, { idToken: idTokenFor('alice'), refreshToken: 'r1', expiresIn: 3600 });
 const paths = (calls: Call[]) => calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
@@ -47,6 +48,12 @@ describe('starting a recording', () => {
     expect(w.sent).toEqual([{ type: 'start', streamId: 'stream-for-7', sessionUri: SESSION, chunkSize: 8388608 }]);
     expect(await readRecording(w.deps)).toMatchObject({ phase: 'recording', noteId: 'note-1', uploadId: 'up-1', title: 'Call, 30 Sep', micIncluded: true });
     expect(w.log).toEqual(['badge:REC']);
+    // What recovery needs if the browser closes mid-way, on disk: the upload, never the sign-in.
+    expect(w.local.data.get('unfinished')).toEqual({
+      uploadId: 'up-1', sessionUri: SESSION, noteId: 'note-1', workspaceId: 'workspace_alice',
+      storagePath: 'recordings/workspace_alice/note-1.webm', title: 'Call, 30 Sep', startedAt: 1_000_000,
+    });
+    expect([...w.local.data.keys()]).toEqual(['unfinished']);
   });
 
   it('signed out: nothing is captured or asked', async () => {
@@ -102,6 +109,7 @@ describe('stopping', () => {
     expect(JSON.parse(w.calls[1]!.body!)).toEqual({ uploadId: 'up-1', title: 'Call, 30 Sep', type: 'recording', mimeType: 'audio/webm', durationSec: 1805 });
     expect(JSON.parse(w.calls[2]!.body!)).toEqual({ noteId: 'note-1', workspaceId: 'workspace_alice', type: 'recording', storagePath: 'recordings/workspace_alice/note-1.webm', durationSec: 1805 });
     expect(w.log).toEqual(['badge:REC', 'close', 'badge:']);
+    expect(w.local.data.has('unfinished')).toBe(false);
   });
 
   it('asked twice (Stop, and the tab closing), saves once', async () => {
@@ -142,6 +150,7 @@ describe('stopping', () => {
     w.calls.length = 0;
     expect(await stopRecording(w.deps)).toMatchObject({ phase: 'failed', error: WORDS.upload_failed });
     expect(w.calls).toHaveLength(0);
+    expect(w.local.data.has('unfinished')).toBe(false);
   });
 
   it('the network failing while saving ends it as failed, not stuck saving', async () => {

@@ -20,9 +20,27 @@ export interface RecordingState {
   title: string;
   startedAt: number;
   micIncluded?: boolean;
+  /** Saved after the browser closed mid-recording, from what had been uploaded (37d). */
+  recovered?: boolean;
   /** Why it failed, in words the popup shows. */
   error?: string;
 }
+
+/**
+ * What it takes to finish a recording after the browser closed mid-way (lib/recovery.ts, 37d), kept in
+ * chrome.storage.local from its start until it's saved or has failed. The session URI can write that one
+ * object, for a week; nothing else is in it.
+ */
+export interface Unfinished {
+  uploadId: string;
+  sessionUri: string;
+  noteId: string;
+  workspaceId: string;
+  storagePath: string;
+  title: string;
+  startedAt: number;
+}
+export const UNFINISHED = 'unfinished';
 
 export interface OffscreenAnswer {
   ok: boolean;
@@ -33,6 +51,8 @@ export interface OffscreenAnswer {
 
 export interface Deps extends SessionDeps {
   fetch: Fetch;
+  /** chrome.storage.local: only the unfinished recording (above), to outlive the browser. */
+  local: chrome.storage.StorageArea;
   /** chrome.tabCapture.getMediaStreamId for the tab. */
   streamIdFor(tabId: number): Promise<string>;
   /** Creates the offscreen document if it isn't there, then sends it a message and waits for its answer. */
@@ -53,10 +73,15 @@ export const WORDS = {
   upload_failed: 'The recording couldn’t be uploaded. Check your connection.',
   no_minutes: 'You’re out of recording minutes. The recording is kept: add minutes on the AlgoMinutes web app, then try it again from the note.',
   save_failed: 'The recording was uploaded but couldn’t be saved as a note. Try again from the AlgoMinutes web app.',
+  lost: 'The browser closed before any of the recording was uploaded, so there was nothing to save.',
 } as const;
 
 export async function readRecording(deps: SessionDeps): Promise<RecordingState | null> {
   return ((await deps.storage.get(KEY))[KEY] as RecordingState | undefined) ?? null;
+}
+
+export async function writeRecording(deps: SessionDeps, state: RecordingState | null): Promise<void> {
+  return write(deps, state);
 }
 
 async function write(deps: SessionDeps, state: RecordingState | null): Promise<void> {
@@ -102,9 +127,12 @@ export async function startRecording(deps: Deps, input: { tabId: number; title: 
     await deps.closeOffscreen();
     return { ok: false, error: 'capture_failed' };
   }
+  const startedAt = deps.now();
+  const unfinished: Unfinished = { uploadId: up.uploadId, sessionUri: up.sessionUri, noteId, workspaceId, storagePath: up.storagePath, title: input.title, startedAt };
+  await deps.local.set({ [UNFINISHED]: unfinished });
   await write(deps, {
     phase: 'recording', noteId, workspaceId, uploadId: up.uploadId, storagePath: up.storagePath,
-    title: input.title, startedAt: deps.now(), micIncluded: started.micIncluded,
+    title: input.title, startedAt, micIncluded: started.micIncluded,
   });
   await deps.setBadge('REC');
   return { ok: true };
@@ -121,6 +149,7 @@ export async function stopRecording(deps: Deps): Promise<RecordingState | null> 
   const fail = async (error: keyof typeof WORDS) => {
     const failed: RecordingState = { ...rec, phase: 'failed', error: WORDS[error] };
     await write(deps, failed);
+    await deps.local.remove(UNFINISHED);
     await deps.setBadge('');
     await deps.closeOffscreen();
     return failed;
@@ -140,7 +169,19 @@ async function save(deps: Deps, rec: RecordingState, fail: (error: keyof typeof 
   if (!stopped.ok) return fail('upload_failed');
   const durationSec = Math.max(1, Math.round(stopped.durationSec ?? (deps.now() - rec.startedAt) / 1000));
   await deps.closeOffscreen();
+  return saveNote(deps, { ...rec, micIncluded: stopped.micIncluded ?? rec.micIncluded }, durationSec, fail);
+}
 
+/**
+ * An uploaded recording becomes a note: the upload completed, the note made, and kicked off. Shared by Stop
+ * and by recovery after the browser closed (lib/recovery.ts).
+ */
+export async function saveNote(
+  deps: Deps,
+  rec: RecordingState,
+  durationSec: number,
+  fail: (error: keyof typeof WORDS) => Promise<RecordingState>,
+): Promise<RecordingState> {
   const token = await idToken(deps);
   if (!token) return fail('signed_out');
   const post = (path: string, body?: unknown) => apiFetch(deps.fetch, path, { method: 'POST', idToken: token, body: body ?? {} });
@@ -154,8 +195,9 @@ async function save(deps: Deps, rec: RecordingState, fail: (error: keyof typeof 
   if (kicked.status === 402) return fail('no_minutes');
   if (!kicked.ok) return fail('save_failed');
 
-  const saved: RecordingState = { ...rec, phase: 'saved', micIncluded: stopped.micIncluded ?? rec.micIncluded };
+  const saved: RecordingState = { ...rec, phase: 'saved' };
   await write(deps, saved);
+  await deps.local.remove(UNFINISHED);
   await deps.setBadge('');
   return saved;
 }
