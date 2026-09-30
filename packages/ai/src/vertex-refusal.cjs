@@ -43,10 +43,48 @@ function refusalReason(status, bodyText) {
   return BY_HTTP_STATUS[status] || '';
 }
 
-/** `new Error('<label> <status> <ENUM>')`: e.g. "Vertex Gemini 503 UNAVAILABLE", "vertex_embed_failed: 400 INVALID_ARGUMENT". */
-function vertexRefusal(label, status, bodyText) {
-  const reason = refusalReason(status, bodyText);
-  return new Error(`${label} ${status}${reason ? ` ${reason}` : ''}`);
+// What else a body may say that names the problem without quoting the request: the paths of the fields it
+// refused (BadRequest.fieldViolations[].field, e.g. "contents[0].parts[0].inline_data") and machine reasons
+// (ErrorInfo.reason). Never a description or a message. Each must look like a path or an enum, or it's dropped.
+const FIELD_PATH = /^[A-Za-z0-9_.[\]]{1,80}$/;
+const REASON = /^[A-Z0-9_]{1,64}$/;
+
+/**
+ * `{ fields, reasons }` from Vertex's error details, at most 3 of each, or null when there are none. A 400 whose
+ * reason can't otherwise be seen (one came and went on 2026-10-01) says which field it refused.
+ */
+function refusalDetail(bodyText) {
+  let details;
+  try {
+    const parsed = JSON.parse(bodyText);
+    details = (Array.isArray(parsed) ? parsed[0] : parsed)?.error?.details;
+  } catch {
+    // silent-catch-ok: a body that isn't Vertex's JSON has no details to keep
+    return null;
+  }
+  if (!Array.isArray(details)) return null;
+  const fields = [];
+  const reasons = [];
+  for (const d of details) {
+    for (const v of (d && Array.isArray(d.fieldViolations) ? d.fieldViolations : [])) {
+      if (typeof v?.field === 'string' && FIELD_PATH.test(v.field) && fields.length < 3) fields.push(v.field);
+    }
+    if (typeof d?.reason === 'string' && REASON.test(d.reason) && reasons.length < 3) reasons.push(d.reason);
+  }
+  return fields.length || reasons.length ? { fields, reasons } : null;
 }
 
-module.exports = { vertexRefusal, refusalReason };
+/**
+ * `new Error('<label> <status> <ENUM>')`: e.g. "Vertex Gemini 503 UNAVAILABLE", "vertex_embed_failed: 400 INVALID_ARGUMENT".
+ * The details go on `err.detail`, not in the message: isTransientError matches words in the message, and a reason
+ * naming INTERNAL mustn't make a 400 retryable.
+ */
+function vertexRefusal(label, status, bodyText) {
+  const reason = refusalReason(status, bodyText);
+  const err = new Error(`${label} ${status}${reason ? ` ${reason}` : ''}`);
+  const detail = refusalDetail(bodyText);
+  if (detail) err.detail = detail;
+  return err;
+}
+
+module.exports = { vertexRefusal, refusalReason, refusalDetail };
