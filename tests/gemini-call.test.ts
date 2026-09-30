@@ -115,6 +115,23 @@ describe('callGeminiWithLadder', () => {
     expect(events.some((e) => e.level === 'warn' && e.msg === 'gemini_output_truncated')).toBe(true);
   });
 
+  // RELEASE.md rev 11, LM4: what a truncation cost, to tell thinking that ate the budget from a long answer.
+  it('logs the tokens each answer used: prompt, output and thinking', async () => {
+    const reply: Reply = {
+      status: 200,
+      body: {
+        candidates: [{ content: { parts: [{ text: '{"gist":"cut' }] }, finishReason: 'MAX_TOKENS' }],
+        usageMetadata: { promptTokenCount: 52000, candidatesTokenCount: 14300, thoughtsTokenCount: 2048 },
+      },
+    };
+    const { impl } = fakeFetch({ 'model-a': [reply] });
+    const { log, events } = logSpy();
+    await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    const tokens = { promptTokens: 52000, outputTokens: 14300, thoughtsTokens: 2048 };
+    expect(events.find((e) => e.msg === 'gemini_output_truncated')?.obj).toMatchObject(tokens);
+    expect(events.find((e) => e.msg === 'gemini_ok')?.obj).toMatchObject(tokens);
+  });
+
   it('by default uses the registry ladder, minus retired models', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-21T00:00:00Z')); // after gemini-2.5-flash retires

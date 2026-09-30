@@ -45,6 +45,9 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
       responseMimeType: 'application/json',
       responseSchema: intelligence.FAST_PATH_RESPONSE_SCHEMA,
       maxOutputTokens: 16384,
+      // Thinking counts toward maxOutputTokens: capped, so the transcript and summary keep their room (rev 11
+      // LM4). thinkingBudget, which gemini-2.5-flash accepts too; it refuses thinkingLevel (spike S1).
+      thinkingConfig: { thinkingBudget: 2048 },
     },
   });
   if (!rawText) throw error || new Error('gemini_failed_no_text');
