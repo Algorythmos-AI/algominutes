@@ -256,7 +256,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 | # | PR / step | What it does |
 |---|---|---|
 | 39 | `feat(infra,ci)` S3-PR4 | • the prod root finished, and `deploy-production.yml` (runs from `main` after a promotion, with migrate, vertex-smoke, rollout and both smokes)<br>• the Release origins in `project.yml`<br>• the prod CSP and `/__/auth` in `vercel.json`<br>• PITR and deletion protection on |
-| 40 | `fix(api,db)` S3-PR11 | • the api checks token revocation (`verifyIdToken(…, true)`, `middleware/auth.js:34`)<br>• shared workspaces on account deletion |
+| 40 | `fix(api,billing)` S3-PR11 | • the api and billing refuse a disabled account and revoked sessions within a minute (`session-check.cjs`: Firebase Auth asked once a minute per user, not `verifyIdToken(…, true)` on every call; DECISIONS)<br>• shared workspaces on account deletion: nothing to do until a workspace can be shared (each is its owner's alone), so it's the sharing PR's |
 | — | **Yours: Apply P** | • bootstrap `algominutes-prod-tfstate`, then apply<br>• prod Firebase: Blaze, providers, APNs key, iOS/web apps, VAPID<br>• a prod Apple Services ID return URL<br>• a prod Recall account<br>• Vercel Production env plus `APP_ENABLED`<br>• re-scope the prod budget |
 | — | **Yours: promotion P3** | Then the first prod deploy, the authenticated smoke, and a prod restore drill |
 | 41 | `build(ios)` Release → External | A new Xcode Cloud workflow on `main` (scheme `AlgoMinutes`, the prod plist). `UPDATE_URL` stays `itms-beta` until 1.0 |

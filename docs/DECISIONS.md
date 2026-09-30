@@ -3,7 +3,22 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
-## The external beta runs on staging, with minutes from invite codes and the trial off (2026-09-29)
+## A disabled account or revoked sessions are refused within a minute (2026-09-30)
+
+- **Context.** The api and billing verify a Firebase ID token's signature and expiry. A token then stays good for
+  up to an hour after its account is disabled (abuse) or its sessions revoked, since `verifyIdToken(token)` doesn't
+  ask Firebase Auth about the user; `verifyIdToken(token, true)` does, on every request.
+- **Decision** (RELEASE.md PR 40, S3-PR11). `@algominutes/ai/session-check.cjs` asks Firebase Auth about the user
+  (`getUser`) and remembers the answer for 60 seconds, per instance: one lookup a minute per active user, and a
+  disabled or revoked account refused within a minute. Firebase's rule applies: revoked when the token was issued
+  (`auth_time`) before `tokensValidAfterTime`; a deleted Firebase user counts as revoked. Both answer 401
+  (`account_disabled`, `session_revoked`), which clients already meet by refreshing the token, which Firebase
+  then refuses, and signing out.
+- **When Firebase Auth can't be asked**, the request goes on, and `auth_session_check_failed` is logged: the token
+  itself is good, and failing closed would make every Firebase Auth blip an outage of the api.
+- **Rejected.** `verifyIdToken(token, true)` on every request: a Firebase Auth round trip on every call, and an
+  outage whenever it's slow.
+
 
 - **Context.**
   - The owner wants external testers as soon as possible, on staging, before prod exists

@@ -808,10 +808,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       - ~~Single-note deletion should also cancel the note's open upload session~~ **done
         (note-delete-cancels-upload PR)**: see the item above.
       - Before shared workspaces ship, account deletion must transfer or refuse a shared workspace. Today
-        an owned workspace goes with its owner, members' notes included.
-      - The api's `verifyIdToken` doesn't check revocation. The tombstone blocks the write paths that could
-        re-create the account, but a deleted account's token can still *read* (nothing is left) for up to
-        an hour. Clients must sign out on the 200.
+        an owned workspace goes with its owner, members' notes included. **Still open, on purpose (RELEASE.md
+        PR 40):** no workspace can be shared yet (each is `workspace_<uid>`, its owner its only member), so there's
+        nothing to transfer; it's the sharing PR's to do, with the owner's call on transfer or refuse.
+      - ~~The api's `verifyIdToken` doesn't check revocation~~ **done (RELEASE.md PR 40):** the api and
+        billing refuse a disabled account (`account_disabled`) and a token issued before its sessions were
+        revoked (`session_revoked`), within a minute (`@algominutes/ai/session-check.cjs`, one Firebase Auth
+        lookup a minute per active user). A deleted account was already refused everywhere (the tombstone,
+        `admitUser`).
       - ~~Firestore rules (PR-11)~~ **done (firestore-rules PR, pending your apply):** rules in the repo,
         released by Terraform, emulator-tested in CI. Clients can't delete notes. They can still re-create
         their own `workspaces/{ws}` doc after an account deletion (the sign-in bootstrap), but the api refuses

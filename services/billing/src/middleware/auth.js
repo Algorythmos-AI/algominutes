@@ -9,6 +9,11 @@
 
 import { getAuth } from 'firebase-admin/auth';
 import { admitUser, isPostgresEnabled } from '@algominutes/db';
+import sessionCheckModule from '@algominutes/ai/session-check.cjs';
+
+// A disabled account or revoked sessions (RELEASE.md PR 40): refused within a minute, where verifyIdToken
+// alone would accept the token until it expires, up to an hour later.
+const checkSession = sessionCheckModule.createSessionCheck({ getUser: (uid) => getAuth().getUser(uid) });
 
 function bearer(req) {
   return (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -29,6 +34,21 @@ export async function authMiddleware(req, res, next) {
       req.log.warn({ err }, 'auth_verify_failed');
     }
     return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  let session;
+  try {
+    session = await checkSession(decoded);
+  } catch (err) {
+    // Firebase Auth can't be asked: the token itself is good (signature, expiry), so the request goes on,
+    // loudly; a disabled or revoked account is refused at the next check. Failing closed would make every
+    // Firebase Auth blip an outage of the whole api.
+    req.log?.warn?.({ err, userId: decoded.uid }, 'auth_session_check_failed');
+    session = 'ok';
+  }
+  if (session !== 'ok') {
+    req.log?.warn?.({ userId: decoded.uid, reason: session }, 'auth_session_refused');
+    return res.status(401).json({ error: session === 'disabled' ? 'account_disabled' : 'session_revoked' });
   }
 
   // Admit the caller: a new user's row is created here from the token's
