@@ -74,7 +74,11 @@ service cloud.firestore {
             'storagePath', 'status', 'errorMessage', 'retryAttempt', 'diagnosticCode', 'title', 'updatedAt'
           ])
           // A client may re-queue (a retry) or give up (the watchdog); only the server marks progress or 'ready'.
-          && (!changed().hasAny(['status']) || request.resource.data.status in ['queued', 'error'])
+          // Never on a finished note: on 2026-10-01 an app marked a ready note failed, offered a retry, and the
+          // whole meeting was run again. A note held for minutes is the server's to resume, too.
+          && (!changed().hasAny(['status'])
+              || (request.resource.data.status in ['queued', 'error']
+                  && !(resource.data.status in ['ready', 'awaiting_minutes'])))
           && (!changed().hasAny(['storagePath']) || validStoragePath(request.resource.data.storagePath))
           && (!changed().hasAny(['title'])
               || (request.resource.data.title is string && request.resource.data.title.size() <= 300));
