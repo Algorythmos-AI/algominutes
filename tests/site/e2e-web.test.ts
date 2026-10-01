@@ -4,7 +4,7 @@ import http, { type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 // @ts-expect-error: a plain .mjs script, no types
-import { bypassHeaders, e2eConfig, fixtureWav, isSiteRequest, isStripePage, runWebE2E } from '../../scripts/e2e-web.mjs';
+import { bypassHeaders, e2eConfig, fixtureWav, isFakeShareNoise, isSiteRequest, isStripePage, runWebE2E } from '../../scripts/e2e-web.mjs';
 
 // scripts/e2e-web.mjs walks the real web app on staging. Here it walks a stand-in
 // with the same labels, in a real Chromium, to prove what the script itself must
@@ -144,6 +144,16 @@ beforeEach(() => {
 
 const CODE = 'BETA-TEST1-TEST2-TEST3';
 const run = (lines: string[], over: Record<string, unknown> = {}) => runWebE2E({ siteUrl, bypass: 'the-secret', inviteCode: CODE, ...over, readyMs: 5000, chromium, recordMs: 50, actionMs: 3000, longMs: 4000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) });
+
+describe('isFakeShareNoise', () => {
+  it("lets through only Chrome's fake-share camera message, and nothing else about permissions or CSP", () => {
+    expect(isFakeShareNoise('Permissions policy violation: camera is not allowed in this document.')).toBe(true);
+    expect(isFakeShareNoise('Permissions policy violation: microphone is not allowed in this document.')).toBe(false);
+    expect(isFakeShareNoise('Permissions policy violation: display-capture is not allowed in this document.')).toBe(false);
+    expect(isFakeShareNoise("Refused to load the script because it violates the following Content Security Policy directive")).toBe(false);
+    expect(isFakeShareNoise('x Permissions policy violation: camera is not allowed in this document. y')).toBe(false);
+  });
+});
 
 describe('the journey, in a real browser', () => {
   it('walks every step, sends the bypass to the site only, and deletes the account', async () => {
