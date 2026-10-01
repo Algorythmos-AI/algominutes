@@ -123,6 +123,22 @@ describe('workspaces/{ws}/notes/{noteId}: what is refused', () => {
     await assertFails(updateDoc(ref, { title: deleteField() }));
   });
 
+  // 2026-10-01: an app marked a ready note failed, offered a retry, and the whole meeting was run again.
+  it("a client can't change the status of a finished note, or of one held for minutes; its title still can change", async () => {
+    for (const status of ['ready', 'awaiting_minutes']) {
+      await serverNote(recordingNote({ status }));
+      const ref = doc(alice(), NOTE);
+      await assertFails(updateDoc(ref, { status: 'error', errorMessage: 'Upload failed.' }));
+      await assertFails(updateDoc(ref, { status: 'queued', retryAttempt: 1 }));
+      await assertSucceeds(updateDoc(ref, { title: 'Renamed' }));
+    }
+    // A failed or in-progress note can still be retried or given up on.
+    await serverNote(recordingNote({ status: 'error' }));
+    await assertSucceeds(updateDoc(doc(alice(), NOTE), { status: 'queued', retryAttempt: 1 }));
+    await serverNote(recordingNote({ status: 'transcribing' }));
+    await assertSucceeds(updateDoc(doc(alice(), NOTE), { status: 'error', errorMessage: 'It stopped.' }));
+  });
+
   it('create: no foreign author or workspace, no server-owned fields, no forged status', async () => {
     await assertFails(setDoc(doc(alice(), NOTE), recordingNote({ authorId: 'bob' })));
     await assertFails(setDoc(doc(alice(), NOTE), recordingNote({ workspaceId: 'workspace_bob' })));
