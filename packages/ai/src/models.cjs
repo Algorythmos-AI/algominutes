@@ -88,4 +88,18 @@ function activeLadder(now = new Date()) {
   return ladder;
 }
 
-module.exports = { REGION, MODELS, LADDER, SINGLE_RUNG_DECISION, CHAT_MODEL, EMBED_MODEL, isRetired, activeLadder };
+/**
+ * How a model's thinking is capped (it counts toward maxOutputTokens, so an uncapped model can spend the room a
+ * summary's chapters need). The two families take different fields, and each refuses the other's:
+ *   - gemini-3.x: `thinkingLevel`. `thinkingBudget` is refused by some of its Sydney backends and accepted by
+ *     others ("Thinking budget is not supported for this model", 7 of 12 identical calls, 2026-10-01), which
+ *     failed over half of all first attempts for a day (#302).
+ *   - gemini-2.5: `thinkingBudget`. It refuses `thinkingLevel` with a 400.
+ * Probed 2026-10-01, 14 calls each, with the fast path's schema: 3.5 + thinkingLevel LOW 14/14, 2.5 +
+ * thinkingBudget 14/14.
+ */
+function thinkingConfigFor(model, { budget = 2048, level = 'LOW' } = {}) {
+  return /^gemini-3/.test(String(model)) ? { thinkingLevel: level } : { thinkingBudget: budget };
+}
+
+module.exports = { REGION, MODELS, LADDER, SINGLE_RUNG_DECISION, CHAT_MODEL, EMBED_MODEL, isRetired, activeLadder, thinkingConfigFor };

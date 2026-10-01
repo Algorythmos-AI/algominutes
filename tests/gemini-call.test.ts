@@ -172,3 +172,65 @@ describe('callGeminiWithLadder', () => {
     expect(events.find((e) => e.msg === 'gemini_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1 });
   });
 });
+
+// 2026-10-01: thinkingBudget was sent to every rung. Some of gemini-3.5-flash's Sydney backends refuse it ("Thinking
+// budget is not supported for this model", 7 of 12 identical calls), so over half of all first attempts failed.
+describe("the thinking cap is each rung's own field", () => {
+  const { thinkingConfigFor } = require('../packages/ai/src/models.cjs');
+  function recording(replies: Record<string, Reply[]>) {
+    const bodies: Array<{ model: string; generationConfig: any }> = [];
+    const f = fakeFetch(replies);
+    const impl = async (url: string, init: { body: string }) => {
+      bodies.push({ model: /models\/([^:]+):generateContent/.exec(url)![1]!, generationConfig: JSON.parse(init.body).generationConfig });
+      return f.impl(url);
+    };
+    return { impl, bodies };
+  }
+
+  it('gemini-3.x gets thinkingLevel, gemini-2.5 gets thinkingBudget, and neither gets the other', () => {
+    expect(thinkingConfigFor('gemini-3.5-flash', { budget: 2048 })).toEqual({ thinkingLevel: 'LOW' });
+    expect(thinkingConfigFor('gemini-2.5-flash', { budget: 2048 })).toEqual({ thinkingBudget: 2048 });
+    expect(thinkingConfigFor('gemini-3.5-flash', { budget: 1024, level: 'MEDIUM' })).toEqual({ thinkingLevel: 'MEDIUM' });
+  });
+
+  it('each rung of the ladder is asked with its own field, and the rest of the config is kept', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 404 }], 'gemini-2.5-flash': [ok('{"a":1}')] });
+    const { log } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash', 'gemini-2.5-flash'], thinking: { budget: 2048 }, generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 16384 } }));
+    expect(out.model).toBe('gemini-2.5-flash');
+    expect(r.bodies.map((b) => [b.model, b.generationConfig.thinkingConfig])).toEqual([
+      ['gemini-3.5-flash', { thinkingLevel: 'LOW' }],
+      ['gemini-2.5-flash', { thinkingBudget: 2048 }],
+    ]);
+    expect(r.bodies[0].generationConfig.maxOutputTokens).toBe(16384);
+  });
+
+  it('a 400 with a cap sent is asked again without it, on the same rung, and answers', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 400, text: JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'Thinking level is not supported for this model.' } }) }, ok('{"a":1}')] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], thinking: { budget: 2048 }, generationConfig: { maxOutputTokens: 100 } }));
+    expect(out.rawText).toBe('{"a":1}');
+    expect(r.bodies.map((b) => b.generationConfig.thinkingConfig)).toEqual([{ thinkingLevel: 'LOW' }, undefined]);
+    expect(events.filter((e) => e.msg === 'gemini_thinking_cap_refused')).toHaveLength(1);
+    expect(events.some((e) => e.msg === 'gemini_non_retryable')).toBe(false);
+  });
+
+  it('a 400 that persists without the cap is still a refusal, after one extra call', async () => {
+    const bad = { status: 400, text: JSON.stringify({ error: { status: 'INVALID_ARGUMENT' } }) };
+    const r = recording({ 'gemini-3.5-flash': [bad, bad] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], thinking: { budget: 2048 } }));
+    expect(out.rawText).toBeNull();
+    expect(r.bodies).toHaveLength(2);
+    expect(events.some((e) => e.msg === 'gemini_non_retryable')).toBe(true);
+  });
+
+  it('with no cap asked for, nothing is added and a 400 is refused at once', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 400, text: '' }] });
+    const { log } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], generationConfig: { maxOutputTokens: 5 } }));
+    expect(out.rawText).toBeNull();
+    expect(r.bodies).toHaveLength(1);
+    expect(r.bodies[0].generationConfig).toEqual({ maxOutputTokens: 5 });
+  });
+});

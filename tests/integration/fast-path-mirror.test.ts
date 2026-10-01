@@ -58,9 +58,10 @@ let lastRequest: any;
 // RELEASE.md rev 11, LM4: the fast path asks one call for a 10-minute transcript and its summary, inside 16,384
 // tokens shared with the model's thinking. Its thinking is capped as the summarizer's is (both rungs take it).
 describe('fast path: the Gemini request', () => {
-  it('caps thinking with thinkingBudget, which both ladder rungs accept', async () => {
+  it("asks the ladder to cap thinking, and leaves each rung's field to it", async () => {
     await (await run(async () => {})).done;
-    expect(lastRequest.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 2048 });
+    expect(lastRequest.thinking).toEqual({ budget: 2048 });
+    expect(lastRequest.generationConfig.thinkingConfig).toBeUndefined();
     expect(lastRequest.generationConfig.maxOutputTokens).toBe(16384);
   });
 });

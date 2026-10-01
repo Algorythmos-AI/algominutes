@@ -104,6 +104,8 @@ describe('search and chat limits', () => {
   it("chat asks Vertex for a bounded answer, with the model's thinking capped", () => {
     const body = chatRequestBody('the prompt');
     expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'the prompt' }] }]);
-    expect(body.generationConfig).toEqual({ maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 1024 } });
+    // The chat model is gemini-3.x: its cap is thinkingLevel (thinkingBudget is refused by some of its backends).
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'LOW' } });
+    expect(chatRequestBody('p', 'gemini-2.5-flash').generationConfig.thinkingConfig).toEqual({ thinkingBudget: 1024 });
   });
 });

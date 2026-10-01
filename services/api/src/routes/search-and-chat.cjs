@@ -79,6 +79,7 @@ const PER_LIST_LIMIT = 25;
 // Model ids: packages/ai/src/models.cjs (lifecycle + Sydney availability).
 const EMBED_MODEL = models.EMBED_MODEL;
 const CHAT_MODEL = models.CHAT_MODEL;
+const { thinkingConfigFor } = models;
 
 // Vertex AI embedding endpoint can hang on cold-start of the publisher
 // model. Without a client-side timeout the unbounded fetch blocks past
@@ -300,13 +301,15 @@ function noteLog(log, noteId) {
 // request could send a 250k-token prompt to the embedder and to Gemini.
 const MAX_QUESTION_CHARS = 2000;
 // A chat answer is a few paragraphs: bounded, with the model's thinking capped inside it.
-const CHAT_GENERATION_CONFIG = Object.freeze({ maxOutputTokens: 2048, thinkingConfig: Object.freeze({ thinkingBudget: 1024 }) });
+// The cap's field is the chat model's own (models.cjs thinkingConfigFor): gemini-3.x takes thinkingLevel, and some of
+// its Sydney backends refuse thinkingBudget, which failed chat answers at random (2026-10-01).
+const CHAT_MAX_OUTPUT_TOKENS = 2048;
 
 /** The Vertex request for a chat answer. */
-function chatRequestBody(prompt) {
+function chatRequestBody(prompt, model = CHAT_MODEL) {
   return {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { ...CHAT_GENERATION_CONFIG, thinkingConfig: { ...CHAT_GENERATION_CONFIG.thinkingConfig } },
+    generationConfig: { maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS, thinkingConfig: thinkingConfigFor(model, { budget: 1024 }) },
   };
 }
 
