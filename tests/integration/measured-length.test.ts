@@ -238,6 +238,33 @@ describe('the transcoder settles before any paid work', () => {
     expect(deadLetters).toEqual([]);
   });
 
+  // RELEASE.md rev 11, H6: longer than the minutes left is held, never refused.
+  it('over the minutes left: held for minutes, uncharged, no paid work, no dead letter, mirrored; a replay changes nothing', async () => {
+    await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 10 });
+    await charge(5); // the kickoff charged the 5 minutes the client claimed
+    const said: string[] = [];
+    const heard: any = { info: noop, warn: (_o: unknown, m: string) => void said.push(m), error: (_o: unknown, m: string) => void said.push(m), child: () => heard };
+    const mirrored: unknown[] = [];
+    const d = deps(20 * 60);
+    const withMirror = { ...d, log: heard, mirror: { ...d.mirror, db: () => ({ doc: (p: string) => ({ update: async (v: unknown) => void mirrored.push([p, v]) }) }) } };
+    await handler.handle(kickoff, withMirror);
+    expect(said).toContain('note_held_for_minutes');
+    expect(said).not.toContain('note_refused');
+    expect(said).not.toContain('note_failed');
+    expect((await pool.query(`SELECT status, error_message, duration_sec_probed::float8 AS measured FROM notes WHERE id = 'n1'`)).rows[0])
+      .toEqual({ status: 'awaiting_minutes', error_message: null, measured: 20 * 60 });
+    expect(await net()).toBe(0);
+    expect(await ledger()).toEqual(['debit 5 ingest', 'reversal -5 refund:held_for_minutes (reverses)']);
+    expect(paid).toEqual([]);
+    expect(deadLetters).toEqual([]);
+    expect(mirrored).toEqual([['workspaces/ws/notes/n1', expect.objectContaining({ status: 'awaiting_minutes', errorMessage: null })]]);
+    // A replayed kickoff finds the note held, not in progress: nothing more is written or paid for.
+    await expect(handler.handle(kickoff, withMirror)).resolves.toBeUndefined();
+    expect(await ledger()).toEqual(['debit 5 ingest', 'reversal -5 refund:held_for_minutes (reverses)']);
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
+    expect(paid).toEqual([]);
+  });
+
   it('a run another attempt failed while this one measured is acknowledged: no charge, no paid work', async () => {
     await charge(0);
     // This attempt passed the kickoff's status checks; another attempt fails
@@ -263,5 +290,58 @@ describe('the transcoder settles before any paid work', () => {
     await handler.handle(kickoff, deps(90));
     expect(await ledger()).toEqual(['debit 0 ingest', 'debit 2 ingest:measured']);
     expect(paid).toEqual(['fast']);
+  });
+});
+
+describe('holdNoteForMinutes', () => {
+  const { holdNoteForMinutes } = require('@algominutes/db/note-terminal.cjs');
+  const noop = () => {};
+  const log: any = { info: noop, warn: noop, error: noop };
+  const mirrored: unknown[] = [];
+  const firestore = { doc: (p: string) => ({ update: async (v: unknown) => void mirrored.push([p, v]) }) };
+  const hold = (noteId = 'n1', workspaceId = 'ws') => holdNoteForMinutes({ pool, firestore, noteId, workspaceId, neededMinutes: 20, log, traceId: 't-hold' });
+  beforeEach(() => { mirrored.length = 0; });
+
+  it.each(['ready', 'error', 'summarizing', 'awaiting_minutes'])('leaves a note that is %s alone: no status change, no refund, no mirror', async (status) => {
+    await charge(5);
+    await pool.query(`UPDATE notes SET status = $1 WHERE id = 'n1'`, [status]);
+    expect(await hold()).toEqual({ held: false, status });
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe(status);
+    expect(await ledger()).toEqual(['debit 5 ingest']);
+    expect(mirrored).toEqual([]);
+  });
+
+  it('finds nothing in another workspace, or for a deleted note', async () => {
+    await charge(5);
+    await seedUser('bob');
+    await seedWorkspace('ws-b', 'bob');
+    expect(await hold('n1', 'ws-b')).toEqual({ held: false, status: null });
+    await pool.query(`UPDATE notes SET deleted_at = NOW() WHERE id = 'n1'`);
+    expect(await hold()).toEqual({ held: false, status: null });
+    expect(await ledger()).toEqual(['debit 5 ingest']);
+    expect(mirrored).toEqual([]);
+  });
+
+  it('holds a queued note once, and two holds at once refund once', async () => {
+    await charge(5);
+    await pool.query(`UPDATE notes SET status = 'queued' WHERE id = 'n1'`);
+    const both = await Promise.all([hold(), hold()]);
+    expect(both.map((r: any) => r.held).sort()).toEqual([false, true]);
+    expect(await ledger()).toEqual(['debit 5 ingest', 'reversal -5 refund:held_for_minutes (reverses)']);
+    expect(mirrored).toHaveLength(1);
+  });
+
+  it('a Postgres error throws before anything is mirrored, so the task retries', async () => {
+    const broken = { connect: async () => ({ query: async (sql: string) => { if (/FOR NO KEY UPDATE/.test(sql)) throw new Error('boom'); return { rows: [] }; }, release: noop }) };
+    await expect(holdNoteForMinutes({ pool: broken, firestore, noteId: 'n1', workspaceId: 'ws', log, traceId: 't' })).rejects.toThrow('boom');
+    expect(mirrored).toEqual([]);
+  });
+
+  it("a mirror that fails doesn't undo the hold", async () => {
+    await charge(5);
+    await pool.query(`UPDATE notes SET status = 'queued' WHERE id = 'n1'`);
+    const failing = { doc: () => ({ update: async () => { throw new Error('firestore down'); } }) };
+    expect(await holdNoteForMinutes({ pool, firestore: failing, noteId: 'n1', workspaceId: 'ws', log, traceId: 't' })).toEqual({ held: true, status: 'awaiting_minutes' });
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
   });
 });

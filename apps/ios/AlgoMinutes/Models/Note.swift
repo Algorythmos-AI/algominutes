@@ -2,6 +2,10 @@ import Foundation
 
 enum NoteStatus: String, Codable, CaseIterable, Sendable {
     case recording, processing, queued, chunking, transcribing, summarizing, ready, error
+    /// Longer than the minutes left this month: kept, uncharged, and processed
+    /// on its own once minutes arrive (RELEASE.md rev 11, H6). Neither in
+    /// progress nor failed.
+    case awaitingMinutes = "awaiting_minutes"
 
     var label: String {
         switch self {
@@ -13,11 +17,12 @@ enum NoteStatus: String, Codable, CaseIterable, Sendable {
         case .summarizing: return "Summarizing"
         case .ready: return "Ready"
         case .error: return "Error"
+        case .awaitingMinutes: return "Waiting for minutes"
         }
     }
 
     var isInProgress: Bool {
-        self != .ready && self != .error
+        self != .ready && self != .error && self != .awaitingMinutes
     }
 }
 

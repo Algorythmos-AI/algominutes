@@ -38,13 +38,15 @@ const { redactLines } = redaction as {
   redactLines: (texts: string[]) => { texts: string[]; counts: Record<string, number> };
 };
 
-export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' }
+// 'awaiting_minutes' (held for minutes, RELEASE.md rev 11 H6) settles like a finish: the note can sit there for
+// weeks, so a mirror write it missed is repaired rather than showing "processing" until it resumes.
+export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' | 'awaiting_minutes' }
 
 /** Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first. */
 export async function listRecentlyFinishedNotes(input: { settledMs: number; windowMs: number; limit: number }): Promise<FinishedNote[]> {
   const { rows } = await getPool().query(
     `SELECT id AS "noteId", workspace_id AS "workspaceId", status FROM notes
-      WHERE status IN ('ready', 'error') AND deleted_at IS NULL
+      WHERE status IN ('ready', 'error', 'awaiting_minutes') AND deleted_at IS NULL
         AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND updated_at > NOW() - (($1::bigint + $2::bigint) * INTERVAL '1 millisecond')
       ORDER BY updated_at LIMIT $3`,
@@ -152,11 +154,12 @@ export async function repairNoteMirror(
   const doc = snap.data() || {};
   const pg = await readPostgres(input.noteId, input.workspaceId, doc.status, opts.log ?? defaultLog);
   if (!pg) return 'gone';
-  if (pg.status !== 'ready' && pg.status !== 'error') return 'not_finished';
+  if (pg.status !== 'ready' && pg.status !== 'error' && pg.status !== 'awaiting_minutes') return 'not_finished';
   if (doc.status === pg.status) return 'in_step';
 
   const patch: Record<string, unknown> = { status: pg.status, updatedAt: new Date().toISOString() };
   if (pg.status === 'error') patch.errorMessage = pg.errorMessage;
+  if (pg.status === 'awaiting_minutes') patch.errorMessage = null;
   if (pg.summary) {
     patch['summary.gist'] = pg.summary.gist;
     patch['summary.actionItems'] = pg.summary.actionItems;

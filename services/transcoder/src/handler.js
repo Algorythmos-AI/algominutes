@@ -218,8 +218,9 @@ async function handleKickoff(payload, deps) {
     }
     // The charge follows the measured length, before any paid work: the kickoff
     // charged what the client claimed (an import may claim nothing). A replay
-    // finds it already settled. Refused (longer than the plan allows, or than
-    // the user's minutes left): the note fails, with a full refund.
+    // finds it already settled. Longer than the plan allows: the note fails,
+    // with a full refund. Longer than the minutes left: it's held, uncharged,
+    // until minutes arrive (RELEASE.md rev 11, H6); the audio stays.
     const settled = await deps.meter.settleMeasuredLength({ noteId, workspaceId, measuredSec: durationSec, log });
     if (settled.kind === 'not_found') throw new NoteGoneError('postgres');
     if (settled.kind === 'moved_on') {
@@ -227,10 +228,22 @@ async function handleKickoff(payload, deps) {
       // handle(), with nothing written, like the status write's own check.
       throw Object.assign(new Error(`note_moved_on:${noteId}`), { code: 'NOTE_MOVED_ON' });
     }
-    if (settled.kind === 'too_long' || settled.kind === 'over_quota') {
-      const message = settled.kind === 'too_long'
-        ? `This recording is longer than ${settled.maxSec / 3600} hours, the longest a note can be.`
-        : "This recording is longer than the minutes you have left this month.";
+    if (settled.kind === 'over_quota') {
+      // Throws on a Postgres error, so the task retries and settles again.
+      await noteTerminal.holdNoteForMinutes({
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        neededMinutes: settled.neededMinutes,
+        measuredSec: durationSec,
+        log,
+        traceId: deps.traceId,
+      });
+      return;
+    }
+    if (settled.kind === 'too_long') {
+      const message = `This recording is longer than ${settled.maxSec / 3600} hours, the longest a note can be.`;
       log.warn({ noteId, workspaceId, durationSec, reason: settled.kind }, 'measured_length_refused');
       // The user's recording, not a pipeline fault: no dead letter. markNoteFailed
       // writes the refund and the "failed" notice in the failure's transaction.

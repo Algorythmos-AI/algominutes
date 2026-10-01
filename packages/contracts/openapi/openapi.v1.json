@@ -83,7 +83,8 @@
           "transcribing",
           "summarizing",
           "ready",
-          "error"
+          "error",
+          "awaiting_minutes"
         ]
       },
       "NoteType": {

@@ -349,6 +349,11 @@ struct FilesView: View {
                 .font(Typography.body(12))
                 .foregroundStyle(Theme.heading)
                 .lineLimit(1)
+        case .awaitingMinutes:
+            Label(note.status.label, systemImage: "hourglass")
+                .font(Typography.body(12))
+                .foregroundStyle(Theme.heading)
+                .lineLimit(1)
         default:
             HStack(spacing: Theme.Spacing.sm) {
                 ProgressView()

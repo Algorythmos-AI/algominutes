@@ -8,8 +8,8 @@
  * note's row lock (the lock every refund and markQueued take, so a failure's
  * refund sees the adjustment whole or not at all):
  *   - longer than charged: the difference is debited, if the user's minutes
- *     cover it; if not, `over_quota`, and the transcoder fails the note with a
- *     full refund;
+ *     cover it; if not, `over_quota`, and the transcoder holds the note for
+ *     minutes, uncharged (note-terminal holdNoteForMinutes, RELEASE.md H6);
  *   - shorter: the difference is refunded;
  *   - longer than the plan's longest recording: `too_long`, failed the same way.
  * A replay finds the charge already equal to the measured length and writes

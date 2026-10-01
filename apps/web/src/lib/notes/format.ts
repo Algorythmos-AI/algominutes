@@ -27,7 +27,7 @@ export function formatClock(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-export type StatusKind = 'working' | 'ready' | 'failed';
+export type StatusKind = 'working' | 'ready' | 'failed' | 'held';
 
 /**
  * A notetaker's progress in words (contracts NotetakerStatus). It's an open string: a value this build doesn't
@@ -77,6 +77,8 @@ export function statusOf(status: NoteDoc['status'], notetaker?: NoteDoc['notetak
       return { kind: 'working', label: 'Transcribing' };
     case 'summarizing':
       return { kind: 'working', label: 'Summarising' };
+    case 'awaiting_minutes':
+      return { kind: 'held', label: 'Waiting for minutes' };
   }
 }
 
