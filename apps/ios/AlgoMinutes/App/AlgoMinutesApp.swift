@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Firebase is configured in AlgoMinutesApp.init() so it's ready before any
         // @State service touches Auth/Firestore; keep this as a safety net.
         FirebaseBootstrap.configureIfNeeded()
+        // H15: jetsam, watchdog and background-time kills, and hangs, reach Crashlytics.
+        MetricKitReporter.shared.start()
         // A7.3: own notification presentation + taps so a note deep link routes.
         // NOTE: we do NOT call registerForRemoteNotifications() here — APNs
         // registration is triggered after the first recording (see
