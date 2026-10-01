@@ -37,6 +37,8 @@ function emit(level, base, payload, msg) {
       message: record.err.message,
       stack: record.err.stack,
       code: record.err.code,
+      // A refused Vertex call's field paths and reasons (vertex-refusal.cjs): never text from the request.
+      ...(record.err.detail !== undefined ? { detail: record.err.detail } : {}),
     };
     // Error Reporting only finds a stack trace in a top-level field of the
     // entry (stack_trace, message or exception), not nested under err: without
