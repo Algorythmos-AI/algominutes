@@ -1,3 +1,4 @@
+import { MAX_QUESTION_CHARS } from '@algominutes/contracts';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import type { z } from 'zod';
@@ -165,7 +166,8 @@ export function SearchPage() {
         <input
           id="q"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          maxLength={MAX_QUESTION_CHARS}
+          onChange={(e) => setQuery(e.target.value.slice(0, MAX_QUESTION_CHARS))}
           placeholder={mode === 'search' ? 'Search every transcript' : 'What did we decide about the launch?'}
           className="min-w-0 flex-1 rounded-xl border border-border bg-bg px-4 py-3 text-heading"
         />

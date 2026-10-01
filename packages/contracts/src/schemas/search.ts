@@ -1,12 +1,13 @@
 // POST /v1/search — hybrid retrieval (functions/search-and-chat.cjs
 // handleSearch). Also the citation shape reused by /v1/chat.
 import { z } from './zod';
+import { MAX_QUESTION_CHARS } from '../limits';
 
 /** Request body. `k` is result count (default 10); `noteId` narrows retrieval
  * to one note as an *additional* predicate. Source: handleSearch body parse. */
 export const SearchRequest = z
   .object({
-    query: z.string().min(1),
+    query: z.string().min(1).max(MAX_QUESTION_CHARS), // rev 11 L4: the api refuses longer (H9a)
     k: z.number().int().min(1).max(50).optional(),
     noteId: z.string().optional(),
   })

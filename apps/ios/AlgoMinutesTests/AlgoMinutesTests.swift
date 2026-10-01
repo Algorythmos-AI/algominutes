@@ -1685,3 +1685,16 @@ final class UploadStallPolicyTests: XCTestCase {
         XCTAssertLessThan(UploadStallPolicy.stallSeconds, UploadStallPolicy.hardCeilingSeconds)
     }
 }
+
+// RELEASE.md rev 11, L4 (H9b): the chat field stops at the api's limit.
+final class QuestionLimitTests: XCTestCase {
+    func testAShortQuestionIsLeftAlone() {
+        XCTAssertEqual(QuestionLimit.cap("What did we decide?"), "What did we decide?")
+    }
+
+    func testALongQuestionStopsAtTheApisLimit() {
+        let long = String(repeating: "q", count: 2500)
+        XCTAssertEqual(QuestionLimit.cap(long).count, 2000)
+        XCTAssertEqual(QuestionLimit.maxCharacters, 2000)
+    }
+}

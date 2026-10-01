@@ -178,7 +178,7 @@ struct ChatView: View {
         HStack(spacing: 10) {
             TextField("Ask about your meetings…", text: Binding(
                 get: { viewModel.draft },
-                set: { viewModel.draft = $0 }
+                set: { viewModel.draft = QuestionLimit.cap($0) }
             ), axis: .vertical)
                 .font(Typography.body(15))
                 .foregroundStyle(Theme.body)
@@ -322,5 +322,15 @@ final class ChatViewModel {
             segments.append(.text(String(remaining)))
         }
         return segments
+    }
+}
+
+/// The longest question the api takes (RELEASE.md rev 11, L4; the contract's MAX_QUESTION_CHARS). A longer one
+/// is answered with a 400, so the field stops there instead.
+enum QuestionLimit {
+    static let maxCharacters = 2000
+
+    static func cap(_ text: String) -> String {
+        text.count > maxCharacters ? String(text.prefix(maxCharacters)) : text
     }
 }
