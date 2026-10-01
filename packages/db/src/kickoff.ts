@@ -11,11 +11,13 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import intelligenceModule from '@algominutes/ai/intelligence.cjs';
 import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
+import noteTerminal from '@algominutes/db/note-terminal.cjs';
 import spendGuardModule from '@algominutes/ai/spend-guard.cjs';
 import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { withinLength, chargedMinutes } from './recording-length.js';
 import { repairNoteMirror } from './mirror-repair';
 import { getNoteQueueState, markQueued, markError, markKickoffRejected, countInFlightNotesForUser } from './notes-repo';
+import { getPool } from './db';
 import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import { noteChargeStands } from './usage-repo';
 import { ensureTrial, type TrialDevice } from './subscriptions-repo';
@@ -83,6 +85,13 @@ export interface KickoffInput {
   allowRecording?: boolean;
   /** The notetaker's ingest: its run is queued once per bot (markQueued's meetingBotId). */
   meetingBotId?: string;
+  /**
+   * A held note's resume (held-notes.ts, RELEASE.md rev 11 H6b): a refusal
+   * (the spend cap, too long for the plan now) leaves it held, and a failure
+   * once it was queued holds it again, refunded, instead of failing it. The
+   * next sweep tries again.
+   */
+  resume?: boolean;
   traceId?: string;
   log: Log;
   env?: NodeJS.ProcessEnv;
@@ -120,6 +129,19 @@ const TRY_AGAIN = "We couldn't queue your audio. Please try again.";
 // kickoff whose transaction wrote nothing returns before failing anything).
 async function failNote(input: KickoffInput, userMsg: string, event: string): Promise<void> {
   const { firestore, noteId, workspaceId, log, traceId } = input;
+  if (input.resume) {
+    // Queued (and charged) but not started: back to held, refunded, in one transaction. If even that fails, the
+    // note is 'queued' with no job, and the stuck-note sweep fails and refunds it.
+    try {
+      // The measured length again: markQueued cleared it for the run, and the next resume charges it.
+      await (noteTerminal as { holdNoteForMinutes: (a: object) => Promise<unknown> })
+        .holdNoteForMinutes({ pool: getPool(), firestore, noteId, workspaceId, measuredSec: input.durationSec ?? null, log, traceId });
+      log.warn({ event }, 'resume_failed_held_again');
+    } catch (err) {
+      log.error({ err, event }, 'resume_rehold_failed');
+    }
+    return;
+  }
   const refund = { reason: 'refund:enqueue_failed', idempotencyKey: `${noteId}:refund:enqueue` };
   await markError(firestore, { noteId, workspaceId, errorMessage: userMsg, refund, traceId, reopenMeetingBotId: input.meetingBotId }, log).catch((err: unknown) =>
     log.error({ err, event }, 'mark_error_failed'),
@@ -130,6 +152,11 @@ async function failNote(input: KickoffInput, userMsg: string, event: string): Pr
 // concurrent duplicate kickoff already queued is left running.
 async function rejectNote(input: KickoffInput, userMsg: string, event: string): Promise<void> {
   const { firestore, noteId, workspaceId, log } = input;
+  if (input.resume) {
+    // A held note stays held: nothing was written, and the next sweep asks again.
+    log.info({ event }, 'resume_refused_left_held');
+    return;
+  }
   try {
     const { marked } = await markKickoffRejected(firestore, { noteId, workspaceId, errorMessage: userMsg }, log);
     if (!marked) log.info({ event }, 'kickoff_rejection_spared_in_flight_note');
@@ -168,6 +195,11 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   }
   if (queueState.inFlight) {
     log.info({ status: queueState.status }, 'process_already_in_flight');
+    return { kind: 'in_flight', status: queueState.status };
+  }
+  if (input.resume && queueState.status !== 'awaiting_minutes') {
+    // Run since the sweep listed it (a client's retry): that run stands. markQueued checks again under the lock.
+    log.info({ status: queueState.status }, 'resume_note_no_longer_held');
     return { kind: 'in_flight', status: queueState.status };
   }
   // A finished note is never run again by a kickoff. The api's own check reads the Firestore doc, which a client
@@ -318,6 +350,7 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       meter: { minutes, idempotencyKey: `${noteId}:ingest`, enforceQuota: input.quota !== false },
       allowRecording: input.allowRecording,
       meetingBotId: input.meetingBotId,
+      onlyIfHeld: input.resume,
     }, log);
   } catch (err: any) {
     // The in-transaction quota check: nothing was written.

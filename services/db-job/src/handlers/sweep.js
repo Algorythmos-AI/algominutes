@@ -71,6 +71,8 @@ const USAGE_EVENTS_DAYS = 90;
 const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
 const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
 const MIRROR_REPAIR_LIMIT = 200;
+// Held notes offered to the kickoff per sweep, oldest first (the rest wait for the next run).
+const HELD_RESUME_LIMIT = 100;
 const NOTICE_RETRY_AFTER_S = 5 * 60; // the writer's own enqueue goes first
 const NOTICE_MAX_AGE_H = 24; // a push about yesterday's recording helps nobody
 const LOCK_KEY = 'algominutes:sweep';
@@ -135,6 +137,7 @@ async function run({
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
     listUnsentNotices, abandonStaleNotices, pruneOldNotices, claimLostSummaries, claimLostEmbeds,
+    resumeHeldNotes,
   } = repo;
   const enqueue = enqueueWorker || workerEnqueuer(env || process.env);
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
@@ -317,6 +320,15 @@ async function run({
       }
       if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
       return repaired;
+    });
+
+    // A note held for minutes (RELEASE.md rev 11, H6) is queued once its author has them: an invite redeemed, a
+    // grant, a purchase or a new month all show up as headroom (packages/db held-notes.ts). Oldest first per user;
+    // charged its measured length. Within a sweep interval of the minutes arriving.
+    await step('resume_held_notes', async () => {
+      const r = await resumeHeldNotes({ firestore: deps.firestore, log, traceId, limit: HELD_RESUME_LIMIT, env: env || process.env });
+      if (r.held === HELD_RESUME_LIMIT) log.warn({ limit: HELD_RESUME_LIMIT }, 'held_resume_limit_reached');
+      return r;
     });
 
     await step('notices', async () => {

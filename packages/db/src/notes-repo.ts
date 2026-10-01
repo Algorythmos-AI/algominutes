@@ -116,6 +116,12 @@ export interface MarkQueuedInput {
    */
   meter?: { minutes: number; idempotencyKey: string; enforceQuota?: boolean };
   /**
+   * A held note's resume (held-notes.ts): queue it only if it's still held,
+   * checked under the note's lock. The sweep works from a list, and a client may
+   * have run the note since (finished, or failed and refunded): that run stands.
+   */
+  onlyIfHeld?: boolean;
+  /**
    * A note still 'recording' (a notetaker in its meeting) is queued only by the
    * notetaker's own ingest, which ends the recording. Checked under the note's
    * lock, so a client kickoff can never race it.
@@ -394,6 +400,9 @@ export async function markQueued(
         if (state.inFlight) {
           // Idempotent: a duplicate kickoff (e.g. a client retry after a
           // timeout) must not reset the running job or delete its chunks.
+          return { queued: false, status: state.status };
+        }
+        if (input.onlyIfHeld && state.status !== 'awaiting_minutes') {
           return { queued: false, status: state.status };
         }
         if (state.status === 'ready') {

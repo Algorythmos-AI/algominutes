@@ -21,6 +21,7 @@ export * from './beta-invites-repo.js';
 export * from './measured-length.js';
 export * from './mirror-repair.js';
 export * from './kickoff.js';
+export * from './held-notes.js';
 export * from './meetings-repo.js';
 export * from './redrive-repo.js';
 // Only the prune: the tombstone's write and check are correct only inside a
