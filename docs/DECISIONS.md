@@ -35,6 +35,13 @@ choices made during the automated A2/A3 run so they are auditable from the git l
     **Not `thinkingLevel`:** gemini-2.5-flash, the fallback until 2026-10-20, answers it with a 400 ("thinking_level
     is not supported by this model"), which the ladder treats as non-retryable, so it would have disabled the
     fallback. Both rungs accept `thinkingBudget` 2048 with a 65,536 cap (probed 2026-10-01).
+    **Corrected the same day:** "both rungs accept `thinkingBudget`" was wrong. On staging gemini-3.5-flash refused
+    it on 7 of 12 calls ("Thinking budget is not supported for this model"); a two-call probe had hit the backends
+    that take it. Re-probed with 14 calls each: 3.5 with `thinkingLevel: LOW` 14/14, 3.5 with no thinking config
+    14/14, 2.5 with `thinkingBudget: 2048` 14/14. The cap is now chosen per model (`models.cjs`
+    `thinkingConfigFor`: `thinkingLevel` for the 3.x family, `thinkingBudget` otherwise), applied per rung by the
+    shared ladder, and dropped for one more ask if Vertex still answers 400 (`gemini_thinking_cap_refused`).
+    Lesson: an intermittent refusal needs a probe of ten or more calls, not two.
 - **Rejected.** Keeping `global` for speech-to-text: it's the only place Google offers Chirp and speaker
   separation, but it moves the audio out of Australia for one feature.
 - **Correction (2026-10-01).** The Sydney move doesn't ship yet. A batchRecognize probe run as the owner's user
