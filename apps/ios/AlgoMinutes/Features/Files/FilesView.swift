@@ -10,6 +10,8 @@ struct FilesView: View {
     @State private var query = ""
     @State private var filter: SourceFilter = .all
     @State private var selectedNoteId: String?
+    /// A note the user asked to delete, until they confirm (H13/UX4: every delete asks).
+    @State private var pendingDelete: Note?
     @State private var showChat = false
     // Owned here (not by ChatView) so the conversation survives sheet dismissal.
     @State private var chatModel = ChatViewModel()
@@ -243,14 +245,10 @@ struct FilesView: View {
                 ))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .contextMenu { NoteContextMenu(note: note, selectedNoteId: $selectedNoteId) }
+                .contextMenu { NoteContextMenu(note: note, selectedNoteId: $selectedNoteId, pendingDelete: $pendingDelete) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
-                        let id = note.id
-                        Task {
-                            do { try await env.deleteNote(id: id) }
-                            catch { env.alertMessage = "Couldn't delete this note. Please try again." }
-                        }
+                        pendingDelete = note
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
@@ -301,6 +299,29 @@ struct FilesView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await env.notes.refresh() }
+        // A swipe or a long press no longer deletes on its own: a note and its
+        // recording can't be brought back, so it asks, naming what goes (H13/UX4).
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { note in
+            Button("Delete", role: .destructive) {
+                let id = note.id
+                pendingDelete = nil
+                Task {
+                    do { try await env.deleteNote(id: id) }
+                    catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+                }
+            }
+            Button("Keep it", role: .cancel) { pendingDelete = nil }
+        } message: { note in
+            Text("“\(note.title)” and its recording are deleted for good.")
+        }
     }
 
     // MARK: - Cards
