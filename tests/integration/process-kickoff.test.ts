@@ -194,6 +194,26 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'error' });
   });
 
+  // 2026-10-01: an app's second kickoff, 4 minutes after a 52-minute meeting was ready, re-ran all of it.
+  it("a ready note is never run again by a kickoff, whatever its Firestore doc says", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(200);
+    await pool.query(`UPDATE notes SET status = 'ready', updated_at = NOW() - INTERVAL '4 minutes' WHERE id = 'n1'`);
+    // A client wrote 'queued' on the doc (its retry does), so the route's own ready check is passed.
+    docs.set('workspaces/workspace_alice/notes/n1', { authorId: 'alice', status: 'queued' });
+    const again = await kickoff('alice', upload('alice', 'n1'));
+    expect(again).toEqual({ status: 200, body: { success: true, noteId: 'n1', cached: true } });
+    // And the doc is put back in step with Postgres, so the app stops offering a retry.
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'ready' });
+    expect((await pool.query(`SELECT status, run_seq FROM notes WHERE id = 'n1'`)).rows[0]).toMatchObject({ status: 'ready' });
+    expect(enqueued).toHaveLength(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(1);
+    // markQueued itself refuses it under the lock.
+    expect(await markQueued(fakeDb as never, { noteId: 'n1', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'recording' }, quietLog as never)).toEqual({ queued: false, status: 'ready' });
+  });
+
   it('markQueued debits only when it queues: the in-transaction duplicate path charges nothing', async () => {
     await seedUser('alice');
     noteDoc('alice', 'n2');

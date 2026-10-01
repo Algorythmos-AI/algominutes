@@ -396,6 +396,10 @@ export async function markQueued(
           // timeout) must not reset the running job or delete its chunks.
           return { queued: false, status: state.status };
         }
+        if (state.status === 'ready') {
+          // A finished note is never queued again (kickoff.ts): its transcript and summary stand.
+          return { queued: false, status: 'ready' };
+        }
 
         await ensureWorkspaceAccess(
           client,
