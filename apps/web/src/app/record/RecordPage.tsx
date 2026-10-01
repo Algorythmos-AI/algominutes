@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useBlocker, useNavigate } from 'react-router';
-import { maxRecordingSecondsForPlan, type EntitlementResponse, type PlanId } from '@algominutes/contracts';
+import { maxRecordingSecondsForPlan, RECORDING_LIMITS, type EntitlementResponse, type PlanId } from '@algominutes/contracts';
 import { noMinutesLeft } from '../../lib/billing/invite';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
@@ -16,6 +16,14 @@ import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 import { useNotes } from '../notes/NotesContext';
 import { recorderEnv } from './env';
+
+// Until the plan is known, a recording may run to the longest any plan allows: the server holds the real limit.
+// Starting at the free plan's 2 hours, a Pro user whose plan couldn't be read was cut off at 2:00:00 (rev 11 N3).
+const LONGEST_CAP_S = Math.max(...Object.values(RECORDING_LIMITS).map((l) => l.maxRecordingSeconds));
+// It stops this far before the limit, so the audio it uploads measures inside it (rev 11 LM1).
+const STOP_EARLY_S = 5;
+// How long to wait before asking for the plan again after a failure: a few quick tries, then once a minute.
+const PLAN_RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 
 export interface RecorderEnv {
   store: RecordingStore;
@@ -103,7 +111,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const [callsOn, setCallsOn] = useState(false);
   const capture = useRef<Capture | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [capSeconds, setCapSeconds] = useState(() => maxRecordingSecondsForPlan());
+  const [capSeconds, setCapSeconds] = useState(LONGEST_CAP_S);
   // A call's two sources, metered (RELEASE.md PR 13): null when not recording a call.
   const [levels, setLevels] = useState<{ call: number; mic: number } | null>(null);
   const [micMuted, setMicMuted] = useState(false);
@@ -166,16 +174,29 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     );
   }, [api, callsPossible]);
 
-  // The plan's per-recording cap (the default until the plan is known).
+  // The plan's per-recording cap, asked for until it's known (the longest plan's until then).
   useEffect(() => {
-    api.entitlement().then(
-      (e) => {
-        setEnt(e);
-        setCapSeconds(maxRecordingSecondsForPlan(e.plan as PlanId));
-      },
-      (err: unknown) => reportCrash('record.entitlement', err),
-    );
-  }, [api]);
+    let gone = false;
+    const sleep = env.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    void (async () => {
+      for (let attempt = 0; !gone; attempt++) {
+        try {
+          const e = await api.entitlement();
+          if (gone) return;
+          setEnt(e);
+          setCapSeconds(maxRecordingSecondsForPlan(e.plan as PlanId));
+          return;
+        } catch (err) {
+          // silent-catch-ok: the first failure is reported; the retries that follow are the handling (asked again until it answers), and reporting each would flood the crash beacon
+          if (attempt === 0) reportCrash('record.entitlement', err);
+          await sleep(PLAN_RETRY_MS[Math.min(attempt, PLAN_RETRY_MS.length - 1)]);
+        }
+      }
+    })();
+    return () => {
+      gone = true;
+    };
+  }, [api, env.sleep]);
 
   // The clock while recording.
   useEffect(() => {
@@ -285,7 +306,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   // The cap: stop on its own at the plan's limit.
   const elapsed = recording ? Math.max(0, (now - phase.startedAt) / 1000) : 0;
   useEffect(() => {
-    if (recording && elapsed >= capSeconds) void stop();
+    if (recording && elapsed >= capSeconds - STOP_EARLY_S) void stop();
   }, [recording, elapsed, capSeconds, stop]);
 
   const start = async () => {
@@ -347,7 +368,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
           void stopRef.current();
         },
         // Checked per chunk too: a hidden tab's clock is throttled, and the cap must still hold.
-        onProgress: (seconds) => seconds >= capRef.current && void stopRef.current(),
+        onProgress: (seconds) => seconds >= capRef.current - STOP_EARLY_S && void stopRef.current(),
       });
       setNow(Date.now());
       setPhase({ kind: 'recording', startedAt: Date.now() });
