@@ -8,7 +8,7 @@ run; each item has a safe reversible default already applied. Grouped by type.
 Rev 11 leads `docs/plans/RELEASE.md`: Stage 0 stops the line, then the quality sprint (H0–H15) comes before
 cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries follow.
 
-- [ ] **Staging deploys have failed since #280 (2026-09-30 01:02 UTC); the api is stuck on 539ad93.**
+- [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
     merge queue had passed it. The cause is a flaky test: `apps/web/src/app/settings/settings.test.tsx:135-147`
     calls `answer()` before the mocked fetch has run (`TypeError: answer is not a function`). → **H0.**
@@ -16,18 +16,87 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
     `BILLING_URL` and `JOBS_SA_EMAIL`, which only Apply B sets. Because `rollout-meetings`, `rollout-api` and
     `smoke` need every wave-1 rollout, they're skipped, so #280–#288 aren't live. → **H1**, then **Apply B**.
   - Done when a deploy at the head is green, the api's image is at the head, and smoke passes.
+  - **Fixed 2026-09-30.** The owner applied Apply B (`reviewed-460da81.tfplan`: 54 added, 10 changed, 0
+    destroyed), which gives billing `BILLING_URL`. Then `services=all` at 460da81 (run 36711017769) passed every
+    job: migrate, 7 rollouts, rollout-meetings, rollout-api and smoke. `scripts/train.sh` (H1c) confirmed all 8
+    services serve 460da81, including billing-00040. #280-#289 are live. H0 (#290) fixed the flaky test. H1a/H1b
+    make sure a missing variable can't do this again.
+- [x] **Web recordings stuck at "Uploading… 0%" (P0, found by the owner's live Meet test, 2026-09-30).**
+  - The api minted the Cloud Storage session without the browser's origin, and the bucket has no CORS
+    policy. So every chunk's answer came back without `Access-Control-Allow-Origin`: stored (HTTP 200), but
+    hidden from the page. Reproduced against the staging bucket, with and without an origin.
+  - Fixed in #293. `train.sh` confirmed the api is live at 15b5942.
+  - [ ] **Owner:** record 30 seconds from Chrome on staging, and check the note reaches ready.
+- [x] **The deploy workflow's new safety nets ran green (#294, H1b).** Run 36735730763 (`services=all` at
+  c054199) passed every job, including billing's own lane (`rollout-solo`) and the live-env preflight before
+  each rollout. `train.sh` confirmed all 8 services serve c054199.
+- [x] **Retracted (2026-10-01): "every recording over 10 minutes fails at speech-to-text" was wrong.**
+  - The claim came from a batchRecognize probe run **as the owner's user account**, which failed on "the speech
+    service agent does not have storage.objects.get access". The transcoder runs as its own service account, and
+    for it the read works.
+  - Evidence: the 15-minute e2e (run 36742160404) went through the long path on staging: chunked
+    speech-to-text in `global`, 340 s to ready, about 1,000 transcript lines, 3 chapters, gemini-3.5-flash with
+    `finishReason: STOP`. The 2-minute e2e (run 36742148442) passed the fast path the same night.
+  - #297 had already merged a Sydney move and a speech-agent grant built on the wrong finding. Neither was
+    applied, so the live transcoder never changed (no `STT_LOCATION`, `LANGUAGE_CODES=en-US,en-GB,en-AU`).
+    `fix/stt-stay-global-until-proven` takes both back out of Terraform.
+  - Kept from the probe: a finished job whose one file failed used to be saved as silence. That is fixed on its
+    own (`fix/stt-file-error-not-silence`).
+  - Sydney (N2, H10) is still wanted, but only once a batchRecognize there is proven **as the transcoder's
+    service account**, and with `en-AU` being the only language Sydney's `long` model takes.
+  - The owner's 45-60 minute proof meeting can go ahead now.
 - [ ] **Safety nets not yet switched on:**
-  - The nightly e2e has run once (36633880052) and failed: `E2E_INVITE_CODE is not set`.
-  - web-e2e's `e2e` job has been skipped in every run: no `VERCEL_AUTOMATION_BYPASS_SECRET`, or the last deploy
-    was red.
-  - Done at the first green run of each.
+  - [x] The pipeline e2e: the owner set `E2E_INVITE_CODE` (2026-09-30). After #295 fixed what it expected of a
+    short recording, both sizes passed on staging: 2 minutes (run 36742148442, the fast path) and 15 minutes (run
+    36742160404, the long path, the first time it ran on this staging).
+  - [ ] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`, and its `e2e` job ran for the first time
+    (run 36746303857, bddc7cd). It failed every step that processes a note (the import, search, the browser
+    recording, the cut-off recording's upload), and passed the rest. Staging's guests start with no minutes
+    (`TRIAL_ON_FIRST_USE=off`), so the web app refused before uploading. Fix: `fix/web-e2e-invite` (the guest
+    redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
+  - Done at the first green run of each, and the nightly schedule's first green night.
+- [x] **The 10-15 proof: a real meeting on gemini-3.5-flash alone (2026-10-01).** The owner's 51.7-minute
+  recording from the iPhone (note tccLBaIAvLIWpcgI6cg4, staging): the chunked path, the summary by
+  gemini-3.5-flash with `finishReason: STOP`, 5 chapters, ready 297 s after the kickoff (the bar for an hour is
+  10 minutes).
+- [x] **The owner's 30-second Chrome recording reached ready (2026-10-01)**, about 30 s after Stop (note
+  webe10a79655650481ba5291f59e39002d4): the web upload fix (#293) on staging. Its first Gemini call got a 400
+  INVALID_ARGUMENT and the retry succeeded; `fix/vertex-refusal-detail` keeps the refused field and reason for
+  the next one.
+- [x] **Apply C applied (2026-10-01, reviewed-65b2a93: 8 added, 22 changed).** Verified: the transcoder's timeout
+  1800 s, `MAX_TASK_ATTEMPTS` 10, the transcode queue's 10 attempts and 600 s backoff, the Cloud SQL maintenance
+  window. Redeployed `services=all` (run 36787844649); all 8 services on the head.
+- [ ] **New P0, found on the proof meeting: a finished note was run again.** Four minutes after it was ready, the
+  iPhone (which was showing a retry) sent a second kickoff, and the server re-ran all 52 minutes: speech-to-text
+  paid twice, the summary replaced. The api's "already ready" check read only the Firestore doc, which a client
+  can write. Fix: `fix/ready-note-not-rerun` (Postgres decides; the doc is repaired at once). Why the app
+  offered a retry on a finished note is still open; two callers on one upload is the likely cause
+  (`fix/ios-upload-never-stuck`).
+- [ ] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
+  was CLEAN, with auto-merge on, but never entered the queue. `gh pr merge` only turns auto-merge on, and its
+  trigger was missed. Enqueuing it directly (the GraphQL `enqueuePullRequest`) worked. The overnight train runs
+  a watcher that does this for any PR still waiting after two looks, 2 minutes apart.
+- **H6, held for minutes, as built (2026-10-01; four PRs in the train):**
+  - H6a `feat/held-for-minutes`: the transcoder's settle holds a note over the minutes left
+    (`awaiting_minutes`, uncharged, its measured length kept); the web and iOS say so; mirror repair covers it.
+  - H6b `feat/resume-held-notes`: the db-sweep step `resume_held_notes` queues a held note through the kickoff
+    once its author has minutes, oldest first per user, and only while it's still held (checked under the
+    note's lock).
+  - H6c `feat/kickoff-holds`: an uploaded recording over the minutes left is held at the kickoff (202, shaped as
+    the in-flight answer so every client reads it as accepted; `held: true` for the ones that know). iOS still
+    offers Pro or the invite code, as it did for the 402. A YouTube link keeps the 402. Redeeming an invite
+    resumes the user's held notes at once. A note held at the kickoff has no measured length: its resume is
+    charged 0, and the transcoder's settle charges the measured length or holds it again.
+  - H6d `feat/web-minutes-left`: the web record page says the minutes left, and that a recording past them is
+    kept. iOS's equivalent is still open.
 - [ ] **P0s found by the rev 11 audits** (RELEASE.md R11.4). Each closes with a failing-then-passing test and
   staging evidence here:
   - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3.
   - L3: Try again doubles the transcript (`markQueued` leaves the old lines) → H2.
   - L6: no kickoff lease, so a duplicate can double-pay speech-to-text → H2.
   - N1: a phone call over 5 minutes ends an iPhone recording → H4.
-  - N2: speech-to-text runs in `locations/global`, not Sydney → S1, H10.
+  - N2: speech-to-text runs in `locations/global`, not Sydney → S1 (done: `long` serves in Sydney; DECISIONS
+    2026-09-30), H10.
   - N3: the web caps Pro at 2 h when the plan fetch fails → H5.
   - LM1: a 4 h recording fails the zero-slack length check → H5.
   - N4, L8–L11: broadcast captures and uploads → H3, H11.
