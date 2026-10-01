@@ -28,7 +28,19 @@ export interface RecordingMeta {
    * The note an upload of it created, until that upload ends: a tab closed mid-upload leaves the note
    * behind, and the retry puts the audio into it instead of making a second one.
    */
-  note?: { noteId: string };
+  note?: { noteId: string; session?: UploadSessionRef };
+}
+
+/**
+ * The upload session a recording's audio is going into (RELEASE.md rev 11, LM8): remembered with its note, so
+ * Try again after a failed or cut-off upload carries on from the bytes Cloud Storage holds, not from the start.
+ */
+export interface UploadSessionRef {
+  uploadId: string;
+  sessionUri: string;
+  chunkSize: number;
+  storagePath: string;
+  totalBytes: number;
 }
 
 /** What /v1/process needs for a note whose audio is already uploaded. */
@@ -116,7 +128,7 @@ export class RecordingStore {
   }
 
   /** Remembers (or, with undefined, forgets) the note an upload of it created. */
-  async setNote(id: string, note: { noteId: string } | undefined): Promise<boolean> {
+  async setNote(id: string, note: { noteId: string; session?: UploadSessionRef } | undefined): Promise<boolean> {
     return this.update(id, (m) => {
       const next = { ...m };
       if (note) next.note = note;

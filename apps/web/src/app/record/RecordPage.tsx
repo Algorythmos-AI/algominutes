@@ -7,6 +7,7 @@ import { formatClock, formatDate } from '../../lib/notes/format';
 import { canCaptureCalls, captureCall, CaptureError, meterStream, SILENT_LEVEL, type Capture, type CaptureEnv, type StreamMeter } from '../../lib/recorder/callCapture';
 import { extensionFor, leftOver, pickMimeType, RecordingGoneError, startRecording, type ActiveRecording, type Locks } from '../../lib/recorder/recorder';
 import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
+import { workspaceIdFor } from '../../lib/notes/workspace';
 import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
 import { endedUpload, startedUpload } from '../../lib/uploads/ownUploads';
 import { useApi } from '../ApiContext';
@@ -266,7 +267,9 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
             track: { start: startedUpload, end: endedUpload },
             // A tab closed mid-upload left its note: the audio goes into that one, not a second.
             reuseNoteId: meta.note?.noteId,
-            onNote: (noteId) => env.store.setNote(meta.id, { noteId }),
+            // And into its upload session, from the bytes Cloud Storage already holds (rev 11, LM8).
+            reuseSession: meta.note?.session,
+            onNote: (noteId, session) => env.store.setNote(meta.id, { noteId, session }),
             onNoteDropped: () => env.store.setNote(meta.id, undefined),
             fetchImpl: env.fetchImpl,
             sleep: env.sleep,
@@ -569,6 +572,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
 /** Recordings left on this browser (a closed tab, a failed upload): upload them, or discard them. */
 function RecoveredRecordings({ env, busy, onUpload }: { env: RecorderEnv; busy: boolean; onUpload: (m: RecordingMeta) => Promise<void> }) {
   const { user } = useAuth();
+  const { api } = useApi();
   const [left, setLeft] = useState<RecordingMeta[]>([]);
   const [discarding, setDiscarding] = useState<RecordingMeta | null>(null);
   const [version, setVersion] = useState(0);
@@ -613,6 +617,10 @@ function RecoveredRecordings({ env, busy, onUpload }: { env: RecorderEnv; busy: 
                 const r = discarding;
                 setDiscarding(null);
                 void env.store.remove(r.id).then(() => setVersion((v) => v + 1), (err: unknown) => reportCrash('record.discard', err));
+                // Its note goes with it (a failed or cut-off upload leaves one, to resume into: rev 11, LM8).
+                if (r.note && user) {
+                  api.deleteNote({ noteId: r.note.noteId, workspaceId: workspaceIdFor(user.uid) }).catch((err: unknown) => reportCrash('record.discardNote', err));
+                }
               }}
             >
               Discard
