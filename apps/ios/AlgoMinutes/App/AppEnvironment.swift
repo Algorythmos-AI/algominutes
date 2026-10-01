@@ -386,13 +386,11 @@ final class AppEnvironment {
             return
         }
 
-        // Upload confirmed — the bytes are safely in Storage, so the local copy
-        // is no longer the only copy and can go. The doc records where they are
-        // (the player asks the api to sign it).
+        // The doc records where the bytes are (the player asks the api to sign it).
+        // The local copy stays until the kickoff is settled (RELEASE.md rev 11, L2): an app
+        // killed between here and the kickoff left a note with no Postgres row, which nothing
+        // ever re-ran; with the file kept, the next launch re-sends it (resumePendingUploads).
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-        if kind == .recording {
-            recordingStore.remove(fileURL: fileURL)
-        }
 
         do {
             try await api.processAudio(.init(
@@ -403,7 +401,11 @@ final class AppEnvironment {
                 mimeType: mimeType,
                 durationSec: durationSeconds.map { Double($0) }
             ))
+            if kind == .recording { recordingStore.remove(fileURL: fileURL) }
         } catch {
+            // The server decided (out of minutes, too long): the audio is in Storage and Try
+            // again uses it, so the copy can go. A network failure keeps it for the next launch.
+            if kind == .recording, Self.kickoffWasDecided(error) { recordingStore.remove(fileURL: fileURL) }
             // Out of minutes opens the paywall (the recording is safe and can
             // process once Pro); a refusal the server recorded is left as is.
             handleKickoffFailure(
@@ -611,7 +613,6 @@ final class AppEnvironment {
         }
 
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-        recordingStore.remove(fileName: pending.fileName)
 
         do {
             try await api.processAudio(.init(
@@ -619,8 +620,11 @@ final class AppEnvironment {
                 storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt,
                 durationSec: pending.durationSeconds.map { Double($0) }
             ))
+            // Settled: the copy can go (kept until now, rev 11 L2, as in uploadAndProcess).
+            recordingStore.remove(fileName: pending.fileName)
             return .queued
         } catch {
+            if Self.kickoffWasDecided(error) { recordingStore.remove(fileName: pending.fileName) }
             return .blocked(message: handleKickoffFailure(
                 error, noteId: noteId, event: "reupload_process_kickoff_failed",
                 fallback: "Could not start processing. Please try again."
@@ -632,6 +636,20 @@ final class AppEnvironment {
     /// the save sheet so its prefilled value and the fallback cannot drift —
     /// TitleDeriver.isPlaceholder matches this exact shape to decide whether
     /// an auto-generated title may be replaced by one derived from the gist.
+    /// Whether a failed kickoff was the server's decision (a refusal it answered), rather than
+    /// the request not getting through. A decided one is final until the user acts, so the local
+    /// copy can go; one that didn't get through is re-sent on the next launch (rev 11, L2).
+    nonisolated static func kickoffWasDecided(_ error: Error) -> Bool {
+        switch error {
+        case APIError.quotaExceeded, APIError.updateRequired:
+            return true
+        case APIError.http(let status, _):
+            return (400..<500).contains(status) && status != 408 && status != 429
+        default:
+            return false
+        }
+    }
+
     nonisolated static func defaultRecordingName(_ date: Date = Date()) -> String {
         "Session_\(dateStamp(date))"
     }
