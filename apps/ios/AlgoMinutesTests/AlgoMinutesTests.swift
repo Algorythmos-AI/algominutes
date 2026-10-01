@@ -1552,7 +1552,8 @@ final class RecorderWatchdogTests: XCTestCase {
         sinceLastResume: TimeInterval? = nil,
         warned: Bool = false,
         recorderRunning: Bool = false,
-        weThink: Bool = true
+        weThink: Bool = true,
+        inCall: Bool = false
     ) -> RecorderWatchdog.Decision {
         RecorderWatchdog.decide(
             weThinkWeAreRecording: weThink,
@@ -1560,8 +1561,40 @@ final class RecorderWatchdogTests: XCTestCase {
             divergedSince: diverged.map { t0.addingTimeInterval(-$0) },
             lastResumeAttempt: sinceLastResume.map { t0.addingTimeInterval(-$0) },
             alreadyWarned: warned,
+            inCall: inCall,
             now: t0
         )
+    }
+
+    // RELEASE.md rev 11, N1 (H4). A phone call longer than 5 minutes ended the recording: the watchdog gave up
+    // at 300 s, so one meeting became two notes, or lost its second half. During a call nothing can be
+    // captured, and nothing is lost by waiting, so it waits for as long as the call lasts.
+    func testDuringACallItNeverGivesUp() {
+        for minutes in [5.0, 30, 120] {
+            let d = decide(diverged: minutes * 60, inCall: true)
+            XCTAssertFalse(d.giveUp, "gave up \(Int(minutes)) minutes into a call")
+        }
+    }
+
+    func testDuringACallItDoesntFightForTheMicrophone() {
+        // setActive(true) fails while the call holds the session; retrying every 5 s only burns battery.
+        XCTAssertFalse(decide(diverged: 60, inCall: true).attemptResume)
+    }
+
+    func testDuringACallItSaysSoOnce() {
+        XCTAssertTrue(decide(diverged: RecorderWatchdog.graceSeconds, inCall: true).warnUser)
+        XCTAssertFalse(decide(diverged: 60, warned: true, inCall: true).warnUser)
+        XCTAssertTrue(RecorderWatchdog.pausedForCallNotice.contains("call"))
+        XCTAssertTrue(RecorderWatchdog.pausedForCallNotice.contains("carries on"))
+    }
+
+    // LM2: a recorder that stopped without an interruption (a watchdog resume, a route change) lost the time
+    // recorded before it stopped, because the resume reset the live span without banking it.
+    func testTimeRecordedBeforeADivergenceIsBanked() {
+        let start = t0.addingTimeInterval(-600)
+        XCTAssertEqual(RecorderWatchdog.banked(accumulated: 120, startedAt: start, until: t0), 720)
+        XCTAssertEqual(RecorderWatchdog.banked(accumulated: 120, startedAt: nil, until: t0), 120,
+                       "nothing live: nothing more to bank")
     }
 
     func testHealthyRecordingIsLeftAlone() {
