@@ -215,17 +215,17 @@ async function handle(payload, deps) {
   // RELEASE.md rev 11, LM4. gemini-3.5-flash's thinking tokens count toward maxOutputTokens, and were uncapped:
   // on a long meeting they ate the room the chapters (written last) needed. Thinking is capped, a meeting with
   // chapters gets the model's whole output cap, and the ladder gets time in proportion to the transcript (the
-  // service's own timeout is 900 s). thinkingBudget, not thinkingLevel: gemini-2.5-flash, the fallback until
-  // 2026-10-20, refuses thinkingLevel with a 400 (spike S1, DECISIONS 2026-09-30).
+  // service's own timeout is 900 s). The cap's field differs by model family, and each refuses the other's: the
+  // ladder picks it per rung (models.cjs thinkingConfigFor; `thinking` below).
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts,
     deadlineMs: summaryDeadlineMs(transcriptStr.length, sharedIntelligence.RETRY_DEADLINE_MS),
     log,
+    thinking: { budget: THINKING_BUDGET },
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: wantChapters ? sharedTemplates.withChapters(chosen.responseSchema) : chosen.responseSchema,
       maxOutputTokens: wantChapters ? MAX_OUTPUT_TOKENS_WITH_CHAPTERS : MAX_OUTPUT_TOKENS,
-      thinkingConfig: { thinkingBudget: THINKING_BUDGET },
     },
   });
   if (!rawText) throw error || new Error('gemini_empty');

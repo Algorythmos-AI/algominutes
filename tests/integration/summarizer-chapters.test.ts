@@ -102,13 +102,13 @@ describe('summarizer chapters', () => {
 
   // RELEASE.md rev 11, LM4 (H8). One call summarises the whole meeting, and its 16,384-token cap was shared with
   // gemini-3.5-flash's uncapped thinking: chapters, which come last, were the first thing cut from a long
-  // meeting. The whole ladder also had 240 s, whatever the length. Both rungs take thinkingBudget and a 65,536
-  // cap (spike S1); thinkingLevel is refused by gemini-2.5-flash (400), which would have killed the fallback.
+  // meeting. The whole ladder also had 240 s, whatever the length. The cap is asked for as `thinking`, and the
+  // ladder picks each rung's field (gemini-call.test.ts): one fixed field is refused by one rung or the other.
   it('a long meeting gets its thinking capped, room for its chapters, and time in proportion', async () => {
     await lines(Array.from({ length: 240 }, (_, i) => i)); // a line a minute for 4 hours
     await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'g', actionItems: [], keyDecisions: [], chapters: [] })));
-    expect(request.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 2048 });
-    expect(request.generationConfig.thinkingConfig.thinkingLevel).toBeUndefined();
+    expect(request.thinking).toEqual({ budget: 2048 });
+    expect(request.generationConfig.thinkingConfig).toBeUndefined();
     expect(request.generationConfig.maxOutputTokens).toBe(65536);
     expect(request.deadlineMs).toBeGreaterThan(240_000);
     expect(request.deadlineMs).toBeLessThanOrEqual(600_000);
@@ -117,7 +117,7 @@ describe('summarizer chapters', () => {
   it('a short meeting keeps the smaller cap and the base budget, with thinking capped too', async () => {
     await lines([0, 1, 2]);
     await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'g', actionItems: [], keyDecisions: [] })));
-    expect(request.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 2048 });
+    expect(request.thinking).toEqual({ budget: 2048 });
     expect(request.generationConfig.maxOutputTokens).toBe(16384);
     expect(request.deadlineMs).toBeLessThan(250_000);
   });

@@ -15,7 +15,7 @@
 
 const { RETRY_DEADLINE_MS, isTransientError, sleep, backoffMs } = require('./intelligence.cjs');
 const { vertexRefusal } = require('./vertex-refusal.cjs');
-const { activeLadder } = require('./models.cjs');
+const { activeLadder, thinkingConfigFor } = require('./models.cjs');
 
 let _authClient = null;
 let _projectId = null;
@@ -58,6 +58,9 @@ async function callGeminiWithLadder({
   log,
   modelLadder,                   // default: models.cjs activeLadder(), evaluated per call
   generationConfig,
+  // Cap the model's thinking: { budget, level } (models.cjs thinkingConfigFor picks the field each rung takes).
+  // Pass this, not a thinkingConfig in generationConfig: one fixed field is refused by one rung or the other.
+  thinking,
   project,
   location,
   // Injection points for tests; production uses ADC, global fetch and real sleeps.
@@ -88,11 +91,17 @@ async function callGeminiWithLadder({
   // {text} / {inlineData} entries (legacy SDK shape). Vertex's REST API
   // expects them under `contents[0].parts`, with `role: 'user'`.
   const contents = [{ role: 'user', parts }];
-  const body = { contents, generationConfig: config };
+  // Built per rung: the thinking cap's field differs by model family.
+  const bodyFor = (modelName, withThinking) => ({
+    contents,
+    generationConfig: thinking && withThinking ? { ...config, thinkingConfig: thinkingConfigFor(modelName, thinking) } : config,
+  });
 
   let lastErr = null;
   for (const modelName of ladder) {
     const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
+    // Dropped for this rung if Vertex refuses the cap itself: an answer with uncapped thinking beats no answer.
+    let withThinking = true;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (Date.now() > deadline) {
         lastErr = new Error('TIME_BUDGET');
@@ -113,7 +122,7 @@ async function callGeminiWithLadder({
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(body),
+          body: JSON.stringify(bodyFor(modelName, withThinking)),
           signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
         });
 
@@ -126,6 +135,14 @@ async function callGeminiWithLadder({
             lastErr = vertexRefusal('Vertex Gemini', resp.status, errText);
             log.warn({ err: lastErr, model: modelName, location: loc }, 'gemini_model_unavailable');
             break; // next rung; retrying the same model can't help
+          }
+          // A 400 while a thinking cap was sent: Vertex's backends don't agree on which field a model takes
+          // (2026-10-01). Ask once more without the cap, on the same rung, without spending an attempt's backoff.
+          if (resp.status === 400 && thinking && withThinking) {
+            withThinking = false;
+            log.warn({ err: vertexRefusal('Vertex Gemini', resp.status, errText), model: modelName }, 'gemini_thinking_cap_refused');
+            attempt -= 1;
+            continue;
           }
           // Match the existing isTransientError fingerprint by mapping
           // HTTP status to a synthetic message — we already detect 503,
