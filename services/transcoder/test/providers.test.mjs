@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const neutral = require('../src/providers/neutral.js');
+const stt = require('../src/stt.js');
 const assemblyai = require('../src/providers/assemblyai.js');
 const deepgram = require('../src/providers/deepgram.js');
 const seam = require('../src/stt-provider.js');
@@ -160,4 +161,56 @@ test('assemblyai.languageParams: single code forced, many → auto-detect', () =
   assert.deepEqual(assemblyai.languageParams(['en-US']), { language_code: 'en-US' });
   assert.deepEqual(assemblyai.languageParams(['en-US', 'en-AU']), { language_detection: true });
   assert.deepEqual(assemblyai.languageParams([]), { language_detection: true });
+});
+
+// N6: a monologue with no pause used to be one line of thousands of characters.
+test('a line ends at 30 s or 1,000 characters, even with no pause or new speaker', () => {
+  // 90 s of one speaker, a 12-character word every 300 ms, no gap over 1.5 s.
+  const words = Array.from({ length: 300 }, (_, i) => ({
+    speakerTag: 1, startMs: i * 300, endMs: i * 300 + 250, text: 'wordwordword', confidence: 0.9,
+  }));
+  for (const [name, toLines] of [['neutral', neutral.wordsToLines], ['stt', stt.wordsToLines]]) {
+    const lines = toLines(words);
+    assert.ok(lines.length >= 3, `${name}: ${lines.length} lines`);
+    for (const l of lines) {
+      assert.ok(l.endMs - l.startMs <= 30_000 + 300, `${name}: a line spans ${l.endMs - l.startMs} ms`);
+      assert.ok(l.text.length <= 1000 + 13, `${name}: a line has ${l.text.length} characters`);
+    }
+    // Every word is kept, in order.
+    assert.equal(lines.map((l) => l.text).join(' '), words.map((w) => w.text).join(' '));
+  }
+});
+
+test('a line ends at 1,000 characters when speech is dense', () => {
+  // Long words, fast: the character limit comes before the 30 s one.
+  const words = Array.from({ length: 200 }, (_, i) => ({
+    speakerTag: 2, startMs: i * 50, endMs: i * 50 + 40, text: 'x'.repeat(40), confidence: 0.9,
+  }));
+  for (const toLines of [neutral.wordsToLines, stt.wordsToLines]) {
+    const lines = toLines(words);
+    assert.ok(lines.length > 1);
+    for (const l of lines) assert.ok(l.text.length <= 1000 + 41, `${l.text.length} characters`);
+  }
+});
+
+// A number read out in groups stays on one line, so redaction (which scrubs a
+// line at a time) still sees the whole of it.
+test('a full line never ends between two groups of digits', () => {
+  const card = ['4111', '1111', '1111', '1111'];
+  // Filler so the line reaches 1,000 characters on the card's third group, then more speech.
+  const filler = Array.from({ length: 82 }, (_, i) => `word${String(i).padStart(7, '0')}`);
+  const texts = [...filler, 'card', ...card, 'thanks', 'everyone'];
+  const words = texts.map((text, i) => ({ speakerTag: 1, startMs: i * 200, endMs: i * 200 + 150, text, confidence: 0.9 }));
+  for (const toLines of [neutral.wordsToLines, stt.wordsToLines]) {
+    const lines = toLines(words);
+    assert.ok(lines.length >= 2, 'the cap still ends the line');
+    assert.ok(lines.some((l) => l.text.includes('4111 1111 1111 1111')), lines.map((l) => l.text.slice(-40)).join(' | '));
+  }
+});
+
+test('a run of numbers still ends at twice the limit', () => {
+  const words = Array.from({ length: 800 }, (_, i) => ({ speakerTag: 1, startMs: i * 100, endMs: i * 100 + 80, text: '1234', confidence: 0.9 }));
+  for (const toLines of [neutral.wordsToLines, stt.wordsToLines]) {
+    for (const l of toLines(words)) assert.ok(l.text.length <= 2000 + 5, `${l.text.length} characters`);
+  }
 });

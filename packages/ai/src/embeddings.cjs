@@ -29,6 +29,36 @@ function timeStrToMs(t) {
   return parts[0] * 1000;
 }
 
+// A line longer than this is cut at spaces before chunking, so no chunk passes
+// TARGET_CHARS (the overlap plus one piece fits). Lines are capped at 1,000
+// characters when written (the transcoder's lineIsFull), but a note from
+// before that, or a whole-file provider's odd output, can hold one line of
+// thousands: it became one oversized chunk, and a batch with it in can fail.
+const PIECE_CHARS = TARGET_CHARS - OVERLAP_CHARS - 1;
+
+// Cut text into pieces of at most `max` characters at spaces (a word with no
+// space in `max` characters is cut where it is), each with its share of the
+// line's time.
+function splitLongText(text, startMs, endMs, max) {
+  if (text.length <= max) return [{ text, startMs, endMs }];
+  const pieces = [];
+  let rest = text;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(' ', max);
+    if (cut <= 0) cut = max;
+    pieces.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^ +/, '');
+  }
+  if (rest) pieces.push(rest);
+  const span = Math.max(0, endMs - startMs);
+  let at = 0;
+  return pieces.map((piece) => {
+    const from = startMs + Math.round((span * at) / text.length);
+    at += piece.length;
+    return { text: piece, startMs: from, endMs: startMs + Math.round((span * Math.min(at, text.length)) / text.length) };
+  });
+}
+
 function chunkTranscript(lines, log) {
   if (!Array.isArray(lines) || lines.length === 0) return [];
   // Scrub the line texts in order FIRST, carrying a private key across lines
@@ -62,12 +92,17 @@ function chunkTranscript(lines, log) {
     const startMs = typeof line.startMs === 'number' ? line.startMs : timeStrToMs(line.time);
     const endMs = typeof line.endMs === 'number' ? line.endMs : startMs;
     const speakerLabel = line.speaker || (line.speakerTag != null ? `Speaker ${line.speakerTag}` : '');
-    const formatted = speakerLabel ? `${speakerLabel}: ${text}` : text;
-    if (bufferStart === null) bufferStart = startMs;
-    if (buffer.length + formatted.length + 1 > TARGET_CHARS) flush();
-    if (bufferStart === null) bufferStart = startMs;
-    buffer += (buffer ? '\n' : '') + formatted;
-    bufferEnd = endMs;
+    const prefix = speakerLabel ? `${speakerLabel}: ` : '';
+    const pieces = splitLongText(text, startMs, endMs, Math.max(100, PIECE_CHARS - prefix.length));
+    if (pieces.length > 1 && log) log.info({ lineChars: text.length, pieces: pieces.length }, 'embed_line_split');
+    for (const piece of pieces) {
+      const formatted = prefix + piece.text;
+      if (bufferStart === null) bufferStart = piece.startMs;
+      if (buffer.length + formatted.length + 1 > TARGET_CHARS) flush();
+      if (bufferStart === null) bufferStart = piece.startMs;
+      buffer += (buffer ? '\n' : '') + formatted;
+      bufferEnd = piece.endMs;
+    }
   }
   flush();
   return out;
