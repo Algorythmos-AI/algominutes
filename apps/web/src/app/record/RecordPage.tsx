@@ -470,6 +470,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
           <p className="mt-2 font-mono text-5xl text-heading" aria-label={`Recorded ${formatClock(elapsed * 1000)}`}>{formatClock(elapsed * 1000)}</p>
           {left <= WARN_BEFORE_CAP_S && <p className="mt-2 text-body">{formatClock(left * 1000)} left: recording stops on its own at {formatClock(capSeconds * 1000)}.</p>}
           <p className="mt-2 text-sm text-muted">Keep this tab open. Everything recorded is saved in this browser as you go.</p>
+          <p className="mt-1 text-sm text-muted">Keep your laptop awake and plugged in for a long meeting: closing the lid stops the recording.</p>
           {levels && (
             <div className="mt-4 flex flex-col gap-2 text-left">
               <LevelMeter label="The call" level={levels.call} />
@@ -517,6 +518,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
 function RecoveredRecordings({ env, busy, onUpload }: { env: RecorderEnv; busy: boolean; onUpload: (m: RecordingMeta) => Promise<void> }) {
   const { user } = useAuth();
   const [left, setLeft] = useState<RecordingMeta[]>([]);
+  const [discarding, setDiscarding] = useState<RecordingMeta | null>(null);
   const [version, setVersion] = useState(0);
   useEffect(() => {
     if (!user || busy) return;
@@ -542,10 +544,30 @@ function RecoveredRecordings({ env, busy, onUpload }: { env: RecorderEnv; busy: 
           <li key={r.id} className="flex flex-wrap items-center gap-2 text-body">
             <span>{formatDate(new Date(r.startedAt).toISOString())} · {formatClock(r.seconds * 1000)}{r.stoppedAt ? '' : ' (cut off)'}</span>
             <button type="button" className="rounded-lg bg-accent px-3 py-1 text-sm font-semibold text-white" onClick={() => void onUpload(r)}>Upload it</button>
-            <button type="button" className="rounded-lg border border-border px-3 py-1 text-sm" onClick={() => void env.store.remove(r.id).then(() => setVersion((v) => v + 1), (err: unknown) => reportCrash('record.discard', err))}>Discard</button>
+            <button type="button" className="rounded-lg border border-border px-3 py-1 text-sm" onClick={() => setDiscarding(r)}>Discard</button>
           </li>
         ))}
       </ul>
+      {discarding && (
+        // It exists only in this browser, so a click that deleted it at once lost it for good (rev 11, UX1).
+        <Modal title="Discard this recording?" onClose={() => setDiscarding(null)} initialFocus="[data-keep]">
+          <p className="text-body">It’s only in this browser, so discarding deletes it for good.</p>
+          <div className="mt-5 flex flex-wrap justify-end gap-3">
+            <button type="button" data-keep className="rounded-lg border border-border px-4 py-2 text-heading" onClick={() => setDiscarding(null)}>Keep it</button>
+            <button
+              type="button"
+              className="rounded-lg bg-danger px-4 py-2 font-semibold text-white"
+              onClick={() => {
+                const r = discarding;
+                setDiscarding(null);
+                void env.store.remove(r.id).then(() => setVersion((v) => v + 1), (err: unknown) => reportCrash('record.discard', err));
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

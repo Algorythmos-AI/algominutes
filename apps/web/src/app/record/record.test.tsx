@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { ApiProvider } from '../ApiContext';
 import { AuthProvider } from '../auth/AuthContext';
@@ -177,6 +177,15 @@ describe('recording in the browser', () => {
     expect(await screen.findByText(/left: recording stops on its own at 2:00:00/)).toBeTruthy();
   });
 
+  // RELEASE.md rev 11, N9: a sleeping laptop stops the microphone, and the screen wake lock can't stop a closed lid.
+  it('while recording, says to keep the laptop awake', async () => {
+    setup();
+    fireEvent.click(await screen.findByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    await screen.findByText('● RECORDING');
+    expect(screen.getByText(/closing the lid stops the recording/)).toBeTruthy();
+  });
+
   it('leaving the page while recording asks first, and keeps recording unless told to stop', async () => {
     setup();
     fireEvent.click(await screen.findByRole('checkbox'));
@@ -225,7 +234,16 @@ describe('recording in the browser', () => {
     cleanup();
     setup({ store } as Partial<RecorderEnv>);
     expect(await screen.findByText(/2:05 \(cut off\)/)).toBeTruthy();
+    // It exists only in this browser: Discard asks first (RELEASE.md rev 11, UX1), and Keep it leaves it.
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    const ask = await screen.findByRole('dialog', { name: 'Discard this recording?' });
+    expect(ask.textContent).toMatch(/only in this browser/);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep it' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(await store.list('u1')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard this recording?' })).getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(screen.queryByText('A recording wasn’t uploaded')).toBeNull());
     expect(await store.list('u1')).toEqual([]);
   });

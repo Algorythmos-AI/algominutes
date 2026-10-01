@@ -60,7 +60,8 @@ export async function captureCall(env: CaptureEnv): Promise<Capture> {
   try {
     // Video must be asked for too (browsers don't share audio alone). It's never recorded, so it's asked for
     // small and at one frame a second: a full-rate share of a video call costs the laptop for nothing.
-    display = await env.getDisplayMedia({ video: { frameRate: { max: 1 }, width: { max: 320 }, height: { max: 180 } }, audio: { echoCancellation: false, noiseSuppression: false }, systemAudio: 'include', selfBrowserSurface: 'exclude' } as DisplayMediaStreamOptions);
+    // displaySurface 'browser': the picker opens on its tab list, where a Meet is (rev 11, UX6).
+    display = await env.getDisplayMedia({ video: { displaySurface: 'browser', frameRate: { max: 1 }, width: { max: 320 }, height: { max: 180 } }, audio: { echoCancellation: false, noiseSuppression: false }, systemAudio: 'include', selfBrowserSurface: 'exclude' } as DisplayMediaStreamOptions);
   } catch (err) {
     const name = (err as { name?: string })?.name;
     throw new CaptureError(name === 'NotAllowedError' ? 'cancelled' : 'failed', name === 'NotAllowedError' ? 'The share was cancelled.' : 'The call couldn’t be shared.', { cause: err });
