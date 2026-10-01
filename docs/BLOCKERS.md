@@ -55,6 +55,23 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
     (`TRIAL_ON_FIRST_USE=off`), so the web app refused before uploading. Fix: `fix/web-e2e-invite` (the guest
     redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
   - Done at the first green run of each, and the nightly schedule's first green night.
+- [x] **The 10-15 proof: a real meeting on gemini-3.5-flash alone (2026-10-01).** The owner's 51.7-minute
+  recording from the iPhone (note tccLBaIAvLIWpcgI6cg4, staging): the chunked path, the summary by
+  gemini-3.5-flash with `finishReason: STOP`, 5 chapters, ready 297 s after the kickoff (the bar for an hour is
+  10 minutes).
+- [x] **The owner's 30-second Chrome recording reached ready (2026-10-01)**, about 30 s after Stop (note
+  webe10a79655650481ba5291f59e39002d4): the web upload fix (#293) on staging. Its first Gemini call got a 400
+  INVALID_ARGUMENT and the retry succeeded; `fix/vertex-refusal-detail` keeps the refused field and reason for
+  the next one.
+- [x] **Apply C applied (2026-10-01, reviewed-65b2a93: 8 added, 22 changed).** Verified: the transcoder's timeout
+  1800 s, `MAX_TASK_ATTEMPTS` 10, the transcode queue's 10 attempts and 600 s backoff, the Cloud SQL maintenance
+  window. Redeployed `services=all` (run 36787844649); all 8 services on the head.
+- [ ] **New P0, found on the proof meeting: a finished note was run again.** Four minutes after it was ready, the
+  iPhone (which was showing a retry) sent a second kickoff, and the server re-ran all 52 minutes: speech-to-text
+  paid twice, the summary replaced. The api's "already ready" check read only the Firestore doc, which a client
+  can write. Fix: `fix/ready-note-not-rerun` (Postgres decides; the doc is repaired at once). Why the app
+  offered a retry on a finished note is still open; two callers on one upload is the likely cause
+  (`fix/ios-upload-never-stuck`).
 - [ ] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
   was CLEAN, with auto-merge on, but never entered the queue. `gh pr merge` only turns auto-merge on, and its
   trigger was missed. Enqueuing it directly (the GraphQL `enqueuePullRequest`) worked. The overnight train runs
