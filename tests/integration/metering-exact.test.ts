@@ -107,7 +107,7 @@ const ledger = async () => (await pool.query(
 const statusOf = async (noteId: string) => (await pool.query(`SELECT status, error_message FROM notes WHERE id = $1`, [noteId])).rows[0];
 
 describe('the quota is checked where the minutes are debited', () => {
-  it('two kickoffs racing for the last minutes: one queues, the other gets a 402, and nothing is overspent', async () => {
+  it('two kickoffs racing for the last minutes: one queues, the other is held for minutes, and nothing is overspent', async () => {
     await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 150 });
     // Hold the user's meter lock, so both kickoffs pass the early check and meet in markQueued.
     const blocker = await pool.connect();
@@ -118,12 +118,14 @@ describe('the quota is checked where the minutes are debited', () => {
     await blocker.query('COMMIT');
     blocker.release();
     const outs = await racing;
-    expect(outs.map((o) => o.status).sort()).toEqual([200, 402]);
-    expect(outs.find((o) => o.status === 402)!.body).toMatchObject({ error: 'quota_exceeded', entitlement: { usedMinutes: 100, includedMinutes: 150 } });
+    expect(outs.map((o) => o.status).sort()).toEqual([200, 202]);
+    // An uploaded recording over the minutes left is held, not refused (RELEASE.md rev 11, H6c).
+    expect(outs.find((o) => o.status === 202)!.body).toMatchObject({ held: true, status: null });
     expect(await ledger()).toHaveLength(1);
     expect(enqueued).toHaveLength(1);
-    // The refused note was never created or charged.
-    expect(await count(`SELECT 1 FROM notes`)).toBe(1);
+    // The held note is kept, uncharged.
+    expect(await count(`SELECT 1 FROM notes WHERE status = 'awaiting_minutes'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM notes WHERE status = 'queued'`)).toBe(1);
   });
 
   it("a retry whose earlier charge still stands needs no headroom, and isn't charged again", async () => {
@@ -135,19 +137,23 @@ describe('the quota is checked where the minutes are debited', () => {
     const retry = await kickoff('n1', 150);
     expect(retry).toMatchObject({ status: 200, body: { status: 'queued' } });
     expect(await ledger()).toEqual(['n1 debit 3 ingest']);
-    // A different note still has no headroom.
-    expect((await kickoff('n2', 60)).status).toBe(402);
+    // A different note still has no headroom: held for minutes, uncharged.
+    expect(await kickoff('n2', 60)).toMatchObject({ status: 202, body: { held: true } });
+    expect(await ledger()).toEqual(['n1 debit 3 ingest']);
   });
 });
 
 // RELEASE.md rev 11, L7 (H2c).
 describe('the kickoff guards what it lets through to paid work', () => {
-  it('with no minutes left, a recording that claims no length is refused too: it will be charged at least a minute', async () => {
+  it('with no minutes left, a recording that claims no length is held too: it will be charged at least a minute', async () => {
     await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 3 });
     expect((await kickoff('n1', 180)).status).toBe(200); // uses all 3
     const out = await kickoff('n2', 0);
-    expect(out.status).toBe(402);
+    // Held at the kickoff (RELEASE.md rev 11, H6c), not queued to be downloaded and measured first.
+    expect(out).toMatchObject({ status: 202, body: { held: true } });
+    expect(await statusOf('n2')).toMatchObject({ status: 'awaiting_minutes' });
     expect(enqueued).toHaveLength(1);
+    expect(await ledger()).toEqual(['n1 debit 3 ingest']);
   });
 
   it("five notes in flight at once is the most: the sixth waits, and another user's don't count", async () => {

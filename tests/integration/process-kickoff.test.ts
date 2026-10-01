@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import crypto from 'node:crypto';
-import { getPool, markQueued, deleteAccountData, queueNoteRun } from '@algominutes/db';
+import { getPool, markQueued, deleteAccountData, queueNoteRun, grantEntitlement } from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
 
 // POST /v1/process end to end against real Postgres. Only the network edges are
@@ -212,6 +212,94 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(1);
     // markQueued itself refuses it under the lock.
     expect(await markQueued(fakeDb as never, { noteId: 'n1', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'recording' }, quietLog as never)).toEqual({ queued: false, status: 'ready' });
+  });
+
+  // RELEASE.md rev 11, H6c.
+  describe('over the minutes left', () => {
+    beforeEach(async () => {
+      await seedUser('alice');
+      await seedWorkspace('workspace_alice', 'alice');
+      await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 2 });
+    });
+
+    it('an uploaded recording is held (202), kept and uncharged, with nothing queued', async () => {
+      noteDoc('alice', 'n1');
+      expect(await kickoff('alice', upload('alice', 'n1'))).toEqual({ status: 202, body: { success: true, noteId: 'n1', status: null, inFlight: true, held: true } });
+      expect((await pool.query(`SELECT status, storage_path FROM notes WHERE id = 'n1'`)).rows[0]).toEqual({ status: 'awaiting_minutes', storage_path: 'recordings/workspace_alice/n1.m4a' });
+      expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(0);
+      expect(enqueued).toEqual([]);
+      expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'awaiting_minutes' });
+      // A client's retry holds it again, and still charges nothing.
+      expect(await kickoff('alice', upload('alice', 'n1'))).toMatchObject({ status: 202, body: { held: true } });
+      expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(0);
+    });
+
+    it('a YouTube link, with nothing uploaded, is still refused with 402 and nothing written', async () => {
+      noteDoc('alice', 'y1');
+      const out = await kickoff('alice', { ...youtube('alice', 'y1'), durationSec: 600 });
+      expect(out).toMatchObject({ status: 402, body: { error: 'quota_exceeded' } });
+      expect(await count(`SELECT 1 FROM notes WHERE id = 'y1'`)).toBe(0);
+    });
+
+    it("a held note's retry whose queue transaction fails stays held, not failed (found by dual-write-auditor)", async () => {
+      noteDoc('alice', 'n1');
+      await kickoff('alice', upload('alice', 'n1'));
+      // The retry's upsert fails for real, and its transaction writes nothing.
+      await pool.query(`CREATE OR REPLACE FUNCTION fail_n1() RETURNS trigger AS $$ BEGIN
+                          IF NEW.id = 'n1' AND NEW.status = 'queued' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+      await pool.query(`CREATE TRIGGER fail_n1 BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION fail_n1()`);
+      try {
+        await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 100 });
+        expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(500);
+      } finally {
+        await pool.query('DROP TRIGGER fail_n1 ON notes');
+        await pool.query('DROP FUNCTION fail_n1()');
+      }
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
+      expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'awaiting_minutes' });
+    });
+
+    it('minutes that arrive while it waits for the meter lock queue it after all, and the spend cap it skipped is checked then', async () => {
+      const spend = ((await import('@algominutes/ai/spend-guard.cjs')) as any).default;
+      noteDoc('alice', 'n1');
+      const blocker = await pool.connect();
+      let released = false;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['meter:alice']);
+        const pending = kickoff('alice', upload('alice', 'n1'));
+        await new Promise((r) => setTimeout(r, 300));
+        // The grant is written on the blocker's own connection: the kickoff holds the app's while it waits for the
+        // lock, and CI also runs this suite with every pool capped at one connection (PG_POOL_MAX=1).
+        await blocker.query(
+          `INSERT INTO entitlement_grants (uid, plan, included_minutes, reason) VALUES ('alice', 'pro', 100, 'test')
+             ON CONFLICT (uid) DO UPDATE SET included_minutes = EXCLUDED.included_minutes, granted_at = NOW()`,
+        );
+        spend.setDailySpendReader(async () => 1e9);
+        await blocker.query('COMMIT');
+        blocker.release();
+        released = true;
+        expect((await pending).status).toBe(503);
+      } finally {
+        spend.setDailySpendReader(async () => 0);
+        if (!released) {
+          await blocker.query('ROLLBACK');
+          blocker.release();
+        }
+      }
+      // Queued and charged in the transaction, then failed and refunded for the cap: nothing enqueued, nothing owed.
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('error');
+      expect(Number((await pool.query(`SELECT COALESCE(SUM(minutes), 0) AS n FROM usage_ledger WHERE note_id = 'n1'`)).rows[0].n)).toBe(0);
+      expect(enqueued).toEqual([]);
+    });
+
+    it("a held note's retry refused for the rate limit stays held, not failed (found by dual-write-auditor)", async () => {
+      noteDoc('alice', 'n1');
+      await kickoff('alice', upload('alice', 'n1'));
+      budgetHook = async () => { throw new Error('RATE_LIMIT'); };
+      expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(429);
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
+    });
   });
 
   it('markQueued debits only when it queues: the in-transaction duplicate path charges nothing', async () => {

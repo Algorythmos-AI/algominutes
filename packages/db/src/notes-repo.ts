@@ -122,6 +122,13 @@ export interface MarkQueuedInput {
    */
   onlyIfHeld?: boolean;
   /**
+   * Over the minutes left, hold the note instead of refusing it (RELEASE.md rev
+   * 11, H6c): the same transaction leaves it 'awaiting_minutes', uncharged, and
+   * returns `held` (mirrored as such). For an uploaded recording, whose audio is
+   * already ours; the resume queues it once minutes arrive (held-notes.ts).
+   */
+  holdIfOverQuota?: boolean;
+  /**
    * A note still 'recording' (a notetaker in its meeting) is queued only by the
    * notetaker's own ingest, which ends the recording. Checked under the note's
    * lock, so a client kickoff can never race it.
@@ -344,12 +351,12 @@ export async function markQueued(
   input: MarkQueuedInput,
   log: { error: (o: any, m?: string) => void },
   now: Date = new Date(),
-): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true }> {
+): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true; held?: true }> {
   const noteDoc = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
   let runSeq: number | undefined;
   if (isPostgresEnabled()) {
     const outcome = await withTx(
-      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true }> => {
+      async (client): Promise<{ queued: boolean; status: string | null; deleted?: true; runSeq?: number; alreadyQueued?: true; held?: true }> => {
         // Serialize kickoffs for this note id, including a brand-new note with
         // no row to lock yet: the second of two concurrent duplicates waits
         // here, then sees the first's 'queued' row and backs off. deleteNote
@@ -488,6 +495,15 @@ export async function markQueued(
               await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`meter:${input.authorUid}`]);
               const ent = await resolveEntitlement(input.authorUid, { db: client });
               if (ent.includedMinutes != null && ent.usedMinutes + input.meter.minutes > ent.includedMinutes) {
+                // Never a notetaker's run: its bot was stamped queued above, and a held run it would never leave.
+                if (input.holdIfOverQuota && !input.meetingBotId) {
+                  // The row this call just wrote, in its workspace: held, and nothing debited.
+                  await client.query(
+                    `UPDATE notes SET status = 'awaiting_minutes', updated_at = NOW() WHERE id = $1 AND workspace_id = $2`,
+                    [input.noteId, input.workspaceId],
+                  );
+                  return { queued: false, held: true, status: 'awaiting_minutes' };
+                }
                 throw new QuotaExceededError(ent, input.meter.minutes);
               }
             }
@@ -513,6 +529,16 @@ export async function markQueued(
       },
       { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId } },
     );
+    if (outcome.held) {
+      // update(), never a merge-set, as below. Held is safe to leave half-mirrored: the sweep's mirror repair
+      // covers 'awaiting_minutes', so a failed write is logged, never turned into a failed note.
+      try {
+        await noteDoc.update({ status: 'awaiting_minutes', errorMessage: null, updatedAt: ISO_NOW() });
+      } catch (err) {
+        log.error({ err, noteId: input.noteId, workspaceId: input.workspaceId, userId: input.authorUid }, isFirestoreNotFound(err) ? 'held_note_doc_missing' : 'held_note_mirror_failed');
+      }
+      return outcome;
+    }
     if (!outcome.queued) return outcome;
     runSeq = outcome.runSeq;
   }
@@ -890,6 +916,11 @@ export async function markError(
  * The guard is in the UPDATE's own WHERE, so it is re-checked against a
  * duplicate's just-committed row. A note with no Postgres row yet gets the
  * mirror only, as markError does. Returns whether the note was marked.
+ *
+ * A note held for minutes is left alone too (RELEASE.md rev 11, H6): a retry
+ * refused for the rate limit or the spend cap mustn't turn a recording waiting
+ * for minutes into a failure the resume never picks up (found by
+ * dual-write-auditor).
  */
 export async function markKickoffRejected(
   firestore: Firestore,
@@ -906,7 +937,7 @@ export async function markKickoffRejected(
        )
        SELECT (SELECT count(*) FROM upd)::int AS updated,
               (SELECT count(*) FROM notes WHERE id = $1 AND workspace_id = $2)::int AS present`,
-      [input.noteId, input.workspaceId, input.errorMessage, IN_FLIGHT_STATUSES as unknown as string[]],
+      [input.noteId, input.workspaceId, input.errorMessage, [...IN_FLIGHT_STATUSES, 'awaiting_minutes']],
     );
     const { updated, present } = rows[0]!;
     if (present && !updated) return { marked: false };

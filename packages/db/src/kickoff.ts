@@ -92,6 +92,12 @@ export interface KickoffInput {
    * next sweep tries again.
    */
   resume?: boolean;
+  /**
+   * Over the minutes left, hold the note (RELEASE.md rev 11, H6c) instead of
+   * answering quota_exceeded: for an uploaded recording, which is ours already.
+   * markQueued decides it in its transaction; the result is `held`.
+   */
+  holdOnQuota?: boolean;
   traceId?: string;
   log: Log;
   env?: NodeJS.ProcessEnv;
@@ -110,6 +116,8 @@ export type KickoffResult =
   | { kind: 'spend_capped'; message: string }
   | { kind: 'rate_limited'; message: string }
   | { kind: 'quota_exceeded'; entitlement: Entitlement | null }
+  /** Over the minutes left, and held for them (holdOnQuota): uncharged, resumed when minutes arrive. */
+  | { kind: 'held' }
   | { kind: 'account_deleted' }
   | { kind: 'misconfigured'; message: string }
   | { kind: 'failed'; message: string };
@@ -269,6 +277,9 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   // billing rounds partial minutes up.
   const durationSec = Number(input.durationSec ?? 0);
   let minutes = Number.isFinite(durationSec) && durationSec > 0 ? Math.ceil(durationSec / 60) : 0;
+  // Over the minutes left and to be held (holdOnQuota): no early refusal and no spend cap (a held note costs
+  // nothing); markQueued decides the hold in its transaction.
+  let overQuota = false;
   if (input.quota !== false) {
     let ent: Entitlement;
     try {
@@ -318,14 +329,15 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
         return { kind: 'failed', message: TRY_AGAIN };
       }
       if (!stands) {
-        log.warn({ minutes, plan: ent.plan }, 'quota_exceeded');
-        return { kind: 'quota_exceeded', entitlement: ent };
+        log.warn({ minutes, plan: ent.plan, hold: !!input.holdOnQuota }, 'quota_exceeded');
+        if (!input.holdOnQuota) return { kind: 'quota_exceeded', entitlement: ent };
+        overQuota = true;
       }
     }
 
     // The daily spend cap (§4.6), before anything is queued or charged. The
     // transcoder's own gate stays as the backstop for work already queued.
-    try {
+    if (!overQuota) try {
       await assertUnderDailyCap({ log });
     } catch (err: any) {
       if (err?.code !== 'SPEND_CAP_EXCEEDED') {
@@ -347,7 +359,10 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       noteId, workspaceId,
       authorUid: uid, authorEmail: input.email, authorName: input.name,
       sourceType: type, storagePath: input.storagePath, sourceUrl: input.sourceUrl, mimeType: input.mimeType,
-      meter: { minutes, idempotencyKey: `${noteId}:ingest`, enforceQuota: input.quota !== false },
+      // Found over by the early check (at least a minute counted): the transaction counts the same, so a claim
+      // of none is held here, not queued to be downloaded and measured first.
+      meter: { minutes: overQuota ? Math.max(minutes, 1) : minutes, idempotencyKey: `${noteId}:ingest`, enforceQuota: input.quota !== false },
+      holdIfOverQuota: input.holdOnQuota && input.quota !== false,
       allowRecording: input.allowRecording,
       meetingBotId: input.meetingBotId,
       onlyIfHeld: input.resume,
@@ -370,6 +385,11 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
       return { kind: 'not_found' };
     }
     log.error({ err }, 'mark_queued_failed');
+    if (queueState.status === 'awaiting_minutes' && !err?.committed) {
+      // A held note, and the transaction wrote nothing: it stays held for the resume, not failed (found by
+      // dual-write-auditor: markError has no status guard).
+      return { kind: 'failed', message: TRY_AGAIN };
+    }
     if (input.meetingBotId && !err?.committed) {
       // A notetaker's ingest, and the transaction wrote nothing: its task
       // retries, and markQueued decides then. Failing the note here would fail
@@ -378,6 +398,25 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     }
     await failNote(input, TRY_AGAIN, 'queue');
     return { kind: 'failed', message: TRY_AGAIN };
+  }
+  if (queued.held) {
+    // Over the minutes left: held, uncharged, and resumed when minutes arrive (held-notes.ts).
+    log.warn({ minutes }, 'kickoff_held_for_minutes');
+    return { kind: 'held' };
+  }
+  if (overQuota && queued.queued) {
+    // Minutes arrived between the early check and the transaction, so it queued after all: the spend cap it
+    // skipped is checked now, and a capped run is refunded and failed as any capped kickoff is refused.
+    try {
+      await assertUnderDailyCap({ log });
+    } catch (err: any) {
+      if (err?.code === 'SPEND_CAP_EXCEEDED') {
+        log.warn({}, 'kickoff_spend_capped');
+        await failNote(input, SPEND_CAP_MESSAGE, 'spend_cap');
+        return { kind: 'spend_capped', message: SPEND_CAP_MESSAGE };
+      }
+      log.error({ err }, 'spend_guard_failed');
+    }
   }
   if (queued.deleted) {
     // Deleted while this ran: it stays deleted, and nothing is queued.

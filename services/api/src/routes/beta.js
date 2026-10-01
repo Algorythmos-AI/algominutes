@@ -4,7 +4,8 @@
 //
 // The code is never logged: it's a bearer of minutes. Logs carry the invite id.
 
-import { redeemInvite, resolveEntitlement } from '@algominutes/db';
+import { getFirestore } from 'firebase-admin/firestore';
+import { redeemInvite, resolveEntitlement, resumeHeldNotes } from '@algominutes/db';
 import { RedeemInviteRequest } from '@algominutes/contracts/schemas';
 import { toEntitlementResponse } from './entitlement.js';
 
@@ -42,6 +43,15 @@ export async function redeemInviteRoute(req, res) {
     const refusal = REFUSALS[result.kind];
     log.warn({ reason: result.kind, inviteId: result.inviteId ?? null }, 'beta_invite_refused');
     return res.status(refusal.status).json({ error: refusal.error });
+  }
+
+  // Recordings held for minutes (RELEASE.md rev 11, H6) go now, not at the next sweep. Never fails the redeem:
+  // the sweep resumes whatever this couldn't.
+  try {
+    const resumed = await resumeHeldNotes({ firestore: getFirestore(), log, traceId: req.traceId, uid: req.uid, limit: 20 });
+    if (resumed.held) log.info({ ...resumed }, 'beta_invite_resumed_held_notes');
+  } catch (err) {
+    log.error({ err }, 'beta_invite_resume_failed');
   }
 
   const ent = await resolveEntitlement(req.uid);

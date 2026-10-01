@@ -1541,6 +1541,12 @@
             "enum": [
               true
             ]
+          },
+          "held": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
           }
         },
         "required": [

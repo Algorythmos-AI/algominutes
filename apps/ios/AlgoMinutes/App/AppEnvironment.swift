@@ -393,7 +393,7 @@ final class AppEnvironment {
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
 
         do {
-            try await api.processAudio(.init(
+            let answer = try await api.processAudio(.init(
                 noteId: noteId,
                 workspaceId: wsId,
                 type: type,
@@ -402,6 +402,11 @@ final class AppEnvironment {
                 durationSec: durationSeconds.map { Double($0) }
             ))
             if kind == .recording { recordingStore.remove(fileURL: fileURL) }
+            if APIClient.kickoffWasHeld(answer) {
+                // Held for minutes: kept, and processed once there are minutes. Offer them now.
+                AppLog.info("process_kickoff_held noteId=\(noteId)")
+                billing.onQuotaExceeded()
+            }
         } catch {
             // The server decided (out of minutes, too long): the audio is in Storage and Try
             // again uses it, so the copy can go. A network failure keeps it for the next launch.
@@ -615,13 +620,17 @@ final class AppEnvironment {
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
 
         do {
-            try await api.processAudio(.init(
+            let answer = try await api.processAudio(.init(
                 noteId: noteId, workspaceId: wsId, type: type,
                 storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt,
                 durationSec: pending.durationSeconds.map { Double($0) }
             ))
             // Settled: the copy can go (kept until now, rev 11 L2, as in uploadAndProcess).
             recordingStore.remove(fileName: pending.fileName)
+            if APIClient.kickoffWasHeld(answer) {
+                AppLog.info("reupload_process_kickoff_held noteId=\(noteId)")
+                billing.onQuotaExceeded()
+            }
             return .queued
         } catch {
             if Self.kickoffWasDecided(error) { recordingStore.remove(fileName: pending.fileName) }

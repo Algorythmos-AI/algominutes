@@ -116,6 +116,9 @@ export async function processIntelligenceRoute(req, res) {
     // The client's estimate at ingest (the transcoder's ffprobe measures it later).
     durationSec: Number(req.body?.durationSec ?? req.body?.duration ?? noteData?.duration ?? noteData?.durationSec ?? 0),
     trial: { device, platform: devPlatform, emailPresent: !!req.authEmail },
+    // An uploaded recording over the minutes left is held for them, never refused (RELEASE.md rev 11, H6c): its
+    // audio is ours already. A YouTube link has nothing uploaded, so it's still answered 402.
+    holdOnQuota: type !== 'youtube' && !!storagePath,
     traceId: req.traceId,
     log,
   });
@@ -128,6 +131,10 @@ export async function processIntelligenceRoute(req, res) {
     case 'ready':
       // As the doc's own 'ready' is answered above: nothing to do.
       return res.json({ success: true, noteId, cached: true });
+    case 'held':
+      // Shaped as the in-flight answer (status null), so every client in testers' hands reads it as accepted; a
+      // client that knows `held` offers the invite code or Pro, as it did for the 402.
+      return res.status(202).json({ success: true, noteId, status: null, inFlight: true, held: true });
     case 'not_found':
       return res.status(404).json({ error: 'Note not found' });
     case 'recording':
