@@ -276,17 +276,20 @@ export async function runPipelineE2E({
     let finished = false;
     // An upload cut off mid-way resumes from what the api says GCS holds (RELEASE.md rev 11, §4.6): after the
     // first chunk of a multi-chunk file, the probe must say exactly what was sent.
-    if (bytes.length > chunk) {
-      const first = await fetch(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${chunk - 1}/${bytes.length}` }, body: bytes.subarray(0, chunk) });
-      const probe = await api('GET', `/uploads/${session.uploadId}`);
-      check('a cut-off upload resumes from what GCS holds (the status probe)', first.status === 308 && probe.body?.receivedBytes === chunk, `PUT ${first.status}, probe says ${probe.body?.receivedBytes}`);
-      if (first.status === 308) sent = probe.body?.receivedBytes ?? chunk;
-    }
+    let probed = bytes.length <= chunk;
     while (!finished && failures <= 3) {
       const end = Math.min(sent + chunk, bytes.length);
       const res = await fetch(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes ${sent}-${end - 1}/${bytes.length}` }, body: bytes.subarray(sent, end) });
       if (res.status === 200 || res.status === 201) finished = true;
-      else if (res.status === 308) sent = end;
+      else if (res.status === 308) {
+        sent = end;
+        if (!probed) {
+          probed = true;
+          const probe = await api('GET', `/uploads/${session.uploadId}`);
+          check('a cut-off upload resumes from what GCS holds (the status probe)', probe.body?.receivedBytes === end, `probe says ${probe.body?.receivedBytes}`);
+          sent = probe.body?.receivedBytes ?? end;
+        }
+      }
       else {
         failures += 1;
         sent = (await api('GET', `/uploads/${session.uploadId}`)).body?.receivedBytes ?? sent;
