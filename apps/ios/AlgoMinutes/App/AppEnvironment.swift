@@ -95,11 +95,14 @@ final class AppEnvironment {
         // relaunch in the background gets to do it.
         backgroundUploads.onOrphanUploadFinished = { [weak self] in
             guard let self else { return }
-            let bgTask = UIApplication.shared.beginBackgroundTask(withName: "finish-upload")
+            // Before the first await, with an expiration handler (BackgroundActivity):
+            // the old one had none, and a task left running when time ran out gets
+            // the app killed.
+            let activity = BackgroundActivity.begin("finish-upload")
             Task { @MainActor in
                 AppLog.info("bg_upload_finished_while_away_resuming")
                 await self.resumePendingUploads()
-                if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
+                activity.end()
             }
         }
     }
@@ -392,6 +395,9 @@ final class AppEnvironment {
         // ever re-ran; with the file kept, the next launch re-sends it (resumePendingUploads).
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
 
+        // The kickoff finishes even if the user has left the app (L10).
+        let kickoffTime = BackgroundActivity.begin("upload-kickoff")
+        defer { kickoffTime.end() }
         do {
             let answer = try await api.processAudio(.init(
                 noteId: noteId,
@@ -619,6 +625,8 @@ final class AppEnvironment {
 
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
 
+        let kickoffTime = BackgroundActivity.begin("reupload-kickoff")
+        defer { kickoffTime.end() }
         do {
             let answer = try await api.processAudio(.init(
                 noteId: noteId, workspaceId: wsId, type: type,

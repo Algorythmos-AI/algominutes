@@ -23,6 +23,10 @@ final class AuthService: NSObject {
 
     override init() {
         super.init()
+        // The signed-in user Firebase restored from the keychain, now: the listener
+        // below reports it a moment later, and a background launch to finish an
+        // upload (L10) found no workspace until then and did nothing.
+        user = Auth.auth().currentUser
         authListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
                 self?.user = user
