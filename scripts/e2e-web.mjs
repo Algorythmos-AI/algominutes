@@ -59,6 +59,15 @@ export function e2eConfig(env = process.env) {
   };
 }
 
+/**
+ * The one console error that's the test's own: Chrome's fake shared tab (--use-fake-device-for-media-stream) is
+ * served by its fake camera device, which the site's `camera=()` policy refuses to name, so Chrome logs a camera
+ * violation although the app never asks for a camera (staging run 36830243017: every step passed but this line).
+ * Only this exact message is let through; a real tab share isn't expected to log it (to confirm by hand: record
+ * a call in Chrome with the console open).
+ */
+export const isFakeShareNoise = (text) => /^Permissions policy violation: camera is not allowed in this document\.?$/.test(String(text).trim());
+
 /** Whether a request goes to the site itself: only those carry the bypass secret. */
 export function isSiteRequest(requestUrl, siteUrl) {
   try {
@@ -156,7 +165,7 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, invi
   page.setDefaultTimeout(actionMs);
   const problems = [];
   // Ours only: Stripe's Checkout page logs its own.
-  page.on('console', (m) => m.type() === 'error' && !isStripePage(page.url()) && problems.push(m.text().slice(0, 200)));
+  page.on('console', (m) => m.type() === 'error' && !isStripePage(page.url()) && !isFakeShareNoise(m.text()) && problems.push(m.text().slice(0, 200)));
   page.on('pageerror', (e) => !isStripePage(page.url()) && problems.push(`pageerror: ${e.message.slice(0, 200)}`));
   const heading = (name, timeout = wait(30_000)) => within(page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout }));
   const toNote = () => within(page.waitForURL(/\/app\/notes\/[^/?#]+/, { timeout: wait(180_000) }));
