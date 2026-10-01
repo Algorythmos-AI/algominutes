@@ -87,6 +87,8 @@ jobs:
         env:
           # Only this step sees the secret (not npm's or apt's install scripts).
           VERCEL_BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # The pipeline e2e's invite code: staging's guests start with no minutes. Only this step sees it.
+          E2E_INVITE_CODE: ${{ secrets.E2E_INVITE_CODE }}
           # 'true' once staging's billing has Stripe's test-mode keys: buy Pro with the test card (PR 28b).
           E2E_STRIPE: ${{ vars.E2E_STRIPE }}
         run: node scripts/e2e-web.mjs
