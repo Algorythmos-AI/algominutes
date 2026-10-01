@@ -125,6 +125,9 @@ export async function processIntelligenceRoute(req, res) {
       return res.json({ success: true, noteId, jobId: result.jobId, status: 'queued' });
     case 'in_flight':
       return res.status(202).json({ success: true, noteId, status: result.status, inFlight: true });
+    case 'ready':
+      // As the doc's own 'ready' is answered above: nothing to do.
+      return res.json({ success: true, noteId, cached: true });
     case 'not_found':
       return res.status(404).json({ error: 'Note not found' });
     case 'recording':

@@ -14,6 +14,7 @@ import cloudTasksModule from '@algominutes/ai/cloud-tasks.cjs';
 import spendGuardModule from '@algominutes/ai/spend-guard.cjs';
 import { maxRecordingSecondsForPlan } from '@algominutes/contracts';
 import { withinLength, chargedMinutes } from './recording-length.js';
+import { repairNoteMirror } from './mirror-repair';
 import { getNoteQueueState, markQueued, markError, markKickoffRejected, countInFlightNotesForUser } from './notes-repo';
 import { resolveEntitlement, QuotaExceededError } from './entitlements';
 import { noteChargeStands } from './usage-repo';
@@ -90,6 +91,8 @@ export interface KickoffInput {
 export type KickoffResult =
   | { kind: 'queued'; jobId: string }
   | { kind: 'in_flight'; status: string | null }
+  /** Postgres already has the note ready: nothing is run, charged or changed. */
+  | { kind: 'ready' }
   | { kind: 'not_found' }
   | { kind: 'recording' }
   | { kind: 'audio_missing' }
@@ -166,6 +169,20 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
   if (queueState.inFlight) {
     log.info({ status: queueState.status }, 'process_already_in_flight');
     return { kind: 'in_flight', status: queueState.status };
+  }
+  // A finished note is never run again by a kickoff. The api's own check reads the Firestore doc, which a client
+  // can write: on 2026-10-01 an app's second kickoff, 4 minutes after a 52-minute meeting was ready, re-ran all
+  // of it (speech-to-text paid twice, the summary replaced). Postgres decides; markQueued checks again under the
+  // note's lock. A new summary for a ready note is the regenerate route's.
+  // (Not a notetaker's ingest: markQueued answers its replay "already queued", under the bot's own lock.)
+  if (queueState.status === 'ready' && !input.meetingBotId) {
+    log.warn({}, 'process_note_already_ready');
+    // The client asked because its doc says otherwise (it showed a failure, or a retry it wrote): put the doc
+    // back in step with Postgres now, not at the sweep's next repair. Best-effort.
+    await repairNoteMirror(firestore, { noteId, workspaceId }, { settledMs: 0 })
+      .then((outcome) => log.info({ outcome }, 'process_ready_note_mirror_checked'))
+      .catch((err: unknown) => log.error({ err }, 'process_ready_note_mirror_repair_failed'));
+    return { kind: 'ready' };
   }
 
   // At most this many of a user's notes are processed at once (rev 11, L7): one account can't fill the
@@ -338,6 +355,11 @@ export async function queueNoteRun(input: KickoffInput): Promise<KickoffResult> 
     // A notetaker's run, queued by an earlier attempt of its ingest: never twice.
     log.info({}, 'notetaker_run_already_queued');
     return { kind: 'in_flight', status: queued.status };
+  }
+  if (!queued.queued && queued.status === 'ready') {
+    // Finished between the pre-check and the lock.
+    log.warn({}, 'process_note_already_ready');
+    return { kind: 'ready' };
   }
   if (!queued.queued && queued.status === 'recording') {
     // Became a notetaker's note between the pre-check and the lock.
