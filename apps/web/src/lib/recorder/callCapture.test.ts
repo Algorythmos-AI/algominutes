@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canCaptureCalls, captureCall, CaptureError, levelOf } from './callCapture';
+import { canCaptureCalls, captureCall, CaptureError, levelOf, meterStream } from './callCapture';
 
 class FakeTrack extends EventTarget {
   stopped = false;
@@ -165,5 +165,20 @@ describe('a call capture you can trust', () => {
     const asked = (display.mock.calls[0] as unknown as [DisplayMediaStreamOptions])[0];
     expect(asked.video).toEqual({ displaySurface: 'browser', frameRate: { max: 1 }, width: { max: 320 }, height: { max: 180 } });
     expect(asked.audio).toBeTruthy();
+  });
+});
+
+// RELEASE.md rev 11, UX6: mic mode had no meter, so a dead or muted microphone could record hours of silence.
+describe('meterStream', () => {
+  it("reads a stream's level without touching the recording, and closes its context", () => {
+    const m = meterStream(stream(new FakeTrack('audio')), FakeCtx as unknown as typeof AudioContext)!;
+    FakeCtx.last.analysers[0].level = 0.5;
+    expect(m.level()).toBeCloseTo(0.5);
+    m.close();
+    expect(FakeCtx.last.closed).toBe(true);
+  });
+
+  it('is null where the browser has no AudioContext: the recording goes on without a meter', () => {
+    expect(meterStream(stream(new FakeTrack('audio')), undefined)).toBeNull();
   });
 });

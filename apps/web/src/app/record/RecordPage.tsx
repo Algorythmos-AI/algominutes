@@ -4,7 +4,7 @@ import { maxRecordingSecondsForPlan, RECORDING_LIMITS, type EntitlementResponse,
 import { noMinutesLeft } from '../../lib/billing/invite';
 import { reportCrash } from '../../lib/crashReport';
 import { formatClock, formatDate } from '../../lib/notes/format';
-import { canCaptureCalls, captureCall, CaptureError, SILENT_LEVEL, type Capture, type CaptureEnv } from '../../lib/recorder/callCapture';
+import { canCaptureCalls, captureCall, CaptureError, meterStream, SILENT_LEVEL, type Capture, type CaptureEnv, type StreamMeter } from '../../lib/recorder/callCapture';
 import { extensionFor, leftOver, pickMimeType, RecordingGoneError, startRecording, type ActiveRecording, type Locks } from '../../lib/recorder/recorder';
 import type { RecordingMeta, RecordingStore } from '../../lib/recorder/store';
 import { importAudio, retryKickoff, type ImportResult } from '../../lib/uploads/importAudio';
@@ -37,6 +37,8 @@ export interface RecorderEnv {
   /** Recording a call in another tab (W7): the browser's share, where it can share a tab's audio. */
   capture?: CaptureEnv;
   canCaptureCalls?: () => boolean;
+  /** For the microphone meter (undefined: the browser's; tests pass a fake). */
+  AudioContext?: typeof AudioContext;
 }
 
 type Phase =
@@ -51,6 +53,8 @@ type Phase =
 const WARN_BEFORE_CAP_S = 5 * 60;
 /** A call that's been silent this long is probably muted, or its tab was shared without its sound. */
 export const CALL_SILENT_WARN_MS = 15_000;
+// A microphone silent this long is said to be (rev 11, UX6): long enough for a pause, short enough to fix.
+export const MIC_SILENT_WARN_MS = 30_000;
 
 /** A meter's fill, on a decibel scale: -60 dB (a quiet room) is empty, full scale is full. */
 export function meterPercent(level: number): number {
@@ -117,6 +121,12 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
   const [micMuted, setMicMuted] = useState(false);
   const [callSilent, setCallSilent] = useState(false);
   const silentSince = useRef<number | null>(null);
+  // The microphone's meter when recording the microphone alone (a call's capture meters its own sources).
+  const micMeter = useRef<StreamMeter | null>(null);
+  const [micLevel, setMicLevel] = useState<number | null>(null);
+  const [micSilent, setMicSilent] = useState(false);
+  // A page left mid-recording closes the meter's audio context with it.
+  useEffect(() => () => micMeter.current?.close(), []);
   // The server's minutes: with none left, the page asks for an invite code before a
   // recording the server would refuse (RELEASE.md PR 9). Unknown never blocks.
   const [ent, setEnt] = useState<EntitlementResponse | null>(null);
@@ -150,8 +160,17 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     if (!recording) return;
     const t = setInterval(() => {
       const c = capture.current;
-      if (!c) return;
       const at = Date.now();
+      if (!c) {
+        const m = micMeter.current;
+        if (!m) return;
+        const level = m.level();
+        setMicLevel(level);
+        if (level >= SILENT_LEVEL) silentSince.current = null;
+        else silentSince.current ??= at;
+        setMicSilent(silentSince.current !== null && at - silentSince.current >= MIC_SILENT_WARN_MS);
+        return;
+      }
       const l = c.levels();
       setLevels(l);
       if (l.call >= SILENT_LEVEL) silentSince.current = null;
@@ -292,9 +311,13 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
         setPhase({ kind: 'failed', message: 'The recording couldn’t be saved. If it’s listed above, upload it from there.' });
       }
     } finally {
-      // The shared tab and the mixer end with the recording, however it ended.
+      // The shared tab and the mixer end with the recording, however it ended; so does the microphone's meter.
       capture.current?.stop();
       capture.current = null;
+      micMeter.current?.close();
+      micMeter.current = null;
+      setMicLevel(null);
+      setMicSilent(false);
     }
   }, [env.store, upload]);
   // The callbacks a running recording holds call the current stop, never the one from when it started.
@@ -320,6 +343,10 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     setLevels(null);
     setMicMuted(false);
     setCallSilent(false);
+    setMicLevel(null);
+    setMicSilent(false);
+    micMeter.current?.close();
+    micMeter.current = null;
     silentSince.current = null;
     let stream: MediaStream;
     if (source === 'call' && env.capture) {
@@ -340,6 +367,7 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
     } else {
       try {
         stream = await env.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        micMeter.current = meterStream(stream, env.AudioContext ?? (typeof AudioContext === 'undefined' ? undefined : AudioContext));
       } catch (err) {
         // silent-catch-ok: getUserMedia's refusal is the user's permission or device, shown as denied or unsupported
         setPhase({ kind: (err as { name?: string })?.name === 'NotAllowedError' ? 'denied' : 'unsupported' });
@@ -487,6 +515,16 @@ export function RecordPage({ env = recorderEnv() }: { env?: RecorderEnv }) {
                 {micMuted ? 'Unmute my microphone' : 'Mute my microphone'}
               </button>
             </div>
+          )}
+          {micLevel !== null && !levels && (
+            <div className="mt-4 text-left">
+              <LevelMeter label="Your microphone" level={micLevel} />
+            </div>
+          )}
+          {micSilent && (
+            <p role="alert" className="mt-3 rounded-xl border border-warning/50 bg-warning/10 p-3 text-left text-body">
+              No sound from your microphone for 30 seconds. Check it isn’t muted, and that the right one is chosen in your browser’s site settings.
+            </p>
           )}
           {callSilent && (
             <p role="alert" className="mt-3 rounded-xl border border-warning/50 bg-warning/10 p-3 text-left text-body">

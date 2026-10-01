@@ -186,6 +186,45 @@ describe('recording in the browser', () => {
     expect(screen.getByText(/closing the lid stops the recording/)).toBeTruthy();
   });
 
+  // RELEASE.md rev 11, UX6: a microphone recording had no meter, so a dead or muted mic recorded silence unnoticed.
+  describe('the microphone meter', () => {
+    const micCtx = () => {
+      const mic = { level: 0.2 };
+      class Ctx {
+        createMediaStreamSource() { return { connect() {} }; }
+        createAnalyser() { return { fftSize: 4, connect() {}, getFloatTimeDomainData: (a: Float32Array) => a.fill(mic.level) }; }
+        close() { return Promise.resolve(); }
+      }
+      return { mic, Ctx: Ctx as unknown as typeof AudioContext };
+    };
+
+    it('shows the microphone level while recording', async () => {
+      const { Ctx } = micCtx();
+      setup({ AudioContext: Ctx });
+      fireEvent.click(await screen.findByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+      await screen.findByText('● RECORDING');
+      const meter = await screen.findByRole('meter', { name: 'Your microphone' });
+      await waitFor(() => expect(Number(meter.getAttribute('aria-valuenow'))).toBeGreaterThan(0));
+    });
+
+    it('a microphone silent for 30 seconds is said to be, and the warning goes when it hears something', async () => {
+      const { mic, Ctx } = micCtx();
+      mic.level = 0;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const start = Date.now();
+      setup({ AudioContext: Ctx });
+      fireEvent.click(await screen.findByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+      await screen.findByText('● RECORDING');
+      await new Promise((r) => setTimeout(r, 600));
+      vi.setSystemTime(start + 31_000);
+      expect(await screen.findByText(/No sound from your microphone/, {}, { timeout: 2000 })).toBeTruthy();
+      mic.level = 0.3;
+      await waitFor(() => expect(screen.queryByText(/No sound from your microphone/)).toBeNull(), { timeout: 2000 });
+    });
+  });
+
   it('leaving the page while recording asks first, and keeps recording unless told to stop', async () => {
     setup();
     fireEvent.click(await screen.findByRole('checkbox'));
