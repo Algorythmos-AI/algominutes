@@ -27,8 +27,16 @@ jobs:
       - run: npm ci
       # The transcoder's duration probe is tested against the real ffmpeg (as its
       # image runs it); without it those tests skip.
+      # Bounded, with one more try: apt has hung here for 20 minutes twice (2026-10-01), holding the merge queue.
+      # Each fetch has its own timeout, man-db's slow trigger is off, and the output is kept so a hang names its stage.
       - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        timeout-minutes: 12
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          apt() { sudo timeout 300 apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 "$@"; }
+          install() { apt update -q && apt install -y -q --no-install-recommends ffmpeg; }
+          install || { echo "::warning::ffmpeg install failed or hung; trying once more"; sleep 10; install; }
+          ffmpeg -version | head -1
       - name: Typecheck (shared TS libraries)
         run: npm run typecheck
       - name: Unit tests (vitest)
