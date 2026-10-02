@@ -11,6 +11,7 @@ import { reportCrash } from '../crashReport';
 import type { NewNote } from '../notes/noteCache';
 import { workspaceIdFor } from '../notes/workspace';
 import { failureMessage, kickoffFailure, noteError } from './kickoff';
+import type { UploadSessionRef } from '../recorder/store';
 import { UploadError, uploadResumable } from './resumable';
 
 /** The api's cap (packages/ai intelligence.cjs MAX_AUDIO_BYTES), checked first so nothing is uploaded in vain. */
@@ -63,8 +64,13 @@ export interface ImportDeps {
    * (the api answers 404), the recording gets a new note.
    */
   reuseNoteId?: string;
+  /**
+   * That note's upload session, when it's remembered (RELEASE.md rev 11, LM8): if the server still has it open
+   * and the file is the same size, the upload carries on from the bytes Cloud Storage holds.
+   */
+  reuseSession?: UploadSessionRef;
   /** The note the upload goes into, once it exists: remembered, so a cut-off upload's retry reuses it. */
-  onNote?: (noteId: string) => void | Promise<unknown>;
+  onNote?: (noteId: string, session: UploadSessionRef) => void | Promise<unknown>;
   /** The note was deleted again (a cancelled or failed recording upload): nothing to reuse. */
   onNoteDropped?: () => void | Promise<unknown>;
 }
@@ -100,10 +106,25 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
   if (deps.signal?.aborted) return cancelled();
 
   const mint = () => deps.api.createUpload({ noteId, workspaceId, fileName: file.name, contentType: mimeType, totalBytes: file.size });
-  let session;
+  let session: Omit<UploadSessionRef, 'totalBytes'> | undefined;
+  // Bytes the remembered session already holds: the upload starts there.
+  let startAt = 0;
+  let resumed = false;
   try {
+    const kept = reused && deps.reuseSession && deps.reuseSession.totalBytes === file.size ? deps.reuseSession : null;
+    if (kept) {
+      try {
+        const status = await deps.api.uploadStatus(kept.uploadId);
+        session = { uploadId: kept.uploadId, sessionUri: kept.sessionUri, chunkSize: kept.chunkSize, storagePath: kept.storagePath };
+        startAt = status.complete ? file.size : Math.min(status.receivedBytes, file.size);
+        resumed = true;
+      } catch (err) {
+        // silent-catch-ok: a session the server no longer has (expired, or its note gone) can't be resumed; a new one is minted below, and that call reports any real failure
+        if (!(err instanceof ApiError)) reportCrash('import.resumeStatus', err);
+      }
+    }
     try {
-      session = await mint();
+      session = session ?? (await mint());
     } catch (err) {
       // silent-catch-ok: the note to reuse was deleted since (its tombstone refuses uploads), so the recording gets a new one; anything else is rethrown
       if (!(reused && err instanceof ApiError && err.kind === 'not_found')) throw err;
@@ -130,7 +151,8 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     }
   }
   // A reused note's doc is already there, with this same storage path (recordings/{ws}/{noteId}.{ext}).
-  await tell('onNote', () => deps.onNote?.(noteId));
+  const sessionRef: UploadSessionRef = { uploadId: session.uploadId, sessionUri: session.sessionUri, chunkSize: session.chunkSize, storagePath: session.storagePath, totalBytes: file.size };
+  await tell('onNote', () => deps.onNote?.(noteId, sessionRef));
   deps.track?.start(noteId);
 
   const mark = async (message: string) => {
@@ -142,32 +164,36 @@ export async function importAudio(file: File, deps: ImportDeps): Promise<ImportR
     }
   };
   const fail = async (message: string): Promise<ImportResult> => {
-    // A recording's audio is still safe on this browser, and a retry makes a new note: remove this one
-    // rather than leave a failure behind. An imported file's note stays, marked, as iOS leaves it.
-    if (deps.recording) {
-      try {
-        await deps.api.deleteNote({ noteId, workspaceId });
-        await tell('onNoteDropped', () => deps.onNoteDropped?.());
-        return { ok: false, noteId: null, message };
-      } catch (err) {
-        reportCrash('import.failDelete', err);
-      }
-    }
+    // The note stays, marked failed, for a recording as for an imported file (RELEASE.md rev 11, LM8; the
+    // owner's choice, 2026-10-01). A recording's note used to be deleted, so Try again made a new note and a new
+    // session and sent a 2-hour recording again from the first byte. Kept, with its session remembered (onNote),
+    // Try again carries on from the bytes Cloud Storage holds. Discarding the recording deletes its note.
     await mark(message);
     return { ok: false, noteId, message };
   };
 
   try {
-    await uploadResumable({
+    const send = (to: Omit<UploadSessionRef, 'totalBytes'>, from: number) => uploadResumable({
       file,
-      sessionUri: session.sessionUri,
-      chunkSize: session.chunkSize,
-      receivedBytes: async () => (await deps.api.uploadStatus(session.uploadId)).receivedBytes,
+      sessionUri: to.sessionUri,
+      chunkSize: to.chunkSize,
+      startAt: from,
+      receivedBytes: async () => (await deps.api.uploadStatus(to.uploadId)).receivedBytes,
       onProgress: (sent, total) => deps.onProgress?.(sent / total),
       signal: deps.signal,
       fetchImpl: deps.fetchImpl,
       sleep: deps.sleep,
     });
+    try {
+      await send(session, startAt);
+    } catch (err) {
+      // silent-catch-ok: a remembered session Cloud Storage has let go of can't be resumed: a new one is minted and the recording sent from the start, once; any other failure is rethrown to the handler below
+      if (!(resumed && err instanceof UploadError && err.kind === 'expired')) throw err;
+      session = await mint();
+      const fresh: UploadSessionRef = { uploadId: session.uploadId, sessionUri: session.sessionUri, chunkSize: session.chunkSize, storagePath: session.storagePath, totalBytes: file.size };
+      await tell('onNote', () => deps.onNote?.(noteId, fresh));
+      await send(session, 0);
+    }
     deps.onUploaded?.();
     await deps.api.completeUpload(session.uploadId);
   } catch (err) {

@@ -303,6 +303,20 @@ describe('recording in the browser', () => {
     expect(await store.list('u1')).toEqual([]);
   });
 
+  // RELEASE.md rev 11, LM8: a failed or cut-off upload leaves its note (to resume into); discarding takes it too.
+  it("discarding a recording whose upload left a note deletes that note too", async () => {
+    const { store } = setup();
+    await store.create({ id: 'old', uid: 'u1', mimeType: 'audio/webm', startedAt: Date.parse('2026-09-26T01:00:00Z'), seconds: 125 });
+    await store.append('old', 0, new Blob(['left']), 125, Date.now() - 60_000);
+    await store.setNote('old', { noteId: 'webkept', session: { uploadId: 'u1', sessionUri: 'https://s', chunkSize: 262144, storagePath: 'recordings/workspace_u1/webkept.webm', totalBytes: 4 } });
+    cleanup();
+    const second = setup({ store } as Partial<RecorderEnv>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard this recording?' })).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(second.calls).toContain('/v1/notes/delete'));
+    expect(await store.list('u1')).toEqual([]);
+  });
+
   describe('a call in another tab', () => {
     const track = () => Object.assign(new EventTarget(), { kind: 'audio', stop: vi.fn() });
     const captureEnv = () => {
