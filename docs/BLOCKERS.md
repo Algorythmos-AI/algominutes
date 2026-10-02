@@ -49,12 +49,15 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
   - [x] The pipeline e2e: the owner set `E2E_INVITE_CODE` (2026-09-30). After #295 fixed what it expected of a
     short recording, both sizes passed on staging: 2 minutes (run 36742148442, the fast path) and 15 minutes (run
     36742160404, the long path, the first time it ran on this staging).
-  - [ ] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`, and its `e2e` job ran for the first time
+  - [x] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`, and its `e2e` job ran for the first time
     (run 36746303857, bddc7cd). It failed every step that processes a note (the import, search, the browser
     recording, the cut-off recording's upload), and passed the rest. Staging's guests start with no minutes
     (`TRIAL_ON_FIRST_USE=off`), so the web app refused before uploading. Fix: `fix/web-e2e-invite` (the guest
     redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
-  - Done at the first green run of each, and the nightly schedule's first green night.
+    **First green run 2026-10-01** (36854145067, all 20 steps), after #318 (the invite code) and #323 (the fake
+    shared tab's own camera message). Green again on 59d8587 (run 36991396876, 2026-10-02).
+  - [ ] The nightly schedule's first green night. The scheduled e2e did not fire on 2026-09-30; not yet seen to
+    fire by itself. #320 adds the long-meeting sizes (60 nightly, 120/240 weekly, ADTS and WebM).
 - [x] **The 10-15 proof: a real meeting on gemini-3.5-flash alone (2026-10-01).** The owner's 51.7-minute
   recording from the iPhone (note tccLBaIAvLIWpcgI6cg4, staging): the chunked path, the summary by
   gemini-3.5-flash with `finishReason: STOP`, 5 chapters, ready 297 s after the kickoff (the bar for an hour is
@@ -66,13 +69,18 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
 - [x] **Apply C applied (2026-10-01, reviewed-65b2a93: 8 added, 22 changed).** Verified: the transcoder's timeout
   1800 s, `MAX_TASK_ATTEMPTS` 10, the transcode queue's 10 attempts and 600 s backoff, the Cloud SQL maintenance
   window. Redeployed `services=all` (run 36787844649); all 8 services on the head.
-- [ ] **New P0, found on the proof meeting: a finished note was run again.** Four minutes after it was ready, the
+- [x] **New P0, found on the proof meeting: a finished note was run again.** Four minutes after it was ready, the
   iPhone (which was showing a retry) sent a second kickoff, and the server re-ran all 52 minutes: speech-to-text
   paid twice, the summary replaced. The api's "already ready" check read only the Firestore doc, which a client
   can write. Fix: `fix/ready-note-not-rerun` (Postgres decides; the doc is repaired at once). Why the app
   offered a retry on a finished note is still open; two callers on one upload is the likely cause
   (`fix/ios-upload-never-stuck`).
-- [ ] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
+  - **Fixed on the server 2026-10-01:** #311 (live at ab84756; the kickoff answers `ready` and repairs the doc;
+    `markQueued` refuses it under the note's lock). #312 stops a client writing a finished or held note's
+    status in the rules; **the rules are released by Apply D, which the owner has not applied yet.**
+  - [ ] Still open: why iPhone build 25 showed "Processing failed" on a note that was ready. #331 (one upload
+    with many waiters) and #326 are the likely fix; confirm on a TestFlight build with a long recording.
+- [x] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
   was CLEAN, with auto-merge on, but never entered the queue. `gh pr merge` only turns auto-merge on, and its
   trigger was missed. Enqueuing it directly (the GraphQL `enqueuePullRequest`) worked. The overnight train runs
   a watcher that does this for any PR still waiting after two looks, 2 minutes apart.
@@ -89,17 +97,42 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
     charged 0, and the transcoder's settle charges the measured length or holds it again.
   - H6d `feat/web-minutes-left`: the web record page says the minutes left, and that a recording past them is
     kept. iOS's equivalent is still open.
+  - **Merged and live (2026-10-02):** H6a #328 (2093172), H6b #329 (bc46fed), H6c #330 (c37b41a), H6d web #340.
+    Each server PR's deploy was followed to its images by `train.sh`. Not yet exercised by hand on staging: an
+    account that runs out mid-test, then redeems a code.
+- [x] **A regression of mine in #302, fixed in #321 (2026-10-01).** #302 capped thinking with `thinkingBudget`
+  on both rungs. gemini-3.5-flash refuses that field on some of its Sydney backends ("Thinking budget is not
+  supported for this model"): 7 of 12 first attempts failed on staging, and the retry usually landed on a backend
+  that takes it, so notes still finished, slower. #321 sends each model its own field (`thinkingLevel` for 3.x,
+  `thinkingBudget` otherwise) and asks once more without a cap if Vertex still answers 400.
+  - Evidence: since the deploy of 59d8587, 11 `gemini_ok` on gemini-3.5-flash, 0 `gemini_non_retryable`,
+    0 `gemini_thinking_cap_refused` (the 2 on gemini-2.5-flash are db-job's Vertex smoke test).
+  - Lesson (DECISIONS, S1): an intermittent refusal needs a probe of ten or more calls, not two.
+- [x] **CI: a hung `apt-get install ffmpeg` held the merge queue for 20 minutes, twice (2026-10-01).** #335
+  bounds the step, turns man-db's trigger off and keeps its output. Not seen since.
+- [x] **The train of 2026-10-01/02: #320–#346 merged, staging on 59d8587.** The pipeline e2e (run 36991393156)
+  and the web journey (run 36991396876, 20 of 20) pass on that head.
 - [ ] **P0s found by the rev 11 audits** (RELEASE.md R11.4). Each closes with a failing-then-passing test and
   staging evidence here:
-  - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3.
-  - L3: Try again doubles the transcript (`markQueued` leaves the old lines) → H2.
-  - L6: no kickoff lease, so a duplicate can double-pay speech-to-text → H2.
-  - N1: a phone call over 5 minutes ends an iPhone recording → H4.
+  - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3. **Merged:** #308
+    (the server finds an upload no note followed), #326, #331, #334 (iOS; in CI only, no device run yet).
+  - L3: Try again doubles the transcript (`markQueued` leaves the old lines) → H2. **Fixed:** #303.
+  - L6: no kickoff lease, so a duplicate can double-pay speech-to-text → H2. **Fixed:** #299 (one attempt
+    claims a chunk's speech job).
+  - N1: a phone call over 5 minutes ends an iPhone recording → H4. **Merged:** #325 (CI only; the device proof
+    is the 3 h recording with a 30-minute call).
   - N2: speech-to-text runs in `locations/global`, not Sydney → S1 (done: `long` serves in Sydney; DECISIONS
     2026-09-30), H10.
-  - N3: the web caps Pro at 2 h when the plan fetch fails → H5.
-  - LM1: a 4 h recording fails the zero-slack length check → H5.
-  - N4, L8–L11: broadcast captures and uploads → H3, H11.
+  - N3: the web caps Pro at 2 h when the plan fetch fails → H5. **Fixed:** #313.
+  - LM1: a 4 h recording fails the zero-slack length check → H5. **Fixed:** #304 (server), #313 (web).
+  - N4, L8–L11: broadcast captures and uploads → H3, H11. **Partly:** L8, L9 #337; L10 #334; L11, N5 #331.
+    **Open:** N4 (the capture queue, ADTS in the extension, `writer.status`, the cap and the disk check).
+  - Also merged from the sprint: H7 #301 (Apply C), H8 #302 + #321, H9 #309, #310, #332, #346, H10's line cap
+    #327, H12 #320, H13 #338, #339, H14 #315–#317, #345, H15 #336, #341, H17's audio link #344, H18 web #343,
+    H20's server half #342.
+  - **Not started:** iOS minutes left (H6d), N4, the rest of H13 (back minimises, pause and resume, one consent
+    sheet), H16, the rest of H17–H19, H20's screens, Sydney speech-to-text (N2; waits for a probe as the
+    transcoder's identity).
 - [x] **Invite minutes corrected in the docs (2026-09-30):** the code's default is Pro's monthly minutes, 1,500
   (`beta-invites-repo.ts:149`). The runbook and RELEASE.md said 600. The e2e code below is explicitly made with 600.
 
