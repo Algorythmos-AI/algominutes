@@ -33,6 +33,8 @@ final class AuthService: NSObject {
                 if user != nil {
                     await self?.ensureWorkspaceDoc()
                 }
+                // H15: crash reports group by a hash of whoever is signed in.
+                CrashReporting.userChanged(uid: user?.uid)
                 // A7.3: the push token follows whoever is signed in.
                 await PushTokenRegistrar.shared.userChanged(uid: user?.uid)
             }

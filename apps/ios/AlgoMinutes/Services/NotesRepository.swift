@@ -190,6 +190,8 @@ final class NotesRepository {
                 RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: true)
             case .error:
                 RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: false)
+                // H15: a failure the user saw happen is a non-fatal, by its code.
+                CrashReporting.noteFailed(diagnosticCode: note.diagnosticCode)
             default:
                 break
             }
