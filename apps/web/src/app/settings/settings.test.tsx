@@ -44,6 +44,10 @@ describe('settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     await waitFor(() => expect(write).toHaveBeenCalledWith('u1'));
     expect(await screen.findByText(/Free plan\. 12 of 60 minutes used this month\./)).toBeTruthy();
+    // RELEASE.md rev 11, H18: a bar, what's left, and the day they renew.
+    const bar = screen.getByRole('meter', { name: 'Minutes used this month' });
+    expect([bar.getAttribute('aria-valuenow'), bar.getAttribute('aria-valuemax')]).toEqual(['12', '60']);
+    expect(screen.getByText('48 left. Your minutes renew on 1 October.')).toBeTruthy();
   });
 
   it('the plan card takes an invite code: sent trimmed, and the new minutes are shown', async () => {
