@@ -101,6 +101,59 @@ describe('search and chat limits', () => {
     expect(hits.map((h: { noteId: string }) => h.noteId)).not.toContain('current');
   });
 
+  // RELEASE.md rev 11, H9.
+  describe('chat and the daily spend cap', () => {
+    const { SpendCapExceededError } = require('@algominutes/ai/spend-guard.cjs');
+    const stream = () => {
+      const out = { status: 200, body: undefined as any, written: '', ended: false };
+      const res = {
+        status(c: number) { out.status = c; return this; }, json(b: unknown) { out.body = b; return this; },
+        setHeader: noop, write(t: string) { out.written += t; }, end() { out.ended = true; },
+      };
+      return { out, res };
+    };
+    const sse = (text: string) => ({
+      ok: true, status: 200,
+      body: (async function* () { yield new TextEncoder().encode(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\n\n`); })(),
+    });
+    const chats = async () => (await pool.query(`SELECT uid, note_id, event, model, audio_seconds FROM usage_events`)).rows;
+
+    it('at the cap it answers 503 with a sentence, and asks nothing of the embedder or the model', async () => {
+      const { out, res } = stream();
+      const calls: string[] = [];
+      await handleChatStream({
+        uid: 'alice', body: { query: 'zzqx' }, log, res,
+        deps: {
+          assertUnderDailyCap: async () => { throw new SpendCapExceededError(21, 20); },
+          embed: async () => { calls.push('embed'); return unit(1); },
+          fetchImpl: async () => { calls.push('model'); return sse('no'); },
+        },
+      });
+      expect(out).toMatchObject({ status: 503, body: { error: expect.stringMatching(/today's limit/) }, written: '' });
+      expect(calls).toEqual([]);
+      expect(await chats()).toEqual([]);
+    });
+
+    it('under the cap it answers, and the answer is counted once as paid work', async () => {
+      const { out, res } = stream();
+      await handleChatStream({
+        uid: 'alice', body: { query: 'zzqx', noteId: 'current' }, log, res,
+        deps: {
+          assertUnderDailyCap: async () => ({ ok: true }), embed: async () => unit(1),
+          fetchImpl: async () => sse('the answer'), authHeader: async () => 'Bearer t', project: 'p',
+        },
+      });
+      expect(out.written).toContain('the answer');
+      expect(out.ended).toBe(true);
+      expect(await chats()).toEqual([{ uid: 'alice', note_id: 'current', event: 'chat_call', model: expect.stringMatching(/^gemini-/), audio_seconds: null }]);
+    });
+
+    it("an error that isn't the cap is not swallowed as one", async () => {
+      const { res } = stream();
+      await expect(handleChatStream({ uid: 'alice', body: { query: 'zzqx' }, log, res, deps: { assertUnderDailyCap: async () => { throw new Error('boom'); } } })).rejects.toThrow('boom');
+    });
+  });
+
   it("chat asks Vertex for a bounded answer, with the model's thinking capped", () => {
     const body = chatRequestBody('the prompt');
     expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'the prompt' }] }]);
