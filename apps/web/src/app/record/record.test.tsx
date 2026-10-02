@@ -177,6 +177,22 @@ describe('recording in the browser', () => {
     expect(await screen.findByText(/left: recording stops on its own at 2:00:00/)).toBeTruthy();
   });
 
+  // RELEASE.md rev 11, H6d: a recording past the minutes left is held, not lost; the page says so before and during.
+  it('says the minutes left before recording, and when a recording passes them, that it will be kept', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    setup(); // ENT: 59 minutes left
+    expect(await screen.findByText(/You have 59 recording minutes left this month/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    await screen.findByText('● RECORDING');
+    FakeRecorder.last!.emit('audio');
+    expect(screen.queryByText(/longer than the minutes you have left/)).toBeNull();
+    vi.setSystemTime(start + 60 * 60 * 1000); // an hour: past 59 minutes
+    expect(await screen.findByText(/This recording is now longer than the minutes you have left this month\. It’s kept/)).toBeTruthy();
+    expect(screen.getByText('● RECORDING')).toBeTruthy();
+  });
+
   // RELEASE.md rev 11, N9: a sleeping laptop stops the microphone, and the screen wake lock can't stop a closed lid.
   it('while recording, says to keep the laptop awake', async () => {
     setup();
