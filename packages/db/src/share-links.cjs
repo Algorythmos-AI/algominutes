@@ -117,6 +117,36 @@ async function revokeShareWithinTx(client, { shareId, noteId, uid }) {
 }
 
 /**
+ * The links one user made for one note, newest first (RELEASE.md rev 11, H20: a user sees what they've shared,
+ * and can take it back, before share links are switched on). Only a note in a workspace they're a member of,
+ * and only their own links on it. Never the token (only its hash is stored): a link can be listed and revoked,
+ * not read back. Revoked and expired links are included with their state, for the owner's record; the last 50.
+ */
+async function listSharesWithinTx(client, { noteId, uid, workspaceId }) {
+  const { rows } = await client.query(
+    `SELECT s.id, s.scope, s.created_at, s.expires_at, s.revoked_at, s.last_read_at, s.read_count
+       FROM shares s
+       JOIN notes n ON n.id = s.note_id AND n.deleted_at IS NULL
+       JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.uid = $2
+      WHERE s.note_id = $1 AND n.workspace_id = $3 AND s.created_by_uid = $2
+      ORDER BY s.created_at DESC
+      LIMIT 50`,
+    [noteId, uid, workspaceId],
+  );
+  const now = Date.now();
+  return rows.map((r) => ({
+    shareId: r.id,
+    scope: r.scope,
+    createdAt: new Date(r.created_at).toISOString(),
+    expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null,
+    revokedAt: r.revoked_at ? new Date(r.revoked_at).toISOString() : null,
+    lastReadAt: r.last_read_at ? new Date(r.last_read_at).toISOString() : null,
+    readCount: Number(r.read_count) || 0,
+    live: !r.revoked_at && (!r.expires_at || new Date(r.expires_at).getTime() > now),
+  }));
+}
+
+/**
  * Resolve a token to a live grant.
  *
  * Returns null for every failure mode — no row, expired, revoked, note gone —
@@ -206,6 +236,7 @@ module.exports = {
   sanitizeShareRequest,
   createShareWithinTx,
   revokeShareWithinTx,
+  listSharesWithinTx,
   findLiveShare,
   logShareAccess,
   touchShareRead,

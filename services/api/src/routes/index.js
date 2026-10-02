@@ -23,7 +23,7 @@ import { setNoteSpeakersRoute } from './set-note-speakers.js';
 // functions/index.js HTTP handlers, ported to services/api (ESM).
 import { processIntelligenceRoute } from './process-intelligence.js';
 import { regenerateSummaryRoute } from './regenerate-summary.js';
-import { shareCreateRoute, shareRevokeRoute } from './shares.js';
+import { shareCreateRoute, shareRevokeRoute, shareListRoute } from './shares.js';
 import { noteFeedbackRoute } from './note-feedback.js';
 import { clientErrorRoute } from './client-error.js';
 
@@ -161,6 +161,9 @@ export function buildRouter() {
 
   // ── POST /v1/shares/revoke ── functions/index.js shareRevoke ───────────
   router.post('/shares/revoke', authed, wrap(shareRevokeRoute));
+
+  // ── POST /v1/shares/list ── the caller's links for a note (rev 11, H20) ─
+  router.post('/shares/list', authed, wrap(shareListRoute));
 
   // ── POST /v1/shares/read ── functions/shared-note.cjs (PUBLIC, no auth) ─
   //

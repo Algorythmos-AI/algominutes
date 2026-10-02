@@ -56,6 +56,35 @@ export const ShareRevokeResponse = z
   })
   .openapi('ShareRevokeResponse');
 
+// ── list (RELEASE.md rev 11, H20) ──────────────────────────────────────
+
+export const ShareListRequest = z
+  .object({
+    noteId: z.string(),
+    workspaceId: z.string(),
+  })
+  .openapi('ShareListRequest');
+
+/** One of the caller's links. Never the token: only its hash is stored, so a link can be listed and revoked,
+ * not read back. `live` is false once it's revoked or expired; those stay listed, for the owner's record. */
+export const ShareListItem = z
+  .object({
+    shareId: z.union([z.string(), z.number()]),
+    scope: ExportScope,
+    createdAt: IsoDateTime,
+    expiresAt: IsoDateTime.nullable(),
+    revokedAt: IsoDateTime.nullable(),
+    lastReadAt: IsoDateTime.nullable(),
+    readCount: z.number().int().nonnegative(),
+    live: z.boolean(),
+  })
+  .openapi('ShareListItem');
+
+/** The caller's links for the note, newest first (at most 50). */
+export const ShareListResponse = z
+  .object({ shares: z.array(ShareListItem) })
+  .openapi('ShareListResponse');
+
 // ── public read ────────────────────────────────────────────────────────
 
 /** Request body for the public read. No bearer token — the link token IS the
@@ -103,6 +132,9 @@ export const SharedNoteResponse = z
 export type ShareCreateRequest = z.infer<typeof ShareCreateRequest>;
 export type ShareCreateResponse = z.infer<typeof ShareCreateResponse>;
 export type ShareRevokeRequest = z.infer<typeof ShareRevokeRequest>;
+export type ShareListRequest = z.infer<typeof ShareListRequest>;
+export type ShareListItem = z.infer<typeof ShareListItem>;
+export type ShareListResponse = z.infer<typeof ShareListResponse>;
 export type ShareRevokeResponse = z.infer<typeof ShareRevokeResponse>;
 export type SharedNoteRequest = z.infer<typeof SharedNoteRequest>;
 export type SharedSummary = z.infer<typeof SharedSummary>;

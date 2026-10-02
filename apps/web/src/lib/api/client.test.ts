@@ -80,6 +80,7 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'chat', run: async (c) => { for await (const _ of c.chat({ query: 'q' })) void _; }, method: 'POST', url: `${ORIGINS.api}/v1/chat`, body: { query: 'q' } },
   { name: 'createShare', run: (c) => c.createShare({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/create`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'revokeShare', run: (c) => c.revokeShare({ noteId: 'n1', workspaceId: 'w1', shareId: 's1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/revoke`, body: { noteId: 'n1', workspaceId: 'w1', shareId: 's1' } },
+  { name: 'listShares', run: (c) => c.listShares({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/list`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'readShare', run: (c) => c.readShare({ token: 'tok' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/read`, body: { token: 'tok' }, auth: false },
   { name: 'checkout', run: (c) => c.checkout({ productId: 'pro_monthly', period: 'monthly' }), method: 'POST', url: `${ORIGINS.billing}/v1/billing/checkout`, body: { productId: 'pro_monthly', period: 'monthly' } },
   { name: 'portal', run: (c) => c.portal(), method: 'POST', url: `${ORIGINS.billing}/v1/billing/portal`, body: {} },

@@ -52,6 +52,8 @@ import {
   ShareCreateResponse,
   SharedNoteRequest,
   SharedNoteResponse,
+  ShareListRequest,
+  ShareListResponse,
   ShareRevokeRequest,
   ShareRevokeResponse,
   SupportCreatedResponse,
@@ -271,6 +273,7 @@ export function createApiClient(opts: ApiClientOptions) {
     // Sharing (off in the apps for now: SHARE_LINKS_ENABLED)
     createShare: (body: ShareCreateRequest) => post('/v1/shares/create', body, ShareCreateResponse),
     revokeShare: (body: ShareRevokeRequest) => post('/v1/shares/revoke', body, ShareRevokeResponse),
+    listShares: (body: ShareListRequest) => post('/v1/shares/list', body, ShareListResponse),
     readShare: (body: SharedNoteRequest) => post('/v1/shares/read', body, SharedNoteResponse, { auth: false }),
 
     // Billing (the billing service's own origin; not on sale in the beta)

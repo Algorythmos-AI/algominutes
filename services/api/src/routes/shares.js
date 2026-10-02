@@ -113,3 +113,33 @@ export async function shareRevokeRoute(req, res) {
     client.release();
   }
 }
+
+// ── shareList ──────────────────────────────────────────────────────────
+// RELEASE.md rev 11, H20: the caller's links for one of their notes, so they can see what they've shared and
+// revoke it. Never the token: only its hash is stored.
+export async function shareListRoute(req, res) {
+  const baseLog = req.log;
+  const uid = req.uid;
+
+  const { noteId, workspaceId } = req.body || {};
+  if (!isValidId(noteId) || !isValidId(workspaceId)) {
+    return res.status(400).json({ error: 'Missing or invalid required fields' });
+  }
+  if (workspaceId !== `workspace_${uid}`) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const log = baseLog.child({ uid, userId: uid, noteId, workspaceId });
+  if (!postgresEnabled()) {
+    return res.status(503).json({ error: 'Sharing is unavailable until Postgres is provisioned.' });
+  }
+
+  const client = await pool().connect();
+  try {
+    const shares = await shareLinks.listSharesWithinTx(client, { noteId, uid, workspaceId });
+    log.info({ count: shares.length, live: shares.filter((s) => s.live).length }, 'shares_listed');
+    return res.status(200).json({ shares });
+  } finally {
+    client.release();
+  }
+}
