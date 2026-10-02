@@ -28,7 +28,10 @@ const models = require('@algominutes/ai/models.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
 // so note-read and the other read-path handlers share one pool and one timeout
 // discipline. Moved verbatim; behaviour unchanged.
-const { withQueryTimeout, postgresEnabled } = require('@algominutes/ai/pg-query.cjs');
+const { withQueryTimeout, postgresEnabled, pool: readPool } = require('@algominutes/ai/pg-query.cjs');
+const spendGuard = require('@algominutes/ai/spend-guard.cjs');
+const { recordPaidWork } = require('@algominutes/db/pipeline-repo.cjs');
+const { CHAT_EVENT } = require('@algominutes/db/spend-repo.cjs');
 
 // Vertex AI client. Single auth instance (caches tokens across calls).
 // search-and-chat used to call generativelanguage.googleapis.com (the
@@ -445,7 +448,13 @@ function createSseLineFeeder(onLine) {
  * the stream. The handler is invoked with (…, res) so it can write the
  * stream directly through the Express response.
  */
-async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
+// What a capped day says in place of an answer (the kickoff's own cap message is about processing).
+const CHAT_CAP_MESSAGE = "We've reached today's limit for answers. Please try again tomorrow.";
+
+async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps = {} }) {
+  const assertUnderDailyCap = deps.assertUnderDailyCap || spendGuard.assertUnderDailyCap;
+  const recordChat = deps.recordChat || ((entry) => recordPaidWork(readPool(), entry));
+  const fetchImpl = deps.fetchImpl || fetch;
   if (!postgresEnabled()) {
     res.status(503).json({ error: 'Chat is unavailable until Postgres is provisioned.' });
     return;
@@ -470,9 +479,19 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   if (Object.keys(questionCounts).length) {
     log.info({ uid, questionRedactionCounts: questionCounts }, 'chat_question_redacted');
   }
+  // The daily spend cap stops chat as it stops the pipeline (RELEASE.md rev 11, H9), before the embedding and the
+  // model are paid for. It fails open on a broken meter, as it does there.
+  try {
+    await assertUnderDailyCap({ log });
+  } catch (err) {
+    if (!err || err.code !== 'SPEND_CAP_EXCEEDED') throw err;
+    log.warn({ uid, spent: err.spent, cap: err.cap }, 'chat_spend_cap_refused');
+    res.status(503).json({ error: CHAT_CAP_MESSAGE });
+    return;
+  }
   let hits = [];
   try {
-    hits = await hybridSearch({ uid, query: question, k: 15, apiKey, log, noteId });
+    hits = await hybridSearch({ uid, query: question, k: 15, apiKey, log, noteId, embed: deps.embed });
   } catch (err) {
     // Retrieval failure is deliberately non-fatal — the model answers with
     // no context rather than the request dying. That is NOT true of an
@@ -530,12 +549,15 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
     // Vertex AI streaming generate. The :streamGenerateContent endpoint
     // with ?alt=sse returns SSE chunks of `data: { candidates: [...] }`,
     // which we parse and forward as our own `data: { text }` events.
-    const project = await getProjectId();
+    const project = deps.project || await getProjectId();
     const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
     const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`;
-    const upstream = await fetch(url, {
+    // Counted as it's asked, as the pipeline's paid work is (best-effort: a failed write is logged, never fatal).
+    // Only a well-formed note id rides on the row and its failure log, as on every log line here (noteLog).
+    await recordChat({ uid, noteId: noteId && isValidId(noteId) ? noteId : undefined, event: CHAT_EVENT, model: CHAT_MODEL, audioSeconds: null, log });
+    const upstream = await fetchImpl(url, {
       method: 'POST',
-      headers: { Authorization: await vertexAuthHeader(), 'Content-Type': 'application/json' },
+      headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
       body: JSON.stringify(chatRequestBody(prompt)),
     });
     if (!upstream.ok || !upstream.body) {
@@ -579,4 +601,4 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   }
 }
 
-module.exports = { handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
