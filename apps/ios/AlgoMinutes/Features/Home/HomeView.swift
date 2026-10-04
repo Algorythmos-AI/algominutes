@@ -128,6 +128,13 @@ struct HomeView: View {
                 if let noteId { selectedNoteId = noteId }
             }
         }
+        // Asked for from the recording bar, or by an outcome the screen has to present (MainTabView).
+        .onChange(of: env.recordingScreenRequested) { _, requested in
+            guard requested else { return }
+            env.recordingScreenRequested = false
+            activeSheet = nil
+            recorderFlow.isRecordingScreenPresented = true
+        }
         .onAppear { checkForOrphan(); refreshPendingCount() }
         .sheet(isPresented: $showPendingRecordings, onDismiss: refreshPendingCount) {
             PendingRecordingsView { noteId in
@@ -259,6 +266,11 @@ struct HomeView: View {
         Button {
             // A9.3: on the free floor (post-trial, unpaid) metered capture is
             // gated behind the paywall; trial/active pass straight through.
+            // A recording that's carrying on behind the app: the card goes back to it, and asks nothing again.
+            if action == .recording, env.recorder.isRecording {
+                recorderFlow.isRecordingScreenPresented = true
+                return
+            }
             guard env.billing.guardMeteredAction() else { return }
             activeSheet = action
         } label: {

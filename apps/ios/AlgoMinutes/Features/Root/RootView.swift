@@ -133,6 +133,14 @@ struct BootstrapSplash: View {
     }
 }
 
+extension MainTabView {
+    /// Home presents the recording screen, so go there and ask for it.
+    fileprivate func openRecordingScreen() {
+        selectedTab = 0
+        env.recordingScreenRequested = true
+    }
+}
+
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(DeepLinkRouter.self) private var deepLinkRouter
@@ -168,6 +176,24 @@ struct MainTabView: View {
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(2)
+        }
+        // A recording that carries on behind the app (Back minimises): said on every tab, with the way back.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if RecordingBar.isShown(isRecording: env.recorder.isRecording, screenVisible: env.isRecordingScreenVisible) {
+                RecordingBar { openRecordingScreen() }
+            }
+        }
+        // The recorder stopped itself (the cap, a full disk) or failed while its screen was away: bring the
+        // screen back to say so and to save what was recorded.
+        .onChange(of: env.recorder.autoStopped) { _, autoStop in
+            guard autoStop != nil, !env.isRecordingScreenVisible else { return }
+            env.recorderOutcomePending = true
+            openRecordingScreen()
+        }
+        .onChange(of: env.recorder.recordingError) { _, error in
+            guard error != nil, !env.isRecordingScreenVisible else { return }
+            env.recorderOutcomePending = true
+            openRecordingScreen()
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
         // A tapped push (or an algominutes://note link) opens its note on Home,

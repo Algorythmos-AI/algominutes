@@ -40,6 +40,14 @@ final class AppEnvironment {
     var alertMessage: String?
     /// The microphone was refused when recording started (RootView offers Settings).
     var micPermissionDenied = false
+    /// The recording screen, while a recording carries on without it (RELEASE.md rev 11, H13 / UX4: Back
+    /// minimises and never stops). `isRecordingScreenVisible` is set by the screen itself; a tap on the bar
+    /// that stands in for it, or an outcome it has to present, asks for it back.
+    var isRecordingScreenVisible = false
+    var recordingScreenRequested = false
+    /// The recorder stopped itself, or failed, while the screen was away: the screen presents that when it
+    /// comes back, instead of starting a new recording.
+    var recorderOutcomePending = false
     /// Ask whether to turn on notifications before iOS's one-shot prompt
     /// (RecordingView shows it; RELEASE.md PR 10a).
     var isNotificationPrePromptPending = false
