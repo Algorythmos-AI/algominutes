@@ -496,8 +496,12 @@ final class AppEnvironment {
                 durationSeconds: seconds,
                 title: "App audio \(Self.dateStamp())"
             )
+            // More than one capture can be waiting (a second broadcast before the app was opened): each
+            // becomes its own note, and each needs its own acknowledgement, so go round again.
+            if broadcast.hasFinishedCapture { await claimBroadcastCapture() }
         case .failed(let message):
             alertMessage = message
+            if broadcast.hasFinishedCapture { await claimBroadcastCapture() }
         }
     }
 
