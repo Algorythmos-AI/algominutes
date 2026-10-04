@@ -92,7 +92,7 @@ struct AccountUpgradeSheet: View {
                 Link("Terms of Service", destination: LegalLinks.terms)
             }
             .font(Typography.body(12))
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(Theme.muted)
         }
         .padding(Theme.Spacing.xl)
         // The upgrade preserved the uid — once no longer anonymous, close.

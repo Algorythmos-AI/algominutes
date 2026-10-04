@@ -43,7 +43,7 @@ struct NoteErrorPane: View {
             if let stage = diagnostic.stageDescription {
                 Text(stage)
                     .font(Typography.body(12))
-                    .foregroundStyle(Theme.tertiary)
+                    .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
