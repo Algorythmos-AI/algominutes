@@ -144,7 +144,7 @@ struct ChatView: View {
             Text("SOURCES")
                 .font(Typography.label(10))
                 .kerning(1.2)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
             ForEach(Array(citations.enumerated()), id: \.offset) { index, citation in
                 Button {
                     selectedNoteId = citation.noteId

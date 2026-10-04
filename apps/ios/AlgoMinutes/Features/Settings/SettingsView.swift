@@ -323,7 +323,7 @@ struct SettingsView: View {
             Text(label.uppercased())
                 .font(Typography.label(10))
                 .kerning(1.2)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
             Text(value)
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.body)
