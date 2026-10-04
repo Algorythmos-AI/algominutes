@@ -80,6 +80,25 @@ final class TranscriptRepository {
         }
     }
 
+    /// How many lines the Firestore mirror carries at most: a note showing this many may have more.
+    nonisolated static let mirrorCap = 200
+
+    /// Whether an export has to wait for the whole transcript (RELEASE.md rev 11, H17 / LM7). A PDF or text
+    /// file made while only the mirror was on screen held the first 200 lines of a long meeting, and nothing
+    /// said so. A summary-only export has no transcript in it, and a shorter mirror is already all of it.
+    nonisolated static func exportNeedsFull(scope: ExportScope, mirroredCount: Int) -> Bool {
+        scope != .summary && mirroredCount >= mirrorCap
+    }
+
+    /// The whole transcript, fetched if it hasn't been, or nil if it can't be: the caller then says so
+    /// rather than exporting part of a meeting as if it were all of it.
+    func whole(noteId: String, workspaceId: String) async -> [TranscriptLine]? {
+        loadFull(noteId: noteId, workspaceId: workspaceId) // a no-op while it's loading or loaded
+        await task?.value
+        guard self.noteId == noteId, case .loaded = state else { return nil }
+        return lines
+    }
+
     /// Which lines the transcript pane should render.
     func displayLines(mirrored: [TranscriptLine]?, for noteId: String) -> [TranscriptLine] {
         Self.preferred(full: lines, fullNoteId: self.noteId, mirrored: mirrored, noteId: noteId)
