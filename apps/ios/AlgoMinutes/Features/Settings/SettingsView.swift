@@ -225,6 +225,25 @@ struct SettingsView: View {
                         .font(Typography.body(13))
                         .foregroundStyle(Theme.muted)
                 }
+                // The same figure as a bar, with what's left and when it renews (RELEASE.md rev 11, H18), as the web shows it.
+                if let bar = MinutesBar(env.billing.entitlement) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Theme.border)
+                                Capsule().fill(bar.level.color).frame(width: geo.size.width * bar.fraction)
+                            }
+                        }
+                        .frame(height: 8)
+                        .accessibilityElement()
+                        .accessibilityLabel("Minutes used this month")
+                        .accessibilityValue("\(Int((bar.fraction * 100).rounded())) percent")
+                        Text(bar.caption)
+                            .font(Typography.body(13))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 // Beta testers' minutes come from the code in their invitation.
                 Divider().overlay(Theme.borderSoft)
                 Button("Enter an invite code") { env.billing.presentInviteSheet() }
@@ -265,6 +284,53 @@ struct SettingsView: View {
             parts.append("\(pendingRecordings) recordings haven't finished uploading. Signing out removes them from this device and they can't be recovered.")
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    /// The month's minutes as a bar (RELEASE.md rev 11, H18): how full, what's left, when they renew. From the
+    /// server's metering only, so it never disagrees with what the quota enforces. Nil when unknown or unmetered.
+    struct MinutesBar: Equatable {
+        enum Level: Equatable {
+            case fine, nearlyUsed, used
+            var color: Color {
+                switch self {
+                case .fine: return Theme.accent
+                case .nearlyUsed: return Theme.warning
+                case .used: return Theme.danger
+                }
+            }
+        }
+
+        /// 0...1 of the month's minutes used.
+        let fraction: Double
+        let level: Level
+        /// "1,160 left. Your minutes renew on 1 November."
+        let caption: String
+
+        init?(_ entitlement: EntitlementResponse?, calendar: Calendar = .current, locale: Locale = .current) {
+            guard let e = entitlement, let included = e.includedMinutes, included > 0 else { return nil }
+            fraction = min(1, max(0, e.usedMinutes / included))
+            level = fraction >= 1 ? .used : fraction >= 0.8 ? .nearlyUsed : .fine
+            let left = Int(max(0, included - e.usedMinutes).rounded())
+            if let renews = Self.renewalDay(period: e.billingPeriod, calendar: calendar, locale: locale) {
+                caption = "\(left.formatted()) left. Your minutes renew on \(renews)."
+            } else {
+                caption = "\(left.formatted()) left."
+            }
+        }
+
+        /// The first day of the month after `period` ("YYYY-MM"), as "1 November". Nil if the period can't be read.
+        static func renewalDay(period: String, calendar: Calendar = .current, locale: Locale = .current) -> String? {
+            let parts = period.split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 2, (1...12).contains(parts[1]) else { return nil }
+            var first = DateComponents()
+            first.year = parts[1] == 12 ? parts[0] + 1 : parts[0]
+            first.month = parts[1] == 12 ? 1 : parts[1] + 1
+            first.day = 1
+            guard let date = calendar.date(from: first) else { return nil }
+            var style = Date.FormatStyle(locale: locale).day().month(.wide)
+            style.timeZone = calendar.timeZone
+            return date.formatted(style)
+        }
     }
 
     /// "340 of 1,500 minutes used this month", from the server's metering
