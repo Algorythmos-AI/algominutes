@@ -20,6 +20,32 @@ struct FilesView: View {
     @State private var transcriptHits: [SearchHit] = []
     @State private var isSearching = false
     @State private var searchError: String?
+    /// The query the transcript hits on screen belong to. Until it matches what's typed, nothing has been
+    /// searched for it yet, and the list must not say "no match" (RELEASE.md rev 11, UX8).
+    @State private var searchedQuery: String?
+
+    /// Transcripts are searched as you type, once you pause: not on every keystroke (each search is a paid
+    /// embedding, and counts towards the hourly search budget).
+    static let searchDebounce: Duration = .milliseconds(600)
+    static let searchMinCharacters = 3
+
+    /// The query to search transcripts for, or nil when it's too short to be worth a search.
+    static func searchable(_ query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= searchMinCharacters ? trimmed : nil
+    }
+
+    /// What the empty list says, or nil while it shouldn't say anything yet: a search is running, or the
+    /// transcripts haven't been searched for what's typed (it used to say "No files match" in that gap,
+    /// before it had looked).
+    static func emptyMessage(query: String, isSearching: Bool, searchedQuery: String?) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Nothing here yet — capture or import your first meeting from Home." }
+        if isSearching { return nil }
+        // Too short to search transcripts: the titles are all there is to match.
+        guard let wanted = searchable(trimmed) else { return "No files match that search." }
+        return searchedQuery == wanted ? "No files or transcripts match that search." : nil
+    }
 
     // The example note, until there's a real one (SampleNote; RELEASE.md PR 10b).
     @State private var showingSample = false
@@ -110,9 +136,16 @@ struct FilesView: View {
                 .submitLabel(.search)
                 .onSubmit { Task { await runTranscriptSearch() } }
                 .onChange(of: query) { _, newValue in
-                    // Title filtering is live; transcript hits only refresh on
-                    // submit, and clear once the query is gone.
-                    if newValue.isEmpty { transcriptHits = []; searchError = nil }
+                    // Title filtering is live. Transcript hits follow a pause in typing (below), and clear
+                    // once the query is gone.
+                    if newValue.isEmpty { transcriptHits = []; searchError = nil; searchedQuery = nil }
+                }
+                // Search the transcripts once the typing pauses; a new keystroke cancels the wait.
+                .task(id: query) {
+                    guard let wanted = Self.searchable(query), wanted != searchedQuery else { return }
+                    try? await Task.sleep(for: Self.searchDebounce)
+                    guard !Task.isCancelled else { return }
+                    await runTranscriptSearch()
                 }
             if !query.isEmpty {
                 Button {
@@ -209,12 +242,11 @@ struct FilesView: View {
                 .listRowSeparator(.hidden)
             }
 
-            if filteredNotes.isEmpty && transcriptHits.isEmpty && !isSearching {
+            if filteredNotes.isEmpty && transcriptHits.isEmpty,
+               let message = Self.emptyMessage(query: query, isSearching: isSearching, searchedQuery: searchedQuery) {
                 EmptyStateView(
                     icon: query.isEmpty ? "folder" : "magnifyingglass",
-                    message: query.isEmpty
-                        ? "Nothing here yet — capture or import your first meeting from Home."
-                        : "No files match that search."
+                    message: message
                 )
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -467,9 +499,15 @@ struct FilesView: View {
         searchError = nil
         defer { isSearching = false }
         do {
-            transcriptHits = try await env.api.search(query: QuestionLimit.cap(trimmed), k: 12)
+            let hits = try await env.api.search(query: QuestionLimit.cap(trimmed), k: 12)
+            // The typing moved on while this was in flight: its answer isn't for what's on screen.
+            guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            transcriptHits = hits
+            searchedQuery = trimmed
         } catch {
+            guard !Task.isCancelled else { return }
             transcriptHits = []
+            searchedQuery = trimmed
             searchError = (error as? APIError)?.errorDescription ?? "Search failed"
         }
     }
