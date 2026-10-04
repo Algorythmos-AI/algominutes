@@ -34,8 +34,8 @@ Each build's **What to Test** says what to try first. The flows that matter most
 - the note: summary, action items, transcript, and chapters on a long recording;
 - search across your notes, and chat with one note;
 - deleting a note, and deleting your account (Settings);
-- capturing a call in another app (FaceTime, Zoom, Teams): **Capture another app** when you start a
-  recording, or in Control Center long-press Screen Recording and choose AlgoMinutes. The app asks you to
+- capturing a call in another app (FaceTime, Zoom, Teams): **Record a call (Zoom, Teams, Meet)** when you
+  start a recording, or in Control Center long-press Screen Recording and choose AlgoMinutes. The app asks you to
   confirm everyone agreed before the capture becomes a note.
 
 Your notes are kept for the whole beta, and backed up. The public release starts fresh: you'll be told

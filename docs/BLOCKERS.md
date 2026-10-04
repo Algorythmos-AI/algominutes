@@ -56,8 +56,18 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
     redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
     **First green run 2026-10-01** (36854145067, all 20 steps), after #318 (the invite code) and #323 (the fake
     shared tab's own camera message). Green again on 59d8587 (run 36991396876, 2026-10-02).
-  - [ ] The nightly schedule's first green night. The scheduled e2e did not fire on 2026-09-30; not yet seen to
-    fire by itself. #320 adds the long-meeting sizes (60 nightly, 120/240 weekly, ADTS and WebM).
+  - [x] The nightly schedule's first green night. **It does fire** (GitHub runs it some hours late): green on
+    2026-09-30, 10-01, 10-02 and 10-03 (2, 15 and 60 minutes). An earlier note here said it hadn't; that was wrong.
+  - [ ] **The weekly long run (120 and 240 minutes), first fired 2026-10-03 (run 37144914602): 120 passed, 240
+    failed one check.** The 4-hour note was ready in 466 s (the bar is 25 min) with 12 chapters, but the last
+    chapter started at minute 84 of 240.
+    - Cause: every recording over 10 minutes was saved **one word a line**. Speech-to-text gives words no speaker
+      without diarization, and `stt.wordsToLines` took each untagged word for a new speaker. The 4-hour note had
+      25,728 lines and a 332,305-token summary prompt; the owner's 52-minute meeting has 7,942.
+    - Fix: `fix/stt-words-into-lines` (an untagged word is speaker 0, as its line is: about 470 lines for 4
+      hours). Notes already processed keep their one-word lines until they are run again.
+    - Closed when a 240-minute run passes the last-quarter check. If the chapters still stop early with normal
+      lines, the chapters instruction needs to name the recording's end.
 - [x] **The 10-15 proof: a real meeting on gemini-3.5-flash alone (2026-10-01).** The owner's 51.7-minute
   recording from the iPhone (note tccLBaIAvLIWpcgI6cg4, staging): the chunked path, the summary by
   gemini-3.5-flash with `finishReason: STOP`, 5 chapters, ready 297 s after the kickoff (the bar for an hour is
@@ -77,7 +87,7 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
   (`fix/ios-upload-never-stuck`).
   - **Fixed on the server 2026-10-01:** #311 (live at ab84756; the kickoff answers `ready` and repairs the doc;
     `markQueued` refuses it under the note's lock). #312 stops a client writing a finished or held note's
-    status in the rules; **the rules are released by Apply D, which the owner has not applied yet.**
+    status in the rules; **the rules are released by Apply D, applied 2026-10-05 (below).**
   - [ ] Still open: why iPhone build 25 showed "Processing failed" on a note that was ready. #331 (one upload
     with many waiters) and #326 are the likely fix; confirm on a TestFlight build with a long recording.
 - [x] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
@@ -130,9 +140,42 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
   - Also merged from the sprint: H7 #301 (Apply C), H8 #302 + #321, H9 #309, #310, #332, #346, H10's line cap
     #327, H12 #320, H13 #338, #339, H14 #315–#317, #345, H15 #336, #341, H17's audio link #344, H18 web #343,
     H20's server half #342.
-  - **Not started:** iOS minutes left (H6d), N4, the rest of H13 (back minimises, pause and resume, one consent
-    sheet), H16, the rest of H17–H19, H20's screens, Sydney speech-to-text (N2; waits for a probe as the
-    transcoder's identity).
+  - **Built in the second train (2026-10-04; each PR's own branch, in the order merged):** the notetaker from
+    the web #348 and from iOS #349; share links behind the server's switch #350, with the list and Stop sharing
+    on the web #351 and on iOS (`feat/ios-share-links-list`, H20); an export that waits for the whole transcript
+    (`fix/ios-export-whole-transcript`, H17/LM7); minutes left on the recording screen (`feat/ios-minutes-left`,
+    H6d); pause and resume (`feat/ios-pause-resume`) and Back minimises (`feat/ios-back-minimises`), H13/UX4;
+    readable secondary text (`fix/ios-readable-secondary-text`, H19/UX13); one consent sheet
+    (`feat/ios-one-consent-sheet`, H13/UX2); "Record a call" with three steps (`feat/ios-record-a-call`,
+    H19/UX11); the minutes bar in Settings (`feat/ios-minutes-bar`, H18); and the call capture's list of
+    unclaimed captures, writer status, disk check, 4 h cap and clocked heartbeat
+    (`fix/ios-broadcast-captures-kept`, H11/N4); and the three latest notes on Home, with their status
+    (`feat/ios-home-recent-notes`, the first part of H16/UX5).
+    - **Later in the same train (#370–#374):** Files searches transcripts as you type (UX8); a chat answer can
+      be copied or shared, with three starter questions (UX9); a failed request says what happened in a sentence
+      (UX7); find in a note's transcript (UX12); and the iOS tests' shared network stub records under a lock.
+    - **Server, from the weekly long run's failure (#353, #355, #356):** words are grouped into lines again, the
+      chapters instruction names the recording's end, and a chat about one note sees its summary and chapters
+      (LM10). The 240-minute e2e passes on them: run 37189798506, 477 lines, a 42,970-token prompt, 30 chapters,
+      the last at minute 232, ready in 384 s.
+    - Evidence: the queue replayed in order builds on Xcode 27 and passes the unit tests on the simulator (340
+      tests); each PR passed CI's `ios-test` on Xcode 26.3.
+    - **Not verified on a device:** every iOS item above. Pause and resume, Back minimises and the call capture
+      change the recorder or the broadcast extension; the extension's changes have never run (ReplayKit doesn't
+      run in the simulator). The device proofs in RELEASE.md (a long recording with a call in the middle, a real
+      call capture) cover them.
+    - **Home to recording is three taps, not the two rev 11 targets:** the card, the tick, Start. Two means
+      dropping the per-recording tick, which is a consent decision for the owner (CONSENT.md).
+  - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
+    mixed ADTS stream needs a device to build against), the rest of H16 (upload progress and an estimate on
+    Home, the example note there, the account prompt's timing, one vocabulary), the rest of UX12 (the summary
+    first, Edit summary on iOS, checkable action items), opening a search result at the moment it matched, 44 pt targets and the
+    VoiceOver pass of UX13, Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
+  - [x] **Apply D applied (2026-10-05, `reviewed-9992dc9.tfplan`: 4 added, 10 changed, 2 destroyed).** Verified:
+    the released Firestore ruleset (1a178557) is `infra/firebase/firestore.rules` byte for byte, so a client can
+    no longer change the status of a finished or held note (#312); the `upload_never_processed` alert policy
+    exists and is enabled; the api carries `SHARE_LINKS=off`; every service kept its image (api 2892df7, the
+    rest 2af14ad) and its latest revision is ready, so no redeploy was needed.
 - [x] **Invite minutes corrected in the docs (2026-09-30):** the code's default is Pro's monthly minutes, 1,500
   (`beta-invites-repo.ts:149`). The runbook and RELEASE.md said 600. The e2e code below is explicitly made with 600.
 
