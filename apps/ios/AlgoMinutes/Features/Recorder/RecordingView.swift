@@ -16,6 +16,28 @@ struct RecordingView: View {
         return "\(left) left — recording stops automatically at \(RecorderService.maxRecordingSeconds / 3600) hours"
     }
 
+    /// How close to the end of the month's minutes the note starts to show.
+    static let minutesNoteLeadSeconds = 30 * 60
+
+    /// What the screen says about the minutes left (RELEASE.md rev 11, H6d), or
+    /// nil when there's nothing to say: the count isn't known or the plan isn't
+    /// metered, there's plenty left, or there were none to begin with (the
+    /// invite sheet asks before a recording starts).
+    ///
+    /// A recording longer than the minutes left is held, not refused, so this
+    /// never tells anyone to stop: it says the recording is kept.
+    static func minutesNote(remainingMinutes: Double?, elapsedSeconds: Int) -> String? {
+        guard let remainingMinutes, remainingMinutes > 0 else { return nil }
+        let secondsLeft = Int((remainingMinutes * 60).rounded(.down)) - elapsedSeconds
+        if secondsLeft <= 0 {
+            return "This recording is now longer than the minutes you have left this month. It’s kept, and processed when you have more."
+        }
+        guard secondsLeft <= minutesNoteLeadSeconds else { return nil }
+        let minutes = Int((Double(secondsLeft) / 60).rounded(.up))
+        let left = minutes <= 1 ? "Less than a minute" : "About \(minutes) minutes"
+        return "\(left) of this month’s minutes left. A longer recording is kept, and processed when you have more."
+    }
+
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -112,6 +134,17 @@ struct RecordingView: View {
                     )
                     .padding(.top, 12)
                     .accessibilityAddTraits(.updatesFrequently)
+            }
+
+            if let minutesNote = Self.minutesNote(
+                remainingMinutes: env.billing.entitlement?.remainingMinutes, elapsedSeconds: elapsed
+            ) {
+                Text(minutesNote)
+                    .font(Typography.body(13))
+                    .foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 10)
             }
 
             if let notice = env.recorder.notice {
