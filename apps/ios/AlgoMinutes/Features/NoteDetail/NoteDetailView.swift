@@ -112,16 +112,20 @@ struct NoteDetailView: View {
                         note: note,
                         transcript: exportLines(for: note),
                         onExport: { scope, format in
-                            viewModel.export(
-                                note: note, scope: scope, format: format,
-                                transcript: exportLines(for: note), api: env.api
-                            ) { env.alertMessage = $0 }
+                            withWholeTranscript(of: note, scope: scope) { lines in
+                                viewModel.export(
+                                    note: note, scope: scope, format: format,
+                                    transcript: lines, api: env.api
+                                ) { env.alertMessage = $0 }
+                            }
                         },
                         onEmail: { scope, format in
-                            viewModel.emailExport(
-                                note: note, scope: scope, format: format,
-                                transcript: exportLines(for: note), api: env.api
-                            ) { env.alertMessage = $0 }
+                            withWholeTranscript(of: note, scope: scope) { lines in
+                                viewModel.emailExport(
+                                    note: note, scope: scope, format: format,
+                                    transcript: lines, api: env.api
+                                ) { env.alertMessage = $0 }
+                            }
                         },
                         // A public link, opening the web app's viewer: offered
                         // only while the server says so (AppSwitches, PR 29).
@@ -368,6 +372,29 @@ struct NoteDetailView: View {
     private func exportLines(for note: Note) -> [TranscriptLine] {
         env.transcripts.displayLines(mirrored: note.transcript, for: note.id)
     }
+
+    /// Run an export with the whole transcript (RELEASE.md rev 11, H17 / LM7). A long note's mirror is its
+    /// first 200 lines: an export made before the rest had loaded held only those, and nothing said so. It
+    /// waits for the rest now, and if that can't be loaded it says so and exports nothing.
+    private func withWholeTranscript(of note: Note, scope: ExportScope, run: @escaping ([TranscriptLine]) -> Void) {
+        let mirrored = note.transcript ?? []
+        guard TranscriptRepository.exportNeedsFull(scope: scope, mirroredCount: mirrored.count) else {
+            run(exportLines(for: note))
+            return
+        }
+        viewModel.isExporting = true
+        Task {
+            guard let whole = await env.transcripts.whole(noteId: note.id, workspaceId: note.workspaceId) else {
+                viewModel.isExporting = false
+                env.alertMessage = Self.wholeTranscriptNeededMessage
+                return
+            }
+            run(TranscriptRepository.preferred(full: whole, fullNoteId: note.id, mirrored: mirrored, noteId: note.id))
+        }
+    }
+
+    static let wholeTranscriptNeededMessage =
+        "The whole transcript couldn’t be loaded, so nothing was exported. Check your connection and try again."
 
     /// Copy the note as plain text — the same payload the share sheet sends.
     private func copy(_ note: Note) {
