@@ -95,7 +95,7 @@ struct LoginView: View {
                 }
             }
             .font(Typography.body(12))
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(Theme.muted)
             .padding(.top, 24)
             .padding(.bottom, 36)
         }

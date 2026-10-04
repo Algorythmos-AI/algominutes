@@ -125,7 +125,7 @@ struct AudioPlayerCard: View {
             }
             .font(Typography.body(11))
             .monospacedDigit()
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(Theme.muted)
         }
     }
 }

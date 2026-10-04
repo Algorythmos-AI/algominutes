@@ -162,7 +162,7 @@ struct ShareExportSheet: View {
                  + "It expires in 7 days and you can revoke it at any time. "
                  + "The audio is never shared.")
                 .font(Typography.body(12))
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let mintedLink {

@@ -247,7 +247,7 @@ struct HomeView: View {
                 .foregroundStyle(Theme.heading)
             Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
                 .font(Typography.body(13))
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
         }
         .padding(.top, Theme.Spacing.sm)
     }
