@@ -29,12 +29,38 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: return "Not signed in"
-        case .http(let status, let message): return message ?? "Request failed (\(status))"
-        case .invalidResponse: return "Invalid server response"
+        case .notSignedIn: return "Please sign in to do that."
+        case .http(let status, let message): return Self.sentence(status: status, serverText: message)
+        case .invalidResponse: return "The server’s answer couldn’t be read. Please try again."
         case .quotaExceeded: return "You've used up your included minutes. Upgrade to keep going."
         case .updateRequired: return "Please update AlgoMinutes to continue."
         }
+    }
+}
+
+extension APIError {
+    /// What a failed request says (RELEASE.md rev 11, UX7). The server's own sentence when it sent one; a
+    /// sentence for the status when it sent a code ("rate_limited", "Forbidden") or nothing. An alert used to
+    /// read "Request failed (500)" or the bare code.
+    static func sentence(status: Int, serverText: String?) -> String {
+        if let text = serverText?.trimmingCharacters(in: .whitespacesAndNewlines), isSentence(text) { return text }
+        switch status {
+        case 401: return "Please sign in again."
+        case 403: return "You don’t have access to that."
+        case 404: return "That couldn’t be found. It may have been deleted."
+        case 408, 504: return "That took too long. Please try again."
+        case 409: return "That’s already under way. Give it a moment."
+        case 413: return "That’s too large to send."
+        case 429: return "Too many requests just now. Please wait a moment and try again."
+        case 500...599: return "Something went wrong on our side. Please try again in a moment."
+        default: return "That didn’t work. Please try again."
+        }
+    }
+
+    /// Written for a person: more than one word, and not a code like `rate_limited` or `Not Found`.
+    static func isSentence(_ text: String) -> Bool {
+        guard text.contains(" "), !text.contains("_") else { return false }
+        return text.split(separator: " ").count >= 3
     }
 }
 

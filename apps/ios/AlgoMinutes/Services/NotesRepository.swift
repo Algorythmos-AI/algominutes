@@ -229,7 +229,7 @@ final class NotesRepository {
     }
 
     func retryProcessing(note: Note) async -> RetryOutcome {
-        guard let wsId else { return .blocked(message: "Not signed in") }
+        guard let wsId else { return .blocked(message: "Please sign in to do that.") }
         guard !retryInFlight.contains(note.id) else { return .queued }
 
         let currentAttempts = note.retryAttempt ?? 0
