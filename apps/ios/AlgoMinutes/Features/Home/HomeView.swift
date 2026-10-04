@@ -76,6 +76,7 @@ struct HomeView: View {
                     NotesSyncBanner()
                     if pendingCount > 0 { pendingBanner }
                     captureActions
+                    recentNotes
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.md)
@@ -250,6 +251,80 @@ struct HomeView: View {
                 .foregroundStyle(Theme.muted)
         }
         .padding(.top, Theme.Spacing.sm)
+    }
+
+    // MARK: - Recent notes (RELEASE.md rev 11, H16 / UX5)
+
+    /// How many of the latest notes Home shows; the rest are in Files.
+    static let recentLimit = 3
+
+    /// The latest notes, newest first. Home never showed any: a recording just made went out of sight until
+    /// its push arrived, unless you knew to look in Files.
+    static func recent(_ notes: [Note], limit: Int = recentLimit) -> [Note] {
+        Array(notes.sorted { $0.createdAt > $1.createdAt }.prefix(limit))
+    }
+
+    /// What a note is doing, in a few words, for Home's list.
+    static func recentStatus(_ note: Note) -> String {
+        switch note.status {
+        case .ready: return "Ready"
+        case .error: return "Couldn’t process"
+        case .awaitingMinutes: return "Waiting for minutes"
+        default: return note.status == .recording && note.notetaker != nil ? note.statusLabel : "\(note.statusLabel)…"
+        }
+    }
+
+    @ViewBuilder
+    private var recentNotes: some View {
+        let notes = Self.recent(env.notes.notes)
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("RECENT")
+                    .font(Typography.eyebrow())
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.muted)
+                VStack(spacing: 0) {
+                    ForEach(notes) { note in
+                        Button {
+                            selectedNoteId = note.id
+                        } label: {
+                            HStack(spacing: Theme.Spacing.md) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                                        .font(Typography.body(15))
+                                        .foregroundStyle(Theme.heading)
+                                        .lineLimit(1)
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        if note.status.isInProgress {
+                                            ProgressView().controlSize(.mini).tint(Theme.outline)
+                                        }
+                                        Text(Self.recentStatus(note))
+                                            .font(Typography.body(12))
+                                            .foregroundStyle(note.status == .error ? Theme.heading : Theme.muted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: Theme.Spacing.sm)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.tertiary)
+                                    .accessibilityHidden(true)
+                            }
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(note.title.isEmpty ? "Untitled" : note.title). \(Self.recentStatus(note))")
+                        if note.id != notes.last?.id {
+                            Divider().overlay(Theme.borderSoft).padding(.horizontal, Theme.Spacing.lg)
+                        }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
+            }
+        }
     }
 
     // MARK: - Capture actions (stacked feature cards)
