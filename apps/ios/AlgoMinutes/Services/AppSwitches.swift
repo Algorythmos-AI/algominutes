@@ -4,7 +4,7 @@ import Observation
 /// Server-side feature switches (`GET /v1/config`, `AppConfigResponse` in
 /// packages/contracts), so a feature can be turned off without a build.
 ///
-/// `broadcastCapture` gates *Capture audio from another app*, the broadcast
+/// `broadcastCapture` gates *Record a call*, the broadcast
 /// extension: the top App Review risk, and the one feature most likely to need
 /// hiding in a hurry. The last answer is kept, so an offline launch shows what
 /// the server last said; before any answer it's hidden, so a build the switch
