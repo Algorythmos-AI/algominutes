@@ -38,6 +38,7 @@ export const routes: RouteObject[] = [
       { path: 'notes/:noteId', lazy: page(() => import('./app/notes/NoteDetailPage'), 'NoteDetailPage') },
       { path: 'import', lazy: page(() => import('./app/notes/ImportPage'), 'ImportPage') },
       { path: 'record', lazy: page(() => import('./app/record/RecordPage'), 'RecordPage') },
+      { path: 'notetaker', lazy: page(() => import('./app/notetaker/NotetakerPage'), 'NotetakerPage') },
       { path: 'search', lazy: page(() => import('./app/search/SearchPage'), 'SearchPage') },
       { path: 'settings', lazy: page(() => import('./app/settings/SettingsPage'), 'SettingsPage') },
       // Where Stripe sends a buyer back (RELEASE.md PR 28).
