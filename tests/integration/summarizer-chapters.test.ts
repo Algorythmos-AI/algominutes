@@ -78,6 +78,9 @@ describe('summarizer chapters', () => {
     });
     await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(answer));
     expect(request.parts[0].text).toContain('"chapters"');
+    // The instruction names the recording's end (its last line's), so the chapters reach it: without that the
+    // model chaptered the first hour of a 4-hour meeting and stopped (the weekly 240-minute e2e, 2026-10-03).
+    expect(request.parts[0].text).toMatch(/must cover the whole recording, which ends at 44:\d\d: the last chapter begins in its final part\./);
     expect(request.generationConfig.responseSchema.properties.chapters).toBeDefined();
     expect(request.generationConfig.responseSchema.propertyOrdering.at(-1)).toBe('chapters');
     const { chapters } = await stored();
