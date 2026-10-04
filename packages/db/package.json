@@ -22,7 +22,7 @@
   "dependencies": {
     "@algominutes/ai": "*",
     "@algominutes/contracts": "*",
-    "pg": "^8.13.0",
+    "pg": "^8.23.1",
     "firebase-admin": "^14.5.0"
   },
   "devDependencies": {

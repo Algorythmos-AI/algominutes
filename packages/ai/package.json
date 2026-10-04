@@ -8,11 +8,11 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@google-cloud/tasks": "^7.2.0",
+    "@google-cloud/tasks": "^7.2.1",
     "cors": "^2.8.6",
     "express-rate-limit": "^8.7.0",
     "google-auth-library": "^9.15.1",
-    "pg": "^8.23.0"
+    "pg": "^8.23.1"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
