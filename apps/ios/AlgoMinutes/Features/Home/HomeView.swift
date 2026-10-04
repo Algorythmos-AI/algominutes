@@ -108,7 +108,7 @@ struct HomeView: View {
                     activeSheet = nil
                     selectedNoteId = noteId
                 }
-                .algoMinutesSheet([.medium])
+                .algoMinutesSheet([.medium, .large])
             case .importFiles:
                 ImportSheet { noteId in
                     activeSheet = nil
