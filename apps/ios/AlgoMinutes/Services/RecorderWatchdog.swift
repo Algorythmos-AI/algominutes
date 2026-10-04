@@ -44,9 +44,12 @@ enum RecorderWatchdog {
         lastResumeAttempt: Date?,
         alreadyWarned: Bool,
         inCall: Bool = false,
+        userPaused: Bool = false,
         now: Date
     ) -> Decision {
-        guard weThinkWeAreRecording, !recorderIsRunning else { return .doNothing }
+        // Paused by the user (RELEASE.md rev 11, H13): the recorder is meant to be still. Not a divergence, so
+        // nothing resumes it, warns about it or gives up on it; only Resume or End does.
+        guard weThinkWeAreRecording, !recorderIsRunning, !userPaused else { return .doNothing }
         // First tick of a divergence: the caller stamps `divergedSince` and the
         // grace period starts from there.
         guard let divergedSince else { return .doNothing }
@@ -81,6 +84,9 @@ enum RecorderWatchdog {
         guard let startedAt else { return accumulated }
         return accumulated + max(0, Int(until.timeIntervalSince(startedAt)))
     }
+
+    /// Shown while the user has paused: said plainly, as "paused" alone reads as harmless.
+    static let pausedByUserNotice = "Paused. Nothing is being captured until you resume."
 
     /// Shown while a call holds the microphone: the recording is paused, not over.
     static let pausedForCallNotice =
