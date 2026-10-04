@@ -235,10 +235,14 @@ function wordsToLines(words) {
   const lines = [];
   let current = null;
   for (const w of words) {
-    if (!current || current.speakerTag !== w.speakerTag || w.startMs - current.endMs > 1500 || lineIsFull(current, w)) {
+    // An untagged word (no diarization: every recording on this path today) is speaker 0, as the line it joins
+    // is. Compared raw, null never equalled the line's 0, so every word started a line: a 52-minute meeting was
+    // saved as 7,942 one-word lines, and the summarizer was sent a timestamp and a speaker for each.
+    const tag = w.speakerTag || 0;
+    if (!current || current.speakerTag !== tag || w.startMs - current.endMs > 1500 || lineIsFull(current, w)) {
       if (current) lines.push(current);
       current = {
-        speakerTag: w.speakerTag || 0,
+        speakerTag: tag,
         startMs: w.startMs,
         endMs: w.endMs,
         text: w.text,

@@ -193,6 +193,37 @@ test('a line ends at 1,000 characters when speech is dense', () => {
   }
 });
 
+// Found by the weekly 240-minute e2e (2026-10-03): 25,728 transcript lines for 4 hours. Speech-to-text without
+// diarization gives words no speaker (flattenWords: null), and each one started a new line.
+test('stt.wordsToLines keeps untagged words on one line: no speaker is one speaker', () => {
+  const said = 'the quarterly budget was agreed and hiring opens in sydney next month'.split(' ');
+  for (const tag of [null, undefined, 0]) {
+    const words = said.map((text, i) => ({ text, startMs: i * 400, endMs: i * 400 + 350, confidence: 0.9, speakerTag: tag }));
+    const lines = stt.wordsToLines(words);
+    assert.equal(lines.length, 1, `speakerTag ${tag}: ${lines.length} lines`);
+    assert.equal(lines[0].text, said.join(' '));
+    assert.equal(lines[0].speakerTag, 0);
+    assert.equal(lines[0].startMs, 0);
+    assert.equal(lines[0].endMs, (said.length - 1) * 400 + 350);
+  }
+});
+
+test('stt.wordsToLines still ends a line on a pause, and when a tagged speaker changes', () => {
+  const w = (text, startMs, speakerTag) => ({ text, startMs, endMs: startMs + 300, confidence: 0.9, speakerTag });
+  const paused = stt.wordsToLines([w('one', 0, null), w('two', 400, null), w('three', 4000, null)]);
+  assert.deepEqual(paused.map((l) => l.text), ['one two', 'three']);
+  const speakers = stt.wordsToLines([w('hello', 0, 1), w('there', 400, 1), w('hi', 800, 2)]);
+  assert.deepEqual(speakers.map((l) => [l.speakerTag, l.text]), [[1, 'hello there'], [2, 'hi']]);
+});
+
+test('a 4-hour recording of untagged words is hundreds of lines, not tens of thousands', () => {
+  // 150 words a minute, no pause over 1.5 s: the 30 s rule alone ends lines.
+  const words = Array.from({ length: 240 * 150 }, (_, i) => ({ text: `w${i}`, startMs: i * 400, endMs: i * 400 + 350, confidence: 0.9, speakerTag: null }));
+  const lines = stt.wordsToLines(words);
+  assert.ok(lines.length >= 440 && lines.length <= 520, `${lines.length} lines`);
+  assert.equal(lines.map((l) => l.text).join(' '), words.map((x) => x.text).join(' '));
+});
+
 // A number read out in groups stays on one line, so redaction (which scrubs a
 // line at a time) still sees the whole of it.
 test('a full line never ends between two groups of digits', () => {
