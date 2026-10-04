@@ -39,6 +39,19 @@ final class AppSwitchesTests: XCTestCase {
         XCTAssertFalse(AppSwitches(defaults: defaults).broadcastCapture)
     }
 
+    // RELEASE.md PR 29: a share link is public, so it's offered only once the server says so.
+    func testShareLinksFollowTheServerAndStayOffWithAnOlderOne() async throws {
+        let switches = AppSwitches(defaults: defaults)
+        XCTAssertFalse(switches.shareLinks)
+        await switches.refresh { AppConfigResponse(broadcastCapture: true, shareLinks: true) }
+        XCTAssertTrue(switches.shareLinks)
+        XCTAssertTrue(AppSwitches(defaults: defaults).shareLinks, "kept across launches")
+        await switches.refresh { AppConfigResponse(broadcastCapture: true) } // an older server: absent means off
+        XCTAssertFalse(switches.shareLinks)
+        let body = Data(#"{"broadcastCapture":true,"shareLinks":true}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(AppConfigResponse.self, from: body).shareLinks, true)
+    }
+
     func testTheResponseDecodes() throws {
         let body = Data(#"{"broadcastCapture":false}"#.utf8)
         XCTAssertEqual(try JSONDecoder().decode(AppConfigResponse.self, from: body), AppConfigResponse(broadcastCapture: false))

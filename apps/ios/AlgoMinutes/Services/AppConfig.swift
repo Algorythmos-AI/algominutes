@@ -20,13 +20,6 @@ enum AppConfig {
         flag(paywallEnabledKey, info: info)
     }
 
-    static let shareLinksEnabledKey = "AlgoMinutesShareLinksEnabled"
-
-    /// SHARE_LINKS_ENABLED: whether the share sheet offers a public link. A link
-    /// opens on the public site, which has no viewer yet, so it's off in every
-    /// configuration until it does. Missing or not "YES" means off.
-    static let shareLinksEnabled = flag(shareLinksEnabledKey, info: Bundle.main.infoDictionary)
-
     /// A build-setting flag carried in Info.plist: on only when exactly "YES".
     static func flag(_ key: String, info: [String: Any]?) -> Bool {
         (info?[key] as? String)?.trimmingCharacters(in: .whitespaces).uppercased() == "YES"

@@ -163,8 +163,11 @@ describe('every link the apps and server build has a page', () => {
 
   it('the api and billing (PUBLIC_SITE_URL)', () => {
     const shares = read('services/api/src/routes/shares.js');
-    expect(shares).toMatch(/\$\{publicSiteUrl\(\)\}\/s\/\$\{raw\}/);
-    expect(has('/s')).toBe(true); // vercel.json rewrites /s/<token> to it
+    // A share link opens the web app's viewer (RELEASE.md PR 29): /app on the site, and its s/:token route.
+    expect(shares).toMatch(/\$\{shareViewerOrigin\(\)\}\/app\/s\/\$\{raw\}/);
+    expect(has('/app')).toBe(true);
+    expect(read('apps/web/src/routes.tsx')).toMatch(/path: 's\/:token'/);
+    expect(has('/s')).toBe(true); // older /s/<token> links still land on a page
     const billing = read('services/billing/src/routes/checkout.js') + read('services/billing/src/routes/portal.js');
     const paths = [...billing.matchAll(/\$\{publicSiteUrl\(\)\}(\/[\w/-]+)/g)].map((m) => m[1]);
     expect(paths.sort()).toEqual(['/billing', '/billing/cancel', '/billing/success']);
