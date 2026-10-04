@@ -18,6 +18,16 @@ struct RecorderConsentFlow: View {
     let onNoteCreated: (String?) -> Void
 
     enum Step: Equatable { case consent, broadcast, micDenied }
+
+    /// Named for what people want to do, not how iOS does it ("capture audio from another app").
+    static let callTitle = "Record a call (Zoom, Teams, Meet)"
+    static let callSteps = [
+        "Tap the button below and choose AlgoMinutes.",
+        "Turn Microphone on, so your own voice is in the recording.",
+        "Tap Start Broadcast, then switch to your call.",
+    ]
+    static let callAfterwards =
+        "To stop, tap the red indicator at the top of the screen. When you come back to AlgoMinutes, the recording becomes a note."
     /// Where the sheet opens: straight at the consent, with nothing before it.
     static let firstStep = Step.consent
     @State private var step: Step = RecorderConsentFlow.firstStep
@@ -85,12 +95,29 @@ struct RecorderConsentFlow: View {
                 .fixedSize(horizontal: false, vertical: true)
 
         case .broadcast:
-            Text("Capture another app")
+            Text(Self.callTitle)
                 .font(Typography.heading(22, weight: .bold))
                 .foregroundStyle(Theme.heading)
-            Text("For a call in another app: tap the button below, choose AlgoMinutes, keep the microphone on so your own voice is included, and tap Start Broadcast. Then switch to your call. To stop, tap the red indicator at the top of the screen. When you come back to AlgoMinutes, the recording becomes a note.")
-                .font(Typography.body(15))
-                .foregroundStyle(Theme.body)
+            // Three numbered steps (RELEASE.md rev 11, H19 / UX11), where one long sentence used to be. The
+            // microphone gets its own step: with it off, the note has the other people and not you.
+            ForEach(Array(Self.callSteps.enumerated()), id: \.offset) { index, text in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("\(index + 1)")
+                        .font(Typography.label(15))
+                        .foregroundStyle(Theme.heading)
+                        .frame(width: 20, alignment: .leading)
+                        .accessibilityHidden(true)
+                    Text(text)
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Step \(index + 1) of \(Self.callSteps.count). \(text)")
+            }
+            Text(Self.callAfterwards)
+                .font(Typography.body(14))
+                .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
@@ -121,7 +148,7 @@ struct RecorderConsentFlow: View {
             // app's audio (H11/L9: it covers that one capture). Shown only while the server allows it (AppSwitches: the
             // broadcast kill switch).
             if env.switches.broadcastCapture {
-                Button("Capture audio from another app") {
+                Button(Self.callTitle) {
                     consentShownBefore = true
                     env.consentGate.acknowledge(for: .appAudio)
                     withAnimation(.spring(duration: 0.3)) { step = .broadcast }
