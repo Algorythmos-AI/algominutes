@@ -59,7 +59,7 @@ final class SessionConsentGate: ConsentGate {
 
     /// Called by `RecorderConsentFlow` when the user ticks the mandatory box
     /// and taps "Start recording" (`.microphone`, for the session), or
-    /// "Capture audio from another app" / confirms a capture made outside the
+    /// "Record a call" / confirms a capture made outside the
     /// app (`.appAudio`, for the next capture). The single v1.0 input to the gate.
     func acknowledge(for kind: CaptureKind = .microphone) {
         switch kind {
