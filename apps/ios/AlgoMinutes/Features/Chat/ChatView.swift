@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit  // UIPasteboard for Copy
 
 /// RAG chat with SSE streaming + inline [n] citation chips — parity with
 /// `ChatTab.tsx`.
@@ -23,8 +24,32 @@ struct ChatView: View {
                             if viewModel.messages.isEmpty {
                                 EmptyStateView(
                                     icon: "bubble.left.and.text.bubble.right",
-                                    message: "I can answer questions across every meeting in your workspace and cite the moments I'm pulling from. Try \"What did we agree to ship next quarter?\""
+                                    message: "I can answer questions across every meeting in your workspace and cite the moments I'm pulling from."
                                 )
+                                // Three questions to start from (RELEASE.md rev 11, UX9): a blank box with
+                                // one example in a sentence left most people not knowing what to ask.
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(Self.starterQuestions, id: \.self) { question in
+                                        Button {
+                                            viewModel.draft = question
+                                            viewModel.send()
+                                        } label: {
+                                            Text(question)
+                                                .font(Typography.body(15))
+                                                .foregroundStyle(Theme.heading)
+                                                .multilineTextAlignment(.leading)
+                                                .padding(.horizontal, 14)
+                                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 14)
+                                                        .fill(Theme.surfaceElevated)
+                                                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.borderSoft))
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(viewModel.isStreaming)
+                                    }
+                                }
                             }
                             ForEach(viewModel.messages) { message in
                                 messageView(message)
@@ -51,6 +76,31 @@ struct ChatView: View {
             .onAppear { viewModel.attach(api: env.api) }
             .onDisappear { viewModel.cancelStreaming() }
         }
+    }
+
+    // MARK: - Starters and usable answers (RELEASE.md rev 11, UX9)
+
+    static let starterQuestions = [
+        "What did we decide in my last meeting?",
+        "What are my action items this week?",
+        "Draft a follow-up email for my last meeting.",
+    ]
+
+    /// The answer as text to copy or share: the words without the [n] citation marks (which point at this
+    /// screen's source list and mean nothing in an email). Nil while it's still arriving, when it failed, or
+    /// when there's nothing to take.
+    static func usableAnswer(_ content: String, failed: Bool, streaming: Bool) -> String? {
+        guard !failed, !streaming else { return nil }
+        let words = ChatViewModel.segments(for: content).compactMap { segment -> String? in
+            if case .text(let text) = segment { return text }
+            return nil
+        }.joined()
+        let tidy = words
+            .replacingOccurrences(of: " +([.,;:!?])", with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: " +\n", with: "\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return tidy.isEmpty ? nil : tidy
     }
 
     // MARK: - Message rendering
@@ -82,6 +132,29 @@ struct ChatView: View {
                 }
                 if let citations = message.citations, !citations.isEmpty {
                     sourcesList(citations)
+                }
+                // An answer you can take somewhere (UX9): copy it, or hand it to Mail, Messages or Notes.
+                if let answer = Self.usableAnswer(message.content, failed: message.failedQuery != nil,
+                                                  streaming: viewModel.isStreaming && message.id == viewModel.messages.last?.id) {
+                    HStack(spacing: 18) {
+                        Button {
+                            UIPasteboard.general.string = answer
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                                .font(Typography.label(13))
+                                .foregroundStyle(Theme.muted)
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Copy answer")
+                        ShareLink(item: answer) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .font(Typography.label(13))
+                                .foregroundStyle(Theme.muted)
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityLabel("Share answer")
+                    }
                 }
                 if message.failedQuery != nil, !viewModel.isStreaming {
                     Button {
