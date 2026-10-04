@@ -364,8 +364,59 @@ async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
 // a single-note conversation whose retrieval returned nothing would otherwise
 // silently fall back to the all-meetings phrasing and invite the model to
 // reason across notes it was never given.
-function buildChatPrompt(question, hits, scoped = false) {
+// How much of a note's own summary the chat prompt carries (RELEASE.md rev 11, LM10): a bound, as the question's is.
+const OVERVIEW_MAX_CHARS = 6000;
+const OVERVIEW_MAX_CHAPTERS = 40;
+
+/**
+ * The note's summary and chapters, for a chat about that one note (LM10). Retrieval finds the 15 excerpts
+ * nearest the question, which answers "what did Priya say about pricing" and not "what was this meeting
+ * about" or "what came after the budget part" on a 3-hour note. Membership-filtered, as every query that
+ * returns user data is. Null when there is no summary (or no access): the prompt is then as before.
+ */
+async function noteOverview({ uid, noteId, log }) {
+  const r = await withQueryTimeout({
+    timeoutMs: 3000,
+    text: `SELECT s.gist, s.long_summary, s.chapters
+             FROM summaries s
+             JOIN notes n ON n.id = s.note_id
+             JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.uid = $2
+            WHERE s.note_id = $1 AND n.deleted_at IS NULL AND n.status <> 'error'`,
+    values: [noteId, uid],
+    log,
+    op: 'note_overview',
+  });
+  const row = r.rows[0];
+  if (!row) return null;
+  const chapters = (Array.isArray(row.chapters) ? row.chapters : [])
+    .filter((c) => c && typeof c.title === 'string' && Number.isFinite(Number(c.startMs)))
+    .slice(0, OVERVIEW_MAX_CHAPTERS)
+    .map((c) => ({ startMs: Number(c.startMs), title: c.title, summary: typeof c.summary === 'string' ? c.summary : '' }));
+  const summary = [row.gist, row.long_summary].filter((t) => typeof t === 'string' && t.trim()).join('\n\n');
+  if (!summary && chapters.length === 0) return null;
+  return { summary, chapters };
+}
+
+/** The overview as prompt text, scrubbed like the excerpts are, and bounded. */
+function overviewBlock(overview, totalCounts) {
+  if (!overview) return '';
+  const scrub = (text) => {
+    const { text: out, counts } = redactPII(text || '');
+    for (const [k, v] of Object.entries(counts)) totalCounts[k] = (totalCounts[k] || 0) + v;
+    return out;
+  };
+  const lines = [];
+  if (overview.summary) lines.push(`Summary: ${scrub(overview.summary)}`);
+  if (overview.chapters.length) {
+    lines.push('Chapters, in order:');
+    for (const c of overview.chapters) lines.push(`- (t=${c.startMs}ms) ${scrub(c.title)}${c.summary ? `: ${scrub(c.summary)}` : ''}`);
+  }
+  return lines.join('\n').slice(0, OVERVIEW_MAX_CHARS);
+}
+
+function buildChatPrompt(question, hits, scoped = false, overview = null) {
   const totalCounts = {};
+  const about = scoped ? overviewBlock(overview, totalCounts) : '';
   const blocks = hits
     .map((h, i) => {
       const { text: redactedChunk, counts } = redactPII(h.chunkText || '');
@@ -383,8 +434,12 @@ function buildChatPrompt(question, hits, scoped = false) {
   const lead = scoped
     ? "You are a meeting intelligence assistant. The user is asking about ONE specific meeting. Answer using ONLY the numbered context blocks below, which are all excerpts from that meeting."
     : "You are a meeting intelligence assistant. Answer the user's question using ONLY the numbered context blocks below.";
-  const prompt = `${lead} Cite sources inline using bracketed numbers like [1] [3]. If the context doesn't answer the question, say so directly — do not invent details.
-
+  // The overview answers what the meeting was about and how it went; only the numbered excerpts are cited.
+  const overviewPart = about
+    ? `\nOverview of the whole meeting (for orientation: do not cite it with a number, and prefer the excerpts for details):\n${about}\n`
+    : '';
+  const prompt = `${lead}${about ? ' An overview of the whole meeting comes first.' : ''} Cite sources inline using bracketed numbers like [1] [3]. If the context doesn't answer the question, say so directly — do not invent details.
+${overviewPart}
 Context:
 ${blocks || '(no relevant excerpts found)'}
 
@@ -506,7 +561,17 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
     res.status(404).json({ error: 'Note not found' });
     return;
   }
-  const { prompt, redactionCounts } = buildChatPrompt(question, hits, Boolean(noteId));
+  // A chat about one note also sees that note's summary and chapters (LM10). Best-effort, as retrieval is: an
+  // overview that can't be read leaves the prompt as it was.
+  let overview = null;
+  if (noteId) {
+    try {
+      overview = await (deps.noteOverview || noteOverview)({ uid, noteId, log });
+    } catch (err) {
+      log.error({ err }, 'chat_overview_failed');
+    }
+  }
+  const { prompt, redactionCounts } = buildChatPrompt(question, hits, Boolean(noteId), overview);
   if (Object.keys(redactionCounts).length) {
     log.info({ uid, hitCount: hits.length, redactionCounts }, 'chat_chunks_redacted');
   }
@@ -601,4 +666,4 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
   }
 }
 
-module.exports = { CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { noteOverview, CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
