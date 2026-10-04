@@ -25,6 +25,13 @@ struct ShareExportSheet: View {
     /// sheet being dismissed and reopened.
     var mintedLink: String?
     var isMintingLink: Bool = false
+    /// The links already made for this note (RELEASE.md rev 11, H20): each can be stopped here later, not only
+    /// in the minute it was made. Read when the sheet opens (`onLoadLinks`; nil while share links are off).
+    var links: [APIClient.ListedShareLink] = []
+    var linksFailed: Bool = false
+    var revokingShareId: String?
+    var onLoadLinks: (() -> Void)?
+    var onRevokeLink: ((APIClient.ListedShareLink) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var scope: ExportScope = .both
@@ -56,7 +63,10 @@ struct ShareExportSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.surface)
-        .onAppear { if !scopes.contains(scope) { scope = scopes.first ?? .summary } }
+        .onAppear {
+            if !scopes.contains(scope) { scope = scopes.first ?? .summary }
+            onLoadLinks?()
+        }
     }
 
     private var scopePicker: some View {
@@ -200,7 +210,53 @@ struct ShareExportSheet: View {
                 .buttonStyle(CardButtonStyle())
                 .disabled(isMintingLink)
             }
+
+            madeLinks
         }
+    }
+
+    /// The links already made: when, whether each still opens, how often it was read, and Stop sharing on the
+    /// ones that do. No link is shown: only its hash is kept, so it can be stopped but not read back.
+    @ViewBuilder
+    private var madeLinks: some View {
+        if linksFailed {
+            Text("The links you’ve made couldn’t be loaded.")
+                .font(Typography.body(12))
+                .foregroundStyle(Theme.muted)
+        }
+        if !links.isEmpty {
+            Text("Links you’ve made".uppercased())
+                .font(Typography.label(11))
+                .kerning(1.2)
+                .foregroundStyle(Theme.muted)
+                .padding(.top, Theme.Spacing.sm)
+            ForEach(links) { link in
+                HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                    Text(Self.linkSummary(link))
+                        .font(Typography.body(13))
+                        .foregroundStyle(Theme.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.Spacing.sm)
+                    if link.live {
+                        Button("Stop sharing", role: .destructive) { onRevokeLink?(link) }
+                            .font(Typography.label(13))
+                            .frame(minHeight: 44)
+                            .disabled(revokingShareId != nil)
+                            .accessibilityLabel("Stop sharing the link made \(Self.day(link.createdAt))")
+                    }
+                }
+            }
+        }
+    }
+
+    static func day(_ date: Date?) -> String {
+        guard let date else { return "earlier" }
+        return date.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    /// One row's words: "Made 1 Oct · opens until 8 Oct · read 3 times".
+    static func linkSummary(_ link: APIClient.ListedShareLink) -> String {
+        "Made \(day(link.createdAt)) · \(link.stateText { day($0) }) · \(link.readText)"
     }
 }
 
