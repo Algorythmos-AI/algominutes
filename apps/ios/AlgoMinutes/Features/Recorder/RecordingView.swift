@@ -41,7 +41,7 @@ struct RecordingView: View {
                 }
                 .accessibilityLabel("Stop recording and go back")
                 Spacer()
-                Text("Recording…")
+                Text(env.recorder.isPaused ? "Paused" : "Recording…")
                     .font(Typography.label(15))
                     .foregroundStyle(Theme.muted)
                 Spacer()
@@ -93,7 +93,7 @@ struct RecordingView: View {
                 .accessibilityLabel("Recording time")
                 .accessibilityValue(formatTimer(seconds: elapsed))
 
-            Text("Recording in progress")
+            Text(env.recorder.isPaused ? "Paused" : "Recording in progress")
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.muted)
                 .padding(.top, 4)
@@ -131,24 +131,44 @@ struct RecordingView: View {
 
             Spacer()
 
-            // Stop button
-            Button {
-                stopAndUpload()
-            } label: {
-                VStack(spacing: 10) {
-                    // Shape says "stop": black square glyph on a white disc.
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Theme.onInverse)
-                        .frame(width: 28, height: 28)
-                        .frame(width: 72, height: 72)
-                        .background(Circle().fill(Theme.inverse))
-                    Text("End")
-                        .font(Typography.label(14))
-                        .foregroundStyle(Theme.body)
+            HStack(alignment: .top, spacing: 44) {
+                // Pause, or carry on (RELEASE.md rev 11, H13): the same recording and the same note either way.
+                Button {
+                    if env.recorder.isPaused { env.recorder.resume() } else { env.recorder.pause() }
+                } label: {
+                    VStack(spacing: 10) {
+                        Image(systemName: env.recorder.isPaused ? "play.fill" : "pause.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(Theme.heading)
+                            .frame(width: 72, height: 72)
+                            .background(Circle().strokeBorder(Theme.outline.opacity(0.6), lineWidth: 1.5))
+                        Text(env.recorder.isPaused ? "Resume" : "Pause")
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.body)
+                    }
                 }
+                .disabled(isStopping || !env.recorder.isRecording)
+                .accessibilityLabel(env.recorder.isPaused ? "Resume recording" : "Pause recording")
+
+                // Stop button
+                Button {
+                    stopAndUpload()
+                } label: {
+                    VStack(spacing: 10) {
+                        // Shape says "stop": black square glyph on a white disc.
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Theme.onInverse)
+                            .frame(width: 28, height: 28)
+                            .frame(width: 72, height: 72)
+                            .background(Circle().fill(Theme.inverse))
+                        Text("End")
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.body)
+                    }
+                }
+                .disabled(isStopping)
+                .accessibilityLabel("End recording")
             }
-            .disabled(isStopping)
-            .accessibilityLabel("End recording")
             .padding(.bottom, 48)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
