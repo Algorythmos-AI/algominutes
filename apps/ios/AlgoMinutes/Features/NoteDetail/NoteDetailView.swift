@@ -132,7 +132,18 @@ struct NoteDetailView: View {
                             ) { env.alertMessage = $0 }
                         } : nil,
                         mintedLink: viewModel.mintedShareLink,
-                        isMintingLink: viewModel.isMintingShareLink
+                        isMintingLink: viewModel.isMintingShareLink,
+                        links: viewModel.shareLinks ?? [],
+                        linksFailed: viewModel.shareLinksFailed,
+                        revokingShareId: viewModel.revokingShareId,
+                        onLoadLinks: env.switches.shareLinks ? {
+                            viewModel.loadShareLinks(noteId: note.id, workspaceId: note.workspaceId, api: env.api)
+                        } : nil,
+                        onRevokeLink: { link in
+                            viewModel.revokeShareLink(
+                                link, noteId: note.id, workspaceId: note.workspaceId, api: env.api
+                            ) { env.alertMessage = $0 }
+                        }
                     )
                     .algoMinutesSheet([.medium, .large])
                 }

@@ -67,6 +67,12 @@ final class NoteDetailViewModel {
     /// server keeps only its hash.
     var mintedShareLink: String?
     var isMintingShareLink = false
+    /// The links already made for the open note (RELEASE.md rev 11, H20), so one can be stopped later and not
+    /// only in the minute it was made. Nil until read; no link or token is ever in here.
+    var shareLinks: [APIClient.ListedShareLink]?
+    var shareLinksFailed = false
+    /// The id of the link being stopped, so its row can't be tapped twice.
+    var revokingShareId: String?
 
     var template: SummaryTemplate = .general
     var isRegenerating = false
@@ -247,9 +253,47 @@ final class NoteDetailViewModel {
                     noteId: noteId, workspaceId: workspaceId, scope: scope
                 )
                 mintedShareLink = link.url
+                loadShareLinks(noteId: noteId, workspaceId: workspaceId, api: api)
             } catch {
                 AppLog.error("share_create_failed: \(error)")
                 onFailure("Couldn't create a link. Please try again.")
+            }
+        }
+    }
+
+    /// Read the links made for this note. A failure says so in the sheet and leaves making a link working.
+    func loadShareLinks(noteId: String, workspaceId: String, api: APIClient) {
+        Task {
+            do {
+                shareLinks = try await api.listShareLinks(noteId: noteId, workspaceId: workspaceId)
+                shareLinksFailed = false
+            } catch {
+                AppLog.error("share_list_failed: \(error)")
+                shareLinksFailed = true
+            }
+        }
+    }
+
+    /// Stop a link: it no longer opens for anyone. The list is read again, so the row says "stopped".
+    func revokeShareLink(
+        _ link: APIClient.ListedShareLink,
+        noteId: String,
+        workspaceId: String,
+        api: APIClient,
+        onFailure: @escaping (String) -> Void
+    ) {
+        guard revokingShareId == nil else { return }
+        revokingShareId = link.shareId
+        Task {
+            defer { revokingShareId = nil }
+            do {
+                try await api.revokeShareLink(noteId: noteId, workspaceId: workspaceId, shareId: link.shareId)
+                // The link shown for copying may be this one; it no longer opens, so it isn't offered.
+                mintedShareLink = nil
+                loadShareLinks(noteId: noteId, workspaceId: workspaceId, api: api)
+            } catch {
+                AppLog.error("share_revoke_failed: \(error)")
+                onFailure("Couldn't stop sharing. Please try again.")
             }
         }
     }

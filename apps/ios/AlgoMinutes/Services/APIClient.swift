@@ -513,6 +513,59 @@ final class APIClient: Sendable {
         return ShareLink(shareId: id, url: url, expiresAt: json["expiresAt"] as? String)
     }
 
+    /// One of the caller's links for a note (`ShareListItem` in the contract). Never the link itself: the
+    /// server keeps only the token's hash, so a link can be listed and stopped, not shown again.
+    struct ListedShareLink: Sendable, Equatable, Identifiable {
+        let shareId: String
+        let createdAt: Date?
+        let expiresAt: Date?
+        let revokedAt: Date?
+        let readCount: Int
+        /// False once it's revoked or expired; those stay listed, for the owner's record.
+        let live: Bool
+
+        var id: String { shareId }
+
+        /// Nil for a row without an id, which can't be stopped and so isn't shown.
+        init?(json: [String: Any]) {
+            // The contract allows a string or a number; today it's a UUID.
+            if let id = json["shareId"] as? String, !id.isEmpty {
+                shareId = id
+            } else if let id = json["shareId"] as? NSNumber {
+                shareId = id.stringValue
+            } else {
+                return nil
+            }
+            func date(_ key: String) -> Date? {
+                guard let iso = json[key] as? String else { return nil }
+                return ISO8601DateFormatter.entitlement.date(from: iso) ?? ISO8601DateFormatter.entitlementPlain.date(from: iso)
+            }
+            createdAt = date("createdAt")
+            expiresAt = date("expiresAt")
+            revokedAt = date("revokedAt")
+            readCount = (json["readCount"] as? Int) ?? 0
+            // Absent means not live: a link is only offered as stoppable when the server says it still opens.
+            live = (json["live"] as? Bool) ?? false
+        }
+
+        /// Whether it still opens, in words (as the web's share dialog says it).
+        func stateText(format: (Date) -> String) -> String {
+            if revokedAt != nil { return "stopped" }
+            if !live { return "expired" }
+            if let expiresAt { return "opens until \(format(expiresAt))" }
+            return "still opens"
+        }
+
+        var readText: String { readCount == 1 ? "read once" : "read \(readCount) times" }
+    }
+
+    /// The caller's links for a note, newest first (RELEASE.md rev 11, H20).
+    func listShareLinks(noteId: String, workspaceId: String) async throws -> [ListedShareLink] {
+        let json = try await post(path: "v1/shares/list", body: ["noteId": noteId, "workspaceId": workspaceId])
+        guard let rows = json["shares"] as? [[String: Any]] else { throw APIError.invalidResponse }
+        return rows.compactMap(ListedShareLink.init(json:))
+    }
+
     /// Revoke a link. Idempotent server-side, so retrying is safe.
     @discardableResult
     func revokeShareLink(noteId: String, workspaceId: String, shareId: String) async throws -> Bool {
