@@ -53,15 +53,19 @@ struct RecordingView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
+                // Back minimises and never stops (RELEASE.md rev 11, H13 / UX4). It used to end the recording,
+                // so a glance at an earlier note cost the rest of the meeting. Only End ends it.
                 Button {
-                    stopAndUpload()
+                    dismiss()
                 } label: {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: "chevron.down")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Theme.body)
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityLabel("Stop recording and go back")
+                .disabled(isStopping)
+                .accessibilityLabel("Minimise")
+                .accessibilityHint("The recording carries on")
                 Spacer()
                 Text(env.recorder.isPaused ? "Paused" : "Recording…")
                     .font(Typography.label(15))
@@ -206,40 +210,18 @@ struct RecordingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.recordingBackground.ignoresSafeArea())
-        .task { await startRecording() }
+        .task { await appear() }
+        .onAppear { env.isRecordingScreenVisible = true }
+        .onDisappear { env.isRecordingScreenVisible = false }
         .onChange(of: env.recorder.autoStopped) { _, autoStop in
             // The service has already stopped and finalised the file — this
             // only presents the outcome. It used to call stopAndUpload() here,
             // which meant the stop never happened at all if the app was
             // backgrounded when the cap was reached.
-            guard let autoStop, !isStopping else { return }
-            isStopping = true
-            env.alertMessage = autoStop.message
-            if let result = autoStop.result {
-                upload(result, title: AppEnvironment.defaultRecordingName())
-            } else {
-                dismiss()
-            }
+            present(autoStop: autoStop)
         }
         .onChange(of: env.recorder.recordingError) { _, error in
-            guard let error else { return }
-            // Salvage rather than discard. An encode failure — the phone
-            // filling up is the common one — used to delete the file
-            // unconditionally, so a user 55 minutes into a recording lost
-            // all 55 minutes. AAC is decodable up to the point it stopped, so
-            // whatever was captured is worth keeping and uploading.
-            //
-            // Only discard when there is genuinely nothing there, which is the
-            // case when the failure happened before any audio was written.
-            if let salvaged = env.recorder.salvageCurrentFile() {
-                env.alertMessage = "Recording stopped early: \(error) "
-                    + "We've kept what was recorded so far, and it's being processed."
-                upload(salvaged, title: AppEnvironment.defaultRecordingName())
-            } else {
-                env.alertMessage = "Recording stopped: \(error). Please try again."
-                env.recorder.deleteCurrentFile()
-                dismiss()
-            }
+            present(recordingError: error)
         }
         .onAppear { pulse = true }
         // Asked while recording (it carries on underneath); "Turn on" shows iOS's prompt.
@@ -254,6 +236,54 @@ struct RecordingView: View {
         }
         .interactiveDismissDisabled()
         .sensoryFeedback(.impact(weight: .medium), trigger: env.recorder.isRecording)
+    }
+
+    /// What to do when the screen appears: start a recording, come back to one that carried on while the screen
+    /// was away, or present what the recorder did by itself in the meantime.
+    private func appear() async {
+        if env.recorderOutcomePending {
+            env.recorderOutcomePending = false
+            present(autoStop: env.recorder.autoStopped)
+            present(recordingError: env.recorder.recordingError)
+            // Nothing left to present (it was handled elsewhere): don't leave an empty screen up.
+            if !isStopping, !env.recorder.isRecording { dismiss() }
+            return
+        }
+        guard !env.recorder.isRecording else { return }
+        await startRecording()
+    }
+
+    private func present(autoStop: RecorderService.AutoStop?) {
+        guard let autoStop, !isStopping else { return }
+        isStopping = true
+        env.alertMessage = autoStop.message
+        if let result = autoStop.result {
+            upload(result, title: AppEnvironment.defaultRecordingName())
+        } else {
+            dismiss()
+        }
+    }
+
+    private func present(recordingError error: String?) {
+        guard let error, !isStopping else { return }
+        isStopping = true
+        // Salvage rather than discard. An encode failure — the phone
+        // filling up is the common one — used to delete the file
+        // unconditionally, so a user 55 minutes into a recording lost
+        // all 55 minutes. AAC is decodable up to the point it stopped, so
+        // whatever was captured is worth keeping and uploading.
+        //
+        // Only discard when there is genuinely nothing there, which is the
+        // case when the failure happened before any audio was written.
+        if let salvaged = env.recorder.salvageCurrentFile() {
+            env.alertMessage = "Recording stopped early: \(error) "
+                + "We've kept what was recorded so far, and it's being processed."
+            upload(salvaged, title: AppEnvironment.defaultRecordingName())
+        } else {
+            env.alertMessage = "Recording stopped: \(error). Please try again."
+            env.recorder.deleteCurrentFile()
+            dismiss()
+        }
     }
 
     private func startRecording() async {
@@ -342,6 +372,48 @@ struct RecordingView: View {
             // this screen may be showing the next recording.
             if !noteMade { dismiss() }
         }
+    }
+}
+
+/// The bar that stands in for the recording screen while it's minimised (RELEASE.md rev 11, H13 / UX4): the
+/// recording carries on, and this says so on every tab, with the time and the way back.
+struct RecordingBar: View {
+    @Environment(AppEnvironment.self) private var env
+    let onOpen: () -> Void
+
+    /// Shown while a recording is live and its screen isn't.
+    static func isShown(isRecording: Bool, screenVisible: Bool) -> Bool { isRecording && !screenVisible }
+
+    static func title(isPaused: Bool) -> String { isPaused ? "Recording paused" : "Recording" }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(env.recorder.isPaused ? Theme.muted : Theme.danger)
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
+                Text(Self.title(isPaused: env.recorder.isPaused))
+                    .font(Typography.label(14))
+                    .foregroundStyle(Theme.heading)
+                Text(formatTimer(seconds: env.recorder.elapsedSeconds))
+                    .font(Typography.label(14))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.body)
+                Spacer()
+                Text("Open")
+                    .font(Typography.label(14))
+                    .foregroundStyle(Theme.heading)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .background(Theme.surfaceElevated)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderSoft).frame(height: 1) }
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(Self.title(isPaused: env.recorder.isPaused)), \(formatTimer(seconds: env.recorder.elapsedSeconds))")
+        .accessibilityHint("Opens the recording")
     }
 }
 
