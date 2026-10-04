@@ -202,7 +202,8 @@ async function handle(payload, deps) {
   const lastMs = lines[lines.length - 1].endMs || lines[lines.length - 1].startMs || 0;
   const wantChapters = lastMs >= CHAPTERS_MIN_MS;
   const parts = [
-    { text: chosen.promptBody + (wantChapters ? sharedTemplates.CHAPTERS_INSTRUCTION : '') },
+    // The instruction names where the recording ends, so the chapters reach it (summary-templates.cjs).
+    { text: chosen.promptBody + (wantChapters ? sharedTemplates.chaptersInstruction(fmtTime(lastMs)) : '') },
     { text: `\n\nTranscript:\n${transcriptStr}\n` },
   ];
 
