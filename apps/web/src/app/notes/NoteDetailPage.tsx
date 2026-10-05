@@ -286,14 +286,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
           {data.summary.actionItems.length > 0 && (
             <section aria-labelledby="ai-title">
               <h2 id="ai-title" className="mb-2 text-xl font-bold text-heading">Action items</h2>
-              <ul className="list-disc pl-6 text-body">
-                {data.summary.actionItems.map((a) => (
-                  <li key={String(a.id)}>
-                    {a.text}
-                    {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
-                  </li>
-                ))}
-              </ul>
+              <ActionItems noteId={noteId} workspaceId={workspaceId} items={data.summary.actionItems} reload={() => setVersion((v) => v + 1)} />
             </section>
           )}
           {data.summary.keyDecisions.length > 0 && (
@@ -543,4 +536,72 @@ function useAudio(noteId: string, workspaceId: string) {
   }, [fetchUrl]);
 
   return [ref, { src, autoPlay, busy, error, start, seek, onError }] as const;
+}
+
+type ActionItemRow = NonNullable<NoteReadResponse['summary']>['actionItems'][number];
+
+/**
+ * A note's action items, each with a tick that is kept on the server (POST /v1/notes/action-items/status). The
+ * tick shows at once and is put back if the save fails. An item's id changes when the summary is edited, so a
+ * tick the server no longer knows (404) reads the note again instead of saying it failed.
+ */
+function ActionItems({ noteId, workspaceId, items, reload }: { noteId: string; workspaceId: string; items: ActionItemRow[]; reload: () => void }) {
+  const { api } = useApi();
+  // Ticks made here and not yet read back from the server, by item id.
+  const [local, setLocal] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = async (id: string, done: boolean) => {
+    setError(null);
+    setSaving(id);
+    setLocal((m) => ({ ...m, [id]: done }));
+    try {
+      await api.setActionItemDone({ noteId, workspaceId, itemId: id, done });
+    } catch (err) {
+      // silent-catch-ok: a 404 reads the note again; any other failure is shown, and reported unless it's the api's own answer
+      setLocal((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+      if (err instanceof ApiError && err.kind === 'not_found') {
+        reload();
+      } else {
+        setError('That tick couldn’t be saved. Try again.');
+        if (!(err instanceof ApiError)) reportCrash('notes.action-item', err);
+      }
+    } finally {
+      setSaving(null);
+    }
+  };
+  return (
+    <>
+      <ul className="space-y-1 text-body">
+        {items.map((a) => {
+          // Only an item the server can address (its ids are UUIDs) gets a tick.
+          const id = typeof a.id === 'string' ? a.id : null;
+          const done = id != null && (local[id] ?? a.status === 'done');
+          return (
+            <li key={String(a.id)}>
+              {id == null ? (
+                <span className="ml-6 list-item list-disc">
+                  {a.text}
+                  {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
+                </span>
+              ) : (
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input type="checkbox" className="mt-1.5 h-4 w-4 shrink-0" checked={done} disabled={saving === id} onChange={(e) => void toggle(id, e.target.checked)} />
+                  <span className={done ? 'text-muted line-through' : undefined}>
+                    {a.text}
+                    {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
+                  </span>
+                </label>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {error && <p role="alert" className="mt-2 text-body">{error}</p>}
+    </>
+  );
 }
