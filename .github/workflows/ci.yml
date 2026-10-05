@@ -146,11 +146,25 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: npm ci
+      # Tried once more only when the emulator's jar couldn't be downloaded ("Failed to make request to": it failed
+      # the post-merge run on integration and blocked a deploy, 2026-10-05). A failing rules test is never retried.
       - name: Firestore rules (emulator)
-        run: >-
-          npx -y firebase-tools@15.31.0 --config infra/firebase/firebase.json
-          emulators:exec --only firestore --project demo-algominutes
-          "npx vitest run -c vitest.rules.config.ts"
+        run: |
+          rules() {
+            npx -y firebase-tools@15.31.0 --config infra/firebase/firebase.json \
+              emulators:exec --only firestore --project demo-algominutes \
+              "npx vitest run -c vitest.rules.config.ts"
+          }
+          out=$(mktemp)
+          rc=0
+          rules 2>&1 | tee "$out" || rc=$?
+          if [ "$rc" -ne 0 ] && grep -q "Failed to make request to" "$out"; then
+            echo "::warning::the Firestore emulator couldn't be downloaded (not a test failure); trying once more"
+            sleep 20
+            rules
+          else
+            exit "$rc"
+          fi
 
   integration:
     runs-on: ubuntu-latest
