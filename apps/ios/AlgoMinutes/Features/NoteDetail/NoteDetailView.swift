@@ -91,9 +91,17 @@ struct NoteDetailView: View {
                         onCopy: { copy(note) },
                         onPrint: { NotePrinter.print(note: note) { env.alertMessage = $0 } },
                         onRegenerate: { viewModel.activeSheet = .templatePicker },
+                        onEditSummary: { viewModel.activeSheet = .editSummary },
                         onDelete: { viewModel.confirmingDelete = true }
                     )
                     .algoMinutesSheet([.medium])
+                case .editSummary:
+                    if let summary = note.summary {
+                        EditSummarySheet(summary: summary) { edited in
+                            await env.saveSummary(noteId: note.id, summary: edited)
+                        }
+                        .algoMinutesSheet([.large])
+                    }
                 case .templatePicker:
                     TemplatePickerSheet(
                         current: viewModel.template,
