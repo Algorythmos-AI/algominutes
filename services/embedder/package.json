@@ -9,7 +9,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "google-auth-library": "^9.15.0",
-    "pg": "^8.20.0",
+    "pg": "^8.23.1",
     "@algominutes/ai": "*",
     "@algominutes/db": "*",
     "tsx": "^4.23.15"
