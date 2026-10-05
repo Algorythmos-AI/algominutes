@@ -427,12 +427,12 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
       [noteId, summary.gist || '', null, JSON.stringify(summary.actionItems || []), model || null],
     );
     await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of summary.actionItems || []) {
-      await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, item]);
+    for (const [position, item] of (summary.actionItems || []).entries()) {
+      await client.query('INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)', [noteId, item, position]);
     }
     await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of summary.keyDecisions || []) {
-      await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
+    for (const [position, dec] of (summary.keyDecisions || []).entries()) {
+      await client.query('INSERT INTO key_decisions (note_id, text, position) VALUES ($1, $2, $3)', [noteId, dec, position]);
     }
     notice = await recordNotice(client, { noteId, workspaceId, kind: 'note_ready', traceId: trace });
     await client.query('COMMIT');

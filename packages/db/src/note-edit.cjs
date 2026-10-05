@@ -123,12 +123,12 @@ async function writeNoteEditWithinTx(client, edit) {
       [noteId, summary.gist || ''],
     );
     await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const text of summary.actionItems || []) {
-      await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, text]);
+    for (const [position, text] of (summary.actionItems || []).entries()) {
+      await client.query('INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)', [noteId, text, position]);
     }
     await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const text of summary.keyDecisions || []) {
-      await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, text]);
+    for (const [position, text] of (summary.keyDecisions || []).entries()) {
+      await client.query('INSERT INTO key_decisions (note_id, text, position) VALUES ($1, $2, $3)', [noteId, text, position]);
     }
   }
 
