@@ -592,7 +592,7 @@ final class AppEnvironment {
     private func reupload(
         noteId: String, type: NoteType, pending: RecordingStore.PendingRecording, retryAttempt: Int?
     ) async -> NotesRepository.RetryOutcome {
-        guard let wsId = auth.workspaceId else { return .blocked(message: "Not signed in") }
+        guard let wsId = auth.workspaceId else { return .blocked(message: "Please sign in to do that.") }
         let fileURL = recordingStore.audioURL(for: pending)
 
         var fields: [String: Any] = [
