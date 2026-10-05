@@ -7,8 +7,8 @@ import XCTest
 // push arrived, unless you knew to look in Files.
 
 final class HomeRecentNotesTests: XCTestCase {
-    private func note(_ id: String, at created: String, status: String = "ready") -> Note {
-        Note(id: id, data: [
+    private func note(_ id: String, at created: String, status: String = "ready", duration: Double? = nil) -> Note {
+        var data: [String: Any] = [
             "title": "Note \(id)",
             "workspaceId": "workspace_u1",
             "authorId": "u1",
@@ -16,7 +16,46 @@ final class HomeRecentNotesTests: XCTestCase {
             "type": "recording",
             "createdAt": created,
             "updatedAt": created,
-        ])!
+        ]
+        if let duration { data["duration"] = duration }
+        return Note(id: id, data: data)!
+    }
+
+    // RELEASE.md rev 11, H16: while it uploads it says how far; while it's processed, roughly how long is left.
+    private let started = "2026-10-01T00:00:00.000Z"
+    private func at(minutes: Double) -> Date { Note.parseISO(started)!.addingTimeInterval(minutes * 60) }
+
+    func testAnUploadSaysHowFarItIs() {
+        let uploading = note("a", at: started, status: "processing", duration: 3600)
+        XCTAssertEqual(HomeView.recentStatus(uploading, uploadPercent: 40, now: at(minutes: 1)), "Uploading 40%")
+        XCTAssertEqual(HomeView.recentStatus(uploading, uploadPercent: 140, now: at(minutes: 1)), "Uploading 100%")
+    }
+
+    func testAnHourIsUsuallyAboutEightMinutesAndFourHoursAboutTwentyThree() {
+        XCTAssertEqual(HomeView.usualProcessingMinutes(recordingSeconds: 3600), 8)
+        XCTAssertEqual(HomeView.usualProcessingMinutes(recordingSeconds: 4 * 3600), 23)
+        XCTAssertEqual(HomeView.usualProcessingMinutes(recordingSeconds: 30), 4)
+        XCTAssertEqual(HomeView.usualProcessingMinutes(recordingSeconds: -5), 3)
+    }
+
+    func testProcessingCountsDownThenSaysNearlyReadyThenThatItIsTakingLonger() {
+        let hour = note("a", at: started, status: "transcribing", duration: 3600)
+        XCTAssertEqual(HomeView.recentStatus(hour, now: at(minutes: 0)), "Transcribing… ready in about 8 min")
+        XCTAssertEqual(HomeView.recentStatus(hour, now: at(minutes: 4.5)), "Transcribing… ready in about 4 min")
+        XCTAssertEqual(HomeView.recentStatus(hour, now: at(minutes: 7.5)), "Transcribing… nearly ready")
+        XCTAssertEqual(HomeView.recentStatus(hour, now: at(minutes: 10)), "Transcribing… nearly ready")
+        XCTAssertEqual(HomeView.recentStatus(hour, now: at(minutes: 11)), "Transcribing… taking longer than usual")
+    }
+
+    func testThereIsNoEstimateWithoutARecordingLength() {
+        XCTAssertEqual(HomeView.recentStatus(note("a", at: started, status: "summarizing"), now: at(minutes: 2)), "Summarizing…")
+        XCTAssertNil(HomeView.processingEstimate(note("a", at: started, status: "summarizing", duration: 0), now: at(minutes: 2)))
+    }
+
+    func testAFinishedHeldOrFailedNoteNeverShowsAnEstimateOrAnUpload() {
+        for (status, said) in [("ready", "Ready"), ("error", "Couldn’t process"), ("awaiting_minutes", "Waiting for minutes")] {
+            XCTAssertEqual(HomeView.recentStatus(note("a", at: started, status: status, duration: 3600), uploadPercent: 50, now: at(minutes: 1)), said)
+        }
     }
 
     func testTheLatestThreeAreShownNewestFirstWhateverOrderTheyArriveIn() {
