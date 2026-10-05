@@ -264,14 +264,37 @@ struct HomeView: View {
         Array(notes.sorted { $0.createdAt > $1.createdAt }.prefix(limit))
     }
 
-    /// What a note is doing, in a few words, for Home's list.
-    static func recentStatus(_ note: Note) -> String {
+    /// What a note is doing, in a few words, for Home's list. While it uploads it says how far; while it's
+    /// processed it says roughly how long is left (RELEASE.md rev 11, H16 / UX5, UX7).
+    static func recentStatus(_ note: Note, uploadPercent: Int? = nil, now: Date = Date()) -> String {
         switch note.status {
         case .ready: return "Ready"
         case .error: return "Couldn’t process"
         case .awaitingMinutes: return "Waiting for minutes"
-        default: return note.status == .recording && note.notetaker != nil ? note.statusLabel : "\(note.statusLabel)…"
+        default:
+            if note.status == .recording, note.notetaker != nil { return note.statusLabel }
+            if let uploadPercent { return "Uploading \(min(100, max(0, uploadPercent)))%" }
+            guard let estimate = processingEstimate(note, now: now) else { return "\(note.statusLabel)…" }
+            return "\(note.statusLabel)… \(estimate)"
         }
+    }
+
+    /// How long a recording of `seconds` usually takes to become a note, in minutes: about 3 minutes, plus one
+    /// for every 12 of recording (an hour in about 8, four hours in about 23; RELEASE.md's bars are 10 and 25).
+    static func usualProcessingMinutes(recordingSeconds seconds: Double) -> Int {
+        3 + Int((max(0, seconds) / 60 / 12).rounded(.up))
+    }
+
+    /// "ready in about 4 min", "nearly ready", or "taking longer than usual". Nil when there's nothing to go
+    /// on: no recording length (an import, a scan) or no start time.
+    static func processingEstimate(_ note: Note, now: Date = Date()) -> String? {
+        guard let seconds = note.duration, seconds > 0, let started = note.createdAtDate else { return nil }
+        let usual = Double(usualProcessingMinutes(recordingSeconds: seconds))
+        let elapsed = now.timeIntervalSince(started) / 60
+        let left = Int((usual - elapsed).rounded(.up))
+        if left > 1 { return "ready in about \(left) min" }
+        if elapsed <= usual + 2 { return "nearly ready" }
+        return "taking longer than usual"
     }
 
     @ViewBuilder
@@ -298,7 +321,7 @@ struct HomeView: View {
                                         if note.status.isInProgress {
                                             ProgressView().controlSize(.mini).tint(Theme.outline)
                                         }
-                                        Text(Self.recentStatus(note))
+                                        Text(Self.recentStatus(note, uploadPercent: env.uploadProgress[note.id]))
                                             .font(Typography.body(12))
                                             .foregroundStyle(note.status == .error ? Theme.heading : Theme.muted)
                                             .lineLimit(1)
@@ -316,7 +339,7 @@ struct HomeView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(note.title.isEmpty ? "Untitled" : note.title). \(Self.recentStatus(note))")
+                        .accessibilityLabel("\(note.title.isEmpty ? "Untitled" : note.title). \(Self.recentStatus(note, uploadPercent: env.uploadProgress[note.id]))")
                         if note.id != notes.last?.id {
                             Divider().overlay(Theme.borderSoft).padding(.horizontal, Theme.Spacing.lg)
                         }
