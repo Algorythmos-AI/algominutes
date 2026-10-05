@@ -11,8 +11,15 @@ import UIKit
 struct NoteDetailView: View {
     @Environment(AppEnvironment.self) private var env
     let noteId: String
+    /// Open on the transcript at this moment (ms into the recording): a search result's (RELEASE.md rev 11,
+    /// UX8). It used to open the note at the top of its summary, and the match had to be found again.
+    var openAtMs: Double?
 
     @Environment(\.dismiss) private var dismiss
+    /// The moment still to be shown, until the transcript has the line and the screen has scrolled to it.
+    @State private var pendingMomentMs: Double?
+    /// The line that moment landed on, kept marked.
+    @State private var momentIndex: Int?
     @State private var viewModel = NoteDetailViewModel()
     /// A10 #4: present the support composer for a "bad transcript" report.
     @State private var reportingBadTranscript = false
@@ -69,6 +76,11 @@ struct NoteDetailView: View {
         }
         .sheet(item: $viewModel.shareItem) { item in
             ActivityShareSheet(items: item.items)
+        }
+        .task(id: noteId) {
+            guard let openAtMs, pendingMomentMs == nil, momentIndex == nil else { return }
+            viewModel.tab = .transcript
+            pendingMomentMs = openAtMs
         }
         .sheet(item: $viewModel.activeSheet) { sheet in
             if let note {
@@ -338,9 +350,13 @@ struct NoteDetailView: View {
                     guard let tag = line.speakerTag else { return }
                     renameText = line.speaker.hasPrefix("Speaker ") ? "" : line.speaker
                     renamingTag = tag
-                }
+                },
+                focusIndex: momentIndex
             )
             .task(id: note.id) { loadFullTranscript(note) }
+            // Opened from a search result: go to its line once the transcript has it. A long note's mirror
+            // holds only its first lines, so this runs again as the rest arrives.
+            .task(id: lines.count) { showPendingMoment(in: lines, note: note) }
 
             // Which notes transcribe badly is a question the corpus cannot
             // answer on its own; this is the only signal that tells us.
@@ -377,6 +393,21 @@ struct NoteDetailView: View {
     /// Lines an export should carry: the full transcript when it has been
     /// fetched, the mirrored preview otherwise — so the file matches what the
     /// user is looking at rather than silently exporting less.
+    /// Scroll to the line a search result matched, once: when the transcript on this iPhone reaches it.
+    private func showPendingMoment(in lines: [TranscriptLine], note: Note) {
+        guard let ms = pendingMomentMs else { return }
+        // Complete when the mirror was the whole transcript, or the rest has loaded (or can't be).
+        let complete: Bool
+        switch env.transcripts.state {
+        case .loaded, .failed: complete = true
+        default: complete = note.transcriptTruncated != true && !lines.isEmpty
+        }
+        guard let index = TranscriptPane.momentIndex(in: lines, atMs: ms, complete: complete) else { return }
+        pendingMomentMs = nil
+        momentIndex = lines[index].index
+        viewModel.scrollTarget = TranscriptPane.anchor(lines[index].index)
+    }
+
     private func exportLines(for note: Note) -> [TranscriptLine] {
         env.transcripts.displayLines(mirrored: note.transcript, for: note.id)
     }
