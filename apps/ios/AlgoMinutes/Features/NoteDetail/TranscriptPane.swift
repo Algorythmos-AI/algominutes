@@ -21,10 +21,42 @@ struct TranscriptPane: View {
     /// Rename a speaker, from their chip. Nil where names can't change.
     var onRenameSpeaker: ((TranscriptLine) -> Void)?
 
+    /// Find in the transcript (RELEASE.md rev 11, UX12): a long meeting is hundreds of lines, and the only
+    /// way to a remembered phrase was to scroll for it.
+    @State private var find = ""
+
+    /// A short transcript fits on a screen or two; the field would only be clutter there.
+    static let findFromLines = 12
+
+    /// The lines whose words or speaker contain `query` (case and accents ignored), in order. All of them for
+    /// an empty query.
+    static func matching(_ lines: [TranscriptLine], query: String) -> [TranscriptLine] {
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return lines }
+        return lines.filter { line in
+            line.text.range(of: wanted, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                || line.speaker.range(of: wanted, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    /// "3 lines match", "1 line matches", "No lines match": said under the field while a query is typed.
+    static func findSummary(matches: Int) -> String {
+        switch matches {
+        case 0: return "No lines match"
+        case 1: return "1 line matches"
+        default: return "\(matches) lines match"
+        }
+    }
+
     var body: some View {
         if !lines.isEmpty {
+            let isFinding = !find.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let shown = Self.matching(lines, query: find)
             LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(lines) { line in
+                if lines.count >= Self.findFromLines {
+                    findField(isFinding: isFinding, matches: shown.count)
+                }
+                ForEach(shown) { line in
                     TranscriptLineRow(
                         line: line,
                         isActive: line.index == activeIndex,
@@ -32,7 +64,7 @@ struct TranscriptPane: View {
                         onRenameSpeaker: onRenameSpeaker
                     )
                 }
-                if isTruncated {
+                if isTruncated, !isFinding {
                     truncationNotice
                 }
             }
@@ -43,6 +75,43 @@ struct TranscriptPane: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             EmptyStateView(icon: "text.quote", message: "No transcript available.")
+        }
+    }
+
+    private func findField(isFinding: Bool, matches: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Theme.tertiary)
+                    .accessibilityHidden(true)
+                TextField("Find in transcript", text: $find)
+                    .font(Typography.body(15))
+                    .foregroundStyle(Theme.body)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                if isFinding {
+                    Button {
+                        find = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear find")
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(minHeight: 44)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.sm).fill(Theme.surfaceElevated))
+            if isFinding {
+                // Only the lines on this iPhone are searched: say so while the rest is still loading or failed.
+                Text(Self.findSummary(matches: matches) + (isTruncated ? " in the first \(lines.count) lines" : ""))
+                    .font(Typography.body(12))
+                    .foregroundStyle(Theme.muted)
+            }
         }
     }
 
