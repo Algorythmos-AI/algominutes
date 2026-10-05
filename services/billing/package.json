@@ -20,7 +20,7 @@
     "firebase-admin": "^14.5.0",
     "googleapis": "^182.0.0",
     "helmet": "^8.1.0",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "tsx": "^4.21.0"
   }
 }
