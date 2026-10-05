@@ -13,6 +13,8 @@ struct MoreOperationsSheet: View {
     let onCopy: () -> Void
     let onPrint: () -> Void
     let onRegenerate: () -> Void
+    /// Edit the summary by hand (RELEASE.md rev 11, UX12): the web could, the iPhone couldn't.
+    var onEditSummary: (() -> Void)?
     let onDelete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -45,6 +47,11 @@ struct MoreOperationsSheet: View {
                 // would earn a 409 the user did nothing to deserve.
                 tile("Rewrite summary", icon: "arrow.clockwise", action: onRegenerate,
                      enabled: !note.status.isInProgress)
+                // There has to be a summary to edit, and it mustn't be mid-rewrite.
+                if let onEditSummary {
+                    tile("Edit summary", icon: "square.and.pencil", action: onEditSummary,
+                         enabled: note.summary != nil && !note.status.isInProgress)
+                }
             }
 
             Button(role: .destructive) {

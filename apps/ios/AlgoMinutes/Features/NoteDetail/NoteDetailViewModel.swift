@@ -22,7 +22,7 @@ final class NoteDetailViewModel {
     /// Which secondary sheet is open, if any. One enum rather than a boolean
     /// per sheet, so two cannot be presented at once.
     enum ActiveSheet: Identifiable, Hashable {
-        case rename, moreOperations, shareExport, conversation, templatePicker
+        case rename, moreOperations, shareExport, conversation, templatePicker, editSummary
         var id: Self { self }
     }
 

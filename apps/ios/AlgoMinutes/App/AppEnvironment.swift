@@ -157,6 +157,20 @@ final class AppEnvironment {
         }
     }
 
+    /// Save a summary edited by hand. Through the api, not Firestore: Postgres is the record, and an edit
+    /// written only to the mirror would leave search and chat on the old text.
+    func saveSummary(noteId: String, summary: Summary) async -> Bool {
+        guard let wsId = auth.workspaceId else { return false }
+        do {
+            try await api.updateNote(noteId: noteId, workspaceId: wsId, summary: summary)
+            return true
+        } catch {
+            AppLog.error("edit_summary_failed: \(error)")
+            alertMessage = "Couldn't save the summary. Please try again."
+            return false
+        }
+    }
+
     /// Start a recording, handing the audio session over from playback first.
     ///
     /// Every recording start goes through here rather than calling
