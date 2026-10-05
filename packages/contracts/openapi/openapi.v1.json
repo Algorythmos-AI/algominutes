@@ -1792,6 +1792,60 @@
           "type"
         ]
       },
+      "ActionItemStatusResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "noteId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "noteId",
+          "itemId",
+          "status"
+        ]
+      },
+      "ActionItemStatusRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId",
+          "itemId",
+          "done"
+        ]
+      },
       "NoteFeedbackResponse": {
         "type": "object",
         "properties": {
@@ -3908,6 +3962,105 @@
           },
           "503": {
             "description": "Service is being upgraded, or today's processing limit is reached (nothing was charged).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes/action-items/status": {
+      "post": {
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Tick or untick one of a note’s action items. Idempotent. The tick is read back on the note read (ActionItem.status).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionItemStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The item’s status after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionItemStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields, or an item id that isn’t one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item on a note you can reach.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Could not save it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable until Postgres is provisioned.",
             "content": {
               "application/json": {
                 "schema": {

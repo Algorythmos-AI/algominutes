@@ -25,6 +25,7 @@ import { processIntelligenceRoute } from './process-intelligence.js';
 import { regenerateSummaryRoute } from './regenerate-summary.js';
 import { shareCreateRoute, shareRevokeRoute, shareListRoute } from './shares.js';
 import { noteFeedbackRoute } from './note-feedback.js';
+import { actionItemStatusRoute } from './action-item.js';
 import { clientErrorRoute } from './client-error.js';
 
 // A7 async-UX + reliability and A9 entitlement routes (ESM).
@@ -120,6 +121,9 @@ export function buildRouter() {
 
   // ── POST /v1/notes/feedback ── functions/index.js noteFeedback ─────────
   router.post('/notes/feedback', authed, wrap(noteFeedbackRoute));
+
+  // ── POST /v1/notes/action-items/status ── tick or untick an action item ──
+  router.post('/notes/action-items/status', authed, wrap(actionItemStatusRoute));
 
   // ── POST /v1/export ── functions/export-note.cjs (binary DOCX) ─────────
   router.post('/export', authed, wrap(async (req, res) => {

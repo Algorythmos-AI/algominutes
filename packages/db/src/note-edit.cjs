@@ -1,5 +1,7 @@
 'use strict';
 
+const { takeTicksWithinTx } = require('./action-items.cjs');
+
 // Shared note-edit writer + input sanitizer.
 //
 // Single source of truth for how a user's manual note edit (title +
@@ -122,9 +124,15 @@ async function writeNoteEditWithinTx(client, edit) {
          SET gist = EXCLUDED.gist, generated_at = NOW()`,
       [noteId, summary.gist || ''],
     );
-    await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
+    // A manual edit keeps the ticks of the items it didn't change (action-items.cjs). A rewrite by the model
+    // (pipeline-repo, notes-repo) doesn't: its items are new ones.
+    const tickFor = await takeTicksWithinTx(client, noteId);
     for (const [position, text] of (summary.actionItems || []).entries()) {
-      await client.query('INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)', [noteId, text, position]);
+      const tick = tickFor(text);
+      await client.query(
+        'INSERT INTO action_items (note_id, text, position, status, completed_at) VALUES ($1, $2, $3, $4, $5)',
+        [noteId, text, position, tick.status, tick.completedAt],
+      );
     }
     await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
     for (const [position, text] of (summary.keyDecisions || []).entries()) {

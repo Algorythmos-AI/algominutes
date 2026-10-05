@@ -71,6 +71,23 @@ export const NoteFeedbackResponse = z
   .object({ ok: z.literal(true), noteId: z.string(), rating: z.number().int() })
   .openapi('NoteFeedbackResponse');
 
+// ── POST /v1/notes/action-items/status (action-item.js) ─────────────────────
+/** Tick (`done: true`) or untick one of a note's action items. `itemId` is the item's id from the note read. */
+export const ActionItemStatusRequest = z
+  .object({
+    noteId: z.string(),
+    workspaceId: z.string(),
+    itemId: z.string().uuid(),
+    done: z.boolean(),
+  })
+  .openapi('ActionItemStatusRequest');
+
+/** The item's status after the change: `done` or `open`. A manual edit of the summary keeps an unchanged item's
+ * tick; a rewrite by the model starts every item open. */
+export const ActionItemStatusResponse = z
+  .object({ ok: z.literal(true), noteId: z.string(), itemId: z.string(), status: z.enum(['open', 'done']) })
+  .openapi('ActionItemStatusResponse');
+
 // ── POST /v1/notes/regenerate-summary (regenerate-summary.js) ────────────────
 export const RegenerateSummaryRequest = z
   .object({
@@ -128,4 +145,6 @@ export const ResolveDeadLetterResponse = z
 
 export type ProcessRequest = z.infer<typeof ProcessRequest>;
 export type NoteFeedbackRequest = z.infer<typeof NoteFeedbackRequest>;
+export type ActionItemStatusRequest = z.infer<typeof ActionItemStatusRequest>;
+export type ActionItemStatusResponse = z.infer<typeof ActionItemStatusResponse>;
 export type RegenerateSummaryRequest = z.infer<typeof RegenerateSummaryRequest>;
