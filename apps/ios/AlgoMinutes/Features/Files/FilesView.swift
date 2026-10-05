@@ -10,6 +10,8 @@ struct FilesView: View {
     @State private var query = ""
     @State private var filter: SourceFilter = .all
     @State private var selectedNoteId: String?
+    /// The moment a tapped search result matched, for the note it opens (nil for a note opened from the list).
+    @State private var selectedMomentMs: Double?
     /// A note the user asked to delete, until they confirm (H13/UX4: every delete asks).
     @State private var pendingDelete: Note?
     @State private var showChat = false
@@ -112,7 +114,7 @@ struct FilesView: View {
             }
             .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
             .navigationDestination(item: $selectedNoteId) { noteId in
-                NoteDetailView(noteId: noteId)
+                NoteDetailView(noteId: noteId, openAtMs: selectedMomentMs)
             }
         }
         .sheet(isPresented: $showChat) {
@@ -283,6 +285,7 @@ struct FilesView: View {
 
             ForEach(filteredNotes) { note in
                 Button {
+                    selectedMomentMs = nil
                     selectedNoteId = note.id
                 } label: {
                     fileCard(note)
@@ -324,6 +327,7 @@ struct FilesView: View {
                 Section {
                     ForEach(transcriptHits) { hit in
                         Button {
+                            selectedMomentMs = hit.startMs
                             selectedNoteId = hit.noteId
                         } label: {
                             transcriptHitCard(hit)

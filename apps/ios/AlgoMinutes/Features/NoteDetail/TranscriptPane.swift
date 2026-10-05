@@ -20,6 +20,26 @@ struct TranscriptPane: View {
     var onRetry: (() -> Void)?
     /// Rename a speaker, from their chip. Nil where names can't change.
     var onRenameSpeaker: ((TranscriptLine) -> Void)?
+    /// The line a search result opened at (RELEASE.md rev 11, UX8): marked like the playing line until
+    /// something plays.
+    var focusIndex: Int?
+
+    /// The scroll anchor of a line, for opening a note at a moment.
+    static func anchor(_ index: Int) -> String { "transcript-line-\(index)" }
+
+    /// The line to open at for a moment `ms` into the recording, or nil while it isn't on this iPhone yet.
+    /// A long note's mirror is its first 200 lines: a moment past them waits for the rest (`complete`) rather
+    /// than settling on line 200.
+    static func momentIndex(in lines: [TranscriptLine], atMs ms: Double, complete: Bool) -> Int? {
+        guard !lines.isEmpty else { return nil }
+        let wanted = max(0, ms) / 1000
+        guard let index = TranscriptTime.activeIndex(in: lines, at: wanted) else { return complete ? 0 : nil }
+        if index == lines.count - 1, !complete,
+           let start = TranscriptTime.seekTarget(for: lines[index]), wanted - start > 60 {
+            return nil
+        }
+        return index
+    }
 
     /// Find in the transcript (RELEASE.md rev 11, UX12): a long meeting is hundreds of lines, and the only
     /// way to a remembered phrase was to scroll for it.
@@ -59,10 +79,11 @@ struct TranscriptPane: View {
                 ForEach(shown) { line in
                     TranscriptLineRow(
                         line: line,
-                        isActive: line.index == activeIndex,
+                        isActive: line.index == (activeIndex ?? focusIndex),
                         onSeek: onSeek,
                         onRenameSpeaker: onRenameSpeaker
                     )
+                    .id(Self.anchor(line.index))
                 }
                 if isTruncated, !isFinding {
                     truncationNotice
