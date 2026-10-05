@@ -11,8 +11,27 @@ final class StubURLProtocol: URLProtocol {
         let body: [String: Any]?
     }
 
-    nonisolated(unsafe) static var recorded: [Recorded] = []
-    nonisolated(unsafe) static var responder: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
+    // Requests are answered on URLSession's own threads, and one test's stray request (analytics, a retry) can
+    // land while the next test's is being recorded. Unlocked, two appends at once could lose one: that was
+    // `testCreateMeetingBotMapsEachAnswer` finding no recorded request, now and then.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _recorded: [Recorded] = []
+    nonisolated(unsafe) private static var _responder: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
+
+    static var recorded: [Recorded] {
+        get { lock.withLock { _recorded } }
+        set { lock.withLock { _recorded = newValue } }
+    }
+
+    static var responder: (URLRequest) -> (Int, Data) {
+        get { lock.withLock { _responder } }
+        set { lock.withLock { _responder = newValue } }
+    }
+
+    /// Append, as one step (a get then a set through `recorded` would be two).
+    private static func record(_ request: Recorded) {
+        lock.withLock { _recorded.append(request) }
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -32,7 +51,7 @@ final class StubURLProtocol: URLProtocol {
             bodyData = data
         }
         let body = bodyData.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
-        Self.recorded.append(Recorded(
+        Self.record(Recorded(
             method: request.httpMethod ?? "",
             url: request.url!,
             headers: request.allHTTPHeaderFields ?? [:],
