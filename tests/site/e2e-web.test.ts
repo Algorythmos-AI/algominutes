@@ -221,6 +221,23 @@ describe('the journey, in a real browser', () => {
     }
   }, 60_000);
 
+  it("a search made before the note's index exists is made again, and passes", async () => {
+    const saved = PAGES['/app/search'];
+    // The first press finds nothing, as a search does in the seconds between the summary and the index.
+    PAGES['/app/search'] = saved.replace(
+      `onclick="document.getElementById('hits').innerHTML='<a href=&quot;/app/notes/n1&quot;>n1</a>'"`,
+      `onclick="window.presses=(window.presses||0)+1;if(window.presses>1)document.getElementById('hits').innerHTML='<a href=&quot;/app/notes/n1&quot;>n1</a>'"`,
+    );
+    expect(PAGES['/app/search']).not.toBe(saved);
+    try {
+      const lines: string[] = [];
+      expect(await runWebE2E({ siteUrl, bypass: '', inviteCode: CODE, readyMs: 60_000, budgetMs: 120_000, chromium, recordMs: 50, actionMs: 3000, longMs: 20_000, fixture: 'tests/fixtures/e2e-speech.ogg', write: (s: string) => lines.push(s) })).toBe(true);
+      expect(lines.some((l) => l.startsWith('ok   search finds a moment in it'))).toBe(true);
+    } finally {
+      PAGES['/app/search'] = saved;
+    }
+  }, 90_000);
+
   it('the whole journey keeps to its budget, and the account is still deleted', async () => {
     const saved = PAGES['/app/search'];
     PAGES['/app/search'] = saved.replace(/onclick="document\.getElementById\('(hits|st)'\)[^"]*"/g, '');
