@@ -22,7 +22,12 @@ jobs:
     if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
     steps:
+      # The nightly run checks production, which is `main`. With the default branch's script it compared
+      # production with headers `integration` has and `main` doesn't yet: red every night between promotions
+      # (2026-09-29 to 10-06), which says nothing about the site. Production is held to what shipped with it.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'main' || '' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
