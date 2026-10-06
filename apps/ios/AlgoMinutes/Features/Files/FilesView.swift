@@ -235,7 +235,7 @@ struct FilesView: View {
                         .foregroundStyle(Theme.heading)
                     Spacer()
                     // The query is still in the field: search it again.
-                    Button("Retry") { Task { await runTranscriptSearch() } }
+                    Button("Try again") { Task { await runTranscriptSearch() } }
                         .font(Typography.label(14))
                         .foregroundStyle(Theme.body)
                         .buttonStyle(.borderless)
@@ -418,7 +418,7 @@ struct FilesView: View {
                     .lineLimit(2)
             }
         case .error:
-            Label(note.errorMessage ?? "Processing failed", systemImage: "exclamationmark.triangle.fill")
+            Label(note.errorMessage ?? "Couldn’t process", systemImage: "exclamationmark.triangle.fill")
                 .font(Typography.body(12))
                 .foregroundStyle(Theme.heading)
                 .lineLimit(1)

@@ -160,7 +160,7 @@ struct ChatView: View {
                     Button {
                         viewModel.retry(messageId: message.id)
                     } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
+                        Label("Try again", systemImage: "arrow.clockwise")
                             .font(Typography.label(14))
                             .foregroundStyle(Theme.body)
                     }

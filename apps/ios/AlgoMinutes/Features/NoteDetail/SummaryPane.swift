@@ -5,7 +5,7 @@ import SwiftUI
 /// Takes the summary rather than the note so it stays trivially previewable
 /// and has no reason to reach into the environment.
 struct SummaryPane: View {
-    /// Scroll anchor for the quick-action row's "Action Items" tile.
+    /// Scroll anchor for the quick-action row's "Action items" tile.
     static let actionItemsAnchor = "summary.actionItems"
 
     let summary: Summary?
@@ -19,7 +19,7 @@ struct SummaryPane: View {
         if let summary {
             AlgoMinutesCard {
                 VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel("Executive Summary")
+                    SectionLabel("Summary")
                     Text(summary.gist.isEmpty ? "No summary." : summary.gist)
                         .font(Typography.body(15))
                         .foregroundStyle(Theme.body)
@@ -32,7 +32,7 @@ struct SummaryPane: View {
             if !summary.actionItems.isEmpty {
                 AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 10) {
-                        SectionLabel("Action Items")
+                        SectionLabel("Action items")
                         if let onTick, let ticks = ActionItemTicks.matching(ticks, texts: summary.actionItems) {
                             ForEach(ticks) { tick in
                                 TickRow(tick: tick) { onTick(tick, !tick.done) }
@@ -49,7 +49,7 @@ struct SummaryPane: View {
             if !summary.keyDecisions.isEmpty {
                 AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 10) {
-                        SectionLabel("Key Decisions")
+                        SectionLabel("Key decisions")
                         ForEach(summary.keyDecisions, id: \.self) { decision in
                             BulletRow(decision, icon: "flag")
                         }

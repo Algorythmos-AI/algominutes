@@ -22,7 +22,7 @@ struct NotesSyncBanner: View {
                         .foregroundStyle(Theme.muted)
                 }
                 Spacer()
-                Button("Retry") { Task { await env.notes.refresh() } }
+                Button("Try again") { Task { await env.notes.refresh() } }
                     .font(Typography.label(14))
                     .foregroundStyle(Theme.body)
             }

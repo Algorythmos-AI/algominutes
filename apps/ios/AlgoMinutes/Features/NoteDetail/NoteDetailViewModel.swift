@@ -15,8 +15,8 @@ import SwiftUI
 @MainActor
 final class NoteDetailViewModel {
     enum Tab: String, CaseIterable {
-        case summary = "AI Summary"
-        case transcript = "Transcriptions"
+        case summary = "Summary"
+        case transcript = "Transcript"
     }
 
     /// Which secondary sheet is open, if any. One enum rather than a boolean
