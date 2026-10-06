@@ -239,10 +239,13 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
         task's retry, and a chat fails after three tries. A quota increase or provisioned throughput for
         3.5-flash in `australia-southeast1` is the owner's to ask for. **Not checked:** whether the refusals
         are the project's quota or Google's shared capacity (the project's quota page shows which).
-      - **Not traced:** a transcoder fast-path attempt that ran out of its time budget
-        (`kickoff_failed`, TIME_BUDGET, 01:45 UTC, a web journey's note): whether that note ended ready.
-      - **Open, small:** the chat handler's older log lines name the user as `uid`, not `userId`, and
-        `chat_retrieval_failed` and `chat_overview_failed` name no user.
+      - **Traced:** the transcoder fast-path attempt that ran out of its time budget (`kickoff_failed`,
+        TIME_BUDGET, note `web72f6…`): the model hung for the whole 240 s on a ten-second recording, the
+        task's retry answered in 3 s, and the note was ready at 01:45:17, four minutes late. One hang; a
+        shorter budget for short audio is the lever if it recurs.
+      - **Corrected:** an earlier entry here said the chat handler's older log lines name no `userId`. They
+        do: the auth middleware binds `uid` and `userId` on the request's logger (`middleware/auth.js`), so
+        every line in the handler carries both. Nothing to fix.
     - **A staging deploy job hung in "waiting" twice on 10-06** (`image (billing)` on #392, run 37439623593;
       `rollout (embedder)` on #393, run 37444736236, for three hours, holding every deploy behind it). The
       staging environment has only a branch rule. Cancelling let the next run through each time. Cause
