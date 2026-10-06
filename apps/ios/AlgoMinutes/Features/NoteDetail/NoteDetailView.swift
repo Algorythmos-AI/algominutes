@@ -21,6 +21,8 @@ struct NoteDetailView: View {
     /// The line that moment landed on, kept marked.
     @State private var momentIndex: Int?
     @State private var viewModel = NoteDetailViewModel()
+    /// The note's action items with their ids and ticks, read from the server; nil until then.
+    @State private var ticks: [ActionItemTick]?
     /// A10 #4: present the support composer for a "bad transcript" report.
     @State private var reportingBadTranscript = false
     /// A notetaker cancel or stop waiting for the user's confirmation: its bot and which.
@@ -313,7 +315,14 @@ struct NoteDetailView: View {
 
         switch viewModel.tab {
         case .summary:
-            SummaryPane(summary: note.summary, onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil)
+            SummaryPane(
+                summary: note.summary,
+                onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil,
+                ticks: ticks,
+                onTick: { tick, done in setTick(tick, done: done, note: note) }
+            )
+                // Again whenever the items change: an edit of the summary gives them new ids.
+                .task(id: note.summary?.actionItems) { await loadTicks(note) }
                 // A9.6 + A6.3: the moment the first summary is actually on screen.
                 // Fires `first_summary_viewed` once and, for a guest, presents the
                 // account prompt (or the paywall if the trial is already over).
@@ -377,6 +386,41 @@ struct NoteDetailView: View {
                     SupportComposerView(kind: .badTranscript, noteId: note.id)
                         .algoMinutesSheet([.medium, .large])
                 }
+            }
+        }
+    }
+
+    /// Without the ids the items stay plain bullets, as they were: a failed read costs the ticks, not the list.
+    private func loadTicks(_ note: Note) async {
+        guard !(note.summary?.actionItems.isEmpty ?? true), let workspaceId = env.auth.workspaceId else {
+            ticks = nil
+            return
+        }
+        do {
+            ticks = try await env.api.fetchActionItems(noteId: note.id, workspaceId: workspaceId)
+        } catch is CancellationError {
+            return
+        } catch {
+            AppLog.error("action_items_read_failed: \(error)")
+            ticks = nil
+        }
+    }
+
+    /// Shown at once, then sent; put back if the server refuses it.
+    private func setTick(_ tick: ActionItemTick, done: Bool, note: Note) {
+        guard let workspaceId = env.auth.workspaceId else { return }
+        ticks = ActionItemTicks.setting(ticks, id: tick.id, done: done)
+        Task {
+            do {
+                try await env.api.setActionItemDone(noteId: note.id, workspaceId: workspaceId, itemId: tick.id, done: done)
+            } catch where ActionItemTicks.isGone(error) {
+                // The summary was edited elsewhere: the items have new ids. Read them again.
+                AppLog.error("action_item_gone_rereading: \(error)")
+                await loadTicks(note)
+            } catch {
+                AppLog.error("action_item_tick_failed: \(error)")
+                ticks = ActionItemTicks.setting(ticks, id: tick.id, done: tick.done)
+                env.alertMessage = "Couldn't save that tick. Please try again."
             }
         }
     }

@@ -11,6 +11,9 @@ struct SummaryPane: View {
     let summary: Summary?
     /// Plays from a chapter's start; nil when the note has no playable audio.
     var onSeek: ((TimeInterval) -> Void)? = nil
+    /// The action items as the server holds them; nil until read, and then they show as plain bullets.
+    var ticks: [ActionItemTick]? = nil
+    var onTick: ((ActionItemTick, Bool) -> Void)? = nil
 
     var body: some View {
         if let summary {
@@ -30,8 +33,14 @@ struct SummaryPane: View {
                 AlgoMinutesCard {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel("Action Items")
-                        ForEach(summary.actionItems, id: \.self) { item in
-                            BulletRow(item, icon: "checkmark.circle")
+                        if let onTick, let ticks = ActionItemTicks.matching(ticks, texts: summary.actionItems) {
+                            ForEach(ticks) { tick in
+                                TickRow(tick: tick) { onTick(tick, !tick.done) }
+                            }
+                        } else {
+                            ForEach(summary.actionItems, id: \.self) { item in
+                                BulletRow(item, icon: "checkmark.circle")
+                            }
                         }
                     }
                 }
@@ -89,6 +98,35 @@ struct BulletRow: View {
                 .foregroundStyle(Theme.body)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// One action item that can be ticked. The whole row is the button, so the target is the row's height.
+private struct TickRow: View {
+    let tick: ActionItemTick
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: tick.done ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(tick.done ? Theme.accent : Theme.outline)
+                Text(tick.text)
+                    .font(Typography.body(14))
+                    .foregroundStyle(tick.done ? Theme.muted : Theme.body)
+                    .strikethrough(tick.done)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44, alignment: .top)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(tick.text)
+        .accessibilityValue(tick.done ? "Done" : "Not done")
+        .accessibilityHint(tick.done ? "Marks it not done" : "Marks it done")
     }
 }
 
