@@ -166,11 +166,36 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       call capture) cover them.
     - **Home to recording is three taps, not the two rev 11 targets:** the card, the tick, Start. Two means
       dropping the per-recording tick, which is a consent decision for the owner (CONSENT.md).
+  - **Built in the third train (2026-10-05 to 10-06, #365–#385; integration `6d3801d`):**
+    - **iPhone:** Home says how far an upload is and roughly when a note will be ready (#379, H16/UX5); a
+      note's summary can be edited by hand (#380, UX12); a search result opens its note at the moment it
+      matched (#381, UX8).
+    - **Action items keep their order and can be ticked:** migration 038 adds a nullable `position` to
+      `action_items` and `key_decisions`, written by every writer and read `NULLS LAST` (#382);
+      `POST /v1/notes/action-items/status` ticks one, joined to the workspace's members, and a hand edit of the
+      summary carries the ticks across (#383); the web note page has the checkboxes (#384). From the
+      dual-write audit of #383: the ticks are taken with `DELETE … RETURNING` inside the edit's transaction, and
+      a replayed summarize task for a note already ready is acknowledged without rewriting it
+      (`summarizer_replay_note_already_ready`).
+    - **Dependencies:** the runtime group (#376) and Stripe 22 → 23 (#367). None of Stripe 23's breaking
+      changes touch the calls billing makes (subscriptions retrieve and cancel, checkout and portal sessions,
+      `webhooks.constructEvent`, API version 2024-06-20). **Not verified:** a checkout on staging in test mode.
+    - **CI:** the Firestore emulator step is retried once on a failed download only (#378); the web journey
+      presses Search again until the note's index exists (#385). The journey's run 37407318477 searched at
+      03:06:54.0 and `embeddings_indexed` is at 03:06:59.0; the re-run on the same head (37408457396) passed.
+    - Evidence: on `35f4280` the pipeline e2e passed; the tick endpoint answers 401 without a token on
+      staging (404 before its deploy).
+    - **Not verified:** a tick end to end on staging with a signed-in account; every iOS item above on a device.
+    - **A person who searches a note in the first seconds after it is ready finds nothing** (the same gap the
+      journey hit): the index is written after the summary. Not changed; logged here.
+    - **Seen once, not fixed:** four rollout preflights failed on GitHub's token exchange with Google
+      ("Unable to retrieve Identity Pool subject token") after #376; re-running the failed jobs passed. A retry
+      is worth adding if it recurs.
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
-    mixed ADTS stream needs a device to build against), the rest of H16 (upload progress and an estimate on
-    Home, the example note there, the account prompt's timing, one vocabulary), the rest of UX12 (the summary
-    first, Edit summary on iOS, checkable action items), opening a search result at the moment it matched, 44 pt targets and the
-    VoiceOver pass of UX13, Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
+    mixed ADTS stream needs a device to build against), the rest of H16 (the example note on Home, the account
+    prompt's timing, one vocabulary), the rest of UX12 (the summary first, checkable action items on iOS: the
+    iPhone reads them as text from the mirror, without ids), 44 pt targets and the VoiceOver pass of UX13,
+    Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
   - [x] **Apply D applied (2026-10-05, `reviewed-9992dc9.tfplan`: 4 added, 10 changed, 2 destroyed).** Verified:
     the released Firestore ruleset (1a178557) is `infra/firebase/firestore.rules` byte for byte, so a client can
     no longer change the status of a finished or held note (#312); the `upload_never_processed` alert policy
