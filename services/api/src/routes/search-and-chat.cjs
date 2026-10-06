@@ -219,10 +219,15 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
   // Push the workspace filter into a subquery so the gin_trgm_ops index
   // on transcript_lines.text can run against a pre-filtered note set
   // instead of doing a similarity scan and filtering after the join.
+  //
+  // Two matches, both served by that index. \`%\` compares the query with the
+  // whole line, which finds a line typed nearly in full. \`<%\` looks for the
+  // query inside the line (word_similarity), which is what finds a word: one
+  // word against a sentence scores about 0.1 on \`%\` and never passed its 0.3.
   const kwRes = await withQueryTimeout({
     timeoutMs: 12000,
     text: `SELECT t.note_id, n.title, t.text AS chunk_text, t.start_ms, t.end_ms,
-                  similarity(t.text, $1) AS sim
+                  GREATEST(similarity(t.text, $1), word_similarity($1, t.text)) AS sim
              FROM transcript_lines t
              JOIN notes n ON n.id = t.note_id
             WHERE t.note_id IN (
@@ -231,9 +236,9 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
                        AND deleted_at IS NULL
                        AND status <> 'error'
                   )
-              AND t.text % $1
+              AND (t.text % $1 OR $1 <% t.text)
               ${noteId ? 'AND t.note_id = $4' : ''}
-            ORDER BY similarity(t.text, $1) DESC
+            ORDER BY sim DESC, t.note_id, t.start_ms
             LIMIT $3`,
     values: noteId
       ? [query, workspaces, PER_LIST_LIMIT, noteId]
