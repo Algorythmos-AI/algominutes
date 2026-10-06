@@ -229,6 +229,16 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       - Chat failed on the model's first 429 (twice that day, `chat_stream_failed`). It asks again after 1 s
         and 3 s before anything streams (#399); integration tests for 429, 503, still busy, and a 400.
       - The nightly web journey was red on 10-04 and 10-05 with the search race fixed in #385 and #388.
+      - **Asking the same model again was not enough (#401).** That evening (13:58 UTC) 3.5-flash answered
+        429 three times in 25 s and the web journey's question failed (run 37473186924). Each chat retry now
+        goes to the ladder's next model, then round again. The journey passes on `d9bd76a` (run 37481331327).
+      - **For the owner, before 2026-10-20: gemini-3.5-flash is busy on staging at almost no traffic.** In
+        the day to 10-06 14:00 UTC: 96 `gemini_ok`, 9 `gemini_transient`, 5 `gemini_timeout`, 1
+        `gemini_model_exhausted` (finished on 2.5-flash), and 3 failed chats. When 2.5-flash retires there is
+        no second model in Sydney (DECISIONS.md): that exhausted call fails its attempt and waits for the
+        task's retry, and a chat fails after three tries. A quota increase or provisioned throughput for
+        3.5-flash in `australia-southeast1` is the owner's to ask for. **Not checked:** whether the refusals
+        are the project's quota or Google's shared capacity (the project's quota page shows which).
       - **Not traced:** a transcoder fast-path attempt that ran out of its time budget
         (`kickoff_failed`, TIME_BUDGET, 01:45 UTC, a web journey's note): whether that note ended ready.
       - **Open, small:** the chat handler's older log lines name the user as `uid`, not `userId`, and
