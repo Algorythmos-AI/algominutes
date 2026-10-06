@@ -79,6 +79,8 @@ struct NoteDetailView: View {
         .sheet(item: $viewModel.shareItem) { item in
             ActivityShareSheet(items: item.items)
         }
+        // The account prompt a guest is owed after their first summary goes up as they leave it, not over it.
+        .onDisappear { env.billing.onLeftNote(isGuest: env.auth.isAnonymous) }
         .task(id: noteId) {
             guard let openAtMs, pendingMomentMs == nil, momentIndex == nil else { return }
             viewModel.tab = .transcript
@@ -324,8 +326,8 @@ struct NoteDetailView: View {
                 // Again whenever the items change: an edit of the summary gives them new ids.
                 .task(id: note.summary?.actionItems) { await loadTicks(note) }
                 // A9.6 + A6.3: the moment the first summary is actually on screen.
-                // Fires `first_summary_viewed` once and, for a guest, presents the
-                // account prompt (or the paywall if the trial is already over).
+                // Fires `first_summary_viewed` once and, for a guest, owes the account
+                // prompt for when they leave (or shows the paywall if the trial is over).
                 .onAppear {
                     env.billing.onFirstSummaryViewed(isGuest: env.auth.isAnonymous)
                     // A10 #6: a successful summary is the value moment — ask for a

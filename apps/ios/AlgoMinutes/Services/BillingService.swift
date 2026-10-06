@@ -40,12 +40,13 @@ final class BillingService {
     var isInviteSheetPresented = false
 
     private let api: APIClient
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     /// PAYWALL_ENABLED for this build; injectable so tests can try both.
     private let paywallEnabled: Bool
 
-    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled) {
+    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled, defaults: UserDefaults = .standard) {
         self.api = api
+        self.defaults = defaults
         self.paywallEnabled = paywallEnabled
         self.store = StoreKitService(api: api)
         // When StoreKit forwards a verified receipt, re-read the authoritative
@@ -208,20 +209,36 @@ final class BillingService {
     }
 
     /// Called when a note's summary is first shown (NoteDetailView, ready state).
-    /// Fires `first_summary_viewed` once, then — NOT at launch — presents the
-    /// A6.3 account prompt to a still-anonymous guest, or the paywall if the
-    /// user is already past the trial. During the trial we never hard-sell.
+    /// The guest has seen their first summary and has not yet been asked to make an account.
+    /// Kept across launches: an app closed on the summary still asks, the next time a note is left.
+    static let accountPromptOwedKey = "account_prompt.owed_after_first_summary"
+
+    /// Fires `first_summary_viewed` once, then, NOT at launch, owes a still-anonymous
+    /// guest the A6.3 account prompt, or presents the paywall if the user is already
+    /// past the trial. During the trial we never hard-sell.
+    ///
+    /// The prompt used to go up here, the moment the summary was on screen: over the
+    /// first note anyone had made, before they had read a word of it. It now waits
+    /// until they leave the note (`onLeftNote`; RELEASE.md rev 11, H16).
     func onFirstSummaryViewed(isGuest: Bool) {
         let firstTime = fireOnce(.firstSummaryViewed, key: "analytics.first_summary_viewed")
         guard firstTime else { return }
         if isGuest {
             // Convert the guest to a permanent account first (A6.3). The sheet
             // itself links onward to Pro plans.
-            isAccountPromptPresented = true
+            defaults.set(true, forKey: Self.accountPromptOwedKey)
         } else if entitlement?.gatesMeteredActions == true {
             // Already past the reverse trial: surface the paywall now.
             presentPaywall(.firstSummary)
         }
+    }
+
+    /// The note screen has gone: ask the guest who has read their first summary to make
+    /// an account, once. Someone who made an account in the meantime is not asked.
+    func onLeftNote(isGuest: Bool) {
+        guard defaults.bool(forKey: Self.accountPromptOwedKey) else { return }
+        defaults.removeObject(forKey: Self.accountPromptOwedKey)
+        if isGuest { isAccountPromptPresented = true }
     }
 
     /// Called when the server refuses a metered action (402 quota_exceeded).
