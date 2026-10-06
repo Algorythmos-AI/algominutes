@@ -166,7 +166,7 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       call capture) cover them.
     - **Home to recording is three taps, not the two rev 11 targets:** the card, the tick, Start. Two means
       dropping the per-recording tick, which is a consent decision for the owner (CONSENT.md).
-  - **Built in the third train (2026-10-05 to 10-06, #365–#388; integration `6651d64`):**
+  - **Built in the third train (2026-10-05 to 10-06, #365–#390; integration `6133505`):**
     - **iPhone:** Home says how far an upload is and roughly when a note will be ready (#379, H16/UX5); a
       note's summary can be edited by hand (#380, UX12); a search result opens its note at the moment it
       matched (#381, UX8).
@@ -199,9 +199,20 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
     - **Seen once, not fixed:** four rollout preflights failed on GitHub's token exchange with Google
       ("Unable to retrieve Identity Pool subject token") after #376; re-running the failed jobs passed. A retry
       is worth adding if it recurs.
+    - **One vocabulary, the wording half (#390):** the iPhone says Summary / Transcript, Action items, Key
+      decisions, Couldn't process, Try again, Waiting to start, Transcribing and Summarising, as the web does.
+      382 unit tests on the simulator; not looked at on a device. **For the owner, the naming half:** Files
+      (iPhone) or Notes (web) for the list; End or Stop and save; Delete or Discard for an unsent recording;
+      Chat / Ask AI or Ask your notes; Import Files or Import a recording; and whether the iPhone keeps its
+      two "Upgrade…" messages where the web names only the invite code.
+    - **UX13's 44 pt targets, checked in the code at `6133505`:** no control has a fixed frame under 44 pt
+      (the three small frames found are glyphs inside larger buttons), and no icon-only button lacks a
+      VoiceOver label (a pattern search, not a screen-by-screen pass). What is left of UX13 is the VoiceOver
+      and large-text pass on a device.
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
     mixed ADTS stream needs a device to build against), the rest of H16 (the example note on Home, the account
-    prompt's timing, one vocabulary), the rest of UX12 (the summary first), 44 pt targets and the VoiceOver pass of UX13,
+    prompt's timing, the naming half of one vocabulary), the rest of UX12 (the summary first), the VoiceOver
+    pass of UX13 on a device,
     Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
   - [x] **Apply D applied (2026-10-05, `reviewed-9992dc9.tfplan`: 4 added, 10 changed, 2 destroyed).** Verified:
     the released Firestore ruleset (1a178557) is `infra/firebase/firestore.rules` byte for byte, so a client can
