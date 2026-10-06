@@ -196,8 +196,16 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, invi
 
     await page.goto(`${siteUrl}/app/search`);
     await page.getByLabel('Search your notes').fill('budget');
-    await page.getByRole('button', { name: 'Search', exact: true }).click();
-    check('search finds a moment in it', await within(page.locator('main a[href*="/app/notes/"]').first().waitFor({ timeout: wait(60_000) })));
+    // A note is ready when its summary is; its search index is written just after. The first run that searched
+    // inside that gap (2026-10-06) got an empty answer and waited a minute on it. Search again, as a person would.
+    const moment = page.locator('main a[href*="/app/notes/"]').first();
+    const searchUntil = Date.now() + wait(60_000);
+    let found = false;
+    while (!found && Date.now() < searchUntil) {
+      await page.getByRole('button', { name: 'Search', exact: true }).click();
+      found = await within(moment.waitFor({ timeout: wait(8_000) }));
+    }
+    check('search finds a moment in it', found);
     await page.getByRole('tab', { name: 'Ask your notes' }).click();
     await page.getByLabel('Ask a question about your notes').fill('When is the website launch?');
     await page.getByRole('button', { name: 'Ask', exact: true }).click();
