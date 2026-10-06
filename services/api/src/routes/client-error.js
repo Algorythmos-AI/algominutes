@@ -19,7 +19,12 @@ const CLIENT_ERROR_FIELD_CAPS = {
 
 // Reports that describe what happened rather than a crash (the web's sign-in
 // trace and CSP reporter: apps/web/src/lib/diagnostics). Everything else is a crash.
-const DIAGNOSTIC_KINDS = new Set(['auth.signInCancelled', 'csp.violation']);
+//
+// A refused screen wake lock is one of those: a browser refuses it for a hidden
+// tab or a low battery, and headless Chrome always does. The recording carries
+// on; only the screen may sleep. It was 51 of staging's 57 error lines on
+// 2026-10-06, every one from the web journey.
+const DIAGNOSTIC_KINDS = new Set(['auth.signInCancelled', 'csp.violation', 'record.wakeLock', 'record.wakeLockRelease']);
 
 export function clientErrorRoute(req, res) {
   const log = req.log;
