@@ -119,6 +119,70 @@ describe('the notes list', () => {
   });
 });
 
+// An action item can be ticked, and the tick is kept on the server.
+describe('a note’s action items', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const withItems = (items: Array<Record<string, unknown>>) => ({ ...READ, summary: { ...READ.summary, actionItems: items } });
+  const item = (id: string, text: string, status = 'open') => ({ id, text, status, assigneeName: null, dueDate: null });
+  const open = async (read: () => unknown, route: Route = () => undefined) => {
+    const { feed } = fakeFeed([note('n1')]);
+    const s = server((url, body) => (url.endsWith('/v1/notes/read') ? json(read()) : route(url, body)));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    await screen.findByRole('heading', { level: 1, name: 'Weekly sync' });
+    return s;
+  };
+  const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement;
+
+  it('shows each item with its tick as the server has it', async () => {
+    await open(() => withItems([item(A, 'Send the deck', 'done'), item(B, 'Book the room')]));
+    expect(box('Send the deck').checked).toBe(true);
+    expect(box('Book the room').checked).toBe(false);
+  });
+
+  it('ticking saves it for that item, and unticking saves that too', async () => {
+    const s = await open(() => withItems([item(A, 'Send the deck'), item(B, 'Book the room')]), (url, body) =>
+      url.endsWith('/v1/notes/action-items/status') ? json({ ok: true, noteId: 'n1', itemId: body.itemId, status: body.done ? 'done' : 'open' }) : undefined);
+    fireEvent.click(box('Book the room'));
+    await waitFor(() => expect(s.calls.find((c) => c.url.endsWith('/v1/notes/action-items/status'))?.body).toEqual({ noteId: 'n1', workspaceId: WS, itemId: B, done: true }));
+    await waitFor(() => expect(box('Book the room').disabled).toBe(false));
+    expect(box('Book the room').checked).toBe(true);
+    expect(box('Send the deck').checked).toBe(false);
+    fireEvent.click(box('Book the room'));
+    await waitFor(() => expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/action-items/status')).at(-1)?.body).toMatchObject({ itemId: B, done: false }));
+    await waitFor(() => expect(box('Book the room').checked).toBe(false));
+  });
+
+  it('a tick that can’t be saved is put back, and says so', async () => {
+    await open(() => withItems([item(A, 'Send the deck')]), (url) => (url.endsWith('/v1/notes/action-items/status') ? json({ error: 'boom' }, 500) : undefined));
+    fireEvent.click(box('Send the deck'));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/couldn’t be saved/);
+    expect(box('Send the deck').checked).toBe(false);
+  });
+
+  it('an item the server no longer knows (the summary was edited) reads the note again instead of failing', async () => {
+    let edited = false;
+    const s = await open(
+      () => withItems(edited ? [item(B, 'Send the deck', 'done')] : [item(A, 'Send the deck')]),
+      (url) => {
+        if (!url.endsWith('/v1/notes/action-items/status')) return undefined;
+        edited = true;
+        return json({ error: 'Action item not found' }, 404);
+      },
+    );
+    fireEvent.click(box('Send the deck'));
+    await waitFor(() => expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/read')).length).toBeGreaterThan(1));
+    await waitFor(() => expect(box('Send the deck').checked).toBe(true));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an item with no addressable id is shown without a tick', async () => {
+    await open(() => READ);
+    expect(screen.getByText('Ship the site')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /Ship the site/ })).toBeNull();
+  });
+});
+
 describe('a note', () => {
   it('shows the summary, actions, decisions, chapters and transcript from the api, and loads more', async () => {
     const { feed } = fakeFeed([note('n1')]);
