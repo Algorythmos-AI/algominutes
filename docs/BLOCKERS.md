@@ -220,6 +220,24 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       `@firebase/firestore` 4.17.2, which pins `~1.9.0`, and firebase 12.19.0 is the latest.
     - **Seen once:** `image (billing)` sat in "waiting" for ten minutes on the deploy of #392 while the other
       image jobs finished; cancelling and re-running the unfinished jobs passed (run 37439623593).
+    - **From a health sweep of staging and the scheduled runs (2026-10-06, #397–#399; staging `23f9997`):**
+      - The nightly site smoke was red every night from 09-29: it checked production (`main`) with
+        `integration`'s script. On schedule it now checks out `main` (#397); `main`'s script passes against
+        production by hand. Its next scheduled run is the check.
+      - 51 of staging's 57 error-level lines were refused screen wake locks from the web journey, logged as
+        `web_client_crash`. They are `web_client_diagnostic` warnings now (#398): still logged, not crashes.
+      - Chat failed on the model's first 429 (twice that day, `chat_stream_failed`). It asks again after 1 s
+        and 3 s before anything streams (#399); integration tests for 429, 503, still busy, and a 400.
+      - The nightly web journey was red on 10-04 and 10-05 with the search race fixed in #385 and #388.
+      - **Not traced:** a transcoder fast-path attempt that ran out of its time budget
+        (`kickoff_failed`, TIME_BUDGET, 01:45 UTC, a web journey's note): whether that note ended ready.
+      - **Open, small:** the chat handler's older log lines name the user as `uid`, not `userId`, and
+        `chat_retrieval_failed` and `chat_overview_failed` name no user.
+    - **A staging deploy job hung in "waiting" twice on 10-06** (`image (billing)` on #392, run 37439623593;
+      `rollout (embedder)` on #393, run 37444736236, for three hours, holding every deploy behind it). The
+      staging environment has only a branch rule. Cancelling let the next run through each time. Cause
+      unknown: a third time needs a proper look. A `timeout-minutes` would not help: it counts from when a
+      job starts, and these never started.
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
     mixed ADTS stream needs a device to build against), the naming half of one vocabulary (H16), the rest of UX12 (the summary first), the VoiceOver
     pass of UX13 on a device,
