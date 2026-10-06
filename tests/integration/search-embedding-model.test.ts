@@ -51,6 +51,50 @@ describe('vector search and the embedding model', () => {
   });
 });
 
+// The keyword half compared the query with the whole line (similarity, threshold 0.3): one word against a
+// sentence scores about 0.1, so a word was only ever found through its embedding. In the seconds between a
+// note's summary and its index (the web journey's run 37407318477), and whenever the embed call fails, a word
+// that is plainly in the transcript found nothing.
+describe('keyword search finds a word inside a line', () => {
+  const LINE = 'We agreed the budget for the website launch is forty thousand dollars this quarter.';
+  const noVector = async () => {
+    throw new Error('embed down');
+  };
+  beforeEach(async () => {
+    await seedUser('bob');
+    await seedWorkspace('ws-b', 'bob');
+    await seedNote('fresh', 'ws-a', 'alice');
+    await seedNote('bobs', 'ws-b', 'bob');
+    await pool.query(
+      `INSERT INTO transcript_lines (note_id, start_ms, end_ms, text) VALUES
+         ('fresh', 4000, 9000, $1), ('fresh', 9000, 12000, 'Thanks everyone, see you on Thursday.'), ('bobs', 0, 5000, $1)`,
+      [LINE],
+    );
+  });
+
+  it('with no embeddings for the note, and with the embed call failing', async () => {
+    for (const embed of [async () => unit(5), noVector]) {
+      const hits = await hybridSearch({ uid: 'alice', query: 'budget', k: 10, log, embed });
+      expect(hits.filter((h: { source: string }) => h.source === 'keyword').map((h: { noteId: string; startMs: number }) => [h.noteId, h.startMs])).toEqual([['fresh', 4000]]);
+    }
+  });
+
+  it('a near spelling still matches, a word that is not there does not, and a whole line still does', async () => {
+    const kw = async (query: string) =>
+      (await hybridSearch({ uid: 'alice', query, k: 10, log, embed: noVector })).map((h: { startMs: number }) => h.startMs);
+    expect(await kw('budgets')).toEqual([4000]);
+    expect(await kw('zebra')).toEqual([]);
+    expect(await kw('thanks everyone see you on thursday')).toEqual([9000]);
+  });
+
+  it("never returns another workspace's line, and keeps to the note it is narrowed to", async () => {
+    const all = await hybridSearch({ uid: 'alice', query: 'budget', k: 10, log, embed: noVector });
+    expect(all.map((h: { noteId: string }) => h.noteId)).toEqual(['fresh']);
+    expect(await hybridSearch({ uid: 'alice', query: 'budget', k: 10, log, embed: noVector, noteId: 'current' })).toEqual([]);
+    expect((await hybridSearch({ uid: 'bob', query: 'budget', k: 10, log, embed: noVector })).map((h: { noteId: string }) => h.noteId)).toEqual(['bobs']);
+  });
+});
+
 describe('the search log line', () => {
   it("carries the query's length, not its text", async () => {
     const lines: Array<{ o: any; m: string }> = [];
