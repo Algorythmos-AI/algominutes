@@ -47,6 +47,9 @@ struct HomeView: View {
     @State private var activeSheet: CaptureAction?
     @State private var recorderFlow = RecorderFlowState()
     @State private var selectedNoteId: String?
+    // The example note, until there's a real one: the same switch Files uses, so hiding it there hides it here.
+    @State private var showingSample = false
+    @AppStorage("sample_note_hidden") private var sampleHidden = false
     @State private var orphanRecording: RecordingStore.PendingRecording?
     @State private var pendingDeletion: RecordingStore.PendingRecording?
     @State private var showPendingRecordings = false
@@ -77,6 +80,7 @@ struct HomeView: View {
                     if pendingCount > 0 { pendingBanner }
                     captureActions
                     recentNotes
+                    exampleNote
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.md)
@@ -95,6 +99,7 @@ struct HomeView: View {
             .navigationDestination(item: $selectedNoteId) { noteId in
                 NoteDetailView(noteId: noteId)
             }
+            .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
         }
         // Consume a deep link both when it changes and if one is already waiting
         // when Home first appears (a cold launch from a notification tap).
@@ -346,6 +351,52 @@ struct HomeView: View {
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
+            }
+        }
+    }
+
+    // MARK: - The example note (RELEASE.md rev 11, H16)
+
+    /// A new user's Home had three ways to make a note and nothing to show what one is: the example was a tab
+    /// away, in Files. It shows here on the same terms (SampleNote.shouldShow), so never beside a real note.
+    @ViewBuilder
+    private var exampleNote: some View {
+        if SampleNote.shouldShow(notesEmpty: env.notes.notes.isEmpty, query: "",
+                                 hasLoaded: env.notes.receivedFirstSnapshot, hidden: sampleHidden) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("EXAMPLE")
+                    .font(Typography.eyebrow())
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.muted)
+                Button {
+                    showingSample = true
+                } label: {
+                    HStack(spacing: Theme.Spacing.md) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(SampleNote.note.title)
+                                .font(Typography.body(15))
+                                .foregroundStyle(Theme.heading)
+                                .lineLimit(1)
+                            Text("See what a note looks like")
+                                .font(Typography.body(12))
+                                .foregroundStyle(Theme.muted)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: Theme.Spacing.sm)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .frame(minHeight: 56)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Example note: \(SampleNote.note.title)")
+                .accessibilityHint("Shows what a note looks like")
             }
         }
     }
