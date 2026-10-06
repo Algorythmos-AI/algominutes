@@ -19,7 +19,14 @@ permissions:
 
 jobs:
   smoke:
-    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    # A deployment status comes from Vercel (the site: it has an environment URL) and from every job of
+    # deploy-staging.yml that names the `staging` environment (Cloud Run: it has none). The second kind is not
+    # a site deployment, and each one failed this job on "not an https origin" (30 red runs on 2026-10-06).
+    if: >-
+      github.event_name != 'deployment_status'
+      || (github.event.deployment_status.state == 'success'
+          && (github.event.deployment_status.environment == 'Production'
+              || github.event.deployment_status.environment_url != ''))
     runs-on: ubuntu-latest
     steps:
       # The nightly run checks production, which is `main`. With the default branch's script it compared
