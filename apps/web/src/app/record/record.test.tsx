@@ -529,12 +529,13 @@ describe('recording, when things go wrong', () => {
       window.dispatchEvent(e);
       return e.defaultPrevented;
     };
-    expect(unload()).toBe(true);
+    // The guard goes up in an effect, a moment after the screen says so: asking in the same tick found none
+    // (CI, 2026-10-06, on a PR that touched no web code). Wait for it, both times.
+    await waitFor(() => expect(unload()).toBe(true));
     fireEvent.click(screen.getByRole('button', { name: 'Stop and save' }));
     expect(await screen.findByText(/Uploading your recording…/)).toBeTruthy();
-    // The recording's guard is taken down as the upload's goes up: let those effects run first.
-    await act(async () => {});
-    expect(unload()).toBe(true);
+    // The recording's guard is taken down as the upload's goes up.
+    await waitFor(() => expect(unload()).toBe(true));
   });
 
   it("a kickoff that fails after the upload is retried on the same note, never uploaded again", async () => {
