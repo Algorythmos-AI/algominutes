@@ -163,4 +163,35 @@ describe('summarizer prompt', () => {
     expect(prompt).toContain('Bob: Hi Jane.');
     expect(prompt).toContain('Speaker 3: Bye.');
   });
+
+  // Cloud Tasks delivers at least once. A second delivery after the summary went in used to pay for another
+  // summary, replace the first, and give the action items new ids (which would now also untick them).
+  it("a task delivered again after the note is ready is acknowledged: no model call, the summary and the ticks stand", async () => {
+    await lines([0, 1]);
+    const first = JSON.stringify({ gist: 'First summary.', actionItems: ['Send the deck', 'Book the room'], keyDecisions: [] });
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(first));
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('ready');
+    await pool.query(`UPDATE action_items SET status = 'done', completed_at = NOW() WHERE note_id = 'n1' AND text = 'Send the deck'`);
+    const before = (await pool.query(`SELECT id, text, status FROM action_items WHERE note_id = 'n1' ORDER BY position`)).rows;
+
+    request = undefined;
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'A different summary.', actionItems: ['Other'], keyDecisions: [] })));
+    expect(request).toBeUndefined();
+    expect((await stored()).gist).toBe('First summary.');
+    expect((await pool.query(`SELECT id, text, status FROM action_items WHERE note_id = 'n1' ORDER BY position`)).rows).toEqual(before);
+    expect(before.map((r: any) => r.status)).toEqual(['done', 'open']);
+  });
+
+  it('a regenerate (the note back at summarizing) still runs, and starts its items open', async () => {
+    await lines([0, 1]);
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'First.', actionItems: ['Send the deck'], keyDecisions: [] })));
+    await pool.query(`UPDATE action_items SET status = 'done', completed_at = NOW() WHERE note_id = 'n1'`);
+    // What claimRegeneration does.
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = summary_generation + 1 WHERE id = 'n1'`);
+    request = undefined;
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'Second.', actionItems: ['Send the deck'], keyDecisions: [] })));
+    expect(request).toBeDefined();
+    expect((await stored()).gist).toBe('Second.');
+    expect((await pool.query(`SELECT status FROM action_items WHERE note_id = 'n1'`)).rows.map((r: any) => r.status)).toEqual(['open']);
+  });
 });

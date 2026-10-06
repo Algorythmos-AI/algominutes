@@ -426,6 +426,21 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/notes/action-items/status`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Tick or untick one of a note’s action items. Idempotent. The tick is read back on the note read (ActionItem.status).',
+    request: { body: json(S.ActionItemStatusRequest) },
+    responses: {
+      200: { description: 'The item’s status after the change.', ...json(S.ActionItemStatusResponse) },
+      400: errorResponse('Invalid fields, or an item id that isn’t one.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('No such item on a note you can reach.'),
+      500: errorResponse('Could not save it.'),
+      503: errorResponse('Unavailable until Postgres is provisioned.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'post', path: `${API_BASE_PATH}/notes/feedback`, tags: ['notes'], security: authed, parameters: commonHeaders,
     summary: 'Rate a note’s transcription or summary (1–5), optionally with a comment. Upserts per (note, user, kind).',
     request: { body: json(S.NoteFeedbackRequest) },

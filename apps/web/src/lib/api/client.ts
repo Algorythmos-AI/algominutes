@@ -28,6 +28,8 @@ import {
   ExportNoteRequest,
   NoteAudioUrlRequest,
   NoteAudioUrlResponse,
+  ActionItemStatusRequest,
+  ActionItemStatusResponse,
   NoteFeedbackRequest,
   NoteFeedbackResponse,
   NoteReadPageResponse,
@@ -213,6 +215,7 @@ export function createApiClient(opts: ApiClientOptions) {
       post(`/v1/notes/${encodeURIComponent(noteId)}/speakers`, body, SetNoteSpeakersResponse),
     regenerateSummary: (body: RegenerateSummaryRequest) => post('/v1/notes/regenerate-summary', body, RegenerateSummaryResponse),
     noteFeedback: (body: NoteFeedbackRequest) => post('/v1/notes/feedback', body, NoteFeedbackResponse),
+    setActionItemDone: (body: ActionItemStatusRequest) => post('/v1/notes/action-items/status', body, ActionItemStatusResponse),
     /** The exported document (DOCX) and the file name the server gave it. */
     exportNote: async (body: ExportNoteRequest): Promise<{ blob: Blob; fileName: string | null }> => {
       const { res } = await send({ method: 'POST', path: '/v1/export', body, timeoutMs: 60_000 }, '*/*');

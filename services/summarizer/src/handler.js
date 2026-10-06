@@ -112,7 +112,7 @@ async function handle(payload, deps) {
     // (deleted mid-pipeline) or not in this workspace is acknowledged, not
     // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template, author_uid, queued_at,
+      `SELECT summary_generation, summary_template, author_uid, queued_at, status,
               COALESCE(duration_sec_probed, duration_sec) AS recording_sec
          FROM notes
         WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
@@ -125,6 +125,15 @@ async function handle(payload, deps) {
     }
     // Every later line carries the note's owner and workspace (CLAUDE.md §1).
     log = log.child({ userId: noteRow.author_uid, workspaceId });
+
+    // A task delivered again after its summary went in (Cloud Tasks delivers at least once). A run that is
+    // wanted always finds the note at 'summarizing': the pipeline's hand-off and a regenerate's claim both set
+    // it. Running again on a 'ready' note paid for a second summary, replaced the first, and gave the action
+    // items new ids, which now would also untick them.
+    if (noteRow.status === 'ready') {
+      log.info({ noteId, summaryGeneration: noteRow.summary_generation }, 'summarizer_replay_note_already_ready');
+      return;
+    }
 
     const { rows } = await client.query(
       `SELECT speaker_tag AS "speakerTag", speaker_name AS "speakerName",
