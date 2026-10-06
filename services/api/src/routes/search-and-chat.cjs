@@ -169,6 +169,11 @@ async function memberWorkspaces(uid, log) {
 const CHAT_BUSY_WAITS_MS = [1000, 3000];
 const CHAT_BUSY_STATUSES = new Set([429, 503]);
 
+/** The chat model first, then the rest of the pipeline's ladder that hasn't retired. */
+function chatModels(now = new Date()) {
+  return [CHAT_MODEL, ...models.activeLadder(now).filter((m) => m !== CHAT_MODEL)];
+}
+
 async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQuery }) {
   const workspaces = await memberWorkspaces(uid, log);
   if (workspaces.length === 0) return [];
@@ -625,24 +630,32 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
     // which we parse and forward as our own `data: { text }` events.
     const project = deps.project || await getProjectId();
     const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
-    const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`;
+    const urlFor = (model) => `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:streamGenerateContent?alt=sse`;
     // Counted as it's asked, as the pipeline's paid work is (best-effort: a failed write is logged, never fatal).
     // Only a well-formed note id rides on the row and its failure log, as on every log line here (noteLog).
     await recordChat({ uid, noteId: noteId && isValidId(noteId) ? noteId : undefined, event: CHAT_EVENT, model: CHAT_MODEL, audioSeconds: null, log });
     // A busy model (429 RESOURCE_EXHAUSTED, 503) is asked again, twice, before anything has streamed: it
     // failed the whole answer on the first refusal (staging, 2026-10-06, twice in a day). The pipeline's
     // calls have their ladder (gemini-call.cjs); this stream is not one of its callers. Counted once above.
+    //
+    // Asking the same model again was not enough: on 2026-10-06 (13:58 UTC) it answered 429 three times in
+    // 25 seconds. Each further try goes to the next model of the pipeline's ladder while there is one
+    // (models.cjs: until gemini-2.5-flash retires), then round again.
     const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-    const body = JSON.stringify(chatRequestBody(prompt));
+    const ladder = deps.chatModels || chatModels();
     let upstream;
     for (let attempt = 0; ; attempt += 1) {
-      upstream = await fetchImpl(url, {
+      const model = ladder[attempt % ladder.length];
+      upstream = await fetchImpl(urlFor(model), {
         method: 'POST',
         headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
-        body,
+        body: JSON.stringify(chatRequestBody(prompt, model)),
       });
-      if (!CHAT_BUSY_STATUSES.has(upstream.status) || attempt >= CHAT_BUSY_WAITS_MS.length) break;
-      log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1 }, 'chat_model_busy_retrying');
+      if (!CHAT_BUSY_STATUSES.has(upstream.status) || attempt >= CHAT_BUSY_WAITS_MS.length) {
+        if (attempt > 0 && upstream.ok) log.info({ userId: uid, model, attempt: attempt + 1 }, 'chat_answered_after_busy');
+        break;
+      }
+      log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1, model }, 'chat_model_busy_retrying');
       // Let the refused response go before asking again.
       if (upstream.body && typeof upstream.body.cancel === 'function') {
         await upstream.body.cancel().catch((err) => log.warn({ err, userId: uid }, 'chat_busy_body_cancel_failed'));
@@ -690,4 +703,4 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
   }
 }
 
-module.exports = { noteOverview, CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { chatModels, noteOverview, CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };

@@ -6,7 +6,7 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 // excerpts nearest the question, which can't answer "what was this meeting about" on a 3-hour note. Real
 // Postgres; two accounts, as every query that returns user data is tested (CLAUDE.md §1).
 const require = createRequire(import.meta.url);
-const { noteOverview, buildChatPrompt, handleChatStream } = require('../../services/api/src/routes/search-and-chat.cjs');
+const { noteOverview, buildChatPrompt, handleChatStream, chatModels } = require('../../services/api/src/routes/search-and-chat.cjs');
 const readPool = require('@algominutes/ai/pg-query.cjs').pool();
 
 const noop = () => {};
@@ -126,17 +126,40 @@ describe('POST /v1/chat about one note', () => {
       const waits: number[] = [];
       let calls = 0;
       let counted = 0;
+      const asked: Array<{ model: string; thinking: object }> = [];
       const deps = {
         sleep: async (ms: number) => void waits.push(ms),
         recordChat: async () => void (counted += 1),
-        fetchImpl: async () => {
+        fetchImpl: async (url: string, init: { body: string }) => {
+          asked.push({ model: /models\/([^:]+):/.exec(url)?.[1] ?? '', thinking: JSON.parse(init.body).generationConfig.thinkingConfig });
           const status = statuses[calls] ?? 200;
           calls += 1;
           return status === 200 ? sse() : busy(status);
         },
       };
-      return { deps, waits, calls: () => calls, counted: () => counted };
+      return { deps, waits, asked, calls: () => calls, counted: () => counted };
     };
+
+    // 2026-10-06, 13:58 UTC: the same model answered 429 three times in 25 seconds.
+    it('goes to the next model of the ladder while there is one, with that model\u2019s own request', async () => {
+      const m = answering([429, 429]);
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, { ...m.deps, chatModels: ['gemini-3.5-flash', 'gemini-2.5-flash'] });
+      expect(out.written).toContain('"text":"ok"');
+      expect(m.asked.map((a) => a.model)).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash']);
+      expect(m.asked[0].thinking).toHaveProperty('thinkingLevel');
+      expect(m.asked[1].thinking).toHaveProperty('thinkingBudget');
+    });
+
+    it('with one model left, asks it again', async () => {
+      const m = answering([429]);
+      await ask('alice', { query: 'q', noteId: 'n1' }, { ...m.deps, chatModels: ['gemini-3.5-flash'] });
+      expect(m.asked.map((a) => a.model)).toEqual(['gemini-3.5-flash', 'gemini-3.5-flash']);
+    });
+
+    it('the ladder is the chat model, then what has not retired', () => {
+      expect(chatModels(new Date('2026-10-07T00:00:00Z'))).toEqual(['gemini-3.5-flash', 'gemini-2.5-flash']);
+      expect(chatModels(new Date('2026-10-21T00:00:00Z'))).toEqual(['gemini-3.5-flash']);
+    });
 
     it('is asked again after 429 or 503, and the answer arrives; the chat is counted once', async () => {
       const m = answering([429, 503]);
