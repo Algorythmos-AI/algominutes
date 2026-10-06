@@ -659,6 +659,27 @@ final class APIClient: Sendable {
         return try JSONDecoder().decode(TranscriptPageResponse.self, from: data).transcript
     }
 
+    /// A note's action items with their ids and ticks. The first page of the note read, asked for
+    /// with one transcript line: the items ride on that page whatever its size.
+    func fetchActionItems(noteId: String, workspaceId: String) async throws -> [ActionItemTick] {
+        let req = try await request(path: "v1/notes/read", body: ["noteId": noteId, "workspaceId": workspaceId, "limit": 1])
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.httpError(status: http.statusCode, json: (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+        }
+        return try ActionItemTicks.parse(data)
+    }
+
+    /// Tick or untick one action item. 404 when the item is gone (see `ActionItemTicks.isGone`).
+    @discardableResult
+    func setActionItemDone(noteId: String, workspaceId: String, itemId: String, done: Bool) async throws -> [String: Any] {
+        try await post(
+            path: "v1/notes/action-items/status",
+            body: ["noteId": noteId, "workspaceId": workspaceId, "itemId": itemId, "done": done]
+        )
+    }
+
     /// Streams `/v1/chat`. The stream finishes on `done`, throws on transport
     /// failure, and surfaces server-sent errors as `.serverError` events.
     ///
