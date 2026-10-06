@@ -165,6 +165,10 @@ async function memberWorkspaces(uid, log) {
 /// into a 404 rather than an empty result set.
 // `embed` is the query-embedding call (a seam for tests; production uses the
 // Vertex one above).
+// How long chat waits before asking a busy model again, and what counts as busy.
+const CHAT_BUSY_WAITS_MS = [1000, 3000];
+const CHAT_BUSY_STATUSES = new Set([429, 503]);
+
 async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQuery }) {
   const workspaces = await memberWorkspaces(uid, log);
   if (workspaces.length === 0) return [];
@@ -625,11 +629,26 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
     // Counted as it's asked, as the pipeline's paid work is (best-effort: a failed write is logged, never fatal).
     // Only a well-formed note id rides on the row and its failure log, as on every log line here (noteLog).
     await recordChat({ uid, noteId: noteId && isValidId(noteId) ? noteId : undefined, event: CHAT_EVENT, model: CHAT_MODEL, audioSeconds: null, log });
-    const upstream = await fetchImpl(url, {
-      method: 'POST',
-      headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(chatRequestBody(prompt)),
-    });
+    // A busy model (429 RESOURCE_EXHAUSTED, 503) is asked again, twice, before anything has streamed: it
+    // failed the whole answer on the first refusal (staging, 2026-10-06, twice in a day). The pipeline's
+    // calls have their ladder (gemini-call.cjs); this stream is not one of its callers. Counted once above.
+    const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const body = JSON.stringify(chatRequestBody(prompt));
+    let upstream;
+    for (let attempt = 0; ; attempt += 1) {
+      upstream = await fetchImpl(url, {
+        method: 'POST',
+        headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
+        body,
+      });
+      if (!CHAT_BUSY_STATUSES.has(upstream.status) || attempt >= CHAT_BUSY_WAITS_MS.length) break;
+      log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1 }, 'chat_model_busy_retrying');
+      // Let the refused response go before asking again.
+      if (upstream.body && typeof upstream.body.cancel === 'function') {
+        await upstream.body.cancel().catch((err) => log.warn({ err, userId: uid }, 'chat_busy_body_cancel_failed'));
+      }
+      await sleep(CHAT_BUSY_WAITS_MS[attempt]);
+    }
     if (!upstream.ok || !upstream.body) {
       // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
       const errText = upstream.body ? await responseTextHead(upstream) : '';
@@ -664,7 +683,7 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
     }
     res.write(`event: done\ndata: {}\n\n`);
   } catch (err) {
-    log.error({ err }, 'chat_stream_failed');
+    log.error({ err, userId: uid }, 'chat_stream_failed');
     res.write(`event: error\ndata: ${JSON.stringify({ error: 'stream_failed' })}\n\n`);
   } finally {
     res.end();

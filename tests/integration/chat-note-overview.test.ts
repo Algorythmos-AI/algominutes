@@ -119,6 +119,51 @@ describe('POST /v1/chat about one note', () => {
     return { out, prompt: sent[0] };
   };
 
+  // Staging, 2026-10-06: two chats failed outright on the model's first 429.
+  describe('a busy model', () => {
+    const busy = (status: number) => ({ ok: false, status, body: null });
+    const answering = (statuses: number[]) => {
+      const waits: number[] = [];
+      let calls = 0;
+      let counted = 0;
+      const deps = {
+        sleep: async (ms: number) => void waits.push(ms),
+        recordChat: async () => void (counted += 1),
+        fetchImpl: async () => {
+          const status = statuses[calls] ?? 200;
+          calls += 1;
+          return status === 200 ? sse() : busy(status);
+        },
+      };
+      return { deps, waits, calls: () => calls, counted: () => counted };
+    };
+
+    it('is asked again after 429 or 503, and the answer arrives; the chat is counted once', async () => {
+      const m = answering([429, 503]);
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, m.deps);
+      expect(out.written).toContain('"text":"ok"');
+      expect(out.written).not.toContain('event: error');
+      expect(m.calls()).toBe(3);
+      expect(m.waits).toEqual([1000, 3000]);
+      expect(m.counted()).toBe(1);
+    });
+
+    it('still busy after two more tries: the chat says it failed, and stops asking', async () => {
+      const m = answering([429, 429, 429, 429]);
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, m.deps);
+      expect(out.written).toContain('event: error');
+      expect(m.calls()).toBe(3);
+    });
+
+    it('a refusal that is not "busy" is not asked again', async () => {
+      const m = answering([400]);
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, m.deps);
+      expect(out.written).toContain('event: error');
+      expect(m.calls()).toBe(1);
+      expect(m.waits).toEqual([]);
+    });
+  });
+
   it("sends the model the note's overview", async () => {
     const { prompt } = await ask('alice', { query: 'What was this about?', noteId: 'n1' });
     expect(prompt).toContain('Summary: A planning meeting.');
