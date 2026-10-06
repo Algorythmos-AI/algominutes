@@ -166,7 +166,7 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       call capture) cover them.
     - **Home to recording is three taps, not the two rev 11 targets:** the card, the tick, Start. Two means
       dropping the per-recording tick, which is a consent decision for the owner (CONSENT.md).
-  - **Built in the third train (2026-10-05 to 10-06, #365–#390; integration `6133505`):**
+  - **Built in the third train (2026-10-05 to 10-06, #365–#395; integration `b75a949`):**
     - **iPhone:** Home says how far an upload is and roughly when a note will be ready (#379, H16/UX5); a
       note's summary can be edited by hand (#380, UX12); a search result opens its note at the moment it
       matched (#381, UX8).
@@ -209,9 +209,19 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       (the three small frames found are glyphs inside larger buttons), and no icon-only button lacks a
       VoiceOver label (a pattern search, not a screen-by-screen pass). What is left of UX13 is the VoiceOver
       and large-text pass on a device.
+    - **The rest of H16 (#394, #395):** Home shows the example note until there is a real one, under the
+      same switch as Files; and a guest is asked to make an account when they leave their first summary, not
+      over it (kept across launches; not asked if they made one in the meantime). "On leaving the note" is
+      one reading of the plan's "after reading": a timer or a scroll is a few lines if the owner prefers.
+      387 unit tests on the simulator. **Not verified on a device,** in particular that every way out of
+      the note screen (a tab switch, not only Back) raises the prompt.
+    - **Dependabot alert 15 closed (#392):** `http-cache-semantics` 4.2.0 to 4.3.0 in the lockfile (Astro's
+      site build only). **Alerts 11 and 12 stay open:** `@grpc/grpc-js` < 1.13.6 comes from
+      `@firebase/firestore` 4.17.2, which pins `~1.9.0`, and firebase 12.19.0 is the latest.
+    - **Seen once:** `image (billing)` sat in "waiting" for ten minutes on the deploy of #392 while the other
+      image jobs finished; cancelling and re-running the unfinished jobs passed (run 37439623593).
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
-    mixed ADTS stream needs a device to build against), the rest of H16 (the example note on Home, the account
-    prompt's timing, the naming half of one vocabulary), the rest of UX12 (the summary first), the VoiceOver
+    mixed ADTS stream needs a device to build against), the naming half of one vocabulary (H16), the rest of UX12 (the summary first), the VoiceOver
     pass of UX13 on a device,
     Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
   - [x] **Apply D applied (2026-10-05, `reviewed-9992dc9.tfplan`: 4 added, 10 changed, 2 destroyed).** Verified:
