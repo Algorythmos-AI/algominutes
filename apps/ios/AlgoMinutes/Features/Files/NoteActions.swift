@@ -49,7 +49,7 @@ struct NoteContextMenu: View {
                     }
                 }
             } label: {
-                Label("Retry processing", systemImage: "arrow.clockwise")
+                Label("Try again", systemImage: "arrow.clockwise")
             }
         }
         Divider()

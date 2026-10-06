@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// A7.4: shows a plain-English cause derived from the note's `diagnosticCode`
 /// (falling back to the server `errorMessage`) plus which pipeline stage failed,
-/// so "Processing failed" is no longer the whole story. The single "Try again"
+/// so "Couldn’t process" is no longer the whole story. The single "Try again"
 /// recovery is unchanged — it still routes through `AppEnvironment.retry(note:)`,
 /// which re-uploads from disk when the local recording is still held.
 ///
@@ -27,9 +27,9 @@ struct NoteErrorPane: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.heading)
-                // Decorative — the "Processing failed" heading below carries the meaning.
+                // Decorative — the "Couldn’t process" heading below carries the meaning.
                 .accessibilityHidden(true)
-            Text("Processing failed")
+            Text("Couldn’t process")
                 .font(Typography.heading(18, weight: .bold))
                 .foregroundStyle(Theme.heading)
 

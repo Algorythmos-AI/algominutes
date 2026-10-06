@@ -48,7 +48,7 @@ final class HomeRecentNotesTests: XCTestCase {
     }
 
     func testThereIsNoEstimateWithoutARecordingLength() {
-        XCTAssertEqual(HomeView.recentStatus(note("a", at: started, status: "summarizing"), now: at(minutes: 2)), "Summarizing…")
+        XCTAssertEqual(HomeView.recentStatus(note("a", at: started, status: "summarizing"), now: at(minutes: 2)), "Summarising…")
         XCTAssertNil(HomeView.processingEstimate(note("a", at: started, status: "summarizing", duration: 0), now: at(minutes: 2)))
     }
 
@@ -80,6 +80,6 @@ final class HomeRecentNotesTests: XCTestCase {
         XCTAssertEqual(HomeView.recentStatus(note("a", at: at, status: "error")), "Couldn’t process")
         XCTAssertEqual(HomeView.recentStatus(note("a", at: at, status: "awaiting_minutes")), "Waiting for minutes")
         XCTAssertEqual(HomeView.recentStatus(note("a", at: at, status: "transcribing")), "Transcribing…")
-        XCTAssertEqual(HomeView.recentStatus(note("a", at: at, status: "summarizing")), "Summarizing…")
+        XCTAssertEqual(HomeView.recentStatus(note("a", at: at, status: "summarizing")), "Summarising…")
     }
 }

@@ -142,7 +142,7 @@ struct TranscriptPane: View {
                 .font(Typography.body(12))
                 .foregroundStyle(Theme.muted)
             if let onRetry {
-                Button("Retry", action: onRetry)
+                Button("Try again", action: onRetry)
                     .font(Typography.label(12))
                     .foregroundStyle(Theme.heading)
             }

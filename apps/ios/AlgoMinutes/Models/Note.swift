@@ -10,13 +10,13 @@ enum NoteStatus: String, Codable, CaseIterable, Sendable {
     var label: String {
         switch self {
         case .recording: return "Recording"
-        case .processing: return "Processing"
-        case .queued: return "Queued"
-        case .chunking: return "Chunking audio"
+        case .processing: return "Waiting to start"
+        case .queued: return "Waiting to start"
+        case .chunking: return "Transcribing"
         case .transcribing: return "Transcribing"
-        case .summarizing: return "Summarizing"
+        case .summarizing: return "Summarising"
         case .ready: return "Ready"
-        case .error: return "Error"
+        case .error: return "Couldn’t process"
         case .awaitingMinutes: return "Waiting for minutes"
         }
     }

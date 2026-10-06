@@ -105,7 +105,7 @@ enum RecordingNotifier {
     static func noteFinished(noteId: String, title: String, ready: Bool) {
         guard UIApplication.shared.applicationState != .active else { return }
         let content = UNMutableNotificationContent()
-        content.title = ready ? "Your notes are ready" : "Processing failed"
+        content.title = ready ? "Your notes are ready" : "Couldn’t process your recording"
         content.body = ready
             ? "\(title) is ready to read."
             : "\(title) couldn't be processed. Tap to try again."
