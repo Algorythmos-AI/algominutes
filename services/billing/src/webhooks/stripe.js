@@ -9,7 +9,7 @@
 //   customer.subscription.deleted → cancellation (keep period end = grace)
 //   invoice.paid                 → renewal
 //   invoice.payment_failed       → billing retry / grace period (past_due)
-//   charge.refunded              → refund (revoke immediately)
+//   charge.refunded              → a refund of the whole charge revokes immediately; a partial one doesn't
 //
 // uid resolution: checkout.session.completed is the ONE event that carries the
 // uid directly (client_reference_id / metadata, set at checkout) — the sub row
@@ -20,6 +20,7 @@
 import {
   activateSubscription,
   cancelIfAccountDeleted,
+  getSubscription,
   setSubscriptionStatus,
   findUidByRailId,
   trackEvent,
@@ -206,9 +207,25 @@ export async function stripeWebhookRoute(req, res) {
         log.warn({ customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
         break;
       }
+      // Only a refund of the whole charge ends Pro (RELEASE.md rev 11, H21). A partial one (a goodwill
+      // credit, a prorated plan change) took it away too. Stripe sends this event for every refund of a
+      // charge, with the running total: `refunded` is true once nothing is left.
+      const amount = Number(charge.amount);
+      const amountRefunded = Number(charge.amount_refunded);
+      const whole = charge.refunded === true || (amount > 0 && amountRefunded >= amount);
+      if (!whole) {
+        log.info({ uid, userId: uid, amount, amountRefunded, event: 'stripe_partial_refund' }, 'stripe_partial_refund');
+        break;
+      }
+      // Delivered at least once: a replay must not move the end again or count a second cancellation.
+      const current = await getSubscription(uid);
+      if (current?.status === 'refunded') {
+        log.info({ uid, userId: uid, event: 'stripe_refund_replayed' }, 'stripe_refund_replayed');
+        break;
+      }
       await setSubscriptionStatus(uid, 'refunded', new Date().toISOString());
       await trackEvent({ uid, event: 'cancellation', props: { rail: 'stripe', reason: 'refund' } });
-      log.info({ uid, event: 'stripe_refunded' }, 'stripe_refunded');
+      log.info({ uid, userId: uid, event: 'stripe_refunded' }, 'stripe_refunded');
       break;
     }
 
