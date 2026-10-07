@@ -70,7 +70,9 @@ const TOMBSTONE_DAYS = 30;
 const USAGE_EVENTS_DAYS = 90;
 const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
 const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
-const MIRROR_REPAIR_LIMIT = 200;
+const MIRROR_REPAIR_PAGE = 200;
+// Paged through the whole window (audit Q20), within this share of the sweep's 900 s.
+const MIRROR_REPAIR_BUDGET_MS = 5 * 60 * 1000;
 // Held notes offered to the kickoff per sweep, oldest first (the rest wait for the next run).
 const HELD_RESUME_LIMIT = 100;
 const NOTICE_RETRY_AFTER_S = 5 * 60; // the writer's own enqueue goes first
@@ -299,25 +301,39 @@ async function run({
     // mirror-repair.ts): checked twice while 10-40 minutes old, repaired only
     // if Postgres says finished and the doc hasn't moved since it was read.
     await step('mirror_repair', async () => {
-      const notes = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: MIRROR_REPAIR_LIMIT });
-      // Oldest first, so at the limit the newest of this window wait for the
-      // next run, and some may age out unchecked.
-      if (notes.length === MIRROR_REPAIR_LIMIT) log.warn({ limit: MIRROR_REPAIR_LIMIT }, 'mirror_repair_limit_reached');
+      // Every note in the window, a page at a time by the (updated_at, id)
+      // watermark (audit Q20). Only the time budget stops it early, and says so:
+      // the rest are the next run's (each note is in two runs' windows).
+      const started = Date.now();
       let repaired = 0;
       let failedRepairs = 0;
-      for (const n of notes) {
-        const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
-        try {
-          const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
-          if (outcome === 'repaired') {
-            repaired += 1;
-            log.warn({ ...fields, status: n.status }, 'mirror_repaired');
-          }
-        } catch (err) {
-          failedRepairs += 1;
-          log.error({ err, ...fields }, 'mirror_repair_failed');
+      let checked = 0;
+      let after = null;
+      do {
+        if (Date.now() - started > MIRROR_REPAIR_BUDGET_MS) {
+          // Where it stopped, so what was left can be measured: one cut-off run is covered by the next
+          // (each note is in two runs' windows), two in a row leave the notes between them unchecked.
+          log.warn({ checked, budgetMs: MIRROR_REPAIR_BUDGET_MS, reachedUpdatedAt: after && after.updatedAt }, 'mirror_repair_budget_reached');
+          break;
         }
-      }
+        const page = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: MIRROR_REPAIR_PAGE, after });
+        const notes = page.notes;
+        after = page.next;
+        checked += notes.length;
+        for (const n of notes) {
+          const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
+          try {
+            const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
+            if (outcome === 'repaired') {
+              repaired += 1;
+              log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+            }
+          } catch (err) {
+            failedRepairs += 1;
+            log.error({ err, ...fields }, 'mirror_repair_failed');
+          }
+        }
+      } while (after);
       if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
       return repaired;
     });
