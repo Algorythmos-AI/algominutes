@@ -30,6 +30,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import redaction from '@algominutes/ai/redaction.cjs';
 import loggerModule from '@algominutes/ai/logger.cjs';
 import { getPool } from './db';
+import { refusedUpdateOutcome } from './firestore-outcome';
 
 type Log = { error: (o: unknown, m?: string) => void };
 const defaultLog = (loggerModule as { logger: Log }).logger;
@@ -172,12 +173,11 @@ export async function repairNoteMirror(
   }
   try {
     await ref.update(patch, { lastUpdateTime: snap.updateTime });
-  } catch (err: any) {
+  } catch (err: unknown) {
     // silent-catch-ok: a newer mirror write or a deleted note is the outcome 'moved' or 'gone', not a failure
-    // FAILED_PRECONDITION: a writer mirrored since the read; it is newer.
-    if (err && (err.code === 9 || /FAILED_PRECONDITION/.test(String(err.message)))) return 'moved';
-    // NOT_FOUND: the note was deleted since the read.
-    if (err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message)))) return 'gone';
+    // (firestore-outcome.ts, pinned against the emulator); anything else is thrown.
+    const refused = refusedUpdateOutcome(err);
+    if (refused) return refused;
     throw err;
   }
   return 'repaired';
