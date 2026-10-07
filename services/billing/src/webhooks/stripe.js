@@ -19,7 +19,9 @@
 import {
   activateSubscription,
   cancelIfAccountDeleted,
+  deriveState,
   getSubscription,
+  queueStripeCancellation,
   setSubscriptionStatus,
   findUidByRailId,
   trackEvent,
@@ -155,6 +157,20 @@ export async function stripeWebhookRoute(req, res) {
       // (activating would fail the deleted user's foreign key, and Stripe would go on charging).
       if (await cancelIfAccountDeleted(uid, subscriptionId, req.traceId)) {
         log.warn({ uid, userId: uid, subscriptionId, event: 'stripe_checkout_after_deletion' }, 'stripe_checkout_after_deletion');
+        break;
+      }
+      // A second subscription for an account that is already paying (RELEASE.md rev 11, H21): two
+      // checkouts open at once both pass the pre-purchase check, and the second completion used to
+      // replace the first on the row, leaving the first charging with nothing pointing at it. The one the
+      // account is on stands; this one is cancelled by the cancel-stripe task. Its first payment is NOT
+      // refunded from here: this line is the alert to refund it by hand.
+      const paying = await getSubscription(uid);
+      if (paying && deriveState(paying) === 'active' && paying.stripe_subscription_id !== subscriptionId) {
+        await queueStripeCancellation(subscriptionId, req.traceId);
+        log.error(
+          { uid, userId: uid, subscriptionId, customerId, onRail: paying.source || null, onSubscriptionId: paying.stripe_subscription_id || null, event: 'stripe_duplicate_subscription' },
+          'stripe_duplicate_subscription',
+        );
         break;
       }
       // Retrieve the subscription to read the price (plan) + current_period_end.

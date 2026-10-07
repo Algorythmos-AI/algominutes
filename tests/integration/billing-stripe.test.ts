@@ -9,7 +9,7 @@ import { pool, resetDb, seedUser } from './helpers';
 // with API-shaped objects. It pins what a Stripe SDK major could change: the
 // requests (paths, form fields, the pinned Stripe-Version), the shapes our
 // handlers read back, and webhook signature checking. Real Postgres.
-type Seen = { method: string; path: string; version: string | undefined; form: URLSearchParams };
+type Seen = { method: string; path: string; version: string | undefined; form: URLSearchParams; key?: string };
 const seen: Seen[] = [];
 const PERIOD_END = 1_790_000_000;
 
@@ -24,7 +24,7 @@ const server = http.createServer((req, res) => {
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     const path = (req.url || '').split('?')[0];
-    seen.push({ method: req.method || '', path, version: req.headers['stripe-version'] as string | undefined, form: new URLSearchParams(body) });
+    seen.push({ method: req.method || '', path, version: req.headers['stripe-version'] as string | undefined, form: new URLSearchParams(body), key: req.headers['idempotency-key'] as string | undefined });
     const reply = (status: number, obj: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (req.method === 'POST' && path === '/v1/billing_portal/sessions') return reply(200, { id: 'bps_1', object: 'billing_portal.session', url: 'https://billing.stripe.test/p/session/1' });
     if (req.method === 'POST' && path === '/v1/checkout/sessions') return reply(200, { id: 'cs_1', object: 'checkout.session', url: 'https://checkout.stripe.test/c/pay/cs_1' });
@@ -311,5 +311,79 @@ describe('Stripe: an event is a reason to look, not the state', () => {
     });
     expect((await send(renewal)).status).toBe(200);
     expect((await sub()).current_period_end).toEqual(new Date(later * 1000));
+  });
+});
+
+// RELEASE.md rev 11, H21: two checkouts open at once both passed the pre-purchase check, and the second
+// completion replaced the first on the row, leaving the first charging with nothing pointing at it.
+describe('Stripe: one subscription per account', () => {
+  const send = (e: unknown) => call(billing.webhook.stripeWebhookRoute, signed(e));
+  const completed = (id: string, subscription: string) => ({
+    ...checkoutCompleted, id, data: { object: { ...checkoutCompleted.data.object, id: `cs_${subscription}`, subscription } },
+  });
+  const queued = async () => (await pool.query(`SELECT stripe_subscription_id FROM stripe_cancellations ORDER BY 1`)).rows.map((r) => r.stripe_subscription_id);
+  // A period that is still running: the file's PERIOD_END is a fixed date, and by now a past one.
+  const RUNNING = Math.floor(Date.now() / 1000) + 20 * 86400;
+  beforeEach(() => { stripeSubs.sub_1.current_period_end = RUNNING; });
+
+  it('the same buyer asking twice gets the same idempotency key; another buyer, price or window gets another', async () => {
+    await seedUser('u2');
+    await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } });
+    await call(billing.checkout.checkoutRoute, { uid: 'u1', body: { productId: 'pro_monthly' } });
+    await call(billing.checkout.checkoutRoute, { uid: 'u2', body: { productId: 'pro_monthly' } });
+    const keys = seen.filter((r) => r.path === '/v1/checkout/sessions').map((r) => r.key);
+    expect(keys[0]).toMatch(/^checkout_[0-9a-f]{64}$/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys.join()).not.toContain('u1');
+
+    const { checkoutIdempotencyKey } = billing.checkout;
+    const base = { uid: 'u1', priceId: 'price_a', successUrl: 'https://a/s', cancelUrl: 'https://a/c', customerId: null };
+    const at = 1_800_000_000_000;
+    expect(checkoutIdempotencyKey(base, at + 60_000)).toBe(checkoutIdempotencyKey(base, at));
+    expect(checkoutIdempotencyKey(base, at + 11 * 60_000)).not.toBe(checkoutIdempotencyKey(base, at));
+    expect(checkoutIdempotencyKey({ ...base, priceId: 'price_b' }, at)).not.toBe(checkoutIdempotencyKey(base, at));
+    expect(checkoutIdempotencyKey({ ...base, successUrl: 'https://b/s' }, at)).not.toBe(checkoutIdempotencyKey(base, at));
+  });
+
+  it('a second subscription completing for a paying account is queued for cancellation, and the first stands', async () => {
+    stripeSubs.sub_2 = { ...SUB_1(), id: 'sub_2', current_period_end: RUNNING };
+    await send(completed('evt_d1', 'sub_1'));
+    seen.length = 0;
+    const r = await send(completed('evt_d2', 'sub_2'));
+    expect(r.status).toBe(200);
+    expect(await sub()).toMatchObject({ status: 'active', stripe_subscription_id: 'sub_1' });
+    expect(await queued()).toEqual(['sub_2']);
+    expect(seen).toEqual([]); // the duplicate is never read or activated
+    // Delivered again: still one row in the queue, still the first subscription.
+    await send(completed('evt_d2', 'sub_2'));
+    expect(await queued()).toEqual(['sub_2']);
+    expect((await sub()).stripe_subscription_id).toBe('sub_1');
+  });
+
+  it("the account's own completion delivered again is not a duplicate", async () => {
+    await send(completed('evt_d3', 'sub_1'));
+    await send(completed('evt_d3', 'sub_1'));
+    expect(await queued()).toEqual([]);
+    expect(await sub()).toMatchObject({ status: 'active', stripe_subscription_id: 'sub_1' });
+  });
+
+  it('paying through the App Store already: the Stripe subscription is the duplicate', async () => {
+    await pool.query(
+      `INSERT INTO subscriptions (uid, plan, status, entitlement_state, source, current_period_end, apple_original_transaction_id)
+       VALUES ('u1', 'pro', 'active', 'active', 'apple_storekit', NOW() + INTERVAL '20 days', '2000000000000001')`,
+    );
+    await send(completed('evt_d4', 'sub_1'));
+    expect(await queued()).toEqual(['sub_1']);
+    expect(await sub()).toMatchObject({ source: 'apple_storekit', stripe_subscription_id: null });
+  });
+
+  it('a lapsed subscriber buying again is activated on the new subscription', async () => {
+    stripeSubs.sub_2 = { ...SUB_1(), id: 'sub_2', current_period_end: RUNNING };
+    await send(completed('evt_d5', 'sub_1'));
+    await pool.query(`UPDATE subscriptions SET current_period_end = NOW() - INTERVAL '1 day', status = 'canceled' WHERE uid = 'u1'`);
+    await send(completed('evt_d6', 'sub_2'));
+    expect(await queued()).toEqual([]);
+    expect(await sub()).toMatchObject({ status: 'active', stripe_subscription_id: 'sub_2' });
   });
 });
