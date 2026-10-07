@@ -1,6 +1,7 @@
 // POST /tasks/cancel-stripe (Cloud Scheduler, every 15 minutes, OIDC as run-jobs; RELEASE.md PR 28b).
 //
-// A deleted account's Stripe subscription would go on charging: account deletion removes the subscriptions
+// Two kinds of subscription end up here. A second one for an account that is already paying (RELEASE.md
+// rev 11, H21: queued by the checkout webhook). And a deleted account's, which would go on charging: account deletion removes the subscriptions
 // row, and Stripe knows nothing of it. The deletion (or a checkout webhook arriving after it) records the
 // subscription in stripe_cancellations; this cancels each with Stripe: immediately, with no proration and
 // no final invoice. One already over (canceled, expired, or gone from Stripe) is simply marked done.

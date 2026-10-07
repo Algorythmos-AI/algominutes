@@ -19,6 +19,9 @@ const SUB_1 = () => ({
   items: { object: 'list', data: [{ id: 'si_1', object: 'subscription_item', price: { id: 'price_test_pro', object: 'price' } } as Record<string, unknown>] },
 });
 const stripeSubs: Record<string, ReturnType<typeof SUB_1>> = {};
+// Which subscription each invoice is for, and whether Stripe is answering at all.
+const stripeInvoices: Record<string, string> = {};
+let stripeDown = false;
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -29,7 +32,13 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && path === '/v1/billing_portal/sessions') return reply(200, { id: 'bps_1', object: 'billing_portal.session', url: 'https://billing.stripe.test/p/session/1' });
     if (req.method === 'POST' && path === '/v1/checkout/sessions') return reply(200, { id: 'cs_1', object: 'checkout.session', url: 'https://checkout.stripe.test/c/pay/cs_1' });
     const subId = /^\/v1\/subscriptions\/(sub_\w+)$/.exec(path)?.[1];
-    if (req.method === 'GET' && subId && stripeSubs[subId]) return reply(200, stripeSubs[subId]);
+    if (req.method === 'GET' && subId) {
+      if (stripeDown) return reply(500, { error: { type: 'api_error', message: 'Stripe is having a moment' } });
+      if (stripeSubs[subId]) return reply(200, stripeSubs[subId]);
+      return reply(404, { error: { type: 'invalid_request_error', code: 'resource_missing', message: `No such subscription: '${subId}'` } });
+    }
+    const invId = /^\/v1\/invoices\/(in_\w+)$/.exec(path)?.[1];
+    if (req.method === 'GET' && invId && stripeInvoices[invId]) return reply(200, { id: invId, object: 'invoice', customer: 'cus_1', subscription: stripeInvoices[invId] });
     return reply(404, { error: { type: 'invalid_request_error', message: `no route ${req.method} ${path}` } });
   });
 });
@@ -57,6 +66,9 @@ beforeEach(async () => {
   seen.length = 0;
   for (const k of Object.keys(stripeSubs)) delete stripeSubs[k];
   stripeSubs.sub_1 = SUB_1();
+  for (const k of Object.keys(stripeInvoices)) delete stripeInvoices[k];
+  stripeInvoices.in_sub1 = 'sub_1';
+  stripeDown = false;
   await resetDb();
   await seedUser('u1');
 });
@@ -212,7 +224,7 @@ describe('Stripe: the webhook', () => {
 describe('Stripe: refunds', () => {
   const refund = (id: string, charge: Record<string, unknown>) => ({
     id, object: 'event', type: 'charge.refunded',
-    data: { object: { id: 'ch_1', object: 'charge', customer: 'cus_1', amount: 2900, ...charge } },
+    data: { object: { id: 'ch_1', object: 'charge', customer: 'cus_1', amount: 2900, invoice: 'in_sub1', ...charge } },
   });
   const cancellations = async () => Number((await pool.query(
     `SELECT COUNT(*)::int AS n FROM analytics_events WHERE uid = 'u1' AND event = 'cancellation'`,
@@ -239,6 +251,18 @@ describe('Stripe: refunds', () => {
     expect((await call(billing.webhook.stripeWebhookRoute, signed(full))).status).toBe(200);
     expect((await sub()).current_period_end).toEqual(moved);
     expect(await cancellations()).toBe(1);
+  });
+
+  // From the audit of the duplicate-subscription change: the account is found by the charge's customer, and
+  // the refund it asks for by hand (the duplicate's first payment) is a whole refund on that customer.
+  it("a whole refund of another subscription's charge, or of a charge with no invoice, keeps Pro", async () => {
+    await call(billing.webhook.stripeWebhookRoute, signed(checkoutCompleted));
+    stripeInvoices.in_dup = 'sub_2';
+    await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r5', { id: 'ch_dup', invoice: 'in_dup', amount_refunded: 2900, refunded: true })));
+    expect((await sub()).status).toBe('active');
+    await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r6', { id: 'ch_oneoff', invoice: null, amount_refunded: 2900, refunded: true })));
+    expect((await sub()).status).toBe('active');
+    expect(await cancellations()).toBe(0);
   });
 
   it('refunded in parts until nothing is left: Pro ends with the last part', async () => {
@@ -294,7 +318,31 @@ describe('Stripe: an event is a reason to look, not the state', () => {
     expect(await cancellations()).toBe(0);
   });
 
-  it("Stripe can't be asked: a failed payment is past due, and an update is taken as it came", async () => {
+  it('Stripe is down: the event is not acknowledged, nothing is written, and Stripe will deliver it again', async () => {
+    stripeDown = true;
+    await expect(send(event('evt_o9', 'customer.subscription.updated', { ...SUB_1(), status: 'canceled' }))).rejects.toThrow();
+    expect((await sub()).status).toBe('active');
+  }, 30_000);
+
+  it("the duplicate's first invoice doesn't move the account onto the duplicate", async () => {
+    stripeSubs.sub_2 = { ...SUB_1(), id: 'sub_2', current_period_end: PERIOD_END + 999 };
+    const r = await send(event('evt_o10', 'invoice.paid', { id: 'in_dup', object: 'invoice', subscription: 'sub_2', customer: 'cus_1' }));
+    expect(r.status).toBe(200);
+    expect(await sub()).toMatchObject({ stripe_subscription_id: 'sub_1', current_period_end: new Date(PERIOD_END * 1000) });
+  });
+
+  it("an account that moved to the App Store isn't touched by its old Stripe subscription ending", async () => {
+    await pool.query(
+      `UPDATE subscriptions SET source = 'apple_storekit', apple_original_transaction_id = '2000000000000001',
+              current_period_end = '2030-01-01T00:00:00Z' WHERE uid = 'u1'`,
+    );
+    stripeSubs.sub_1.status = 'canceled';
+    await send(event('evt_o11', 'customer.subscription.deleted', { ...SUB_1(), status: 'canceled' }));
+    expect(await sub()).toMatchObject({ source: 'apple_storekit', status: 'active', current_period_end: new Date('2030-01-01T00:00:00Z') });
+    expect(await cancellations()).toBe(0);
+  });
+
+  it('gone from Stripe: a failed payment is past due, and an update is taken as it came', async () => {
     delete stripeSubs.sub_1;
     await send(event('evt_o6', 'invoice.payment_failed', { id: 'in_3', object: 'invoice', subscription: 'sub_1', customer: 'cus_1' }));
     expect((await sub()).status).toBe('past_due');
@@ -338,11 +386,12 @@ describe('Stripe: one subscription per account', () => {
     expect(keys.join()).not.toContain('u1');
 
     const { checkoutIdempotencyKey } = billing.checkout;
-    const base = { uid: 'u1', priceId: 'price_a', successUrl: 'https://a/s', cancelUrl: 'https://a/c', customerId: null };
+    const base = { uid: 'u1', productId: 'pro_monthly', priceId: 'price_a', successUrl: 'https://a/s', cancelUrl: 'https://a/c', customerId: null };
     const at = 1_800_000_000_000;
     expect(checkoutIdempotencyKey(base, at + 60_000)).toBe(checkoutIdempotencyKey(base, at));
     expect(checkoutIdempotencyKey(base, at + 11 * 60_000)).not.toBe(checkoutIdempotencyKey(base, at));
     expect(checkoutIdempotencyKey({ ...base, priceId: 'price_b' }, at)).not.toBe(checkoutIdempotencyKey(base, at));
+    expect(checkoutIdempotencyKey({ ...base, productId: 'pro_annual' }, at)).not.toBe(checkoutIdempotencyKey(base, at));
     expect(checkoutIdempotencyKey({ ...base, successUrl: 'https://b/s' }, at)).not.toBe(checkoutIdempotencyKey(base, at));
   });
 
