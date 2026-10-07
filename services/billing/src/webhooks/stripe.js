@@ -5,10 +5,9 @@
 // Then we drive the entitlement state machine through the repo:
 //
 //   checkout.session.completed   → grant (first activation; carries uid)
-//   customer.subscription.updated → renew / grace / cancellation reflect
-//   customer.subscription.deleted → cancellation (keep period end = grace)
 //   invoice.paid                 → renewal
-//   invoice.payment_failed       → billing retry / grace period (past_due)
+//   customer.subscription.updated, customer.subscription.deleted, invoice.payment_failed
+//                                → the subscription is read back from Stripe, and that is what's written
 //   charge.refunded              → a refund of the whole charge revokes immediately; a partial one doesn't
 //
 // uid resolution: checkout.session.completed is the ONE event that carries the
@@ -47,11 +46,79 @@ function isoFromUnix(seconds) {
   return seconds ? new Date(Number(seconds) * 1000).toISOString() : null;
 }
 
+/** An id that Stripe gives as a string, or as the expanded object. */
+function idOf(ref) {
+  if (!ref) return null;
+  return typeof ref === 'string' ? ref : ref.id || null;
+}
+
+/**
+ * When a subscription's paid period ends. Stripe moved it: on the subscription itself up to the 2025-02
+ * API, on its items from 2025-03 (`items.data[0].current_period_end`). The account's API version decides
+ * what a webhook carries, whatever version this service pins for its own calls, so both are read.
+ */
+function periodEndOf(subscription) {
+  return subscription?.current_period_end ?? subscription?.items?.data?.[0]?.current_period_end ?? null;
+}
+
+/** The subscription an invoice is for: `invoice.subscription`, or under `parent` from the 2025-03 API. */
+function subscriptionOfInvoice(invoice) {
+  return idOf(invoice?.subscription) || idOf(invoice?.parent?.subscription_details?.subscription);
+}
+
 /** Pull plan + currentPeriodEnd off a Stripe Subscription object. */
 function planAndPeriod(subscription) {
   const priceId = subscription?.items?.data?.[0]?.price?.id || null;
   const { plan } = planFromStripePriceId(priceId);
-  return { plan, currentPeriodEnd: isoFromUnix(subscription?.current_period_end) };
+  return { plan, currentPeriodEnd: isoFromUnix(periodEndOf(subscription)) };
+}
+
+/**
+ * The subscription as Stripe has it now (RELEASE.md rev 11, H21). Events arrive late, twice and out of
+ * order: a "past due" from before a renewal, replayed after it, used to put a paid account back in
+ * arrears. Each event is only a reason to look; what is written is what Stripe says at that moment.
+ * Null when it can't be read (gone from Stripe, or Stripe unreachable): the caller falls back to the event.
+ */
+async function currentSubscription(stripe, subscriptionId, log) {
+  try {
+    return await stripe.subscriptions.retrieve(subscriptionId);
+  } catch (err) {
+    log.warn({ err, subscriptionId, event: 'stripe_subscription_unreadable' }, 'stripe_subscription_unreadable');
+    return null;
+  }
+}
+
+/**
+ * True when the event is about a Stripe subscription other than the one this account is on. A second
+ * subscription for the same customer (an abandoned duplicate, an older one cancelled later) must not
+ * change the standing of the one that is paid.
+ */
+function aboutAnotherSubscription(row, subscriptionId) {
+  return Boolean(row?.stripe_subscription_id && subscriptionId && row.stripe_subscription_id !== subscriptionId);
+}
+
+/** Write what Stripe says a subscription is. Returns the status written. */
+async function reflect({ uid, subscription, customerId, row }) {
+  const { plan, currentPeriodEnd } = planAndPeriod(subscription);
+  const status = subscription.status; // active | trialing | past_due | canceled | unpaid | incomplete | ...
+  if ((status === 'active' || status === 'trialing') && currentPeriodEnd) {
+    await activateSubscription({
+      uid,
+      rail: 'stripe',
+      plan,
+      currentPeriodEnd,
+      stripeSubscriptionId: subscription.id,
+      stripeCustomerId: customerId,
+    });
+    return 'active';
+  }
+  // Cancelled, in arrears, unpaid: the status changes and the paid period stands (grace).
+  await setSubscriptionStatus(uid, status, currentPeriodEnd);
+  // Counted when it becomes cancelled, not each time an event says so.
+  if (status === 'canceled' && row?.status !== 'canceled') {
+    await trackEvent({ uid, event: 'cancellation', props: { rail: 'stripe' } });
+  }
+  return status;
 }
 
 export async function stripeWebhookRoute(req, res) {
@@ -78,8 +145,8 @@ export async function stripeWebhookRoute(req, res) {
     case 'checkout.session.completed': {
       const session = event.data.object;
       const uid = session.client_reference_id || session.metadata?.uid || null;
-      const subscriptionId = session.subscription || null;
-      const customerId = session.customer || null;
+      const subscriptionId = idOf(session.subscription);
+      const customerId = idOf(session.customer);
       if (!uid || !subscriptionId) {
         log.error({ uid, subscriptionId, event: 'stripe_checkout_incomplete' }, 'stripe_checkout_incomplete');
         break;
@@ -114,8 +181,8 @@ export async function stripeWebhookRoute(req, res) {
     case 'invoice.paid': {
       // Renewal (or first invoice). Re-grant with the fresh period end.
       const invoice = event.data.object;
-      const subscriptionId = invoice.subscription || null;
-      const customerId = invoice.customer || null;
+      const subscriptionId = subscriptionOfInvoice(invoice);
+      const customerId = idOf(invoice.customer);
       const uid = await resolveUid({ subscriptionId, customerId });
       if (!uid || !subscriptionId) {
         log.warn({ subscriptionId, customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
@@ -136,72 +203,46 @@ export async function stripeWebhookRoute(req, res) {
       break;
     }
 
-    case 'invoice.payment_failed': {
-      // Dunning: billing retry / grace period. Keep current_period_end so
-      // deriveState leaves the user active until it actually lapses.
-      const invoice = event.data.object;
-      const subscriptionId = invoice.subscription || null;
-      const customerId = invoice.customer || null;
-      const uid = await resolveUid({ subscriptionId, customerId });
-      if (!uid) {
-        log.warn({ subscriptionId, customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
-        break;
-      }
-      await setSubscriptionStatus(uid, 'past_due');
-      log.info({ uid, subscriptionId, event: 'stripe_past_due' }, 'stripe_past_due');
-      break;
-    }
-
-    case 'customer.subscription.updated': {
-      // Reflects status changes: active (grace resolved), past_due, canceled at
-      // period end, etc. Mirror the status; keep the period end for grace.
-      const subscription = event.data.object;
-      const subscriptionId = subscription.id;
-      const customerId = subscription.customer || null;
-      const uid = await resolveUid({ subscriptionId, customerId });
-      if (!uid) {
-        log.warn({ subscriptionId, customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
-        break;
-      }
-      const { plan, currentPeriodEnd } = planAndPeriod(subscription);
-      const status = subscription.status; // active | past_due | canceled | unpaid | trialing | ...
-      if (status === 'active' && currentPeriodEnd) {
-        await activateSubscription({
-          uid,
-          rail: 'stripe',
-          plan,
-          currentPeriodEnd,
-          stripeSubscriptionId: subscriptionId,
-          stripeCustomerId: customerId,
-        });
-      } else {
-        await setSubscriptionStatus(uid, status, currentPeriodEnd);
-      }
-      log.info({ uid, subscriptionId, status, currentPeriodEnd, event: 'stripe_updated' }, 'stripe_updated');
-      break;
-    }
-
+    case 'invoice.payment_failed':
+    case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
-      // Cancellation. Keep current_period_end (grace) — deriveState flips to
-      // free_floor once it passes.
-      const subscription = event.data.object;
-      const subscriptionId = subscription.id;
-      const customerId = subscription.customer || null;
+      // Each of these says "something changed": a failed payment (dunning), a status change, a
+      // cancellation. None is trusted for what the subscription is now; Stripe is asked.
+      const object = event.data.object;
+      const isInvoice = event.type === 'invoice.payment_failed';
+      const subscriptionId = isInvoice ? subscriptionOfInvoice(object) : object.id;
+      const customerId = idOf(object.customer);
       const uid = await resolveUid({ subscriptionId, customerId });
       if (!uid) {
         log.warn({ subscriptionId, customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
         break;
       }
-      await setSubscriptionStatus(uid, 'canceled', isoFromUnix(subscription.current_period_end));
-      await trackEvent({ uid, event: 'cancellation', props: { rail: 'stripe' } });
-      log.info({ uid, subscriptionId, event: 'stripe_canceled' }, 'stripe_canceled');
+      const row = await getSubscription(uid);
+      if (aboutAnotherSubscription(row, subscriptionId)) {
+        log.warn(
+          { uid, userId: uid, subscriptionId, onSubscriptionId: row.stripe_subscription_id, event: 'stripe_event_for_other_subscription' },
+          'stripe_event_for_other_subscription',
+        );
+        break;
+      }
+      // Unreadable: the event's own object is all there is. An invoice carries no subscription state, so
+      // a failed payment falls back to what it always meant.
+      const subscription = (subscriptionId && (await currentSubscription(stripe, subscriptionId, log)))
+        || (isInvoice ? null : object);
+      if (!subscription) {
+        await setSubscriptionStatus(uid, 'past_due');
+        log.info({ uid, userId: uid, subscriptionId, event: 'stripe_past_due' }, 'stripe_past_due');
+        break;
+      }
+      const status = await reflect({ uid, subscription, customerId, row });
+      log.info({ uid, userId: uid, subscriptionId, status, event: 'stripe_reflected' }, 'stripe_reflected');
       break;
     }
 
     case 'charge.refunded': {
       // Refund. Revoke entitlement immediately (period end = now).
       const charge = event.data.object;
-      const customerId = charge.customer || null;
+      const customerId = idOf(charge.customer);
       const uid = await resolveUid({ customerId });
       if (!uid) {
         log.warn({ customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
