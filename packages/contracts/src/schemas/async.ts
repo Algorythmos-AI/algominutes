@@ -24,7 +24,9 @@ export const CreateUploadSessionRequest = z
     workspaceId: z.string(),
     fileName: z.string(),
     contentType: z.string(),
-    totalBytes: z.number().int().nonnegative(),
+    // Absent: the length isn't known yet (RELEASE.md PR 33, R3): the web recorder uploads while it records,
+    // and the size cap is checked at /complete. Present: capped before a session is minted, as before.
+    totalBytes: z.number().int().nonnegative().optional(),
     sha256: z.string().optional(),
   })
   .openapi('CreateUploadSessionRequest');

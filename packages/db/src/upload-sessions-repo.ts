@@ -21,7 +21,8 @@ export interface UploadSession {
   noteId: string;
   storagePath: string;
   sessionUri: string;
-  totalBytes: number;
+  /** Null for a session minted before its length was known (an upload while recording, PR 33). */
+  totalBytes: number | null;
   expiresAt: Date;
 }
 
@@ -72,7 +73,7 @@ export async function createUploadSession(
         `INSERT INTO upload_sessions (uid, workspace_id, note_id, storage_path, session_uri, total_bytes, expires_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [input.uid, input.workspaceId, input.noteId, input.storagePath, input.sessionUri, input.totalBytes, input.expiresAt],
+        [input.uid, input.workspaceId, input.noteId, input.storagePath, input.sessionUri, input.totalBytes ?? null, input.expiresAt],
       );
       return rows[0]!.id;
     },
@@ -107,7 +108,7 @@ export async function getUploadSession(input: { id: string; uid: string }, now: 
     noteId: r.note_id,
     storagePath: r.storage_path,
     sessionUri: r.session_uri,
-    totalBytes: Number(r.total_bytes),
+    totalBytes: r.total_bytes == null ? null : Number(r.total_bytes),
     expiresAt: new Date(r.expires_at),
   };
 }
