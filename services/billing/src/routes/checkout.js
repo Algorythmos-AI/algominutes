@@ -10,6 +10,7 @@
 // Matches CheckoutSessionRequest / CheckoutSessionResponse
 // (packages/contracts/src/schemas/billing.ts).
 
+import { createHash } from 'node:crypto';
 import { getSubscription, deriveState } from '@algominutes/db';
 import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
@@ -18,6 +19,18 @@ import { productById } from '../lib/plans.js';
 import { webAppOrigin } from '../lib/return-origin.js';
 
 const { publicSiteUrl } = siteUrlModule;
+
+/** How long two identical checkout requests are the same request. Stripe keeps a key for 24 hours. */
+const CHECKOUT_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * One key per buyer, price, return pages and ten-minute window. Everything that goes into the session goes
+ * into the key: Stripe refuses a key reused with different parameters. No uid in the clear: it's hashed.
+ */
+export function checkoutIdempotencyKey({ uid, priceId, successUrl, cancelUrl, customerId }, now = Date.now()) {
+  const window = Math.floor(now / CHECKOUT_WINDOW_MS);
+  return `checkout_${createHash('sha256').update([uid, priceId, successUrl, cancelUrl, customerId || '', window].join('\n')).digest('hex')}`;
+}
 
 export async function checkoutRoute(req, res) {
   const uid = req.uid;
@@ -59,17 +72,22 @@ export async function checkoutRoute(req, res) {
   const cancelUrl = app ? `${app}/app/billing/cancel` : process.env.BILLING_CANCEL_URL || `${publicSiteUrl()}/billing/cancel`;
 
   // TODO(A11): verify against live Stripe (real secret key + price ids).
-  const session = await stripe.checkout.sessions.create({
-    mode: 'subscription',
-    line_items: [{ price: product.stripePriceId, quantity: 1 }],
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    // Bind the session to the uid so the completion webhook can resolve it.
-    client_reference_id: uid,
-    metadata: { uid, productId: product.id, plan: product.plan },
-    subscription_data: { metadata: { uid, plan: product.plan } },
-    ...(customerId ? { customer: customerId } : {}),
-  });
+  const session = await stripe.checkout.sessions.create(
+    {
+      mode: 'subscription',
+      line_items: [{ price: product.stripePriceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      // Bind the session to the uid so the completion webhook can resolve it.
+      client_reference_id: uid,
+      metadata: { uid, productId: product.id, plan: product.plan },
+      subscription_data: { metadata: { uid, plan: product.plan } },
+      ...(customerId ? { customer: customerId } : {}),
+    },
+    // The same buyer asking for the same thing twice (a double click, a retry after a timeout, two tabs)
+    // gets the same session, and a session can be paid once (RELEASE.md rev 11, H21).
+    { idempotencyKey: checkoutIdempotencyKey({ uid, priceId: product.stripePriceId, successUrl, cancelUrl, customerId }) },
+  );
 
   req.log.info({ uid, productId: product.id, sessionId: session.id, event: 'checkout_created' }, 'checkout_created');
   return res.json({ url: session.url });

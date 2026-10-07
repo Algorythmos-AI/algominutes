@@ -32,6 +32,19 @@ export async function cancelIfAccountDeleted(uid: string, subscriptionId: string
   return true;
 }
 
+/**
+ * Queue a Stripe subscription to be cancelled by the cancel-stripe task, with its retries (RELEASE.md rev 11,
+ * H21: a second subscription for an account that is already paying). Queued once however often it's asked.
+ */
+export async function queueStripeCancellation(subscriptionId: string, traceId?: string | null): Promise<void> {
+  if (!isPostgresEnabled()) return;
+  await getPool().query(
+    `INSERT INTO stripe_cancellations (stripe_subscription_id, trace_id) VALUES ($1, $2)
+     ON CONFLICT (stripe_subscription_id) DO NOTHING`,
+    [subscriptionId, traceId ?? null],
+  );
+}
+
 /** The cancellations due an attempt, oldest first. */
 export async function listDueStripeCancellations(limit = 50): Promise<StripeCancellation[]> {
   if (!isPostgresEnabled()) return [];
