@@ -1,0 +1,4 @@
+{
+  "thirty_days": { "retentionDays": 30 },
+  "keep": { "retentionDays": null }
+}

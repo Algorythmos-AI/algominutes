@@ -1,0 +1,6 @@
+{
+  "page": { "transcript": { "lines": [
+    { "id": "l1", "speaker": "Priya", "speakerTag": 1, "startMs": 0, "endMs": 3200, "text": "Morning, everyone.", "confidence": 0.94 },
+    { "id": "l2", "speaker": null, "speakerTag": null, "startMs": 3200, "endMs": 6100, "text": "Let's start with the launch.", "confidence": null }
+  ], "nextCursor": "c2", "truncated": false }, "redaction": { "applied": true, "scheme": "shared/redaction.cjs" } }
+}

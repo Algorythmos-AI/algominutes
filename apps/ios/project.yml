@@ -176,6 +176,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: AlgoMinutesTests
+      # The contract's /v1 fixtures (packages/contracts/fixtures), which ContractFixturesTests decodes with the
+      # app's own models: a folder in the test bundle, never in the app.
+      - path: ../../packages/contracts/fixtures/v1
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: AlgoMinutes
 
