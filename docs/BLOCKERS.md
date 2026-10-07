@@ -263,7 +263,7 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
         defaults) and needs `LOAD_CONFIRM=run`; the owner's call.
       - #412: one set of `/v1` fixtures, parsed by the schemas and decoded by the iPhone app (PR 30d).
       - #413: a disabled account or revoked sessions refused within a minute (PR 40), **off until the owner
-        applies `reviewed-9a163459.tfplan`** (3 added: a role with only `firebaseauth.users.get` for the api
+        applies the pending plan (`reviewed-dd556da5.tfplan`, below)** (3 added: a role with only `firebaseauth.users.get` for the api
         and billing; 10 changed: the usual no-ops plus `SESSION_CHECK=off` on both; images unchanged) and
         then sets `session_check = "on"`. As written on 09-30 it would have made a refused call on every
         request: neither service account could read Auth users. **Not verified:** that the grant is enough
@@ -279,6 +279,35 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       that asks every active model hung twice on gemini-3.5-flash for its whole time budget
       (`gemini_timeout`, `TIME_BUDGET`). Re-running the failed jobs passed. With the capacity numbers above,
       this is the case for asking Google for quota or provisioned throughput before 2026-10-20.
+    - **H21, Stripe you can trust (2026-10-07, #415–#418; staging `dd556da`).** None of its six items was
+      done. Four are now, against a fake Stripe only:
+      - #415: only a refund of the whole charge ends Pro; a replayed refund changes nothing.
+      - #416: `customer.subscription.updated`/`.deleted` and `invoice.payment_failed` read the subscription
+        back from Stripe and write that (a stale "payment failed" used to put a renewed account in arrears);
+        both API shapes are read (period end on the subscription or its item; an invoice's subscription
+        directly or under `parent`).
+      - #417: one subscription per account. A checkout completing for an account already paying on another
+        subscription is queued for the cancel-stripe task and not activated;
+        `checkout.sessions.create` carries an idempotency key (buyer, product, price, return pages, a
+        ten-minute window).
+      - #418, from the audit of the three before it: only a completed checkout puts an account on a
+        subscription, and every other event acts only on that one. Without it a duplicate's first invoice
+        moved the account onto the duplicate, and the by-hand refund of the duplicate's payment would have
+        ended the paying account's Pro. Stripe unreachable now answers 500 (Stripe delivers again) instead
+        of writing the event as the state.
+      - **For the owner:**
+        - `stripe_duplicate_subscription` (error) means a second payment was taken and the duplicate is
+          being cancelled: **its first payment is not refunded automatically.** Refund it by hand.
+        - `stripe_refund_not_this_accounts` with `reason: unattributed` (error) means a whole refund whose
+          charge carries no invoice: Pro is kept. On a Stripe API version whose charges don't name their
+          invoice, every whole refund lands here. Check it when Stripe is first configured.
+        - **Stripe's keys are not in Terraform** (no `STRIPE_*` in `cloud-run.tf`, no Secret Manager secret),
+          and an apply would revert any set by hand. H21's last item, secrets as Terraform references, is
+          open and needs the owner's secret values.
+        - **Not verified against Stripe itself.** The test-mode checkout on staging is the proof.
+      - **Not done:** a table of seen event ids (the handlers are safe to repeat instead).
+    - **The plan to apply is now `reviewed-dd556da5.tfplan`** (the same 3 added and 10 changed as
+      `reviewed-9a163459`, re-made after the Stripe deploys so the images in it are the live ones).
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
     mixed ADTS stream needs a device to build against), the naming half of one vocabulary (H16), the rest of UX12 (the summary first), the VoiceOver
     pass of UX13 on a device,
