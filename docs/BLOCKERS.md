@@ -251,6 +251,34 @@ cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries fol
       staging environment has only a branch rule. Cancelling let the next run through each time. Cause
       unknown: a third time needs a proper look. A `timeout-minutes` would not help: it counts from when a
       job starts, and these never started.
+    - **The branches left from 2026-09-30, rebased and landed (2026-10-07, #407–#413; staging `9a16345`):**
+      - #407: Firestore's refusal codes, as mirror repair reads them, pinned against the emulator (PR 30c).
+      - #408: mirror repair pages through its whole window and repairs a failed note's message (PR 30a,
+        audits Q20, Q21); migration 039. From its dual-write audit: two cut-off runs in a row would leave
+        the notes between them unrepaired; the warning now says where it stopped
+        (`mirror_repair_budget_reached.reachedUpdatedAt`). Not seen; a signal to page newest-first if it is.
+      - #409: an upload can start before its length is known (PR 33a); migration 040; additive to the
+        contract. A finished upload of unknown length reports the size that arrived, not 0.
+      - #411: `scripts/load-staging.mjs` (PR 31). **Not run:** it spends real minutes (about A$22.50 at the
+        defaults) and needs `LOAD_CONFIRM=run`; the owner's call.
+      - #412: one set of `/v1` fixtures, parsed by the schemas and decoded by the iPhone app (PR 30d).
+      - #413: a disabled account or revoked sessions refused within a minute (PR 40), **off until the owner
+        applies `reviewed-9a163459.tfplan`** (3 added: a role with only `firebaseauth.users.get` for the api
+        and billing; 10 changed: the usual no-ops plus `SESSION_CHECK=off` on both; images unchanged) and
+        then sets `session_check = "on"`. As written on 09-30 it would have made a refused call on every
+        request: neither service account could read Auth users. **Not verified:** that the grant is enough
+        as those accounts; `auth_session_check_failed` staying silent once it is on is the check.
+      - `test/rate-limit-cold-start` needed nothing: both its changes were already in.
+      - **Not landed:** `ci/deploy-production` (the production pipeline: the owner's) and the extension
+        stack (8 commits, a new sign-in path; Wave 3).
+    - **For the owner, from #409's audit (both true before it):** nothing bounds the bytes of an upload in
+      progress, and an oversized upload that is never completed stays in the recordings bucket (no lifecycle
+      rule: `recordings_lifecycle_days = 0`; the session row goes after 7 days). A lifecycle rule for
+      unfinished uploads, or Cloud Storage enforcing the declared length, closes it.
+    - **A deploy failed on the model, not the code (2026-10-07 02:26 UTC, run 37560412278):** the smoke
+      that asks every active model hung twice on gemini-3.5-flash for its whole time budget
+      (`gemini_timeout`, `TIME_BUDGET`). Re-running the failed jobs passed. With the capacity numbers above,
+      this is the case for asking Google for quota or provisioned throughput before 2026-10-20.
   - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
     mixed ADTS stream needs a device to build against), the naming half of one vocabulary (H16), the rest of UX12 (the summary first), the VoiceOver
     pass of UX13 on a device,
