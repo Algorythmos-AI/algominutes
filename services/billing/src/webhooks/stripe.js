@@ -79,24 +79,34 @@ function planAndPeriod(subscription) {
  * The subscription as Stripe has it now (RELEASE.md rev 11, H21). Events arrive late, twice and out of
  * order: a "past due" from before a renewal, replayed after it, used to put a paid account back in
  * arrears. Each event is only a reason to look; what is written is what Stripe says at that moment.
- * Null when it can't be read (gone from Stripe, or Stripe unreachable): the caller falls back to the event.
+ * Null when Stripe no longer has it: the caller falls back to the event. Stripe unreachable is thrown.
  */
 async function currentSubscription(stripe, subscriptionId, log) {
   try {
     return await stripe.subscriptions.retrieve(subscriptionId);
   } catch (err) {
-    log.warn({ err, subscriptionId, event: 'stripe_subscription_unreadable' }, 'stripe_subscription_unreadable');
+    // Only "Stripe has no such subscription" falls back to the event. A timeout or a 5xx is thrown: the
+    // webhook answers 500 and Stripe delivers again, rather than a stale event being written as the state.
+    if (err?.code !== 'resource_missing') throw err;
+    log.warn({ err, subscriptionId, event: 'stripe_subscription_gone' }, 'stripe_subscription_gone');
     return null;
   }
 }
 
 /**
- * True when the event is about a Stripe subscription other than the one this account is on. A second
- * subscription for the same customer (an abandoned duplicate, an older one cancelled later) must not
- * change the standing of the one that is paid.
+ * Why an event must not change this account, or null when it may. Only a completed checkout puts an account
+ * on a subscription; every other event acts only on the subscription the account is on:
+ *   - 'other_subscription': the event is about a different Stripe subscription of the same customer (a
+ *     duplicate being cancelled, its first invoice, an older one ending);
+ *   - 'other_rail': the account now pays through a store, and still carries an old Stripe subscription's id.
+ *     That subscription's last events must not overwrite the store's period.
  */
-function aboutAnotherSubscription(row, subscriptionId) {
-  return Boolean(row?.stripe_subscription_id && subscriptionId && row.stripe_subscription_id !== subscriptionId);
+const STORE_RAILS = new Set(['apple_storekit', 'google_play']);
+function notThisAccounts(row, subscriptionId) {
+  if (!row) return null;
+  if (STORE_RAILS.has(row.source)) return 'other_rail';
+  if (row.stripe_subscription_id && subscriptionId && row.stripe_subscription_id !== subscriptionId) return 'other_subscription';
+  return null;
 }
 
 /** Write what Stripe says a subscription is. Returns the status written. */
@@ -150,7 +160,7 @@ export async function stripeWebhookRoute(req, res) {
       const subscriptionId = idOf(session.subscription);
       const customerId = idOf(session.customer);
       if (!uid || !subscriptionId) {
-        log.error({ uid, subscriptionId, event: 'stripe_checkout_incomplete' }, 'stripe_checkout_incomplete');
+        log.error({ uid, userId: uid, subscriptionId, event: 'stripe_checkout_incomplete' }, 'stripe_checkout_incomplete');
         break;
       }
       // Paid for an account deleted meanwhile (RELEASE.md PR 28b): it's cancelled, never activated
@@ -178,7 +188,7 @@ export async function stripeWebhookRoute(req, res) {
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
       const { plan, currentPeriodEnd } = planAndPeriod(subscription);
       if (!currentPeriodEnd) {
-        log.error({ uid, subscriptionId, event: 'stripe_no_period_end' }, 'stripe_no_period_end');
+        log.error({ uid, userId: uid, subscriptionId, event: 'stripe_no_period_end' }, 'stripe_no_period_end');
         break;
       }
       await activateSubscription({
@@ -190,7 +200,7 @@ export async function stripeWebhookRoute(req, res) {
         stripeCustomerId: customerId,
       });
       await trackEvent({ uid, event: 'purchase', props: { rail: 'stripe', plan } });
-      log.info({ uid, subscriptionId, plan, currentPeriodEnd, event: 'stripe_activated' }, 'stripe_activated');
+      log.info({ uid, userId: uid, subscriptionId, plan, currentPeriodEnd, event: 'stripe_activated' }, 'stripe_activated');
       break;
     }
 
@@ -204,9 +214,23 @@ export async function stripeWebhookRoute(req, res) {
         log.warn({ subscriptionId, customerId, event: 'stripe_uid_unresolved' }, 'stripe_uid_unresolved');
         break;
       }
+      // A duplicate's first invoice finds the account by its customer: it must not move the account onto
+      // the duplicate (which is then cancelled, leaving the real one charging unseen).
+      const invoiceRow = await getSubscription(uid);
+      const invoiceNotOurs = notThisAccounts(invoiceRow, subscriptionId);
+      if (invoiceNotOurs) {
+        log.warn(
+          { uid, userId: uid, subscriptionId, onRail: invoiceRow.source || null, onSubscriptionId: invoiceRow.stripe_subscription_id || null, reason: invoiceNotOurs, event: 'stripe_event_not_this_accounts' },
+          'stripe_event_not_this_accounts',
+        );
+        break;
+      }
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
       const { plan, currentPeriodEnd } = planAndPeriod(subscription);
-      if (!currentPeriodEnd) break;
+      if (!currentPeriodEnd) {
+        log.error({ uid, userId: uid, subscriptionId, event: 'stripe_no_period_end' }, 'stripe_no_period_end');
+        break;
+      }
       await activateSubscription({
         uid,
         rail: 'stripe',
@@ -215,7 +239,7 @@ export async function stripeWebhookRoute(req, res) {
         stripeSubscriptionId: subscriptionId,
         stripeCustomerId: customerId,
       });
-      log.info({ uid, subscriptionId, currentPeriodEnd, event: 'stripe_renewed' }, 'stripe_renewed');
+      log.info({ uid, userId: uid, subscriptionId, currentPeriodEnd, event: 'stripe_renewed' }, 'stripe_renewed');
       break;
     }
 
@@ -234,10 +258,11 @@ export async function stripeWebhookRoute(req, res) {
         break;
       }
       const row = await getSubscription(uid);
-      if (aboutAnotherSubscription(row, subscriptionId)) {
+      const notOurs = notThisAccounts(row, subscriptionId);
+      if (notOurs) {
         log.warn(
-          { uid, userId: uid, subscriptionId, onSubscriptionId: row.stripe_subscription_id, event: 'stripe_event_for_other_subscription' },
-          'stripe_event_for_other_subscription',
+          { uid, userId: uid, subscriptionId, onRail: row.source || null, onSubscriptionId: row.stripe_subscription_id || null, reason: notOurs, event: 'stripe_event_not_this_accounts' },
+          'stripe_event_not_this_accounts',
         );
         break;
       }
@@ -278,6 +303,23 @@ export async function stripeWebhookRoute(req, res) {
       const current = await getSubscription(uid);
       if (current?.status === 'refunded') {
         log.info({ uid, userId: uid, event: 'stripe_refund_replayed' }, 'stripe_refund_replayed');
+        break;
+      }
+      // The account is found by the charge's customer, and a customer can have other charges: a cancelled
+      // duplicate's first payment (refunded by hand, as stripe_duplicate_subscription asks), or an old
+      // subscription's. Only a refund of the subscription the account is on ends Pro. The charge names its
+      // invoice, and the invoice its subscription.
+      const invoiceId = idOf(charge.invoice);
+      const invoice = invoiceId ? await stripe.invoices.retrieve(invoiceId) : null;
+      const refundedSubscriptionId = invoice ? subscriptionOfInvoice(invoice) : null;
+      const refundNotOurs = refundedSubscriptionId ? notThisAccounts(current, refundedSubscriptionId) : 'unattributed';
+      if (refundNotOurs) {
+        // 'unattributed': the charge carries no invoice (a one-off charge, or an API version that dropped
+        // the field). Pro is kept, loudly: wrongly ending a paid subscription is worse than keeping one to
+        // its period end, and whoever refunds a subscription in full cancels it too, which does arrive.
+        const line = { uid, userId: uid, chargeId: charge.id || null, refundedSubscriptionId, onSubscriptionId: current?.stripe_subscription_id || null, reason: refundNotOurs, event: 'stripe_refund_not_this_accounts' };
+        if (refundNotOurs === 'unattributed') log.error(line, 'stripe_refund_not_this_accounts');
+        else log.warn(line, 'stripe_refund_not_this_accounts');
         break;
       }
       await setSubscriptionStatus(uid, 'refunded', new Date().toISOString());

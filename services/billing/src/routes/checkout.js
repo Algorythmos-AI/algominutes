@@ -24,12 +24,12 @@ const { publicSiteUrl } = siteUrlModule;
 const CHECKOUT_WINDOW_MS = 10 * 60 * 1000;
 
 /**
- * One key per buyer, price, return pages and ten-minute window. Everything that goes into the session goes
+ * One key per buyer, product, price, return pages and ten-minute window. Everything that goes into the session goes
  * into the key: Stripe refuses a key reused with different parameters. No uid in the clear: it's hashed.
  */
-export function checkoutIdempotencyKey({ uid, priceId, successUrl, cancelUrl, customerId }, now = Date.now()) {
+export function checkoutIdempotencyKey({ uid, productId, priceId, successUrl, cancelUrl, customerId }, now = Date.now()) {
   const window = Math.floor(now / CHECKOUT_WINDOW_MS);
-  return `checkout_${createHash('sha256').update([uid, priceId, successUrl, cancelUrl, customerId || '', window].join('\n')).digest('hex')}`;
+  return `checkout_${createHash('sha256').update([uid, productId, priceId, successUrl, cancelUrl, customerId || '', window].join('\n')).digest('hex')}`;
 }
 
 export async function checkoutRoute(req, res) {
@@ -86,7 +86,7 @@ export async function checkoutRoute(req, res) {
     },
     // The same buyer asking for the same thing twice (a double click, a retry after a timeout, two tabs)
     // gets the same session, and a session can be paid once (RELEASE.md rev 11, H21).
-    { idempotencyKey: checkoutIdempotencyKey({ uid, priceId: product.stripePriceId, successUrl, cancelUrl, customerId }) },
+    { idempotencyKey: checkoutIdempotencyKey({ uid, productId: product.id, priceId: product.stripePriceId, successUrl, cancelUrl, customerId }) },
   );
 
   req.log.info({ uid, productId: product.id, sessionId: session.id, event: 'checkout_created' }, 'checkout_created');
