@@ -202,3 +202,46 @@ describe('Stripe: the webhook', () => {
     expect(seen).toEqual([]);
   });
 });
+
+// RELEASE.md rev 11, H21: any refund took Pro away at once, a partial one (a goodwill credit, a prorated
+// plan change) included, and a replayed event moved the end of the period each time.
+describe('Stripe: refunds', () => {
+  const refund = (id: string, charge: Record<string, unknown>) => ({
+    id, object: 'event', type: 'charge.refunded',
+    data: { object: { id: 'ch_1', object: 'charge', customer: 'cus_1', amount: 2900, ...charge } },
+  });
+  const cancellations = async () => Number((await pool.query(
+    `SELECT COUNT(*)::int AS n FROM analytics_events WHERE uid = 'u1' AND event = 'cancellation'`,
+  )).rows[0].n);
+
+  it('a partial refund keeps Pro, to the same period end', async () => {
+    await call(billing.webhook.stripeWebhookRoute, signed(checkoutCompleted));
+    const r = await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r1', { amount_refunded: 500, refunded: false })));
+    expect(r.status).toBe(200);
+    expect(await sub()).toMatchObject({ status: 'active', current_period_end: new Date(PERIOD_END * 1000) });
+    expect(await cancellations()).toBe(0);
+  });
+
+  it('a full refund ends Pro now; the same event again changes nothing more', async () => {
+    await call(billing.webhook.stripeWebhookRoute, signed(checkoutCompleted));
+    const full = refund('evt_r2', { amount_refunded: 2900, refunded: true });
+    expect((await call(billing.webhook.stripeWebhookRoute, signed(full))).status).toBe(200);
+    const first = await sub();
+    expect(first.status).toBe('refunded');
+    expect(Math.abs(first.current_period_end.getTime() - Date.now())).toBeLessThan(10_000);
+    // Stripe delivers at least once: a replay must not move the end again, or count a second cancellation.
+    await pool.query(`UPDATE subscriptions SET current_period_end = current_period_end - INTERVAL '1 hour' WHERE uid = 'u1'`);
+    const moved = (await sub()).current_period_end;
+    expect((await call(billing.webhook.stripeWebhookRoute, signed(full))).status).toBe(200);
+    expect((await sub()).current_period_end).toEqual(moved);
+    expect(await cancellations()).toBe(1);
+  });
+
+  it('refunded in parts until nothing is left: Pro ends with the last part', async () => {
+    await call(billing.webhook.stripeWebhookRoute, signed(checkoutCompleted));
+    await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r3', { amount_refunded: 1000, refunded: false })));
+    expect((await sub()).status).toBe('active');
+    await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r4', { amount_refunded: 2900 })));
+    expect((await sub()).status).toBe('refunded');
+  });
+});
