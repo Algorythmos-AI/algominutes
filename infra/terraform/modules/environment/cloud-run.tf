@@ -105,6 +105,8 @@ locals {
       ALLOWED_ORIGINS    = var.allowed_origins
       PUBLIC_SITE_URL    = var.public_site_url
       BROADCAST_CAPTURE  = var.broadcast_capture
+      # A disabled account or revoked sessions refused within a minute (session-check.cjs).
+      SESSION_CHECK = var.session_check
       # Share links (RELEASE.md PR 29): off until the viewer's host is public.
       SHARE_LINKS         = var.share_links
       SHARE_VIEWER_ORIGIN = var.share_viewer_origin
@@ -126,6 +128,7 @@ locals {
     # Its own URL: /tasks/* checks that each OIDC token was minted for it. The App Store
     # Server API's key is the app-store-server-key secret, read at run time.
     billing = merge(local.db_env, {
+      SESSION_CHECK   = var.session_check
       PUBLIC_SITE_URL = var.public_site_url
       BILLING_URL     = local.service_url["billing"]
       APPLE_ISSUER_ID = var.app_store_issuer_id

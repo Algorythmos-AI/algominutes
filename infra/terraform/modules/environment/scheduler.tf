@@ -34,6 +34,24 @@ resource "google_project_iam_member" "auth_user_deleter" {
   member  = "serviceAccount:${google_service_account.runtime[each.value].email}"
 }
 
+# Only the permission the session check needs (packages/ai session-check.cjs): read an Auth user, to see
+# whether it is disabled or its sessions were revoked. The api and billing verify tokens; neither could ask.
+resource "google_project_iam_custom_role" "auth_user_reader" {
+  project     = var.project_id
+  role_id     = "algominutesAuthUserReader"
+  title       = "AlgoMinutes: read Firebase Auth users"
+  description = "Session check only: firebaseauth.users.get."
+  permissions = ["firebaseauth.users.get"]
+}
+
+resource "google_project_iam_member" "auth_user_reader" {
+  for_each = toset(["run-api", "run-billing"])
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.auth_user_reader.id
+  member  = "serviceAccount:${google_service_account.runtime[each.value].email}"
+}
+
 resource "google_storage_bucket_iam_member" "sweep_recordings" {
   bucket = google_storage_bucket.buckets["recordings"].name
   role   = "roles/storage.objectAdmin"
