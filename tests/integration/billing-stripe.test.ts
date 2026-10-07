@@ -13,6 +13,12 @@ type Seen = { method: string; path: string; version: string | undefined; form: U
 const seen: Seen[] = [];
 const PERIOD_END = 1_790_000_000;
 
+// What Stripe says each subscription is now; a test changes it to play a renewal, arrears or a cancellation.
+const SUB_1 = () => ({
+  id: 'sub_1', object: 'subscription', customer: 'cus_1', status: 'active', current_period_end: PERIOD_END as number | undefined,
+  items: { object: 'list', data: [{ id: 'si_1', object: 'subscription_item', price: { id: 'price_test_pro', object: 'price' } } as Record<string, unknown>] },
+});
+const stripeSubs: Record<string, ReturnType<typeof SUB_1>> = {};
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -22,12 +28,8 @@ const server = http.createServer((req, res) => {
     const reply = (status: number, obj: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (req.method === 'POST' && path === '/v1/billing_portal/sessions') return reply(200, { id: 'bps_1', object: 'billing_portal.session', url: 'https://billing.stripe.test/p/session/1' });
     if (req.method === 'POST' && path === '/v1/checkout/sessions') return reply(200, { id: 'cs_1', object: 'checkout.session', url: 'https://checkout.stripe.test/c/pay/cs_1' });
-    if (req.method === 'GET' && path === '/v1/subscriptions/sub_1') {
-      return reply(200, {
-        id: 'sub_1', object: 'subscription', customer: 'cus_1', status: 'active', current_period_end: PERIOD_END,
-        items: { object: 'list', data: [{ id: 'si_1', object: 'subscription_item', price: { id: 'price_test_pro', object: 'price' } }] },
-      });
-    }
+    const subId = /^\/v1\/subscriptions\/(sub_\w+)$/.exec(path)?.[1];
+    if (req.method === 'GET' && subId && stripeSubs[subId]) return reply(200, stripeSubs[subId]);
     return reply(404, { error: { type: 'invalid_request_error', message: `no route ${req.method} ${path}` } });
   });
 });
@@ -53,6 +55,8 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   seen.length = 0;
+  for (const k of Object.keys(stripeSubs)) delete stripeSubs[k];
+  stripeSubs.sub_1 = SUB_1();
   await resetDb();
   await seedUser('u1');
 });
@@ -243,5 +247,69 @@ describe('Stripe: refunds', () => {
     expect((await sub()).status).toBe('active');
     await call(billing.webhook.stripeWebhookRoute, signed(refund('evt_r4', { amount_refunded: 2900 })));
     expect((await sub()).status).toBe('refunded');
+  });
+});
+
+// RELEASE.md rev 11, H21: events arrive late, twice and out of order. Four handlers wrote what the event
+// said; they now read the subscription back and write what Stripe says it is.
+describe('Stripe: an event is a reason to look, not the state', () => {
+  const event = (id: string, type: string, object: Record<string, unknown>) => ({ id, object: 'event', type, data: { object } });
+  const send = (e: unknown) => call(billing.webhook.stripeWebhookRoute, signed(e));
+  const cancellations = async () => Number((await pool.query(
+    `SELECT COUNT(*)::int AS n FROM analytics_events WHERE uid = 'u1' AND event = 'cancellation'`,
+  )).rows[0].n);
+  beforeEach(async () => { await send(checkoutCompleted); });
+
+  it('a failed payment from before a renewal, delivered after it, leaves the paid account active', async () => {
+    const r = await send(event('evt_o1', 'invoice.payment_failed', { id: 'in_old', object: 'invoice', subscription: 'sub_1', customer: 'cus_1' }));
+    expect(r.status).toBe(200);
+    expect(await sub()).toMatchObject({ status: 'active', current_period_end: new Date(PERIOD_END * 1000) });
+  });
+
+  it('a failed payment while Stripe says past due is past due, with the paid period kept', async () => {
+    stripeSubs.sub_1.status = 'past_due';
+    await send(event('evt_o2', 'invoice.payment_failed', { id: 'in_2', object: 'invoice', subscription: 'sub_1', customer: 'cus_1' }));
+    expect(await sub()).toMatchObject({ status: 'past_due', current_period_end: new Date(PERIOD_END * 1000) });
+  });
+
+  it("an old \"canceled\" update, replayed after the subscription was resumed, doesn't cancel it", async () => {
+    await send(event('evt_o3', 'customer.subscription.updated', { ...SUB_1(), status: 'canceled' }));
+    expect((await sub()).status).toBe('active');
+  });
+
+  it('a cancellation is written once, keeps the paid period, and counts once however often it is delivered', async () => {
+    stripeSubs.sub_1.status = 'canceled';
+    const deleted = event('evt_o4', 'customer.subscription.deleted', { ...SUB_1(), status: 'canceled' });
+    await send(deleted);
+    await send(deleted);
+    expect(await sub()).toMatchObject({ status: 'canceled', current_period_end: new Date(PERIOD_END * 1000) });
+    expect(await cancellations()).toBe(1);
+  });
+
+  it("another subscription of the same customer ending doesn't touch the one the account is on", async () => {
+    stripeSubs.sub_2 = { ...SUB_1(), id: 'sub_2', status: 'canceled' };
+    const r = await send(event('evt_o5', 'customer.subscription.deleted', { ...SUB_1(), id: 'sub_2', status: 'canceled' }));
+    expect(r.status).toBe(200);
+    expect(await sub()).toMatchObject({ status: 'active', stripe_subscription_id: 'sub_1' });
+    expect(await cancellations()).toBe(0);
+  });
+
+  it("Stripe can't be asked: a failed payment is past due, and an update is taken as it came", async () => {
+    delete stripeSubs.sub_1;
+    await send(event('evt_o6', 'invoice.payment_failed', { id: 'in_3', object: 'invoice', subscription: 'sub_1', customer: 'cus_1' }));
+    expect((await sub()).status).toBe('past_due');
+    await send(event('evt_o7', 'customer.subscription.updated', { ...SUB_1(), status: 'active' }));
+    expect((await sub()).status).toBe('active');
+  });
+
+  it("reads the newer API's shape: the period end on the item, the invoice's subscription under parent", async () => {
+    const later = PERIOD_END + 30 * 86400;
+    stripeSubs.sub_1.current_period_end = undefined;
+    stripeSubs.sub_1.items.data[0].current_period_end = later;
+    const renewal = event('evt_o8', 'invoice.paid', {
+      id: 'in_4', object: 'invoice', customer: 'cus_1', parent: { type: 'subscription_details', subscription_details: { subscription: 'sub_1' } },
+    });
+    expect((await send(renewal)).status).toBe(200);
+    expect((await sub()).current_period_end).toEqual(new Date(later * 1000));
   });
 });
