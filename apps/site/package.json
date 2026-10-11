@@ -16,7 +16,7 @@
   "dependencies": {
     "@algominutes/contracts": "*",
     "@algominutes/tokens": "*",
-    "astro": "^7.3.5",
+    "astro": "^7.3.8",
     "cookie": "^2.0.1"
   },
   "devDependencies": {
