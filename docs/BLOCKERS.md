@@ -124,9 +124,17 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     step. **Left in S11:**
     - Code-scanning alert #131 is a false positive: the nightly pipeline test uploading its own fixture to Cloud
       Storage, the host already restricted. **Owner:** dismiss it as "used in tests".
-    - Notes that live only in Firestore (scanned text) are outside retention and backups: deleting them on a
-      schedule removes user data, so it needs a design (move scans into Postgres, or retention reading Firestore).
-  - **Still open in Stage 1:** the nightly failure cases (1.8), I3's kill-safe capture and device pass 1 (both
+    - Notes that live only in Firestore (scanned text) moved to **S16**, below.
+  - [ ] **S16 (new, P1): scanned and imported text notes live only in Firestore.** The iPhone writes them straight
+    into Firestore as `ready` (the rules' one client-made `ready` note), so Postgres never has them: outside
+    retention, backups and PITR, search, chat, `/v1/notes/read` and its paged export, and Postgres-written edits.
+    Deletion and account deletion already work. **The owner chose (2026-10-24) to move them into Postgres like
+    every other note**; the design is RELEASE.md R12.8: a `POST /v1/notes/text` route and a repo
+    `createTextNote` (Postgres first, then the mirror and an embedding), the iPhone calling it, a backfill job for
+    staging, and the rules' exception removed once the version floor passes the new build. Six PRs, one at a time.
+  - [x] **1.8, the nightly failure cases → #459 (merged 21:09):** Try again on a finished note (every length) and held first, then
+    released (the 2-minute run). Proven by the first nightly after the merge.
+  - **Still open in Stage 1:** I3's kill-safe capture and device pass 1 (both
     need the owner's iPhone).
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**

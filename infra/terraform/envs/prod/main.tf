@@ -147,7 +147,11 @@ module "environment" {
   # new user can record and see a summary first. At A$0.03 a minute, at most A$3.60 an account a month; the
   # daily spend cap bounds the total.
   free_floor_minutes = 120
-  monthly_budget     = 300
+
+  # One warm api and billing instance (plan rev 12, Stage 2, O5): a sign-in, a kickoff or a purchase never waits
+  # on a cold start. Billed at Cloud Run's idle rate, roughly A$40 a month for the two (to confirm after Apply P).
+  min_instances  = { api = 1, billing = 1 }
+  monthly_budget = 300
 }
 
 # Re-export module outputs at the root for convenience.

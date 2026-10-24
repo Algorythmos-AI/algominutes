@@ -296,6 +296,17 @@ variable "free_floor_minutes" {
   }
 }
 
+variable "min_instances" {
+  description = "Instances kept warm per Cloud Run service (by name); a service left out scales to zero. Each warm instance is billed at Cloud Run's idle rate."
+  type        = map(number)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for n in values(var.min_instances) : n >= 0 && floor(n) == n && n <= 3])
+    error_message = "min_instances values must be whole numbers from 0 to 3."
+  }
+}
+
 variable "monthly_budget" {
   description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
   type        = number

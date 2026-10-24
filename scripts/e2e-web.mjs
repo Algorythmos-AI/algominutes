@@ -81,6 +81,23 @@ export function isSiteRequest(requestUrl, siteUrl) {
 /** The headers that let automation through Vercel Authentication (and set its cookie for the rest of the run). */
 export const bypassHeaders = (bypass) => (bypass ? { 'x-vercel-protection-bypass': bypass, 'x-vercel-set-bypass-cookie': 'true' } : {});
 
+/**
+ * A console error as the report shows it. Chrome's "Failed to load resource" names no URL (the 10-16 journey's two
+ * 401s after the deletion said only "status of 401"), but the message's location is the resource: its origin and
+ * path are added, never its query (a key can ride there).
+ */
+export function consoleProblem(m) {
+  const text = m.text().slice(0, 200);
+  if (!text.startsWith('Failed to load resource')) return text;
+  try {
+    const u = new URL(m.location?.().url ?? '');
+    return `${text} [${u.origin}${u.pathname}]`;
+  } catch {
+    // silent-catch-ok: no location (or not a URL): the message is reported as Chrome wrote it
+    return text;
+  }
+}
+
 /** Whether a page is Stripe's (Checkout): its own console messages aren't ours to fail on. */
 export const isStripePage = (pageUrl) => {
   try {
@@ -176,7 +193,7 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, invi
   page.setDefaultTimeout(actionMs);
   const problems = [];
   // Ours only: Stripe's Checkout page logs its own.
-  page.on('console', (m) => m.type() === 'error' && !isStripePage(page.url()) && !isFakeShareNoise(m.text()) && problems.push(m.text().slice(0, 200)));
+  page.on('console', (m) => m.type() === 'error' && !isStripePage(page.url()) && !isFakeShareNoise(m.text()) && problems.push(consoleProblem(m)));
   page.on('pageerror', (e) => !isStripePage(page.url()) && problems.push(`pageerror: ${e.message.slice(0, 200)}`));
   const heading = (name, timeout = wait(30_000)) => within(page.getByRole('heading', { name, exact: true }).first().waitFor({ timeout }));
   const toNote = () => within(page.waitForURL(/\/app\/notes\/[^/?#]+/, { timeout: wait(180_000) }));
