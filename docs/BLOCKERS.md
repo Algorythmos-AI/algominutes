@@ -32,8 +32,54 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
   - **Could not be read from here:** App Store Connect (products, agreements, Test Information, whether a
     Staging → Beta workflow or an external group exists), prod Firebase, the Vertex quota page. The owner's
     consoles answer those.
-  - [x] 0.1 S1 → #428.
-  - [ ] 0.2 I1, I4, I7 → #430 (open) · 0.3 O2 · 0.4 O1's workflow and O3 · 0.6 O8. Each opens as its own PR.
+  - [x] 0.1 S1 → #428 (90c8ef9f). Every workflow green on the merge commit's push, including `ci`'s integration
+    job (run 40093802631) and `invariants` with the new frozen-clock step (run 40093802643).
+  - [x] 0.5 the plan → #429 (586bb218): rev 12 in RELEASE.md, this entry, the two audits under `docs/audits/`,
+    INFRASTRUCTURE.md and EXTRACTION-AUDIT.md corrected.
+- **Stage 0, the rest (plan rev 12 R12.5), as of 2026-10-24 14:45 UTC.** Opened, each with auto-merge on (the
+  owner's go-ahead, 2026-10-24), so each lands only when its checks pass:
+  - [ ] **0.2 I1, I4, I7 → #430.** Release `UPDATE_URL` → `itms-apps://apps.apple.com/app/id6816333591`; the
+    extension `TARGETED_DEVICE_FAMILY "1"` (the generated project shows `1` in Debug, Staging and Release); the
+    extension's manifest declares DiskSpace `E174.1`; `ci_post_clone.sh` fails an archive whose plist project
+    doesn't match its scheme; `ensureWorkspaceDoc` logs. Evidence: `plutil -lint` OK on both manifests,
+    `shellcheck` OK, `xcodebuild build-for-testing` for `generic/platform=iOS` exit 0. **Not run here:** the unit
+    tests (this Mac has no simulator runtime; CI's `ios-test` runs them). **Not verifiable until the first Release
+    archive:** the post-clone check against prod's plist, and the Privacy Report.
+  - [ ] **0.3 O2 → #431.** Measured from the runs' own `ok`/`FAIL` lines:
+
+    | Step | Green (10-19, 10-21, 10-22) | Wait | Red |
+    |---|---|---|---|
+    | A question gets an answer | 2–3 s | 120 s | timed out 10-18, 10-20 |
+    | A recorded call becomes a note | 20–38 s | 480 s | 499 s on 10-17; 110 s on 10-18 |
+    | Install Chromium and ffmpeg | 38–54 s | none | 2,366 s on 10-23, job killed at 40 min |
+
+    The waits are 40–60 times the green time: the red nights were an apt hang and pipeline failures, not budgets.
+    #431 bounds the install like `ci.yml`'s ffmpeg step, adds what the page showed (its alerts and statuses) to
+    every failed wait, and opens a `web-e2e-failed` issue on a red night. Budgets unchanged. 20 of 20 journey
+    tests pass; with the script reverted the two new ones fail. **Still open, now under S2/S3:** why the chat answer
+    and a summary stall; the next red night's FAIL line will say what the page showed.
+  - [ ] **0.4 O1's workflow half, O3 → #432.** `deploy-production.yml` regenerated from today's
+    `deploy-staging.yml` (the 09-30 branch predated the billing solo lane, the live-env preflight and the failure
+    issue), with its own `prod-deploy-failed` label; `tests/deploy-production.test.ts` (5 tests) fails on any
+    other difference, and a one-line change to staging alone turned it red. Every deploy job has a
+    `timeout-minutes` ceiling from staging's last six deploys (ci-gate peaked at 7 min, migrate at 9, the rest at
+    1 or less). Runbook `resume-staging-and-deploy.md` §3b lists the owner's steps after Apply P. **Not done, on
+    purpose:** a WIF retry (seen once; added if it recurs).
+  - [ ] **0.6 O8.** Dependabot rebased #422, #423, #427 and #433 (which replaced #425) onto the fixed base, and
+    each has auto-merge on. #424 and #426 hadn't rebased by 14:45; asked again, with auto-merge on, so they land
+    only on a green run at the new base. #422 (motion 13 → 14.5) and #423 (`@firebase/rules-unit-testing` 5 → 6)
+    are majors: they land on CI's say-so, which covers the web build and the rules tests.
+  - [ ] **The Stage 0 gate:** CI green through the merge queue on each of the above; an Xcode Cloud Staging build
+    green after #430 lands; two green scheduled web journeys after #431.
+- **Found during Stage 0, not fixed yet:**
+  - **After deleting the account, the web app still sends a request with the deleted account's token** (two
+    401s on the 10-16 web journey, after `the account is deleted from Settings`). Under O2; a fix stops the app's
+    polling at deletion.
+  - **`tests/ios-what-to-test.test.ts` times out locally** (2 of 8, at vitest's default 5 s): each test makes a
+    dozen real git commits, too slow on this Mac's nearly full disk. Passes on a re-run and in CI. A `testTimeout`
+    on that file fixes it if CI ever sees it.
+  - **This Mac can't start worktree sessions:** 4.5 GB free against the 5.4 GB a worktree needs. Stage 0 ran in
+    one checkout, one branch per PR.
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
