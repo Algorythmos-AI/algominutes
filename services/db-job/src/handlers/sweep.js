@@ -169,14 +169,60 @@ async function run({
   async function sweepOnce() {
     const counts = {};
     const failures = [];
+    // How long each step took, logged with the run (sweep_done): the evidence for the 900 s budget (plan rev 12 S11).
+    const durationsMs = {};
     const step = async (name, fn) => {
+      const started = Date.now();
       try {
         counts[name] = await fn();
       } catch (err) {
         failures.push(name);
         log.error({ err, step: name }, 'sweep_step_failed');
+      } finally {
+        durationsMs[name] = Date.now() - started;
       }
     };
+
+    // The promises first (plan rev 12 S11): an account deletion must finish within an hour (SLO 6), and a
+    // queued purge is a deleted note's audio still stored. They ran ninth and second, after retention, and a slow
+    // run (mirror repair alone may take 5 of the job's 15 minutes) pushed them late or past the limit.
+    await step('account_deletions', async () => {
+      let finished = 0;
+      let incomplete = 0;
+      for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
+        // Logged under the original request's traceId, so the finish traces back to it.
+        const accountLog = log.child({ userId: d.uid, ...(d.traceId ? { traceId: d.traceId } : {}) });
+        try {
+          const r = await finishAccountDeletion(deps, d, accountLog);
+          if (r.complete) finished += 1;
+          else incomplete += 1;
+        } catch (err) {
+          // One account's failure must not skip the rest of the batch.
+          incomplete += 1;
+          accountLog.error({ err }, 'sweep_account_deletion_failed');
+        }
+      }
+      if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
+      return finished;
+    });
+
+    await step('storage_purges', async () => {
+      let done = 0;
+      // Stuck ones are listed separately, so they can never crowd out newer purges.
+      for (const p of await listPendingStoragePurges(200, MAX_PURGE_ATTEMPTS)) {
+        if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
+        if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
+      }
+      const stuck = await listStuckStoragePurges(50, MAX_PURGE_ATTEMPTS);
+      for (const p of stuck) {
+        log.error({
+          purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId,
+          ...(p.uid ? { userId: p.uid } : {}), ...(p.traceId ? { traceId: p.traceId } : {}),
+          attempts: p.attempts, lastError: p.lastError,
+        }, 'storage_purge_stuck');
+      }
+      return { done, stuck: stuck.length };
+    });
 
     await step('retention', async () => {
       let deleted = 0;
@@ -207,23 +253,6 @@ async function run({
       return deleted;
     });
 
-    await step('storage_purges', async () => {
-      let done = 0;
-      // Stuck ones are listed separately, so they can never crowd out newer purges.
-      for (const p of await listPendingStoragePurges(200, MAX_PURGE_ATTEMPTS)) {
-        if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
-        if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
-      }
-      const stuck = await listStuckStoragePurges(50, MAX_PURGE_ATTEMPTS);
-      for (const p of stuck) {
-        log.error({
-          purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId,
-          ...(p.uid ? { userId: p.uid } : {}), ...(p.traceId ? { traceId: p.traceId } : {}),
-          attempts: p.attempts, lastError: p.lastError,
-        }, 'storage_purge_stuck');
-      }
-      return { done, stuck: stuck.length };
-    });
 
     await step('stuck_notes', async () => {
       const stuck = await listStuckNotes({ olderThanMs: STUCK_NOTE_MS, limit: 100 });
@@ -384,25 +413,6 @@ async function run({
 
     await step('upload_sessions', () => deleteExpiredUploadSessions(now));
 
-    await step('account_deletions', async () => {
-      let finished = 0;
-      let incomplete = 0;
-      for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
-        // Logged under the original request's traceId, so the finish traces back to it.
-        const accountLog = log.child({ userId: d.uid, ...(d.traceId ? { traceId: d.traceId } : {}) });
-        try {
-          const r = await finishAccountDeletion(deps, d, accountLog);
-          if (r.complete) finished += 1;
-          else incomplete += 1;
-        } catch (err) {
-          // One account's failure must not skip the rest of the batch.
-          incomplete += 1;
-          accountLog.error({ err }, 'sweep_account_deletion_failed');
-        }
-      }
-      if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
-      return finished;
-    });
 
     await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
     await step('note_tombstones', () => pruneDeletedNotes({ olderThanDays: TOMBSTONE_DAYS }));
@@ -410,7 +420,7 @@ async function run({
     await step('trials', () => expireElapsedTrials());
     await step('usage_events', () => pruneUsageEvents({ olderThanDays: USAGE_EVENTS_DAYS }));
 
-    log.info({ counts, failures }, 'sweep_done');
+    log.info({ counts, failures, durationsMs }, 'sweep_done');
     if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);
     return counts;
   }
