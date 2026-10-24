@@ -112,7 +112,8 @@ describe('an upload session for a browser', () => {
   it("is minted for the web app's origin, so the browser can read Cloud Storage's answers", async () => {
     process.env.ALLOWED_ORIGINS = 'https://staging.algominutes.algorythmos.com';
     expect((await upload('n1', 'https://staging.algominutes.algorythmos.com')).status).toBe(200);
-    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4' }, origin: 'https://staging.algominutes.algorythmos.com' }]);
+    // The declared length rides on the session too (plan rev 12 S4).
+    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4', contentLength: 10 }, origin: 'https://staging.algominutes.algorythmos.com' }]);
   });
 
   it("isn't minted for an origin outside the allowlist, or with none (iOS)", async () => {
@@ -120,6 +121,6 @@ describe('an upload session for a browser', () => {
     expect((await upload('n1', 'https://evil.example')).status).toBe(200);
     await seedNote('n2', 'workspace_alice', 'alice');
     expect((await upload('n2')).status).toBe(200);
-    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4' } }, { metadata: { contentType: 'audio/mp4' } }]);
+    expect(minted).toEqual([{ metadata: { contentType: 'audio/mp4', contentLength: 10 } }, { metadata: { contentType: 'audio/mp4', contentLength: 10 } }]);
   });
 });
