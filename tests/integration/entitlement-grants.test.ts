@@ -111,15 +111,16 @@ describe('db-job grant-tester', () => {
   });
 
   it('GRANT_DAYS=0 never expires, MODE=revoke removes it, and no target is an error', async () => {
-    await grantTester.run({ log, repo, env: { GRANT_UID: 'bob', GRANT_DAYS: '0' } });
+    // One clock for the whole test (scripts/check-frozen-clock.mjs).
+    const now = new Date('2026-09-25T00:00:00Z');
+    await grantTester.run({ log, repo, env: { GRANT_UID: 'bob', GRANT_DAYS: '0' }, now });
     expect((await pool.query(`SELECT expires_at FROM entitlement_grants WHERE uid = 'bob'`)).rows).toEqual([{ expires_at: null }]);
     lines.length = 0;
-    expect(await grantTester.run({ log, repo, env: { GRANT_UID: 'bob', MODE: 'revoke' } })).toEqual({ uid: 'bob', revoked: true });
+    expect(await grantTester.run({ log, repo, env: { GRANT_UID: 'bob', MODE: 'revoke' }, now })).toEqual({ uid: 'bob', revoked: true });
     expect(lines).toEqual([[{ userId: 'bob', revoked: true }, 'entitlement_grant_revoked']]);
-    await expect(grantTester.run({ log, repo, env: {} })).rejects.toThrow(/GRANT_EMAIL or GRANT_UID/);
-    await expect(grantTester.run({ log, repo, env: { GRANT_UID: 'bob', GRANT_DAYS: '-1' } })).rejects.toThrow(/GRANT_DAYS/);
+    await expect(grantTester.run({ log, repo, env: {}, now })).rejects.toThrow(/GRANT_EMAIL or GRANT_UID/);
+    await expect(grantTester.run({ log, repo, env: { GRANT_UID: 'bob', GRANT_DAYS: '-1' }, now })).rejects.toThrow(/GRANT_DAYS/);
     // A blank GRANT_DAYS is the default, not "never expires".
-    const now = new Date('2026-09-25T00:00:00Z');
     expect(await grantTester.run({ log, repo, env: { GRANT_UID: 'bob', GRANT_DAYS: ' ' }, now }))
       .toEqual({ uid: 'bob', expiresAt: new Date(now.getTime() + 90 * DAY) });
   });

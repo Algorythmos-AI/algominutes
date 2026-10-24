@@ -540,8 +540,10 @@ describe('db-job beta-invite', () => {
     expect(i).toMatchObject({ label: 'cohort 1', maxRedemptions: 25, grantDays: 30, includedMinutes: 600, notetaker: true, expiresAt: new Date(now.getTime() + 14 * DAY) });
     expect(lines).toEqual([['info', 'beta_invite_created', expect.objectContaining({ inviteId: i!.id })]]);
     expect(JSON.stringify(lines)).not.toContain(hashInviteCode(CODE));
-    // The code it was made from redeems.
-    expect((await redeemInvite({ uid: 'alice', code: CODE })).kind).toBe('redeemed');
+    // The code it was made from redeems, at the same frozen clock the invite was
+    // made with: redeemed against the real clock, this test went red on
+    // 2026-10-15, when the 14-day invite made "on 2026-10-01" expired.
+    expect((await redeemInvite({ uid: 'alice', code: CODE, now })).kind).toBe('redeemed');
   });
 
   it('refuses a plaintext code: it would already sit in the execution\'s env overrides', async () => {
