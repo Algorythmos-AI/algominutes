@@ -334,7 +334,9 @@ final class AuthService: NSObject {
                 ])
             }
         } catch {
-            // Non-fatal: backend also validates workspace on every call.
+            // Non-fatal: the backend validates the workspace on every call, but
+            // a Firestore refusal here is worth seeing (rules, offline, quota).
+            AppLog.error("workspace_doc_ensure_failed: \(error.localizedDescription)")
         }
     }
 
