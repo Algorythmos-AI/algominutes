@@ -29,7 +29,13 @@ name: deploy-staging
 #   Every job that authenticates runs in the `staging` GitHub Environment: the
 #   WIF provider only accepts tokens from refs/heads/integration in that
 #   environment (infra/terraform/modules/environment/cloud-run.tf), so no other
-#   branch, PR or workflow can deploy.
+#   branch, PR or workflow can deploy. The auth step is .github/actions/gcp-auth,
+#   which asks a second time after a transient token-exchange failure
+#   ("Unable to retrieve Identity Pool subject token", BLOCKERS 2026-10-06).
+# - The first job runs in the Environment too and checks its variables name
+#   this target's project (infra/terraform/envs/*/terraform.tfvars) before
+#   anything waits on CI: a missing Environment or variable fails there, by
+#   name, instead of reaching the repo's fallback values.
 # - Image-only: `gcloud run services update --image` changes ONLY the image;
 #   env, service account, VPC and limits stay owned by Terraform (which ignores
 #   the image field, so the two never fight).
@@ -40,8 +46,11 @@ name: deploy-staging
 #   STAGING_FIREBASE_API_KEY (the authenticated smoke signs up a test user).
 # - Prod: deploy-production.yml, the same jobs for `main` in the `production`
 #   Environment. Change a job here and there together, or the test fails.
-# - Every job has a timeout-minutes ceiling from measured runs, so a hung job
-#   fails naming itself (a job that never starts, "waiting", is not covered).
+# - Every job has a timeout-minutes ceiling, so a hung job fails naming itself
+#   (a job that never starts, "waiting", is not covered). Each says what was
+#   measured, over the seven green staging deploys from 2026-10-07 to
+#   2026-10-24 (runs 37571732859, 37573721264, 37578234448, 37581670770,
+#   37584801264, 37588287180 and 40104085061).
 on:
   push:
     branches: [integration]
@@ -52,6 +61,7 @@ on:
       - 'packages/contracts/**'
       - 'package-lock.json'
       - '.github/workflows/deploy-staging.yml'
+      - '.github/actions/gcp-auth/action.yml'
       - 'scripts/smoke-staging.sh'
       - 'scripts/smoke-auth.mjs'
       - 'scripts/check-live-env.mjs'
@@ -77,7 +87,8 @@ jobs:
   changes:
     if: vars.DEPLOY_STAGING == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 5 # measured 5–7 s
+    environment: staging
     outputs:
       services: ${{ steps.pick.outputs.services }}
       # The rollout waves (see the header): who hands work to whom.
@@ -87,6 +98,49 @@ jobs:
       solo: ${{ steps.pick.outputs.solo }}
     steps:
       - uses: actions/checkout@v7
+      - name: Deploy target (this Environment's variables name the project they should)
+        env:
+          TARGET: staging
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+        run: |
+          set -euo pipefail
+          # Read here, in the first job, before anything waits on CI or builds.
+          # Each Environment's variables (runbook §3, §3b) override the repo's;
+          # where an Environment or a variable is missing, GitHub falls back to
+          # the repo's values, which name staging. That is stopped here, by name,
+          # so a run can never deploy to the wrong project with the right-looking
+          # steps. The WIF provider refuses the token as well (the ref and the
+          # environment claim), but that fails later, with a less clear error.
+          case "$TARGET" in
+            staging)    tfvars=infra/terraform/envs/staging/terraform.tfvars ;;
+            production) tfvars=infra/terraform/envs/prod/terraform.tfvars ;;
+            *) echo "::error::Unknown deploy target '$TARGET'"; exit 1 ;;
+          esac
+          want=$(sed -n 's/^project_id *= *"\([^"]*\)".*/\1/p' "$tfvars")
+          [ -n "$want" ] || { echo "::error::No project_id in $tfvars"; exit 1; }
+          missing=
+          [ -n "$PROJECT" ]      || missing="$missing GCP_PROJECT_ID"
+          [ -n "$WIF_PROVIDER" ] || missing="$missing GCP_WIF_PROVIDER"
+          [ -n "$DEPLOYER_SA" ]  || missing="$missing GCP_DEPLOYER_SA"
+          if [ -n "$missing" ]; then
+            echo "::error::The $TARGET Environment has no variable(s):$missing. Set them on the Environment (docs/runbooks/resume-staging-and-deploy.md) before deploying."
+            exit 1
+          fi
+          if [ "$PROJECT" != "$want" ]; then
+            echo "::error::GCP_PROJECT_ID is '$PROJECT', but $TARGET deploys to '$want' ($tfvars): the $TARGET Environment's variables are missing or wrong. Not deploying."
+            exit 1
+          fi
+          case "$DEPLOYER_SA" in
+            *"@${want}.iam.gserviceaccount.com") ;;
+            *) echo "::error::GCP_DEPLOYER_SA '$DEPLOYER_SA' is not a service account of '$want'. Not deploying."; exit 1 ;;
+          esac
+          case "$WIF_PROVIDER" in
+            projects/*/locations/global/workloadIdentityPools/*/providers/*) ;;
+            *) echo "::error::GCP_WIF_PROVIDER '$WIF_PROVIDER' is not a Workload Identity provider resource name. Not deploying."; exit 1 ;;
+          esac
+          echo "Deploying to $TARGET: project $want, as $DEPLOYER_SA"
       - id: filter
         if: github.event_name == 'push'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -142,7 +196,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 50 # measured 6 min 43 s – 7 min 43 s waiting on CI; its own loop gives up at 45 min
     permissions:
       actions: read
       contents: read
@@ -184,7 +238,7 @@ jobs:
     needs: [changes, ci-gate]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30 # measured 31 s – 1 min 21 s with a warm layer cache; room for a cold one
     environment: staging
     permissions:
       contents: read
@@ -197,7 +251,7 @@ jobs:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -220,13 +274,13 @@ jobs:
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     environment: staging
-    timeout-minutes: 30
+    timeout-minutes: 30 # measured 1 min 52 s – 9 min 1 s (two db-job executions, --wait)
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -274,7 +328,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.wave1 != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # measured 33 s – 1 min 21 s per service
     environment: staging
     permissions:
       contents: read
@@ -286,7 +340,7 @@ jobs:
         service: ${{ fromJSON(needs.changes.outputs.wave1) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -312,7 +366,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.solo != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # measured 41 s – 1 min 21 s
     environment: staging
     permissions:
       contents: read
@@ -323,7 +377,7 @@ jobs:
         service: ${{ fromJSON(needs.changes.outputs.solo) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -352,14 +406,14 @@ jobs:
       !cancelled() && needs.changes.outputs.wave2 != '[]' && needs.migrate.result == 'success'
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # measured 39–45 s
     environment: staging
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -387,14 +441,14 @@ jobs:
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
       && (needs.rollout-meetings.result == 'success' || needs.rollout-meetings.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # measured 38–41 s
     environment: staging
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -426,14 +480,14 @@ jobs:
       && needs.rollout.result != 'cancelled' && needs.rollout-meetings.result != 'cancelled'
       && needs.rollout-api.result != 'cancelled'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 20 # measured 54 s – 1 min 0 s
     environment: staging
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: ./.github/actions/gcp-auth # WIF, asked twice (a transient token-exchange failure)
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
@@ -501,7 +555,7 @@ jobs:
     if: >-
       !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 5 # a label and an issue: seconds
     permissions:
       contents: read
       issues: write

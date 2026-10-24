@@ -11,6 +11,8 @@ const jobs = (s: string) => s.slice(s.indexOf('\njobs:\n'));
 const SUBSTITUTIONS: Array<[string, string]> = [
   ["vars.DEPLOY_STAGING == 'true'", "vars.DEPLOY_PRODUCTION == 'true'"],
   ['environment: staging', 'environment: production'],
+  // The first job's target check reads this Environment's variables against this target's tfvars.
+  ['TARGET: staging', 'TARGET: production'],
   ['secrets.STAGING_FIREBASE_API_KEY', 'secrets.PROD_FIREBASE_API_KEY'],
   // A failed prod deploy opens its own issue, under its own label, never a comment on staging's.
   ['stuck staging is seen', 'stuck production deploy is seen'],
@@ -42,11 +44,55 @@ describe('the production deploy', () => {
   it('a failed prod deploy reports under its own label, and every job has a ceiling', () => {
     expect(jobs(production)).toContain('gh issue list --label prod-deploy-failed');
     expect(jobs(production)).not.toMatch(/--label deploy-failed\b/);
-    // Each job carries a timeout-minutes, so a hung job fails naming itself (both files: the jobs are one).
+    // Each job carries a timeout-minutes, so a hung job fails naming itself (both files: the jobs are one),
+    // and each says what was measured, so the next person can re-size it from the same evidence.
     for (const file of [staging, production]) {
       const blocks = jobs(file).split(/\n  (?=[a-z-]+:\n)/).slice(1);
       expect(blocks.length).toBeGreaterThanOrEqual(10);
-      for (const b of blocks) expect(b, b.split('\n')[0]).toMatch(/\n    timeout-minutes: \d+\n/);
+      for (const b of blocks) expect(b, b.split('\n')[0]).toMatch(/\n    timeout-minutes: \d+ # \S.*\n/);
+    }
+  });
+
+  it('authenticates through the local action, which asks WIF a second time, after a checkout', () => {
+    const action = fs.readFileSync('.github/actions/gcp-auth/action.yml', 'utf8');
+    // The pinned auth action appears twice in the composite (the attempt and the retry), and nowhere else:
+    // every job authenticates through the composite, so a retry change is made once.
+    const pinned = /google-github-actions\/auth@[0-9a-f]{40} # v\d+\.\d+\.\d+/g;
+    expect(action.match(pinned)).toHaveLength(2);
+    expect(new Set(action.match(pinned)).size).toBe(1);
+    expect(action).toMatch(/- id: first\n\s+uses: google-github-actions\/auth@[0-9a-f]{40}[^\n]*\n(?:\s+#[^\n]*\n)*\s+continue-on-error: true\n/);
+    expect(action.match(/if: steps\.first\.outcome == 'failure'/g)).toHaveLength(2);
+    expect(action).toMatch(/\n\s+sleep \d+\n/);
+    for (const file of [staging, production]) {
+      expect(file).not.toContain('google-github-actions/auth@');
+      const uses = file.match(/- uses: \.\/\.github\/actions\/gcp-auth\b/g) ?? [];
+      expect(uses).toHaveLength(7);
+      // A local action needs the repository on disk: the checkout comes first in each of those jobs.
+      for (const b of jobs(file).split(/\n  (?=[a-z-]+:\n)/).slice(1)) {
+        if (!b.includes('./.github/actions/gcp-auth')) continue;
+        expect(b.indexOf('uses: actions/checkout@'), b.split('\n')[0]).toBeGreaterThan(-1);
+        expect(b.indexOf('uses: actions/checkout@')).toBeLessThan(b.indexOf('./.github/actions/gcp-auth'));
+      }
+    }
+  });
+
+  it('the first job runs in the Environment and refuses the wrong project before anything else runs', () => {
+    const tfvarsProject = (env: string) =>
+      fs.readFileSync(`infra/terraform/envs/${env}/terraform.tfvars`, 'utf8').match(/^project_id\s*=\s*"([^"]+)"/m)?.[1];
+    expect(tfvarsProject('staging')).toBe('algominutes-staging');
+    expect(tfvarsProject('prod')).toBe('algominutes-prod');
+    for (const [file, env, target] of [[staging, 'staging', 'staging'], [production, 'production', 'production']] as const) {
+      const changes = jobs(file).split(/\n  (?=[a-z-]+:\n)/)[1];
+      expect(changes.startsWith('changes:\n')).toBe(true);
+      expect(changes).toContain(`\n    environment: ${env}\n`);
+      expect(changes).toContain(`TARGET: ${target}\n`);
+      // The check's job comes before the paths filter (so it fails before CI is waited on), reads the three
+      // variables, and maps each target to its tfvars.
+      expect(changes.indexOf('Deploy target')).toBeLessThan(changes.indexOf('- id: filter'));
+      for (const v of ['GCP_PROJECT_ID', 'GCP_WIF_PROVIDER', 'GCP_DEPLOYER_SA']) expect(changes).toContain(`vars.${v}`);
+      expect(changes).toContain('staging)    tfvars=infra/terraform/envs/staging/terraform.tfvars');
+      expect(changes).toContain('production) tfvars=infra/terraform/envs/prod/terraform.tfvars');
+      expect(changes).toContain('if [ "$PROJECT" != "$want" ]; then');
     }
   });
 

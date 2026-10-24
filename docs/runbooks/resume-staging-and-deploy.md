@@ -155,7 +155,13 @@ Firebase API keys identify the project rather than grant access, but a secret ke
 ```
 
 The deploy jobs run in the `staging` GitHub Environment, and the WIF provider
-rejects tokens from any other ref or environment. Apply the repo settings once,
+rejects tokens from any other ref or environment. The first job (`changes`) runs in the Environment
+too and checks, before anything waits on CI, that its three variables are set and name
+`algominutes-staging` (the project in `infra/terraform/envs/staging/terraform.tfvars`); a missing or
+wrong one fails the run there, naming it. Each job then authenticates through
+`.github/actions/gcp-auth`, which asks WIF a second time after a transient "Unable to retrieve
+Identity Pool subject token" (seen 2026-10-06), so one such failure no longer fails a deploy; the run
+shows a warning on the step that was retried. Apply the repo settings once,
 so the environment's branch policy exists before the first deploy
 (`bash scripts/github-settings.sh` shows exactly what will change):
 
@@ -218,7 +224,13 @@ the services it affects.
 two workflows differ in anything but the environment, the gate variable, the smoke's API-key secret and
 the failure issue's label (`prod-deploy-failed`), so a change to one is made to both.
 
-It does nothing until all of these exist. Do them **after Apply P** (plan rev 12 Stage 2), in this order:
+It does nothing until all of these exist, and it cannot touch staging while they don't: until the
+`production` Environment and its variables exist, its first job (`changes`) reads the repo's staging
+values, sees that `GCP_PROJECT_ID` is not `algominutes-prod` (the project in
+`infra/terraform/envs/prod/terraform.tfvars`), and fails naming the variable, with nothing after it run
+(the WIF provider would refuse the token as well, since the ref is `main`, but later and less clearly).
+Before `DEPLOY_PRODUCTION` is set, not even that runs: every job is skipped. Do these **after Apply P**
+(plan rev 12 Stage 2), in this order:
 
 1. `bash scripts/github-settings.sh --apply`, if it hasn't run since the `production` Environment was added:
    the Environment accepts `main` only, and the owner approves each run.
@@ -252,8 +264,16 @@ It does nothing until all of these exist. Do them **after Apply P** (plan rev 12
    ```
 
 Every job has a `timeout-minutes` ceiling sized from staging's runs (ci-gate 50, migrate 30, an image 30,
-a rollout 15, the smoke 20), so a hung job fails naming itself. A job that never starts ("waiting", seen
-twice on staging on 2026-10-06) isn't covered by a timeout: cancel the run and re-run it.
+a rollout 15, the smoke 20; each line in the workflow says what was measured, and the header names the
+runs), so a hung job fails naming itself. A job that never starts ("waiting", seen twice on staging on
+2026-10-06) isn't covered by a timeout: cancel the run and re-run it. Every job authenticates through
+`.github/actions/gcp-auth`, which asks WIF a second time after a transient token-exchange failure (§3).
+
+What the owner creates, in one list. Variables, on the `production` Environment: `GCP_PROJECT_ID`
+(`algominutes-prod`), `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`. Secret, on the Environment:
+`PROD_FIREBASE_API_KEY`. Repository variable, last: `DEPLOY_PRODUCTION` (`true`). Optional, on the
+repository, shared with staging: `SWEEPER_HOLD` (`true` keeps `db-sweep` paused). The Environment itself,
+with `main` as its only branch and the owner as its reviewer, comes from `scripts/github-settings.sh`.
 
 ## 4. Give internal testers minutes
 

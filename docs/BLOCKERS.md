@@ -63,8 +63,14 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     issue), with its own `prod-deploy-failed` label; `tests/deploy-production.test.ts` (5 tests) fails on any
     other difference, and a one-line change to staging alone turned it red. Every deploy job has a
     `timeout-minutes` ceiling from staging's last six deploys (ci-gate peaked at 7 min, migrate at 9, the rest at
-    1 or less). Runbook `resume-staging-and-deploy.md` §3b lists the owner's steps after Apply P. **Not done, on
-    purpose:** a WIF retry (seen once; added if it recurs).
+    1 or less). Runbook `resume-staging-and-deploy.md` §3b lists the owner's steps after Apply P. **Then, the
+    hardening the plan asked for alongside it:** every deploy job authenticates through
+    `.github/actions/gcp-auth`, which asks WIF a second time after a transient "Unable to retrieve Identity Pool
+    subject token" (the 10-06 sighting), both workflows' first job runs in its Environment and fails by name when
+    a variable is missing or names the wrong project (so production's workflow can't fall through to the repo's
+    staging values), and each ceiling says what was measured (seven green deploys, 10-07 to 10-24; the header
+    names the runs). **Not exercised live:** the retry path needs a token-exchange failure to happen; the next
+    red auth step is the test.
   - [ ] **0.6 O8.** Dependabot rebased #422, #423, #427 and #433 (which replaced #425) onto the fixed base, and
     each has auto-merge on. #424 and #426 hadn't rebased by 14:45; asked again, with auto-merge on, so they land
     only on a green run at the new base. #422 (motion 13 → 14.5) and #423 (`@firebase/rules-unit-testing` 5 → 6)

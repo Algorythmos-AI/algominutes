@@ -57,7 +57,9 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions
-    directory: /
+    # The workflows, and the composite action the deploys authenticate through
+    # (a composite action's pins are read only from its own directory).
+    directories: ['/', '/.github/actions/gcp-auth']
     schedule:
       interval: weekly
       day: monday
