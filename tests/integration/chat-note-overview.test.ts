@@ -108,7 +108,7 @@ describe('POST /v1/chat about one note', () => {
     const sent: string[] = [];
     const { out, res } = stream();
     await handleChatStream({
-      uid, body, log, res,
+      uid, body, log: (deps as { log?: typeof log }).log ?? log, res,
       deps: {
         assertUnderDailyCap: async () => ({ ok: true }), embed: async () => { throw new Error('no embedder in this test'); },
         recordChat: async () => {}, authHeader: async () => 'Bearer t', project: 'p',
@@ -184,6 +184,105 @@ describe('POST /v1/chat about one note', () => {
       expect(out.written).toContain('event: error');
       expect(m.calls()).toBe(1);
       expect(m.waits).toEqual([]);
+    });
+  });
+
+  // Plan rev 12 S14. On 2026-10-11, 10-18 and 10-20 /v1/chat closed at exactly 61 s: the api's Cloud Run request
+  // timeout. Vertex accepted the stream and sent nothing; the handler waited with no bound, so it wrote neither
+  // `done` nor `error`, and the browser was left with a cut stream. A stall is now cut and asked again.
+  describe('a stalled model', () => {
+    // A stream that opens and then sends nothing until it's aborted.
+    const silentStream = (init: { signal?: AbortSignal }) => ({
+      ok: true, status: 200,
+      body: (async function* () {
+        await new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+      })(),
+    });
+    // One that sends some text, then goes quiet.
+    const stopsMidway = (init: { signal?: AbortSignal }) => ({
+      ok: true, status: 200,
+      body: (async function* () {
+        yield new TextEncoder().encode(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'half' }] } }] })}\n\n`);
+        await new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+      })(),
+    });
+    const events = () => {
+      const seen: Array<{ msg: string; obj: any }> = [];
+      const at = (obj: any, msg: string) => void seen.push({ msg, obj });
+      return { log: { info: at, warn: at, error: at, child: () => ({ info: at, warn: at, error: at }) }, seen };
+    };
+
+    it('a stream that sends nothing is cut at the first-text limit and asked again, and the answer arrives', async () => {
+      let calls = 0;
+      const { seen, log: spy } = events();
+      const started = Date.now();
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, {
+        firstTextMs: 100, streamBudgetMs: 5_000, chatModels: ['gemini-3.5-flash'], log: spy,
+        fetchImpl: async (_url: string, init: { signal?: AbortSignal }) => (calls += 1) === 1 ? silentStream(init) : sse(),
+      });
+      expect(Date.now() - started).toBeLessThan(3_000);
+      expect(out.written).toContain('"text":"ok"');
+      expect(out.written).toContain('event: done');
+      expect(out.written).not.toContain('event: error');
+      expect(calls).toBe(2);
+      expect(seen.find((e) => e.msg === 'chat_stream_stalled')?.obj).toMatchObject({ model: 'gemini-3.5-flash', attempt: 1, firstTextMs: 100 });
+    });
+
+    // From the PII audit of this change: a stalled attempt can leave half an SSE line behind, and the next
+    // attempt's first line must not be joined onto it.
+    it("a stalled attempt's half-line never reaches the next attempt", async () => {
+      let calls = 0;
+      const halfThenSilent = (init: { signal?: AbortSignal }) => ({
+        ok: true, status: 200,
+        body: (async function* () {
+          yield new TextEncoder().encode('data: {"candidates":[{"content":{"parts":[{"te');
+          await new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+        })(),
+      });
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, {
+        firstTextMs: 100, streamBudgetMs: 5_000, chatModels: ['gemini-3.5-flash'],
+        fetchImpl: async (_url: string, init: { signal?: AbortSignal }) => (calls += 1) === 1 ? halfThenSilent(init) : sse(),
+      });
+      expect(calls).toBe(2);
+      expect(out.written).toContain('"text":"ok"');
+      expect(out.written).toContain('event: done');
+    });
+
+    it('a request whose headers never come is cut the same way', async () => {
+      let calls = 0;
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, {
+        firstTextMs: 100, streamBudgetMs: 5_000, chatModels: ['gemini-3.5-flash'],
+        fetchImpl: (_url: string, init: { signal?: AbortSignal }) => (calls += 1) === 1
+          ? new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)))
+          : Promise.resolve(sse()),
+      });
+      expect(out.written).toContain('"text":"ok"');
+      expect(calls).toBe(2);
+    });
+
+    it('every attempt stalls: it says the chat failed, well inside Cloud Run’s 60 s, and stops asking', async () => {
+      let calls = 0;
+      const started = Date.now();
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, {
+        firstTextMs: 100, streamBudgetMs: 5_000, chatModels: ['gemini-3.5-flash'],
+        fetchImpl: async (_url: string, init: { signal?: AbortSignal }) => { calls += 1; return silentStream(init); },
+      });
+      expect(Date.now() - started).toBeLessThan(3_000);
+      expect(out.written).toContain('event: error');
+      expect(out.written).not.toContain('event: done');
+      expect(calls).toBe(3);
+    });
+
+    it('a stream that stops partway is ended at the budget with an error, never left hanging', async () => {
+      const started = Date.now();
+      const { out } = await ask('alice', { query: 'q', noteId: 'n1' }, {
+        firstTextMs: 100, streamBudgetMs: 400, chatModels: ['gemini-3.5-flash'],
+        fetchImpl: async (_url: string, init: { signal?: AbortSignal }) => stopsMidway(init),
+      });
+      expect(Date.now() - started).toBeLessThan(3_000);
+      expect(out.written).toContain('"text":"half"');
+      expect(out.written).toContain('event: error');
+      expect(out.written).not.toContain('event: done');
     });
   });
 

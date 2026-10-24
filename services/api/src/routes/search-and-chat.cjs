@@ -168,6 +168,12 @@ async function memberWorkspaces(uid, log) {
 // How long chat waits before asking a busy model again, and what counts as busy.
 const CHAT_BUSY_WAITS_MS = [1000, 3000];
 const CHAT_BUSY_STATUSES = new Set([429, 503]);
+// Plan rev 12 S14. How long an attempt may go before its first text, and how long the whole answer may take.
+// /v1/chat closed at exactly 61 s on 2026-10-11, 10-18 and 10-20 (the api's 60 s Cloud Run request timeout):
+// Vertex accepted the stream and sent nothing, and nothing bounded the wait. A green night's answer starts in
+// 2-3 s, so 15 s is far past normal; 45 s leaves the retrieval before it, and the error frame, inside the 60.
+const CHAT_FIRST_TEXT_MS = 15_000;
+const CHAT_STREAM_BUDGET_MS = 45_000;
 
 /** The chat model first, then the rest of the pipeline's ladder that hasn't retired. */
 function chatModels(now = new Date()) {
@@ -643,35 +649,13 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
     // (models.cjs: until gemini-2.5-flash retires), then round again.
     const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     const ladder = deps.chatModels || chatModels();
-    let upstream;
-    for (let attempt = 0; ; attempt += 1) {
-      const model = ladder[attempt % ladder.length];
-      upstream = await fetchImpl(urlFor(model), {
-        method: 'POST',
-        headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(chatRequestBody(prompt, model)),
-      });
-      if (!CHAT_BUSY_STATUSES.has(upstream.status) || attempt >= CHAT_BUSY_WAITS_MS.length) {
-        if (attempt > 0 && upstream.ok) log.info({ userId: uid, model, attempt: attempt + 1 }, 'chat_answered_after_busy');
-        break;
-      }
-      log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1, model }, 'chat_model_busy_retrying');
-      // Let the refused response go before asking again.
-      if (upstream.body && typeof upstream.body.cancel === 'function') {
-        await upstream.body.cancel().catch((err) => log.warn({ err, userId: uid }, 'chat_busy_body_cancel_failed'));
-      }
-      await sleep(CHAT_BUSY_WAITS_MS[attempt]);
-    }
-    if (!upstream.ok || !upstream.body) {
-      // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
-      const errText = upstream.body ? await responseTextHead(upstream) : '';
-      throw vertexRefusal('vertex_stream_failed:', upstream.status, errText);
-    }
+    const firstTextMs = deps.firstTextMs || CHAT_FIRST_TEXT_MS;
+    const deadline = Date.now() + (deps.streamBudgetMs || CHAT_STREAM_BUDGET_MS);
+    // Busy refusals and stalls share the same few tries (one ask, then CHAT_BUSY_WAITS_MS.length more).
+    const maxAttempts = CHAT_BUSY_WAITS_MS.length + 1;
 
-    const decoder = new TextDecoder();
     let emittedText = false;
-
-    const feeder = createSseLineFeeder((rawLine) => {
+    const onLine = (rawLine) => {
       const parsed = parseSseDataLine(rawLine);
       if (parsed.type === 'parse_error') {
         log.warn({ uid, errorName: parsed.errorName, payloadChars: parsed.payloadChars }, 'chat_stream_parse_failed');
@@ -681,12 +665,68 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps 
         res.write(`data: ${JSON.stringify({ text: parsed.text })}\n\n`);
         emittedText = true;
       }
-    });
+    };
 
-    for await (const chunk of upstream.body) {
-      feeder.feed(decoder.decode(chunk, { stream: true }));
+    for (let attempt = 0; ; attempt += 1) {
+      const model = ladder[attempt % ladder.length];
+      // Each attempt reads with its own decoder and line buffer: a stalled attempt can leave half an SSE line
+      // behind, and the next attempt's first line must not be joined onto it.
+      const decoder = new TextDecoder();
+      const feeder = createSseLineFeeder(onLine);
+      // Each attempt is aborted if no text has come by the first-text limit (a stall: ask again), or when the
+      // whole answer's budget runs out (then the chat says it failed, inside Cloud Run's request timeout).
+      const controller = new AbortController();
+      let stalled = false;
+      const stallTimer = setTimeout(() => { stalled = true; controller.abort(new Error('chat_first_text_timeout')); },
+        Math.max(1, Math.min(firstTextMs, deadline - Date.now())));
+      const budgetTimer = setTimeout(() => controller.abort(new Error('chat_stream_budget')), Math.max(1, deadline - Date.now()));
+      try {
+        const upstream = await fetchImpl(urlFor(model), {
+          method: 'POST',
+          headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(chatRequestBody(prompt, model)),
+          signal: controller.signal,
+        });
+        if (CHAT_BUSY_STATUSES.has(upstream.status) && attempt + 1 < maxAttempts) {
+          log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1, model }, 'chat_model_busy_retrying');
+          // Let the refused response go before asking again.
+          if (upstream.body && typeof upstream.body.cancel === 'function') {
+            await upstream.body.cancel().catch((err) => log.warn({ err, userId: uid }, 'chat_busy_body_cancel_failed'));
+          }
+          clearTimeout(stallTimer);
+          clearTimeout(budgetTimer);
+          await sleep(CHAT_BUSY_WAITS_MS[attempt]);
+          continue;
+        }
+        if (!upstream.ok || !upstream.body) {
+          // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
+          const errText = upstream.body ? await responseTextHead(upstream) : '';
+          throw vertexRefusal('vertex_stream_failed:', upstream.status, errText);
+        }
+        for await (const chunk of upstream.body) {
+          feeder.feed(decoder.decode(chunk, { stream: true }));
+          // The answer has started: from here only the whole budget bounds it.
+          if (emittedText) clearTimeout(stallTimer);
+        }
+        feeder.flush(); // trailing line with no terminating newline
+        if (attempt > 0) log.info({ userId: uid, model, attempt: attempt + 1 }, 'chat_answered_after_busy');
+        break;
+      } catch (err) {
+        // Nothing of this answer has been sent yet, and there's a try and time left: ask again (the next model,
+        // while the ladder has one), at once. A stall is its own wait.
+        if (stalled && !emittedText && attempt + 1 < maxAttempts && Date.now() < deadline) {
+          log.warn({ userId: uid, model, attempt: attempt + 1, firstTextMs }, 'chat_stream_stalled');
+          continue;
+        }
+        if (controller.signal.aborted) {
+          log.warn({ userId: uid, model, attempt: attempt + 1, stalled, emittedText }, 'chat_stream_gave_up');
+        }
+        throw err;
+      } finally {
+        clearTimeout(stallTimer);
+        clearTimeout(budgetTimer);
+      }
     }
-    feeder.flush(); // trailing line with no terminating newline
 
     // Diagnostic: retrieval succeeded (citations sent) but the model stream
     // yielded no text. If this fires after the CRLF fix, the cause is upstream
