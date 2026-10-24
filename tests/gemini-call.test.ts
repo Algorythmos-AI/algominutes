@@ -171,6 +171,73 @@ describe('callGeminiWithLadder', () => {
     // It gives up rather than moving on to the next rung with no budget left.
     expect(events.find((e) => e.msg === 'gemini_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1 });
   });
+
+  // Plan rev 12 S3 (BLOCKERS 2026-10-06): the model hung for the whole 240 s budget on a ten-second recording,
+  // and the task's retry answered in 3 s. With a per-attempt cap, a hung attempt is cut and asked again while
+  // the budget lasts, instead of spending all of it on one call.
+  it('cuts a hung attempt at its own cap and asks again, within the budget', async () => {
+    const { log, events } = logSpy();
+    let calls = 0;
+    const hangThenAnswer = (_url: string, init: { signal?: AbortSignal }) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ok('{"gist":"x"}').body, text: async () => '' });
+    };
+    const started = Date.now();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: hangThenAnswer, log, deadlineMs: 5_000, attemptTimeoutMs: 100 }));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(out).toMatchObject({ rawText: '{"gist":"x"}', model: 'model-a', error: null });
+    expect(calls).toBe(2);
+    expect(events.find((e) => e.msg === 'gemini_attempt_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1, attemptTimeoutMs: 100 });
+    expect(events.find((e) => e.msg === 'gemini_ok')?.obj).toMatchObject({ attempt: 2 });
+  });
+
+  it('every attempt hung: it moves to the next rung, and stops with TIME_BUDGET once the budget is gone', async () => {
+    const { log, events } = logSpy();
+    const seen: string[] = [];
+    const hang = (url: string, init: { signal?: AbortSignal }) => {
+      seen.push(/models\/([^:]+):generateContent/.exec(url)![1]!);
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a', 'model-b'], fetchImpl: hang, log, deadlineMs: 1_000, attemptTimeoutMs: 150 }));
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    // Three cut attempts on model-a, then model-b, until the budget ends.
+    expect(seen.slice(0, 4)).toEqual(['model-a', 'model-a', 'model-a', 'model-b']);
+    expect(events.filter((e) => e.msg === 'gemini_attempt_timeout').length).toBeGreaterThanOrEqual(3);
+    expect(events.some((e) => e.msg === 'gemini_model_exhausted' && e.obj.model === 'model-a')).toBe(true);
+  });
+
+  it('with no per-attempt cap, an attempt may use the whole budget, as before (the summarizer)', async () => {
+    const { log, events } = logSpy();
+    let calls = 0;
+    const hang = (_url: string, init: { signal?: AbortSignal }) => {
+      calls += 1;
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: hang, log, deadlineMs: 200 }));
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    expect(calls).toBe(1);
+    expect(events.some((e) => e.msg === 'gemini_attempt_timeout')).toBe(false);
+  });
+});
+
+describe('attemptTimeoutForAudioMs: how long one call may take on audio of a given length', () => {
+  const { attemptTimeoutForAudioMs, RETRY_DEADLINE_MS } = require('../packages/ai/src/intelligence.cjs');
+
+  it('grows with the audio, from a floor to a ceiling inside the ladder budget', () => {
+    expect(attemptTimeoutForAudioMs(10)).toBe(60_000);
+    expect(attemptTimeoutForAudioMs(5 * 60)).toBe(105_000);
+    expect(attemptTimeoutForAudioMs(10 * 60)).toBe(150_000);
+    expect(attemptTimeoutForAudioMs(60 * 60)).toBe(150_000);
+    // Always room for a second attempt inside the budget.
+    expect(attemptTimeoutForAudioMs(60 * 60)).toBeLessThan(RETRY_DEADLINE_MS);
+  });
+
+  it('an unknown length gets no cap (undefined): the whole budget, as before', () => {
+    for (const d of [undefined, null, NaN, 0, -5]) expect(attemptTimeoutForAudioMs(d)).toBeUndefined();
+  });
 });
 
 // 2026-10-01: thinkingBudget was sent to every rung. Some of gemini-3.5-flash's Sydney backends refuse it ("Thinking

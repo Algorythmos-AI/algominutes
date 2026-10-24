@@ -64,6 +64,14 @@ describe('fast path: the Gemini request', () => {
     expect(lastRequest.generationConfig.thinkingConfig).toBeUndefined();
     expect(lastRequest.generationConfig.maxOutputTokens).toBe(16384);
   });
+
+  // Plan rev 12 S3: a hung attempt on a short clip is cut at a cap from the clip's length (62 s here: one full
+  // minute, 60 s + 9 s), not left to spend the whole 240 s budget.
+  it('caps one attempt by the clip length, inside the budget', async () => {
+    await (await run(async () => {})).done;
+    expect(lastRequest.attemptTimeoutMs).toBe(69_000);
+    expect(lastRequest.attemptTimeoutMs).toBeLessThan(lastRequest.deadlineMs);
+  });
 });
 
 describe("fast path: an earlier run's chapters", () => {

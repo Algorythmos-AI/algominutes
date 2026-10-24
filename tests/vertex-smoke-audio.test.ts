@@ -31,6 +31,9 @@ describe('vertex-smoke audio check', () => {
     expect(calls[0].generationConfig).toMatchObject({ responseMimeType: 'application/json', maxOutputTokens: 16384 });
     expect(calls[0].generationConfig.responseSchema.required).toContain('transcript');
     expect(calls[0].location).toBe('australia-southeast1');
+    // One hung attempt is cut and asked again, so it can't fail a deploy on its own (plan rev 12 S3).
+    expect(calls[0].attemptTimeoutMs).toBe(60_000);
+    expect(calls[0].attemptTimeoutMs).toBeLessThan(calls[0].deadlineMs);
   });
 
   it.each([
