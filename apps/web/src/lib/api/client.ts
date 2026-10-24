@@ -58,6 +58,8 @@ import {
   ShareListResponse,
   ShareRevokeRequest,
   ShareRevokeResponse,
+  TextNoteCreateRequest,
+  TextNoteResponse,
   SupportCreatedResponse,
   SupportRequest,
   TrackEventRequest,
@@ -210,6 +212,8 @@ export function createApiClient(opts: ApiClientOptions) {
     readNotePage: (body: NoteReadRequest & { cursor: string }) => post('/v1/notes/read', body, NoteReadPageResponse),
     updateNote: (body: UpdateNoteRequest) => post('/v1/notes/update', body, UpdateNoteResponse),
     deleteNote: (body: DeleteNoteRequest) => post('/v1/notes/delete', body, DeleteNoteResponse),
+    // A text note (a scan, a PDF, an imported file) from text extracted on the device (plan rev 12 R12.8).
+    createTextNote: (body: TextNoteCreateRequest) => post('/v1/notes/text', body, TextNoteResponse),
     noteAudioUrl: (body: NoteAudioUrlRequest) => post('/v1/notes/audio-url', body, NoteAudioUrlResponse),
     setSpeakers: (noteId: string, body: SetNoteSpeakersRequest) =>
       post(`/v1/notes/${encodeURIComponent(noteId)}/speakers`, body, SetNoteSpeakersResponse),
