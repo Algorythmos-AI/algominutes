@@ -235,7 +235,10 @@ query strings / a test email — do-not-port. `reports/slater-*` names the clien
 
 **Synthetic (not incidents):** `scripts/fixtures/README.md:19` and `tests/redaction.test.ts`
 (29,35,112,149,151) contain the AWS doc example key `AKIAIOSFODNN7EXAMPLE` and deliberately fake
-`AIza…`/`ghp_…`/`xoxb-…`/`sk_live_…` samples that exercise the redactor. Allowlisted in `.gitleaks.toml`.
+`AIza…`/`ghp_…`/`xoxb-…`/`sk_live_…` samples that exercise the redactor. They are **not** allowlisted:
+`.gitleaks.toml` keeps its empty allowlist (CLAUDE.md §1). The samples are assembled at run time
+(`'sk_live_' + 'a'.repeat(24)`, `'AKIA' + 'ABCDEFGHIJKLMNOP'`), so no scanner sees a token in the source, and
+`gitleaks detect` over the tree is clean (checked 2026-10-24).
 
 None of this enters `~/algominutes`: the do-not-port list already excludes `evidence/`, `evals/`,
 `reports/`, `scratch/`, `recordings/`, and the seed fixtures.

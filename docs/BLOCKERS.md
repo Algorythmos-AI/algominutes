@@ -3,10 +3,37 @@
 Batched list of everything that needs a human decision or credential. Nothing here stopped the A2/A3
 run; each item has a safe reversible default already applied. Grouped by type.
 
-## 0. The release plan (rev 11, 2026-09-30; rev 10, 2026-09-29)
+## 0. The release plan (rev 12, 2026-10-24; rev 11, 2026-09-30; rev 10, 2026-09-29)
 
-Rev 11 leads `docs/plans/RELEASE.md`: Stage 0 stops the line, then the quality sprint (H0–H15) comes before
-cohort 1 (about 2026-10-24). Its evidence goes here, first; rev 10's entries follow.
+Rev 12 leads `docs/plans/RELEASE.md`: the App-Review readiness check of 2026-10-24, its bug list (S1–S13,
+I1–I9, O1–O9), and the five stages to a submission that passes. Each bug closes here under its id, with a
+failing-then-passing test and staging evidence. Rev 11's entries follow, then rev 10's.
+
+- **The readiness check of 2026-10-24 (plan rev 12 R12.1), at integration `6ce9c3f0`.** Read-only: docs, CI
+  history, the public site, both GCP projects (read-only), an App-Review audit of `apps/ios`, a backend and
+  operations audit. Findings and their ids are in RELEASE.md R12.3. The facts that decide the plan:
+  - No merge from 2026-10-07 to 10-24. `main` is 218 commits behind `integration`; its only promotion is the site
+    (#198). `algominutes-prod` has Cloud Run, Cloud Tasks and Secret Manager disabled, no Cloud SQL and no
+    tfstate bucket (O1). `ci/deploy-production` (e335e107) was never merged.
+  - **CI red for every new PR from 2026-10-18** (#422–#427): `tests/integration/beta-invites.test.ts:544` made a
+    14-day invite at a frozen 2026-10-01 and redeemed it at the real clock (S1). Reproduced locally against
+    Postgres 16 + pgvector: `expected 'expired' to be 'redeemed'`, 1 failed of 34. **Fixed in #428**, which also
+    adds `scripts/check-frozen-clock.mjs` to `invariants.yml`: it flagged the test before the fix (and one
+    two-clock block in `entitlement-grants.test.ts`, now on one clock) and passes after, 50 of 50 across both
+    files.
+  - The nightly pipeline e2e is green 10-13 → 10-23 (10-22 cancelled), so the one-model ladder works after
+    gemini-2.5-flash's retirement. The scheduled web journey failed 10-16, 10-17, 10-18 and 10-20 (the chat answer
+    at 120 s, a call note's summary at 480 s) and was killed at 40 minutes on 10-23 (O2).
+  - The Release build: empty origins (`project.yml`, by design until prod), `UPDATE_URL` `itms-beta://`, the
+    extension at device family `"1,2"`, no DiskSpace reason in the extension's manifest (I1, I4), the invite path
+    and the paywall-off posture (I2), no products in App Store Connect.
+  - Terms and Privacy live at version 2026-09-26, still "pending legal review"; `/delete-account` and `/support`
+    200; `/notetaker` 404 on prod until P3.
+  - **Could not be read from here:** App Store Connect (products, agreements, Test Information, whether a
+    Staging → Beta workflow or an external group exists), prod Firebase, the Vertex quota page. The owner's
+    consoles answer those.
+  - [x] 0.1 S1 → #428.
+  - [ ] 0.2 I1, I4, I7 → #430 (open) · 0.3 O2 · 0.4 O1's workflow and O3 · 0.6 O8. Each opens as its own PR.
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the

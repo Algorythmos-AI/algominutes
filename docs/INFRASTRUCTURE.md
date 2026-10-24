@@ -166,23 +166,25 @@ expensive AI pipeline while leaving the API serving.
 same region, same IAM shape — at the **smallest viable tier** of each. It is not a capacity test of
 production. Record tier differences in `docs/DECISIONS.md`.
 
-### 4.5 Services (A4) — ⏸️ STAGING PAUSED · ⏳ prod authored, not applied
+### 4.5 Services (A4) — ✅ staging live · ⏳ prod authored, not applied
 
-**Status (15 Aug 2026):** infrastructure is authored as **Terraform** in `infra/terraform/`
+**Status (24 Oct 2026):** infrastructure is authored as **Terraform** in `infra/terraform/`
 (modules/environment + envs/{staging,prod}); `terraform validate` passes both envs. Apply steps:
 `docs/runbooks/gcp-provisioning.md`; prod-specific notes: `docs/runbooks/prod-firebase-config.md`.
 
-- **`algominutes-staging`: ✅ APPLIED — 111 resources live** (`terraform apply` succeeded; Cloud SQL
-  `edition = ENTERPRISE`, see DECISIONS A4).
-- **`algominutes-prod`: ⏳ not yet applied.** Same Terraform, run from a `gcp-admin@algorythmos.com` shell.
+- **`algominutes-staging`: ✅ live.** Applied 15 Aug 2026 (111 resources; Cloud SQL `edition = ENTERPRISE`,
+  DECISIONS A4), paused 27 Aug to stop idle spend, **resumed 26 Sep 2026**
+  (`docs/runbooks/resume-staging-and-deploy.md`; applies B, C and D since, BLOCKERS §0). All eight Cloud Run
+  services deploy from `integration` (`deploy-staging.yml`), `algominutes-staging-pg` is RUNNABLE with backups
+  and PITR on, and the nightly e2e runs against it.
+- **`algominutes-prod`: ⏳ not yet applied.** Same Terraform, run from an owner shell. As of 24 Oct 2026 the
+  project has the Cloud Run, Cloud Tasks and Secret Manager APIs disabled, no Cloud SQL instance and no
+  `algominutes-prod-tfstate` bucket; plan rev 12 Stage 2 (`docs/plans/RELEASE.md`) is the apply.
 
-> ⏸️ **PAUSED 27 Aug 2026 to stop idle spend — out-of-band, NOT reflected in Terraform.**
-> `algominutes-staging-pg` is `activation-policy=NEVER` (STOPPED) and the Serverless VPC Access
-> connector `algominutes-staging-vpc` has been **deleted** (a connector cannot scale below
-> `min_instances = 2`, so deletion is the only way to reach zero). Everything else — VPC, subnet, PSA
-> range, buckets, Firestore, secrets, service accounts — is untouched.
-> **`terraform apply` will recreate the connector and resume the spend.** See DECISIONS
-> "Staging paused to stop idle spend" for the resume commands.
+> History: the 27 Aug 2026 pause stopped `algominutes-staging-pg` (`activation-policy=NEVER`) and deleted the
+> Serverless VPC Access connector out of band (a connector cannot scale below `min_instances = 2`). The
+> resume re-applied Terraform, which recreated the connector. DECISIONS "Staging paused to stop idle spend"
+> keeps the commands.
 
 **Firebase — staging** (`algominutes-staging`):
 - Firebase enabled, **Blaze** (pay-as-you-go) plan.
