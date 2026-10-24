@@ -124,15 +124,26 @@ export async function runWebE2E({ siteUrl, bypass, readyMs, stripe = false, invi
   const left = () => Math.max(1_000, deadline - Date.now());
   const wait = (ms) => Math.min(ms, longMs, left());
   const results = [];
-  // Why the last wait gave up (a timeout, a selector), for the FAIL line that follows it.
+  // Why the last wait gave up (a timeout, a selector), and what the page was showing when it did, for the FAIL
+  // line that follows it. A bare timeout can't tell a slow pipeline from an error on the screen: on 10-18 and
+  // 10-20 the chat answer, which takes 2-3 s on a green night, timed out at 120 s with nothing else said.
   let lastWait = '';
   const within = (p) => p.then(
     () => true,
-    (err) => {
-      lastWait = String(err?.message ?? err).split('\n')[0].slice(0, 160);
+    async (err) => {
+      const shown = await pageSays();
+      lastWait = [String(err?.message ?? err).split('\n')[0].slice(0, 160), shown].join('; ');
       return false;
     },
   );
+  // The page's visible alerts and statuses, which is where the app says what went wrong or what it's doing.
+  const pageSays = async () => {
+    const texts = await page.locator('[role="alert"], [role="status"]').allInnerTexts().then(
+      (all) => all.map((t) => t.trim().replace(/\s+/g, ' ')).filter(Boolean),
+      (err) => [`unreadable: ${String(err?.message ?? err).split('\n')[0].slice(0, 80)}`],
+    );
+    return texts.length ? `the page said: ${texts.join(' / ').slice(0, 240)}` : 'the page showed no error or status';
+  };
   const check = (name, ok, detail) => {
     const why = [detail, ok ? '' : lastWait].filter(Boolean).join('; ');
     lastWait = '';
