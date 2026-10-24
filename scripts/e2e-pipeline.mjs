@@ -143,6 +143,8 @@ export function e2eConfig(env = process.env) {
     minutes,
     readyMs: Number.isFinite(ready) && ready > 0 ? ready : 10 * 60_000 + minutes * 20_000,
     logProject: (env.LOG_PROJECT || '').trim(),
+    // Held first (plan rev 12 step 1.8): upload with no minutes, expect the kickoff held, then redeem.
+    holdFirst: env.E2E_HOLD_FIRST === 'true',
   };
 }
 
@@ -206,6 +208,8 @@ export async function runPipelineE2E({
   logWaitMs = 60_000,
   write = (s) => process.stdout.write(s),
   traceId = `e2e-${randomBytes(12).toString('hex')}`,
+  // Held first: the recording is uploaded before the invite code is redeemed, so it must be held, then released.
+  holdFirst = false,
 }) {
   const results = [];
   // Seconds from kickoff to ready, when it got there (scripts/load-staging.mjs reads it).
@@ -258,9 +262,13 @@ export async function runPipelineE2E({
   };
 
   try {
-    const redeemed = await api('POST', '/beta/redeem', { code: inviteCode });
-    const left = redeemed.body?.entitlement?.remainingMinutes;
-    if (!check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`)) return { ok: false, results };
+    const redeem = async () => {
+      const redeemed = await api('POST', '/beta/redeem', { code: inviteCode });
+      const left = redeemed.body?.entitlement?.remainingMinutes;
+      return check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`);
+    };
+    // Staging's guests start with no minutes. Normally the code is redeemed first; held first, after the kickoff.
+    if (!holdFirst && !(await redeem())) return { ok: false, results };
 
     const bytes = fs.readFileSync(recording);
     const { ext, mime } = FORMATS[format];
@@ -318,12 +326,20 @@ export async function runPipelineE2E({
     if (!check("the note's doc, written as the apps write it", doc.status === 200, `HTTP ${doc.status}`)) return { ok: false, results };
 
     const started = now();
-    const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
-    // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
-    if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
-    // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
-    const replay = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
-    check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
+    const kickoffBody = { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 };
+    const kickoff = await api('POST', '/process', kickoffBody);
+    if (holdFirst) {
+      // H6c: an uploaded recording over the minutes left is held, never refused, and answered as accepted (202).
+      if (!check('with no minutes, the uploaded recording is held', kickoff.status === 202 && kickoff.body?.held === true, `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // H6b: redeeming a code resumes the user's held notes at once; nothing else asks for it.
+      if (!(await redeem())) return { ok: false, results };
+    } else {
+      // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
+      if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
+      const replay = await api('POST', '/process', kickoffBody);
+      check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
+    }
 
     let status = 'processing';
     let error = '';
@@ -350,6 +366,14 @@ export async function runPipelineE2E({
       `HTTP ${read.status}, ${pg.note?.status}, ${pg.transcript?.lines?.length ?? 0} lines`,
     );
     if (chaptersWanted) check(`a ${minutes}-minute recording has chapters`, (pg.summary?.chapters?.length ?? 0) >= 2, `${pg.summary?.chapters?.length ?? 0} chapters`);
+
+    // Try again on a finished note (plan rev 12 step 1.8): answered ready, and nothing runs. On 2026-10-01 a
+    // finished 52-minute note was run again by a second kickoff (#311), paying speech-to-text twice.
+    const lines = pg.transcript?.lines?.length ?? 0;
+    const again = await api('POST', '/process', kickoffBody);
+    check('Try again on a finished note answers ready, and runs nothing', again.status === 200 && again.body?.cached === true, `HTTP ${again.status}${again.body?.status ? `, ${again.body.status}` : ''}`);
+    const reread = await api('POST', '/notes/read', { noteId, workspaceId });
+    check('the transcript is the same after Try again', reread.status === 200 && (reread.body?.transcript?.lines?.length ?? -1) === lines, `${reread.body?.transcript?.lines?.length ?? 0} lines, was ${lines}`);
     if (minutes >= LONG_FROM_MINUTES) {
       const chapters = pg.summary?.chapters ?? [];
       const lastStart = Math.max(0, ...chapters.map((c) => Number(c.startMs) || 0));
@@ -372,7 +396,7 @@ export async function runPipelineE2E({
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
       const enqueuedRuns = readLogs(`jsonPayload.msg="kickoff_enqueued" AND jsonPayload.noteId="${noteId}"`);
-      check('the note was run once: the replay enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
+      check('the note was run once: the replay and the Try again enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
       if (minutes >= CHAPTERS_FROM_MINUTES) {
         const salvaged = readLogs(`jsonPayload.msg="summary_salvaged_partial" AND jsonPayload.noteId="${noteId}"`);
         check('the summary came back whole, not salvaged', salvaged.length === 0, salvaged.length ? 'summary_salvaged_partial' : '');
