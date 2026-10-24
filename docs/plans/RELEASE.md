@@ -1,9 +1,209 @@
-# Release plan: a great beta on iPhone and Chrome, then production ready (rev 11, 2026-09-30)
+# Release plan: robust, bug-free, and through App Review (rev 12, 2026-10-24)
 
-> Rev 11 was approved by the owner on 2026-09-30 and leads this file: it re-orders the remaining work around
-> robustness, long meetings and ease of use. The rev 10 sections after it (approved 2026-09-29) keep the detail of
-> each wave; where they disagree, rev 11 wins. Update this file in the PR that changes the plan. Evidence for each
-> step goes into `docs/BLOCKERS.md`.
+> Rev 12 was approved by the owner on 2026-10-24 and leads this file: it is the honest check of where the app
+> stands against App Store Review, the bug list that check produced, and the stages from here to a submission
+> that passes. The rev 11 section after it (approved 2026-09-30) keeps the detail of the quality sprint, and rev
+> 10 the detail of each wave; where they disagree, rev 12 wins. Update this file in the PR that changes the
+> plan. Evidence for each step goes into `docs/BLOCKERS.md` §0.
+
+## Rev 12 (2026-10-24): robust, bug-free, and through App Review
+
+> Built on a read-only check at integration `6ce9c3f0` (the last merge, 2026-10-07): the docs and BLOCKERS,
+> CI history, the public site, a read-only look at both GCP projects, a full App-Review audit of `apps/ios`,
+> and a backend and operations audit of `services/`, `packages/`, `infra/` and `.github/`. The rules of rev 11
+> R11.5 stand: one PR per concern, a failing test first, a mutation check, the sub-agents, evidence in
+> BLOCKERS, and a PR is done when staging runs it.
+
+### R12.1 Where we are
+
+**Not ready to submit, and Apple would reject the build.** The code is close and well tested; the environment,
+the billing posture, the proofs and the paperwork are not.
+
+1. **A Release archive cannot be built.** Release has empty API and billing origins and its pre-build script
+   fails on purpose until production exists (`apps/ios/project.yml`, `TODO(prod)`).
+2. **Production does not exist.** `algominutes-prod` has Cloud Run, Cloud Tasks and Secret Manager disabled, no
+   Cloud SQL and no tfstate bucket; no deploy-from-`main` workflow is merged (`ci/deploy-production` is an
+   unmerged branch from 2026-09-30); `main` is 218 commits behind `integration`.
+3. **A reviewer on production would meet a closed beta:** zero minutes, no trial, "Enter an invite code", the
+   paywall off (`PAYWALL_ENABLED: "NO"` in Release). That is Guideline 2.1 and 3.1.1 on one screen. The
+   subscription products are not in App Store Connect.
+4. **Two certain rejections at upload:** the broadcast extension reads disk space but its privacy manifest
+   declares no DiskSpace reason (ITMS-91053), and the App Privacy answers drafted in `STORE-COMPLIANCE.md` §2
+   contradict the app's own `PrivacyInfo.xcprivacy`.
+5. **Legal is unsigned:** Terms and Privacy are live but "pending legal review" (version 2026-09-26); no
+   recording-consent opinion; the age rating is provisional.
+6. **Nothing merged from 2026-10-07 to 10-24, and CI was red for every new PR from 2026-10-18** (a test on two
+   clocks, fixed in #428). The nightly web journey failed 5 of the 10 nights to 10-23.
+
+**Solid, with evidence:** StoreKit 2 end to end (server-verified JWS with Apple's root pinned, sandbox accepted
+in every environment, Restore, Manage, the 3.1.2 paywall copy, the hourly reconcile); Sign in with Apple with
+equal prominence; in-app account deletion with Apple revocation; accurate usage strings and app manifest; push
+asked only after the first recording; the 426 screen; no debug UI outside `#if DEBUG`; a call interruption
+pauses rather than stops; low-disk guards; resumable background uploads that survive a kill. Backend: auth on
+every `/v1` route but the four public ones, workspace joins, strict CSP and CORS, rate limits, verified
+Stripe/Apple/Recall signatures, upserts on every async write, chunked speech-to-text with claimed jobs, the
+dead-letter table with its admin view and alert, an alert per `SLO.md` row, PITR and deletion protection in the
+prod Terraform. Gates on integration: typecheck clean, 938 unit tests and 376 iOS tests pass, all six invariant
+scripts pass, gitleaks clean; the nightly pipeline e2e green 10-13 → 10-23, through the 10-20 retirement of
+gemini-2.5-flash; the 240-minute e2e passed.
+
+### R12.2 The bar
+
+R11.3's numbers, kept, plus: **the nightly e2e and the web journey green 7 nights running before submission**,
+and **crash-free ≥ 99.5% over 7 days on the candidate**, counting jetsam, hangs and background kills.
+
+### R12.3 The bug list
+
+Each closes with a failing test first, then the fix, then staging evidence in BLOCKERS §0 under its id. P0
+loses data, money or the launch; P1 breaks a user's trust; P2 is hygiene before prod.
+
+**Server**
+
+| ID | Pri | Bug | Where |
+|---|---|---|---|
+| S1 | P0 | The db-job invite test freezes `now` at 2026-10-01 with a 14-day expiry and redeems at the real clock: red from 10-18 | `tests/integration/beta-invites.test.ts:544`; **fixed #428**, with `scripts/check-frozen-clock.mjs` |
+| S2 | P0 | One Gemini model since 10-20; gemini-3.5-flash in Sydney saturated at near-zero traffic; no quota or throughput request recorded | `packages/ai/src/models.cjs:58-69` |
+| S3 | P1 | A short recording waits the whole 240 s budget on a hung model | `packages/ai/src/intelligence.cjs` |
+| S4 | P1 | Nothing bounds an upload in progress; a never-completed upload stays in the bucket (`recordings_lifecycle_days = 0`) | `services/api/src/routes/uploads.js`, module `main.tf` |
+| S5 | P1 | A search hit's note title leaves the server unredacted | `services/api/src/routes/search-and-chat.cjs` |
+| S6 | P1 | A failed Apple token revocation is logged and the deletion proceeds | `SettingsView.swift:552-563`, `AppleTokenRevocation.swift:31-55` |
+| S7 | P1 | Mirror repair cut off twice in a row leaves the notes between unrepaired | `packages/db` mirror repair (#408) |
+| S8 | P1 | DeviceCheck: one failed token puts a device on the floor for good; Apple is asked before the deleted-account check | the api kickoff |
+| S9 | P2 | CORS allows `localhost`, `capacitor://`, `ionic://` in prod | `packages/ai/src/cors.cjs:16-22` |
+| S10 | P2 | Share-link IP hashes unsalted; the viewer has no report control (off in 1.0 unless fixed) | share links, `SharedNotePage.tsx` |
+| S11 | P2 | yt-dlp unpinned; alert #131; the sweep's step order vs 900 s; Firestore-only notes outside retention | rev 11 P2 list |
+| S12 | P2 | Stripe: a duplicate's first payment isn't refunded by itself; `unattributed` refunds; keys not in Terraform | H21 "for the owner" |
+| S13 | P2 | The session check is off until `reviewed-dd556da5.tfplan` is applied and `session_check = "on"` | `middleware/auth.js:39,49` |
+
+**iPhone**
+
+| ID | Pri | Bug | Where |
+|---|---|---|---|
+| I1 | P0 | The broadcast extension's manifest lacks `NSPrivacyAccessedAPICategoryDiskSpace` | `BroadcastExtension/PrivacyInfo.xcprivacy`, `SampleHandler.swift:66-67` |
+| I2 | P0 | Release: invite codes unlock paid minutes, a quota hit opens the invite sheet, the paywall is off, and beta wording ships | `SettingsView.swift:249,350`, `BillingService.swift:109-123,236-241`, `InviteCodeSheet.swift`, `PaywallView.swift:160-164`, `KickoffFailure.swift:32-39`, `HeldForMinutesPane.swift:23` |
+| I3 | P0 | N4's kill-safe capture: an extension killed mid-way leaves an unreadable `.m4a` | `SampleHandler.swift`, `BroadcastHandoff.swift` |
+| I4 | P1 | Release `UPDATE_URL` opens TestFlight; the extension is device family `"1,2"`; nothing checks the Release archive carries prod's Firebase plist | `project.yml`, `ci_scripts/ci_post_clone.sh` |
+| I5 | P1 | "Processing failed" on a note that was ready (build 25); #326/#331 unconfirmed on a device | BLOCKERS "Still open" |
+| I6 | P1 | Every iOS change since 2026-10-04 is unverified on a device | BLOCKERS "Not verified on a device" |
+| I7 | P1 | A silent catch in `AuthService.ensureWorkspaceDoc` | `AuthService.swift:336-338` |
+| I8 | P2 | Transitive `GoogleAppMeasurement` and an ads-conversion SDK in `Package.resolved`: must not be linked | `Package.resolved` |
+| I9 | P2 | CallKit linked (observer only); Apple restricts CallKit apps in mainland China | `RecorderService.swift:2,111-115` |
+
+**Pipeline, CI and operations**
+
+| ID | Pri | Bug | Where |
+|---|---|---|---|
+| O1 | P0 | No production: Terraform unapplied, no deploy from `main`, prod secrets unset, Stripe keys absent from Terraform | `infra/terraform/envs/prod`, branch `ci/deploy-production` |
+| O2 | P1 | The nightly web journey is flaky: chat answer 120 s and call-note summary 480 s time out; a 40-minute job kill | `web-e2e.yml` schedule runs 10-16 → 10-23 |
+| O3 | P1 | Deploy jobs hang in "waiting"; the WIF token exchange fails intermittently | `deploy-staging.yml` |
+| O4 | P1 | Alerts e-mail only; prod has no channels until `TF_VAR_alert_emails`; no paging; no latency alert; 429 folded into `gemini_transient` | `alerting.tf:240-248`, `monitoring.tf:219` |
+| O5 | P1 | Load test never run; prod transcoder 4 × concurrency 1; `min_instance_count = 0` everywhere | `scripts/load-staging.mjs`, `cloud-run.tf` |
+| O6 | P1 | Restore drill never executed; two-account tenancy proof never recorded; no production incident runbooks | `docs/runbooks/` |
+| O7 | P2 | No canary; Cloud SQL ZONAL; no Firestore backup (acceptable, undocumented) | module `main.tf:182` |
+| O8 | P2 | Six Dependabot PRs open and red on S1; `@grpc/grpc-js` advisory pinned by Firestore | #422–#427 |
+| O9 | P2 | Docs drift: `INFRASTRUCTURE.md` said staging paused; `EXTRACTION-AUDIT.md` claimed a gitleaks allowlist; `/notetaker` 404 on prod | fixed with this plan, except `/notetaker` (P3) |
+
+**Paperwork (rejections, not bugs):** App Privacy answers rewritten from `PrivacyInfo.xcprivacy`; review notes
+and demo access; products and agreements in App Store Connect; `aps-environment = production` and the linked
+frameworks confirmed in the archive; legal sign-off; age rating; screenshots and listing; the CallKit storefront
+decision.
+
+### R12.4 How it stays bug-free
+
+What exists stays (unit, integration, rules, iOS XCTests, the nightly e2e, the web journey, the load script,
+the sub-agents, mutation checks). Added:
+
+1. **Failure cases in the nightly** (R11.5 §6, never closed): a replayed kickoff; a Try again that must not
+   double; an over-quota hold then release; an interrupted upload resumed; a Gemini 429/503 injected through the
+   fake and recovered by the ladder; a note deleted mid-pipeline. Each asserts row counts and the ledger under one
+   `traceId`.
+2. **The iOS device matrix, per candidate build, recorded in BLOCKERS:** fresh guest start; 2-min, 60-min and
+   3-h locked recordings; a 30-minute call mid-recording → one note; force-quit mid-upload → one resumed upload;
+   lock after Stop → the push arrives; broadcast of a FaceTime or Zoom call (proof 5); delete a note; delete an
+   Apple-linked account → gone from Settings → Apple ID; the 426 screen against a lowered floor; VoiceOver and
+   large text on an SE.
+3. **Clock-safe tests:** `scripts/check-frozen-clock.mjs` in `invariants.yml` (#428).
+4. **Flake policy enforced:** a red scheduled run opens an issue; the web journey's budgets come from staging's
+   measured p95 plus a margin, with a job timeout below the 40-minute kill.
+5. **Chaos on staging once per stage:** the kill switches; a Cloud SQL restart during a 15-minute run; a queue
+   paused and resumed; the api scaled to zero mid-upload. The note counts must match before and after.
+6. **The crash-free gate** on the candidate in external TestFlight for 7 days.
+
+### R12.5 The stages
+
+**Stage 0: stop the line (week of 10-27).** 0.1 S1 (#428). 0.2 I1, I4, I7 as one `fix(ios)` Release-hygiene
+PR. 0.3 O2 as `fix(web-e2e)`. 0.4 O1's workflow half: `ci/deploy-production` rebased and merged, inert until the
+`production` Environment exists, with `timeout-minutes` and a WIF retry (O3). 0.5 this plan, the bug list in
+BLOCKERS, the drift fixed (O9). 0.6 the Dependabot PRs (O8). **Gate:** CI green through the merge queue, the
+Xcode Cloud Staging build green, two green scheduled web journeys.
+
+**Stage 1: the hardening sprint (weeks of 10-27 and 11-03).** S2 and S3 (the time budget by audio length, a 429
+alert, `gemini_model_exhausted` paged; **owner:** the quota or provisioned-throughput request); S4; S5; S6; S7;
+S8; I3 (ADTS in the extension, built against a device); the six failure cases (R12.4 §1); S9; S11; then device
+pass 1 on a Staging TestFlight build (I5, I6). **Gate:** the nightly with failure cases green 3 nights; device
+pass 1 recorded; no P0 open.
+
+**Stage 2: production exists (owner-heavy, from 10-27).** **Owner:** `gcloud auth login`; the tfstate bucket;
+`terraform plan` in `envs/prod` with the billing account and alert e-mails → reviewed → **Apply P**; staging's
+`reviewed-dd556da5.tfplan` applied and `session_check = "on"` (S13); prod Firebase per
+`runbooks/prod-firebase-config.md` (Blaze, the three providers, the Apple provider's Services ID and key, the
+APNs key, the apps, the prod plist into a new Xcode Cloud **Release → App Store** workflow); the secret versions
+(`app-store-server-key`, `devicecheck-key`, `recall`); the `production` GitHub Environment and variables; the
+Zoho aliases monitored. **Code:** Stripe secrets as Terraform references (S12); the prod budget and caps (A$60 a
+day, A$500 a month); alert channels beyond e-mail (O4); `min_instance_count = 1` for api and billing; **P3**,
+the promotion by merge commit; then the Release origins in `project.yml` and the first Release archive.
+**Gate:** `train.sh` shows prod at `main`'s head; the uptime check green from two regions; a Release archive
+records a note on prod; the prod restore drill recorded (O6).
+
+**Stage 3: the billing posture Apple requires (with Stage 2).** **Owner:** the Paid Apps agreement, banking and
+tax, the Small Business Program; the subscription group with `pro.monthly` and `pro.annual`; the Server
+Notifications v2 URL; sandbox testers; a DeviceCheck key. **Code:** the Release money flow (I2): `PAYWALL_ENABLED`
+on in Release, the invite path compiled out of the store build (kept for Staging), a quota hit opens the paywall,
+no beta wording, an App Store Offer Code entry for free time; the free floor for every new account
+(`FREE_FLOOR_MINUTES`, 120 recommended); `trial_on_first_use` on once the key exists. **Gate, on a device in
+sandbox against prod:** buy, restore on a second device, renew, expire, and a missed notification corrected by
+the reconcile; the archive's entitlements and linked frameworks checked (I8).
+
+**Stage 4: robust at launch scale (week of 11-10).** The load test (`LOAD_CONFIRM=run node
+scripts/load-staging.mjs`, about A$22) and the prod sizing from its numbers (O5); chaos (R12.4 §5); the
+two-account tenancy proof; device pass 2 on the Release candidate against prod, proof 5 deciding "Record a
+call" in 1.0; every prod alert fired once as a test; `docs/runbooks/production-incident.md` (per-service Cloud
+Run rollback, "prod is down", "a note is stuck", who is paged, the status message); the candidate in external
+TestFlight for 7 days at ≥ 99.5% crash-free.
+
+**Stage 5: the listing, the review package, submission (weeks of 11-17 and 11-24).** **Owner:** legal sign-off
+(or a dated decision to launch on the drafts) and the consent opinion; the age rating (13+); screenshots,
+description, keywords, URLs, the EULA, the category; the CallKit storefront decision (exclude mainland China,
+I9). **Code and docs:** `STORE-COMPLIANCE.md` §2 and `DATA-RETENTION.md` rewritten from
+`PrivacyInfo.xcprivacy` and checked against the candidate archive's Privacy Report; `runbooks/app-store-review.md`
+with the review notes and a reviewer sandbox account; `broadcast_capture` on for review if proof 5 passed,
+otherwise removed from 1.0 (never switched on after review); share links off (S10). **Submit** with a phased
+release; the 426 floor tested against the shipped build; the rollback rehearsed.
+
+**After launch, 14 days:** the dashboard, dead letters, `gemini_*`, crash-free and the support inbox daily; a
+P0 pauses the phased release; only fixes merge in the first week; the wow features start after.
+
+### R12.6 Decisions for the owner (defaults in bold)
+
+1. **A free floor for every new account in 1.0** (120 minutes), the DeviceCheck trial on top.
+2. **Stripe stays in test mode for 1.0**; iOS sells through StoreKit.
+3. "Record a call" in 1.0: **decided by proof 5.**
+4. Legal: **wait for the review**; request it on 10-27 if it was never requested.
+5. **Exclude mainland China** (CallKit).
+6. Gemini capacity: **ask Google now**; if refused, record the single-model risk in DECISIONS and keep the
+   10-attempt retry window as the mitigation.
+
+### R12.7 Timeline, if the owner's Stage 2 steps start the week of 10-27
+
+| Week of | Milestone |
+|---|---|
+| 10-27 | Stage 0 merged; the hardening sprint started; Apply P, prod Firebase, the ASC products and the quota request started |
+| 11-03 | The sprint lands; P3; the first Release archive; a sandbox purchase proven on prod |
+| 11-10 | Load, chaos, tenancy, device pass 2, alerts, the incident runbook |
+| 11-17 | Privacy labels, the listing, the review package; the candidate into external TestFlight |
+| 11-24 → 12-01 | 7 days crash-free; legal sign-off; submission with a phased release |
+
+---
 
 ## Rev 11 (2026-09-30): robust, easy, and built for long meetings
 
