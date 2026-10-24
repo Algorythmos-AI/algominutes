@@ -183,7 +183,9 @@ resource "google_cloud_run_v2_service" "services" {
     max_instance_request_concurrency = each.value.concurrency
 
     scaling {
-      min_instance_count = 0
+      # Warm instances where the environment names them (prod: the api and billing, the user's first request),
+      # zero elsewhere: the workers are behind queues.
+      min_instance_count = lookup(var.min_instances, each.key, 0)
       # From the connection budget, so max instances x pools x PG_POOL_MAX fits
       # the database (connection-budget.json). Also the cost guard.
       max_instance_count = var.connection_budget.services[each.key].max_instances

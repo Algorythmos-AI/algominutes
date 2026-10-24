@@ -142,7 +142,11 @@ module "environment" {
   # with devicecheck_not_configured on each first kickoff. Turned on with them.
   trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
-  monthly_budget     = 300
+
+  # One warm api and billing instance (plan rev 12, Stage 2, O5): a sign-in, a kickoff or a purchase never waits
+  # on a cold start. Billed at Cloud Run's idle rate, roughly A$40 a month for the two (to confirm after Apply P).
+  min_instances  = { api = 1, billing = 1 }
+  monthly_budget = 300
 }
 
 # Re-export module outputs at the root for convenience.
