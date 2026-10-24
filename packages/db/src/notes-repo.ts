@@ -1676,3 +1676,34 @@ export async function createTextNote(
   }, 'text_note_created');
   return { noteId: input.noteId, status: 'ready', lines: note.lines.length, truncated, replay };
 }
+
+/** Which of these note ids Postgres has (any kind, any workspace): the text-note backfill skips them. */
+export async function existingNoteIds(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const { rows } = await getPool().query('SELECT id FROM notes WHERE id = ANY($1::text[])', [ids]);
+  return new Set(rows.map((r: { id: string }) => r.id));
+}
+
+/**
+ * The text notes the iPhone wrote straight into Firestore (before R12.8 PR 4), a page at a time, workspace by
+ * workspace: each workspace's `notes` queried by type, which needs no collection-group index. The backfill job
+ * (db-job backfill-text-notes) creates the ones Postgres lacks through createTextNote.
+ */
+export async function* firestoreTextNotePages(
+  firestore: Firestore,
+  pageSize: number,
+): AsyncGenerator<{ workspaceId: string; docs: { id: string; data: Record<string, any> }[] }> {
+  const workspaces = await firestore.collection('workspaces').listDocuments();
+  for (const ws of workspaces) {
+    let last: any = null;
+    for (;;) {
+      let q = ws.collection('notes').where('type', '==', 'scan_text').limit(pageSize);
+      if (last) q = q.startAfter(last);
+      const snap = await q.get();
+      if (snap.empty) break;
+      last = snap.docs[snap.docs.length - 1];
+      yield { workspaceId: ws.id, docs: snap.docs.map((d) => ({ id: d.id, data: d.data() })) };
+      if (snap.docs.length < pageSize) break;
+    }
+  }
+}
