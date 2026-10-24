@@ -246,6 +246,24 @@ describe('sweep', () => {
     expect(Number((await pool.query(`SELECT count(*) AS n FROM usage_events`)).rows[0].n)).toBe(1);
   });
 
+  // Plan rev 12 S11: the sweep has 900 s, and its steps ran in the order they were written. Account deletion (SLO 6:
+  // gone within an hour) came ninth, after up to five minutes of mirror repair, so a slow run pushed it late or
+  // past the job's limit. The promises run first; housekeeping last. Each step's time is logged with the run.
+  it('runs the promises first, and says how long each step took', async () => {
+    const f = fakes();
+    const infos: Array<{ o: any; m: string }> = [];
+    const spy = { ...log, info: (o: any, m: string) => void infos.push({ o, m }), child() { return spy; } };
+    const counts = await sweep.run({ log: spy, env: {}, traceId: 't', deps: f.deps, repo, noteTerminal });
+    const order = Object.keys(counts);
+    expect(order.slice(0, 3)).toEqual(['account_deletions', 'storage_purges', 'retention']);
+    expect(order.indexOf('account_deletions')).toBeLessThan(order.indexOf('mirror_repair'));
+    expect(order.indexOf('mirror_repair')).toBeGreaterThan(order.indexOf('redrive'));
+    expect(order.slice(-2)).toEqual(['trials', 'usage_events']);
+    const done = infos.find((i) => i.m === 'sweep_done');
+    expect(Object.keys(done!.o.durationsMs)).toEqual(order);
+    for (const ms of Object.values(done!.o.durationsMs)) expect(ms).toBeGreaterThanOrEqual(0);
+  });
+
   it('a failing step is logged, the others still run, and the job fails visibly', async () => {
     const f = fakes();
     const broken = { ...repo, listStuckNotes: async () => { throw new Error('boom'); } };

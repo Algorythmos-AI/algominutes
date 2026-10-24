@@ -60,12 +60,11 @@ places; there is now one.
 
 ### One CORS config
 
-`src/middleware/cors.js` reads `ALLOWED_ORIGINS` (comma-separated) and adds it
-to the source's default origins — the Functions default set, which is the
-superset that keeps the native (Capacitor/Ionic) clients working:
-`http://localhost:3000`, `http://127.0.0.1:3000`, `https://localhost`,
-`capacitor://localhost`, `ionic://localhost`. Requests with no `Origin`
-(server-to-server, native WebViews, curl) are allowed, as before.
+`src/middleware/cors.js` uses `@algominutes/ai/cors.cjs`: the origins in `ALLOWED_ORIGINS` (comma-separated,
+from Terraform), plus the local development origins (`http://localhost:3000`, `http://127.0.0.1:3000`,
+`https://localhost`) everywhere **except production** (`ALGOMINUTES_ENV=prod`). The Capacitor/Ionic origins are
+gone: the iOS app is native and sends no `Origin`. Requests with no `Origin` (the iOS app, server-to-server,
+curl, the stores' webhooks) are allowed.
 
 > The deployed origin (`https://algominutes.algorythmos.com`) is supplied by
 > Terraform via `ALLOWED_ORIGINS`; only the localhost dev origins are baked in.

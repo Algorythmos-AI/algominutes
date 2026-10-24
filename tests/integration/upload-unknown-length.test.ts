@@ -7,11 +7,13 @@ import { pool, resetDb, seedUser, seedWorkspace } from './helpers';
 // stand-in for Cloud Storage.
 const SESSION = 'https://storage.googleapis.com/upload/storage/v1/b/bkt/o?uploadType=resumable&upload_id=abc';
 const object = { exists: true, size: 1000, deleted: false };
+// What each session was opened with (plan rev 12 S4: a declared length is sent to Cloud Storage).
+const opened: Array<{ metadata?: Record<string, unknown> }> = [];
 vi.mock('firebase-admin/storage', () => ({
   getStorage: () => ({
     bucket: () => ({
       file: () => ({
-        createResumableUpload: async () => [SESSION],
+        createResumableUpload: async (opts: { metadata?: Record<string, unknown> }) => { opened.push(opts); return [SESSION]; },
         exists: async () => [object.exists],
         getMetadata: async () => [{ size: String(object.size) }],
         delete: async () => { object.deleted = true; object.exists = false; return [{}]; },
@@ -28,6 +30,7 @@ beforeEach(async () => {
   await resetDb();
   Object.assign(object, { exists: true, size: 1000, deleted: false });
   probes.length = 0;
+  opened.length = 0;
   vi.stubGlobal('fetch', async (_url: string, init: { headers: Record<string, string> }) => {
     probes.push(init.headers['Content-Range']);
     return { status: 308, headers: { get: (h: string) => (h.toLowerCase() === 'range' ? 'bytes=0-1048575' : null) } };
@@ -51,6 +54,22 @@ async function call(route: (req: any, res: any) => Promise<unknown>, req: any) {
 }
 const create = (extra: Record<string, unknown> = {}) => call(createUploadSessionRoute, {
   body: { noteId: 'n1', workspaceId: 'workspace_alice', fileName: 'recording.webm', contentType: 'audio/webm', ...extra },
+});
+
+// Plan rev 12 S4: nothing bounded the bytes of an upload in progress. A session opened with its length makes Cloud
+// Storage refuse any byte past it (X-Upload-Content-Length), so a declared upload can't grow past what was checked.
+describe('an upload whose length is declared', () => {
+  it('opens the Cloud Storage session with that length, so no more can be sent', async () => {
+    const out = await create({ totalBytes: 734003 });
+    expect(out.status).toBe(200);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.metadata).toMatchObject({ contentType: 'audio/webm', contentLength: 734003 });
+  });
+
+  it("one whose length isn't known yet is opened without one (the cap is checked at /complete)", async () => {
+    await create();
+    expect(opened[0]!.metadata).not.toHaveProperty('contentLength');
+  });
 });
 
 describe('an upload whose length isn\'t known yet', () => {

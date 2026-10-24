@@ -68,3 +68,36 @@ describe('one allowlist', () => {
     expect(tf).toMatch(/billing\s+= merge\(local\.db_env, \{[^}]*ALLOWED_ORIGINS = var\.allowed_origins/);
   });
 });
+
+// Plan rev 12 S9: the built-in origins were the same in every environment, prod included: localhost, and the
+// Capacitor/Ionic WebView origins of a hybrid app that no longer exists (iOS is native and sends no Origin).
+// Production allows only the origins Terraform names; staging and local development add localhost.
+describe('the origins each environment allows', () => {
+  // @ts-expect-error: plain CJS module, no type declarations
+  const corsLib = () => import('../packages/ai/src/cors.cjs').then((m) => m.default ?? m);
+  const SITE = 'https://algominutes.algorythmos.com';
+
+  it('production: only the configured origins', async () => {
+    const { buildAllowedOriginSet } = await corsLib();
+    const prod = buildAllowedOriginSet({ ALGOMINUTES_ENV: 'prod', ALLOWED_ORIGINS: SITE });
+    expect([...prod]).toEqual([SITE]);
+  });
+
+  it('staging and local development also allow localhost, for the web app run locally', async () => {
+    const { buildAllowedOriginSet } = await corsLib();
+    for (const env of [{ ALGOMINUTES_ENV: 'staging', ALLOWED_ORIGINS: SITE }, { ALLOWED_ORIGINS: SITE }]) {
+      const set = buildAllowedOriginSet(env);
+      expect(set.has(SITE)).toBe(true);
+      expect(set.has('http://localhost:3000')).toBe(true);
+    }
+  });
+
+  it('no environment allows the old hybrid-app origins', async () => {
+    const { buildAllowedOriginSet } = await corsLib();
+    for (const env of [{ ALGOMINUTES_ENV: 'prod' }, { ALGOMINUTES_ENV: 'staging' }, {}]) {
+      const set = buildAllowedOriginSet(env);
+      expect(set.has('capacitor://localhost')).toBe(false);
+      expect(set.has('ionic://localhost')).toBe(false);
+    }
+  });
+});

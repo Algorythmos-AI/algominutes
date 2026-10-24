@@ -132,7 +132,7 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     every other note**; the design is RELEASE.md R12.8: a `POST /v1/notes/text` route and a repo
     `createTextNote` (Postgres first, then the mirror and an embedding), the iPhone calling it, a backfill job for
     staging, and the rules' exception removed once the version floor passes the new build. Six PRs, one at a time.
-  - [ ] **1.8, the nightly failure cases → #459:** Try again on a finished note (every length) and held first, then
+  - [x] **1.8, the nightly failure cases → #459 (merged 21:09):** Try again on a finished note (every length) and held first, then
     released (the 2-minute run). Proven by the first nightly after the merge.
   - **Still open in Stage 1:** I3's kill-safe capture and device pass 1 (both
     need the owner's iPhone).

@@ -38,6 +38,8 @@ function world(opts: {
   replayQueuesAgain?: boolean;
   kickoffsEnqueued?: number;
   sessionUri?: string;
+  tryAgainRuns?: boolean;
+  holdIgnored?: boolean;
 } = {}) {
   const calls: Call[] = [];
   let held = 0;
@@ -47,6 +49,9 @@ function world(opts: {
   let deleted = false;
   let putFailed = false;
   let processCalls = 0;
+  let redeemed = false;
+  let readyNow = false;
+  let lines = 1;
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
   const fetch = async (url: string, init: RequestInit = {}) => {
     const call: Call = { method: init.method ?? 'GET', url, headers: (init.headers ?? {}) as Record<string, string>, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body };
@@ -54,6 +59,7 @@ function world(opts: {
     const key = `${call.method} ${url.replace(API, '').replace(SESSION, 'SESSION').replace(FS, 'FS')}`;
     if (key === 'POST https://identitytoolkit.googleapis.com/v1/accounts:signUp') return json(200, { idToken: TOKEN, localId: UID });
     if (key === 'POST /v1/beta/redeem') {
+      redeemed = opts.redeem === undefined;
       return opts.redeem === undefined ? json(200, { entitlement: { remainingMinutes: 600 } }) : json(opts.redeem, { error: 'invite_used_up' });
     }
     if (key === 'POST /v1/uploads') {
@@ -78,6 +84,14 @@ function world(opts: {
     // The api's real answer: 200 with status queued (process-intelligence.js; tests/integration/process-kickoff.test.ts).
     if (key === 'POST /v1/process') {
       processCalls += 1;
+      // No minutes yet (staging's guests start with none): an uploaded recording is held (H6c), unless a test says
+      // the api ignores it.
+      if (!redeemed && !opts.holdIgnored) return json(202, { success: true, noteId, status: null, inFlight: true, held: true });
+      // A finished note's Try again is answered ready, and nothing runs (process-intelligence.js, #311).
+      if (readyNow) {
+        if (opts.tryAgainRuns) { lines += 1; return json(200, { success: true, noteId, status: 'queued' }); }
+        return json(200, { success: true, noteId, cached: true });
+      }
       // A second kickoff of the note in flight is answered 202 (process-intelligence.js), unless a test says otherwise.
       if (processCalls > 1) return opts.replayQueuesAgain ? json(200, { success: true, noteId, status: 'queued' }) : json(202, { success: true, noteId, status: 'queued', inFlight: true });
       return json(200, { success: true, noteId, status: 'queued' });
@@ -85,6 +99,7 @@ function world(opts: {
     if (key.startsWith('GET FS/')) {
       polls += 1;
       const status = opts.ready === 'never' || polls < (opts.readyAfterPolls ?? 2) ? 'processing' : opts.ready ?? 'ready';
+      if (status === 'ready') readyNow = true;
       return json(200, { fields: { status: { stringValue: status }, ...(status === 'error' ? { errorMessage: { stringValue: 'transcription failed' } } : {}) } });
     }
     if (key === 'POST /v1/notes/read') {
@@ -97,7 +112,7 @@ function world(opts: {
             startMs: Math.round((i / Math.max(1, (opts.chapters ?? 1) - 1)) * (opts.chapterSpan ?? 0.95) * (opts.spanMin ?? 0) * 60_000),
           })),
         },
-        transcript: { lines: [{ text: 'hello' }] },
+        transcript: { lines: Array.from({ length: lines }, () => ({ text: 'hello' })) },
       });
     }
     if (key === 'POST /v1/account/delete') {
@@ -166,7 +181,41 @@ describe('the pipeline e2e', () => {
   it('a replayed kickoff must be answered in flight, and the note run once', async () => {
     expect((await run(world())).fails).toEqual([]);
     expect((await run(world({ replayQueuesAgain: true }))).fails).toContain('a replayed kickoff is answered in flight, not queued again');
-    expect((await run(world({ kickoffsEnqueued: 2 }))).fails).toContain('the note was run once: the replay enqueued nothing');
+    expect((await run(world({ kickoffsEnqueued: 2 }))).fails).toContain('the note was run once: the replay and the Try again enqueued nothing');
+  });
+
+  // Plan rev 12 step 1.8: the failure cases rev 11 R11.5 §6 asked for. On 2026-10-01 a finished 52-minute note was
+  // run again by a second kickoff (#311): Try again on a ready note answers ready and runs nothing.
+  it('Try again on a finished note answers ready, and changes nothing', async () => {
+    const r = await run(world());
+    expect(r.fails).toEqual([]);
+    expect(r.out).toContain('ok   Try again on a finished note answers ready, and runs nothing');
+    expect(r.out).toContain('ok   the transcript is the same after Try again');
+  });
+
+  it('a Try again that runs the note again fails the run', async () => {
+    const r = await run(world({ tryAgainRuns: true }));
+    expect(r.fails).toContain('Try again on a finished note answers ready, and runs nothing');
+    expect(r.fails).toContain('the transcript is the same after Try again');
+  });
+
+  // H6 (held for minutes) on staging, never exercised by hand: a recording uploaded with no minutes is held, and a
+  // redeemed code releases it, to ready, on its own.
+  it('held first: uploaded with no minutes, held; a redeemed code releases it, to ready', async () => {
+    const w = world();
+    const r = await run(w, { holdFirst: true });
+    expect(r.fails).toEqual([]);
+    expect(r.out).toContain('ok   with no minutes, the uploaded recording is held');
+    expect(r.out).toContain('ok   the e2e invite code gives minutes');
+    const order = w.calls.map((c) => c.url.replace(API, '')).filter((u) => u === '/v1/process' || u === '/v1/beta/redeem');
+    expect(order.slice(0, 2)).toEqual(['/v1/process', '/v1/beta/redeem']);
+    // The replay check is the normal run's; held first, it's skipped.
+    expect(r.out).not.toContain('a replayed kickoff is answered in flight');
+  });
+
+  it('held first: a kickoff that queues with no minutes fails the run', async () => {
+    const r = await run(world({ holdIgnored: true }), { holdFirst: true });
+    expect(r.fails).toContain('with no minutes, the uploaded recording is held');
   });
 
   it('a note that fails says why, and the account is still deleted', async () => {
@@ -303,6 +352,15 @@ describe('its workflow', () => {
     expect(wf).toContain("else minutes='[2,15,60]'; fi");
     expect(wf).toMatch(/options: \['2', '15', '60', '120', '180', '240'\]/);
     expect(wf).toMatch(/apt-get install -y -q ffmpeg espeak-ng/);
+  });
+
+  it('the 2-minute run goes held first, and only it', () => {
+    const ENV = { API_URL: 'https://api/', FIREBASE_API_KEY: 'k', FIREBASE_PROJECT_ID: 'p', E2E_INVITE_CODE: 'c' };
+    const wf = fs.readFileSync('.github/workflows/e2e.yml', 'utf8');
+    expect(wf).toContain('E2E_HOLD_FIRST: ${{ matrix.minutes == 2 }}');
+    expect(e2eConfig({ ...ENV, E2E_HOLD_FIRST: 'true' }).holdFirst).toBe(true);
+    expect(e2eConfig({ ...ENV, E2E_HOLD_FIRST: 'false' }).holdFirst).toBe(false);
+    expect(e2eConfig(ENV).holdFirst).toBe(false);
   });
 
   it('runs in the staging environment (the only one the deployer trusts), one length at a time', () => {

@@ -135,8 +135,12 @@ export async function createUploadSessionRoute(req, res) {
     const origin = typeof req.headers?.origin === 'string' && corsModule.buildAllowedOriginSet().has(req.headers.origin)
       ? req.headers.origin
       : undefined;
+    // A declared length opens the session with it (X-Upload-Content-Length): Cloud Storage then refuses any byte
+    // past it, so an upload can't grow beyond the size checked above (plan rev 12 S4). Both clients declare the
+    // finished file's exact size (iOS: the file on disk; the web import: file.size). A session minted before its
+    // length is known has no such bound, and is capped at /complete.
     [sessionUri] = await file.createResumableUpload({
-      metadata: { contentType },
+      metadata: { contentType, ...(totalBytes != null ? { contentLength: totalBytes } : {}) },
       ...(origin ? { origin } : {}),
     });
   } catch (err) {
