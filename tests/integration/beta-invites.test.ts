@@ -410,6 +410,18 @@ describe('trial switched off (TRIAL_ON_FIRST_USE=off)', () => {
       .toEqual({ entitlement_state: 'free_floor', trial_end: null });
   });
 
+  // Plan rev 12 S8: Apple was asked before ensureUser refused a deleted account, so in an Apple outage a deleted
+  // account's kickoff failed as an error (500) instead of saying account_deleted (401). A deleted account now
+  // never reaches Apple.
+  it("a deleted account is refused before Apple is asked, even while Apple is down", async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('gone');
+    await pool.query(`INSERT INTO account_deletions (uid) VALUES ('gone')`);
+    const down = appleDevice(false, { checkFails: true });
+    await expect(ensureTrial('gone', { platform: 'ios', device: down.device })).rejects.toMatchObject({ code: 'ACCOUNT_DELETED' });
+    expect(down.calls).toEqual([]);
+  });
+
   it('no device to ask (no token), or Android, opens on the free floor; the trial switched off never asks Apple', async () => {
     delete process.env.TRIAL_ON_FIRST_USE;
     await seedUser('dan');

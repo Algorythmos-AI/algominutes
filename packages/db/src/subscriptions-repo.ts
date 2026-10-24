@@ -12,7 +12,7 @@ import loggerModule from '@algominutes/ai/logger.cjs';
 
 // The request's logger when the caller passes one; the root logger otherwise, so a failure is never unlogged.
 const rootLog = (loggerModule as { logger: { error: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void } }).logger;
-import { ensureUser } from './workspace-access.js';
+import { ensureUser, AccountDeletedError } from './workspace-access.js';
 
 export interface SubscriptionRow {
   uid: string;
@@ -104,6 +104,13 @@ export async function ensureTrial(
     eligible = opts.emailPresent === true; // web requires an email
   } else if (eligible && opts.platform === 'ios') {
     if (!opts.device) (opts.log ?? rootLog).warn({ userId: uid }, 'trial_device_unverified');
+    // A deleted account is refused before Apple is asked (plan rev 12 S8): ensureUser below refuses it too, but
+    // only after this call, so in an Apple outage a deleted account's kickoff failed as an error (500) instead of
+    // answering account_deleted (401), and Apple was asked about a device whose account is gone.
+    if (opts.device) {
+      const { rowCount } = await getPool().query('SELECT 1 FROM account_deletions WHERE uid = $1', [uid]);
+      if (rowCount) throw new AccountDeletedError(uid);
+    }
     eligible = !!opts.device && !(await opts.device.trialUsed());
   } else if (eligible && opts.platform !== undefined) {
     // Android (Play Integrity isn't checked yet, A11), or a platform nobody ships: no fresh trial.
