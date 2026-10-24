@@ -8,9 +8,9 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@google-cloud/tasks": "^7.2.1",
+    "@google-cloud/tasks": "^7.3.0",
     "cors": "^2.8.6",
-    "express-rate-limit": "^8.7.0",
+    "express-rate-limit": "^8.7.1",
     "google-auth-library": "^9.15.1",
     "pg": "^8.23.1"
   },
