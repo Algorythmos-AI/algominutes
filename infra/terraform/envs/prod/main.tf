@@ -142,6 +142,11 @@ module "environment" {
   # with devicecheck_not_configured on each first kickoff. Turned on with them.
   trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
+
+  # Every new account's minutes before buying (plan rev 12, Stage 3; owner decision 1), so App Review and every
+  # new user can record and see a summary first. At A$0.03 a minute, at most A$3.60 an account a month; the
+  # daily spend cap bounds the total.
+  free_floor_minutes = 120
   monthly_budget     = 300
 }
 

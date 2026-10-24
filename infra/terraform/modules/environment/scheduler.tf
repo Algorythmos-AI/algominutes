@@ -84,7 +84,7 @@ resource "google_cloud_run_v2_job" "db_sweep" {
           limits = { cpu = "1", memory = "512Mi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env, {
+          for_each = merge(local.common_env, local.free_floor_env, local.db_env, {
             JOB_NAME       = "sweep"
             STORAGE_BUCKET = local.region_bucket["recordings"]
             PG_POOL_MAX    = tostring(var.connection_budget.jobs["db-sweep"].pool_max)

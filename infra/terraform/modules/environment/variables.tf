@@ -284,6 +284,18 @@ variable "alert_emails" {
   }
 }
 
+variable "free_floor_minutes" {
+  description = "Minutes a month on the free floor (FREE_FLOOR_MINUTES): every new account's, and where an ended trial lands. null leaves it unset, which is 0 (staging's beta, where invite codes give minutes)."
+  type        = number
+  default     = null
+
+  validation {
+    # A conditional, not ||: Terraform evaluates both sides of ||, and null >= 0 is an error.
+    condition     = var.free_floor_minutes == null ? true : (var.free_floor_minutes >= 0 && var.free_floor_minutes <= 1000 && floor(var.free_floor_minutes) == var.free_floor_minutes)
+    error_message = "free_floor_minutes must be a whole number of minutes from 0 to 1000, or null."
+  }
+}
+
 variable "monthly_budget" {
   description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
   type        = number
