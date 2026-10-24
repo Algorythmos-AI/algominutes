@@ -16,8 +16,10 @@
   (§4). "Deleted" never silently means "still in a backup forever".
 - **Minimise on the device.** Local audio exists only long enough to guarantee a
   successful upload, then is purged (§5).
-- **No analytics store.** Firebase Analytics is off (A6.9); there is no separate behavioural
-  data warehouse to retain or expire.
+- **No analytics or advertising service.** Firebase Analytics is off (A6.9) and no analytics or ads SDK is
+  linked (`tests/ios-linked-sdks.test.ts`). The app's own product events (`POST /v1/events`: first recording,
+  plan screen viewed, and the rest) are kept in Postgres `analytics_events`, tied to the account, with no note
+  content (§3). They are declared as Product Interaction for Analytics (`docs/STORE-COMPLIANCE.md` §2).
 
 ---
 
@@ -63,6 +65,9 @@ options (product-configurable, plan-aware):
 | **Paid-work records** | Postgres `usage_events` (event, audio seconds, model, time; uid/workspace/note ids, nulled when those are deleted) | 90 days: the spend cap reads 24 hours, the rest is cost attribution | The sweeper prunes rows after 90 days |
 | **Workspace membership** | Postgres `workspace_members` | Until account deletion / removal | `delete-account` endpoint |
 | **Push token (FCM)** | Server-side token store | Until token rotates or account deletion | rotation / account delete |
+| **Product events** | Postgres `analytics_events` (uid, event name, small props without note content, time) | Until account deletion | `POST /v1/account/delete` deletes the account's rows; nothing prunes them by age (`TODO(legal)`: whether they need a time limit) |
+| **Support messages** | Postgres `support_requests` (uid, kind, the user's message, a note's id if they chose, app version, device, platform) | Until account deletion | `POST /v1/account/delete` deletes the account's rows |
+| **Crash, performance and diagnostic reports** | Firebase Crashlytics (crashes; MetricKit's hangs, CPU, disk and exit reports, `MetricKitReporter`; their logs and keys), tied to a hashed uid | Firebase keeps them 90 days, then removes them from live and backup systems ([Firebase privacy](https://firebase.google.com/support/privacy)) | Automatic (Firebase) |
 | **Billing/subscription state** | Stripe / App Store / Play + Postgres | Per payment-processor + tax/record-keeping law | see below |
 | **Server logs** (traceId, uid, noteId, workspaceId, error events) | Cloud Logging | **Log retention window** — recommend **30 days** operational, then purge | Logging retention config |
 | **Error Reporting** (error groups, from error-level server logs) | Cloud Error Reporting | Google keeps error events 30 days | Automatic. The group's title is the error's first line. Error messages can carry short fragments of model output (the fast path's JSON parse error quotes about 10 characters; queued in BLOCKERS) |
@@ -144,7 +149,9 @@ Reference: iOS `apps/ios/AlgoMinutes/Services/RecordingStore.swift`.
 > it's deleted from the device. You can delete any note at any time, or set recordings to
 > delete automatically. When you delete a note or your whole account, we delete the audio,
 > transcript, summary, and related data from our live systems straight away, and from our
-> backups within 30 days. We do not use analytics or tracking. A minimal billing record may
+> backups within 30 days. We don't use any third-party analytics or advertising tools, and we
+> don't track you across other apps or websites; we count a few in-app events (like a first
+> recording) to see whether AlgoMinutes works for people. A minimal billing record may
 > be kept where the law requires it."
 
 - `TODO(legal):` Confirm this statement and the 30-day figure before it ships on the
