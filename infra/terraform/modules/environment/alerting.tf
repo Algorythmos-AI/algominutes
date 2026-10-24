@@ -106,6 +106,26 @@ locals {
       severity  = "WARNING"
       doc       = "Gemini answered overloaded (429/503) more than 20 times in 15 minutes. From 2026-10-20 the ladder has one Sydney model, so the summarize queue retries for about an hour before a note fails. Check Vertex status for australia-southeast1 and the gemini_transient lines (model, attempt); if it persists, consider Provisioned Throughput (DECISIONS 2026-09-28)."
     }
+    # Plan rev 12 S2: one Gemini model in Sydney since 2026-10-20, busy at near-zero traffic on 10-06 (9
+    # transient, 5 timeouts, 1 exhausted in a day).
+    gemini_rate_limited = {
+      threshold = 5
+      window    = "900s"
+      severity  = "WARNING"
+      doc       = "Vertex refused Gemini calls for quota (429 RESOURCE_EXHAUSTED) more than 5 times in 15 minutes: the project's quota or Google's shared capacity in australia-southeast1, not an outage. Check the project's Vertex quota page for the model (gemini_rate_limited: model, location); if it's the quota, ask for more, or for Provisioned Throughput (DECISIONS 2026-09-28)."
+    }
+    gemini_model_exhausted = {
+      threshold = 2
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A Gemini model used all its attempts more than twice in 15 minutes. With one model on the ladder, each is a task attempt that failed: Cloud Tasks retries it (10 attempts), but notes are slowing toward failure. See gemini_model_exhausted (model) and the gemini_transient / gemini_rate_limited lines under the same traceId."
+    }
+    gemini_attempt_timeout = {
+      threshold = 3
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "More than three Gemini calls in an hour hung past their cap and were asked again (gemini_attempt_timeout: model, latencyMs, attemptTimeoutMs; plan rev 12 S3). Notes still finish, later. Many in a row means Vertex in australia-southeast1 is stalling: check its status, and the gemini_ok latencyMs that follow."
+    }
     gemini_model_unavailable = {
       threshold = 0
       window    = "3600s"

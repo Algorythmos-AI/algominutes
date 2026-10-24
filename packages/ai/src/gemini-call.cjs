@@ -206,6 +206,11 @@ async function callGeminiWithLadder({
         }
         const backoff = backoffMs(attempt);
         log.warn({ err, model: modelName, attempt: attempt + 1, backoff }, 'gemini_transient');
+        // A quota refusal, told apart from an outage (503): the case for more quota or provisioned throughput
+        // (plan rev 12 S2). It's still a gemini_transient, and retried the same way.
+        if (/\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '')) {
+          log.warn({ model: modelName, attempt: attempt + 1, location: loc }, 'gemini_rate_limited');
+        }
         await sleepFn(backoff);
       }
     }
