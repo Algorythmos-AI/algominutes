@@ -221,6 +221,39 @@ describe('the journey, in a real browser', () => {
     }
   }, 60_000);
 
+  // 10-18 and 10-20: the chat answer timed out at 120 s with only "Timeout exceeded" to go on. A failed wait
+  // now says what the page was showing, so an error on the screen is told apart from a slow pipeline.
+  it('a failed wait says what the page was showing', async () => {
+    const saved = PAGES['/app/search'];
+    PAGES['/app/search'] = saved.replace(
+      `onclick="document.getElementById('st').textContent='Answer ready.'"`,
+      `onclick="document.getElementById('err').textContent='The model is busy. Try again.'"`,
+    ).replace('<p id="st" role="status"></p>', '<p id="st" role="status"></p><p id="err" role="alert"></p>');
+    try {
+      const lines: string[] = [];
+      expect(await run(lines)).toBe(false);
+      const fail = lines.find((l) => l.startsWith('FAIL a question about it gets an answer'));
+      expect(fail).toMatch(/Timeout 4000ms exceeded/);
+      expect(fail).toContain('the page said: The model is busy. Try again.');
+      expect(seen.some((r) => r.path === '/deleted')).toBe(true);
+    } finally {
+      PAGES['/app/search'] = saved;
+    }
+  }, 60_000);
+
+  it('a failed wait on a page with nothing to say says so', async () => {
+    const saved = PAGES['/app/search'];
+    PAGES['/app/search'] = saved.replace(`onclick="document.getElementById('st').textContent='Answer ready.'"`, '');
+    try {
+      const lines: string[] = [];
+      expect(await run(lines)).toBe(false);
+      const fail = lines.find((l) => l.startsWith('FAIL a question about it gets an answer'));
+      expect(fail).toContain('the page showed no error or status');
+    } finally {
+      PAGES['/app/search'] = saved;
+    }
+  }, 60_000);
+
   it("a search made before the note's index exists is made again, and passes", async () => {
     const saved = PAGES['/app/search'];
     // The first press finds nothing, as a search does in the seconds between the summary and the index.

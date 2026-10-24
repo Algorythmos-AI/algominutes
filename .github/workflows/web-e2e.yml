@@ -78,10 +78,21 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Bounded, with one more try, as ci.yml's ffmpeg step: on 10-23 this step hung for 39 minutes in apt and
+      # the job was killed at its 40-minute limit with no step having failed. Green nights take 38-54 s.
+      # Each fetch has its own timeout, man-db's slow trigger is off, and the output is kept so a hang names
+      # its stage.
       - name: Install Chromium and ffmpeg (the fake microphone)
+        timeout-minutes: 12
         run: |
-          npx playwright install --with-deps chromium
-          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+          sudo rm -f /var/lib/man-db/auto-update
+          apt() { sudo timeout 300 apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 "$@"; }
+          install() {
+            timeout 300 npx playwright install --with-deps chromium \
+              && apt update -q && apt install -y -q --no-install-recommends ffmpeg
+          }
+          install || { echo "::warning::the browser or ffmpeg install failed or hung; trying once more"; sleep 10; install; }
+          ffmpeg -version | head -1
       - name: The journey
         timeout-minutes: 30
         env:
@@ -92,3 +103,34 @@ jobs:
           # 'true' once staging's billing has Stripe's test-mode keys: buy Pro with the test card (PR 28b).
           E2E_STRIPE: ${{ vars.E2E_STRIPE }}
         run: node scripts/e2e-web.mjs
+
+  # A red nightly opens a `web-e2e-failed` issue, or comments on the open one, so a red night is seen the next
+  # morning and fixed, never retried away (RELEASE.md R11.5 §3). Scheduled runs only: a run started by hand is
+  # watched by whoever started it.
+  report-failure:
+    needs: [gate, e2e]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the web-e2e-failed issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          body="The nightly web journey failed on ${SHA:0:7} ($RUN_URL). Its FAIL lines say which step, and what the page showed."
+          gh label create web-e2e-failed --color B60205 --description "The nightly web journey failed" 2>/dev/null \
+            || echo "label web-e2e-failed exists"
+          open=$(gh issue list --label web-e2e-failed --state open --json number -q '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --label web-e2e-failed --title "Nightly web journey failed on ${SHA:0:7}" \
+              --body "$body Close this once a scheduled run is green."
+          fi
