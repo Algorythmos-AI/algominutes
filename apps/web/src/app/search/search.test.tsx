@@ -111,6 +111,23 @@ describe('ask your notes', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
+  // On 10-11, 10-18 and 10-20 Cloud Run cut the api's chat stream before it sent `done` or `error` (plan rev 12
+  // S14, fixed in the api). The client already reads a stream that just ends as `stream_ended` (client.ts), so
+  // the page says the answer was cut short; this pins that, so a cut stream can never pass as an answer.
+  it('a stream that ends without done or error was cut short, and offers Try again', async () => {
+    const s = sse();
+    const f = route({ '/v1/chat': () => s.response() });
+    openSearch(f);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ask your notes' }));
+    fireEvent.change(screen.getByLabelText('Ask a question about your notes'), { target: { value: 'q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    s.send(`event: citations\ndata: ${JSON.stringify({ hits: [hit('n1', 5000, 'launch Monday')] })}\n\n`);
+    s.close();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/cut short/);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText('Answer ready.')).toBeNull();
+  });
+
   it('splits [n] citations out of the text', () => {
     expect(splitCitations('A [1] and [12].')).toEqual([{ text: 'A ' }, { cite: 1 }, { text: ' and ' }, { cite: 12 }, { text: '.' }]);
     expect(splitCitations('none')).toEqual([{ text: 'none' }]);
