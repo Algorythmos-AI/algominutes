@@ -17,7 +17,9 @@ RUN apt-get update \
         ca-certificates \
         curl \
     && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]"
+    # Pinned (plan rev 12 S11): unpinned, every build took whatever PyPI had that minute. 2026.10.21 is what
+    # staging ran on 2026-10-24. YouTube changes often: bump it on purpose, with tests/dockerfile-pins.test.ts.
+    && pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]==2026.10.21"
 
 WORKDIR /app
 
