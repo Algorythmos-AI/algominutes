@@ -65,7 +65,7 @@ loses data, money or the launch; P1 breaks a user's trust; P2 is hygiene before 
 | S2 | P0 | One Gemini model since 10-20; gemini-3.5-flash in Sydney saturated at near-zero traffic; no quota or throughput request recorded | `packages/ai/src/models.cjs:58-69` |
 | S3 | P1 | A short recording waits the whole 240 s budget on a hung model | `packages/ai/src/intelligence.cjs` |
 | S4 | P1 | Nothing bounds an upload in progress; a never-completed upload stays in the bucket (`recordings_lifecycle_days = 0`) | `services/api/src/routes/uploads.js`, module `main.tf` |
-| S5 | P1 | A search hit's note title leaves the server unredacted | `services/api/src/routes/search-and-chat.cjs` |
+| S5 | — | ~~A search hit's note title leaves the server unredacted~~ **Closed, not a bug (owner, 2026-10-24):** the user's own title, shown only to them, never in a prompt | `services/api/src/routes/search-and-chat.cjs` |
 | S6 | P1 | A failed Apple token revocation is logged and the deletion proceeds | `SettingsView.swift:552-563`, `AppleTokenRevocation.swift:31-55` |
 | S7 | P1 | Mirror repair cut off twice in a row leaves the notes between unrepaired | `packages/db` mirror repair (#408) |
 | S8 | P1 | DeviceCheck: one failed token puts a device on the floor for good; Apple is asked before the deleted-account check | the api kickoff |

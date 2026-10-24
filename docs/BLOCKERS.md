@@ -86,6 +86,48 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     on that file fixes it if CI ever sees it.
   - **This Mac can't start worktree sessions:** 4.5 GB free against the 5.4 GB a worktree needs. Stage 0 ran in
     one checkout, one branch per PR.
+- **Stage 1, the hardening sprint (plan rev 12 R12.5), as of 2026-10-24 21:00 UTC.** Each fix opened with a test
+  that failed before it; the server ones pass the full suite and gates, the iPhone ones build for testing with
+  Xcode 27 and run their tests in CI (this Mac has no simulator runtime). None is verified on a device yet.
+  - [x] **S3 → #437.** A hung Gemini attempt is cut at a cap from the audio's length (60 s + 9 s a minute, at
+    most 150 s) and asked again within the 240 s budget; the summarizer keeps no per-attempt cap.
+  - [x] **S2's alert half → #442.** `gemini_rate_limited` tells a quota refusal from an outage; alerts on it, on
+    `gemini_model_exhausted` and on `gemini_attempt_timeout`. **Owner:** apply the next staging plan for the
+    three policies to exist, and ask Google for gemini-3.5-flash quota or provisioned throughput in Sydney.
+  - [x] **The login retry → #438 (another session's), and a timed-out job counts as failed → #439.** Proven on
+    the 17:11 deploy: all 19 jobs that talk to Google Cloud logged in through `.github/actions/gcp-auth` on the
+    first try; every retry step `outcome=skipped`.
+  - [x] **S14 → #443.** `/v1/chat` closed at exactly 61 s on 10-11, 10-18 and 10-20 (Cloud Run's request
+    timeout; staging logs): Vertex sent nothing and nothing bounded the wait. An attempt with no text by 15 s is
+    cut and asked again; an answer ends inside 45 s, with `event: error` if it must. Found by the
+    pii-scrub-compliance audit of the change: each attempt reads with its own SSE buffer.
+  - [ ] **S15 → #444.** The web client has read a cut stream as `stream_ended` since #191 (the page says "cut
+    short"; a test now pins it). The **iPhone** didn't: `chatStream` finished normally, leaving the answer empty
+    with nothing to retry. It now throws `streamEnded`, and a server error reads as a sentence, not its code.
+  - [ ] **S4 → #450.** The declared length opens the upload session (`X-Upload-Content-Length`), so Cloud
+    Storage refuses any byte past it. The planned lifecycle rule for unfinished uploads is dropped: an
+    unfinished resumable upload is never an object.
+  - [x] **S5: closed, not a bug (owner, 2026-10-24).** A search hit's note title is the user's own title, shown
+    only to them, and never enters a prompt or the embedder (the chunk text does, redacted). Redacting it would
+    show "<<REDACTED:…>>" where they typed a title.
+  - [ ] **S6 → #451.** A failed Apple revocation asks Try again (a fresh Apple prompt) or Delete anyway; it used
+    to delete silently. A hard stop was rejected: a misconfigured Apple provider would block every Apple user's
+    deletion (5.1.1(v)).
+  - [ ] **S7 → #452.** Mirror repair pages newest first, and checks its budget after a page, so a cut-off run has
+    checked the notes no run has seen.
+  - [ ] **S8 → #453 (server) and #456 (iPhone).** A deleted account is refused before Apple's DeviceCheck is
+    asked (an Apple outage gave it a 500, not a 401); a failed DeviceCheck token is asked for once more.
+  - [ ] **S9 → #454.** Production allows only `ALLOWED_ORIGINS`; staging and local development add localhost;
+    the Capacitor/Ionic origins are gone.
+  - [ ] **S11 → #455 and #457.** yt-dlp pinned to 2026.10.21 (what staging ran), with a test that every pip
+    install names a version; the sweep runs account deletions and queued purges first and logs `durationsMs` per
+    step. **Left in S11:**
+    - Code-scanning alert #131 is a false positive: the nightly pipeline test uploading its own fixture to Cloud
+      Storage, the host already restricted. **Owner:** dismiss it as "used in tests".
+    - Notes that live only in Firestore (scanned text) are outside retention and backups: deleting them on a
+      schedule removes user data, so it needs a design (move scans into Postgres, or retention reading Firestore).
+  - **Still open in Stage 1:** the nightly failure cases (1.8), I3's kill-safe capture and device pass 1 (both
+    need the owner's iPhone).
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
