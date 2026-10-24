@@ -55,9 +55,9 @@ final class BillingSurfacesTests: XCTestCase {
         XCTAssertNil(SettingsView.minutesLine(nil))
     }
 
-    func testTheAccountPromptMentionsTheTrialOnlyWithAPaywall() {
-        XCTAssertTrue(AccountUpgradeSheet.message(paywallEnabled: true).contains("7-day trial"))
-        let off = AccountUpgradeSheet.message(paywallEnabled: false)
+    func testTheAccountPromptMentionsTheTrialOnlyDuringOne() {
+        XCTAssertTrue(AccountUpgradeSheet.message(trialing: true).contains("7-day trial"))
+        let off = AccountUpgradeSheet.message(trialing: false)
         XCTAssertFalse(off.contains("trial"))
         XCTAssertTrue(off.hasPrefix("Create a free account"))
     }

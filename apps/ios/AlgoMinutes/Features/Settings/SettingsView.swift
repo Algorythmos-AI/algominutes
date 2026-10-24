@@ -244,11 +244,13 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                // Beta testers' minutes come from the code in their invitation.
-                Divider().overlay(Theme.borderSoft)
-                Button("Enter an invite code") { env.billing.presentInviteSheet() }
-                    .font(Typography.body(15))
-                    .foregroundStyle(Theme.body)
+                // Beta testers' minutes come from the code in their invitation; the App Store build has no beta.
+                if AppConfig.inviteCodesEnabled {
+                    Divider().overlay(Theme.borderSoft)
+                    Button("Enter an invite code") { env.billing.presentInviteSheet() }
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                }
                 if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
                     Button("Restore Purchases") {
@@ -343,11 +345,11 @@ struct SettingsView: View {
 
     private var planLabel: String { Self.planLabel(env.billing.entitlement, trialDaysRemaining: env.billing.trialDaysRemaining) }
 
-    /// The plan, as the card's headline: a grant's minutes say so, so a tester
-    /// never takes them for a purchase.
-    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?) -> String {
+    /// The plan, as the card's headline: in the beta, a grant's minutes say so, so a tester never takes them for
+    /// a purchase. The App Store build has no beta, and a grant there is just Pro.
+    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?, beta: Bool = AppConfig.inviteCodesEnabled) -> String {
         switch entitlement?.state {
-        case .active?: return entitlement?.isGrant == true ? "Pro · beta minutes" : "Pro"
+        case .active?: return entitlement?.isGrant == true && beta ? "Pro · beta minutes" : "Pro"
         case .trialing?:
             if let days = trialDaysRemaining {
                 return "Free trial · \(days) day\(days == 1 ? "" : "s") left"

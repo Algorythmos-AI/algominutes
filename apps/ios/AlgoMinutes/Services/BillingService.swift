@@ -43,9 +43,12 @@ final class BillingService {
     private let defaults: UserDefaults
     /// PAYWALL_ENABLED for this build; injectable so tests can try both.
     private let paywallEnabled: Bool
+    /// INVITE_CODES_ENABLED: the beta's invite codes. Off in the App Store build, where nothing opens the sheet.
+    let inviteCodesEnabled: Bool
 
-    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled, defaults: UserDefaults = .standard) {
+    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled, inviteCodesEnabled: Bool = AppConfig.inviteCodesEnabled, defaults: UserDefaults = .standard) {
         self.api = api
+        self.inviteCodesEnabled = inviteCodesEnabled
         self.defaults = defaults
         self.paywallEnabled = paywallEnabled
         self.store = StoreKitService(api: api)
@@ -123,7 +126,7 @@ final class BillingService {
             // No products on sale: an invite code is the way to minutes. Ask for
             // it before a recording the server would refuse, rather than after
             // the meeting. Otherwise the server decides.
-            if hasNoMinutesLeft {
+            if hasNoMinutesLeft, inviteCodesEnabled {
                 presentInviteSheet()
                 return false
             }
@@ -135,6 +138,10 @@ final class BillingService {
     }
 
     func presentInviteSheet() {
+        guard inviteCodesEnabled else {
+            AppLog.info("invite_sheet_suppressed")
+            return
+        }
         isInviteSheetPresented = true
     }
 
@@ -147,6 +154,7 @@ final class BillingService {
     /// or the App Store unreachable) to the beta's other way to minutes, an
     /// invite code (RELEASE.md PR 27), rather than a dead end.
     func switchToInviteSheet() {
+        guard inviteCodesEnabled else { return }
         inviteAfterPaywall = true
         isPaywallPresented = false
     }
