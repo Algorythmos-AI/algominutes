@@ -32,6 +32,18 @@ describe('the quiet failures alert', () => {
     expect(alerting).toMatch(/gemini_output_truncated\s*=\s*\{/);
   });
 
+  // Plan rev 12 S2: one Gemini model in Sydney since 2026-10-20, already busy at near-zero traffic. A quota
+  // refusal (429) is told apart from an outage (503), a model that used all its attempts is an error, and an
+  // attempt cut at its cap (S3) is counted.
+  it('Gemini capacity: quota refusals, an exhausted model, and cut attempts', () => {
+    const entry = (event: string) => new RegExp(`${event}\\s*=\\s*\\{[^}]*severity\\s*=\\s*"([A-Z]+)"`).exec(alerting)?.[1];
+    expect(entry('gemini_rate_limited')).toBe('WARNING');
+    expect(entry('gemini_model_exhausted')).toBe('ERROR');
+    expect(entry('gemini_attempt_timeout')).toBe('WARNING');
+    // The overload alert still counts both kinds.
+    expect(entry('gemini_transient')).toBe('WARNING');
+  });
+
   it("the sweep's absence, a failed Scheduler job, a queue backing up, and Cloud SQL near its limits", () => {
     expect(pipeline).toMatch(/condition_absent\s*\{[\s\S]*?sweep_done/);
     expect(pipeline).toMatch(/resource\.type=\\"cloud_scheduler_job\\" AND severity>=ERROR/);

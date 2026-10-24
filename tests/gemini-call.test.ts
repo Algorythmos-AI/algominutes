@@ -60,6 +60,25 @@ describe('callGeminiWithLadder', () => {
     expect(calls).toEqual(['model-a', 'model-a']);
   });
 
+  // Plan rev 12 S2: a quota refusal is the case for asking Google for more quota or provisioned throughput; an
+  // outage (503) is not. Both stay gemini_transient (and retried); a 429 also logs gemini_rate_limited.
+  it('a quota refusal (429 / RESOURCE_EXHAUSTED) is logged as rate-limited too; a 503 is not', async () => {
+    const { log, events } = logSpy();
+    const { impl } = fakeFetch({
+      'model-a': [
+        { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' },
+        { status: 503, text: '{"error":{"status":"UNAVAILABLE"}}' },
+        ok('{"gist":"x"}'),
+      ],
+    });
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    expect(out).toMatchObject({ rawText: '{"gist":"x"}', error: null });
+    expect(events.filter((e) => e.msg === 'gemini_transient')).toHaveLength(2);
+    const limited = events.filter((e) => e.msg === 'gemini_rate_limited');
+    expect(limited).toHaveLength(1);
+    expect(limited[0]!.obj).toMatchObject({ model: 'model-a', attempt: 1 });
+  });
+
   it('stops on a non-transient request error (400): another model will not fix a bad request', async () => {
     const { impl, calls } = fakeFetch({ 'model-a': [{ status: 400, text: 'INVALID_ARGUMENT' }], 'model-b': [ok('{}')] });
     const { log } = logSpy();
