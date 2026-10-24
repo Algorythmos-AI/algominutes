@@ -142,7 +142,13 @@ module "environment" {
   # with devicecheck_not_configured on each first kickoff. Turned on with them.
   trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
-  monthly_budget     = 300
+
+  # The launch's cost guards (plan rev 12, Stage 2). The api refuses a kickoff, and the transcoder halts queued
+  # paid work, once a day's paid work reaches A$60 (about 2,000 minutes at A$0.03), rather than spend-guard's
+  # A$200 prod default. Revisit from the measured cost per minute after launch.
+  daily_spend_cap_aud = 60
+  # Alerts only (budget.tf): a month past A$500.
+  monthly_budget = 500
 }
 
 # Re-export module outputs at the root for convenience.
