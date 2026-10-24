@@ -109,7 +109,11 @@ jobs:
   # watched by whoever started it.
   report-failure:
     needs: [gate, e2e]
-    if: failure() && github.event_name == 'schedule'
+    # The journey killed at its time limit on 2026-10-23 concluded `cancelled`, not `failure`, so failure()
+    # alone would never have reported it. A run cancelled as a whole is skipped (!cancelled()).
+    if: >-
+      !cancelled() && github.event_name == 'schedule'
+      && (needs.gate.result == 'failure' || needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

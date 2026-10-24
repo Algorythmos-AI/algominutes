@@ -415,13 +415,16 @@ jobs:
 
   smoke:
     needs: [changes, migrate, rollout, rollout-solo, rollout-meetings, rollout-api]
-    # After every wave that ran, and only if none failed (a skipped wave had nothing to deploy). A failed solo
+    # After every wave that ran, and only if none failed or hit its timeout-minutes (a job that does ends
+    # `cancelled`, not `failure`; a skipped wave had nothing to deploy). A failed solo
     # rollout doesn't stop it: that service keeps serving its previous revision, which the smoke checks too,
     # and the run is red either way.
     if: >-
       !cancelled() && needs.changes.outputs.services != '[]' && needs.migrate.result == 'success'
       && needs.rollout.result != 'failure' && needs.rollout-meetings.result != 'failure'
       && needs.rollout-api.result != 'failure'
+      && needs.rollout.result != 'cancelled' && needs.rollout-meetings.result != 'cancelled'
+      && needs.rollout-api.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -492,7 +495,11 @@ jobs:
   # stuck staging is seen the same hour, not days later (#280-#288).
   report-failure:
     needs: [changes, ci-gate, build, migrate, rollout, rollout-solo, rollout-meetings, rollout-api, smoke]
-    if: failure()
+    # A job that hits its timeout-minutes ends `cancelled`, not `failure`, so failure() alone missed it (the
+    # web journey killed at its limit on 2026-10-23 concluded `cancelled`). A run cancelled as a whole (a
+    # queued deploy replaced by a newer one, or one stopped by hand) is not a failure: !cancelled() skips it.
+    if: >-
+      !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -508,7 +515,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          failed=$(jq -r 'to_entries | map(select(.value.result == "failure") | .key) | join(", ")' <<<"$RESULTS")
+          failed=$(jq -r 'to_entries | map(select(.value.result == "failure" or .value.result == "cancelled") | .key + (if .value.result == "cancelled" then " (timed out)" else "" end)) | join(", ")' <<<"$RESULTS")
           body="deploy-staging failed on ${SHA:0:7} ($RUN_URL). Failed: ${failed:-unknown}."
           gh label create deploy-failed --color B60205 --description "A staging deploy failed" 2>/dev/null \
             || echo "label deploy-failed exists"

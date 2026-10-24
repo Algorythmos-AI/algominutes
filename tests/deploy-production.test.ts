@@ -50,6 +50,23 @@ describe('the production deploy', () => {
     }
   });
 
+  // A job that hits its timeout-minutes ends `cancelled`, not `failure` (the web journey killed at its limit on
+  // 2026-10-23 concluded `cancelled`). With failure() alone, a hung deploy job would open no issue, and the
+  // smoke would run after a rollout that never finished.
+  it('a timed-out job counts as failed: the issue opens and the smoke stays out', () => {
+    for (const file of [staging, production]) {
+      const report = jobs(file).slice(jobs(file).indexOf('\n  report-failure:'));
+      expect(report).toMatch(/if: >-\n\s+!cancelled\(\) && \(contains\(needs\.\*\.result, 'failure'\) \|\| contains\(needs\.\*\.result, 'cancelled'\)\)/);
+      expect(report).not.toMatch(/\n    if: failure\(\)\n/);
+      const smoke = jobs(file).slice(jobs(file).indexOf('\n  smoke:'), jobs(file).indexOf('\n  report-failure:'));
+      for (const job of ['rollout', 'rollout-meetings', 'rollout-api']) {
+        expect(smoke).toContain(`needs.${job}.result != 'cancelled'`);
+      }
+    }
+    const web = fs.readFileSync('.github/workflows/web-e2e.yml', 'utf8');
+    expect(web).toMatch(/!cancelled\(\) && github\.event_name == 'schedule'\n\s+&& \(needs\.gate\.result == 'failure' \|\| needs\.e2e\.result == 'failure' \|\| needs\.e2e\.result == 'cancelled'\)/);
+  });
+
   it('runs on main only, gated, in its own lane', () => {
     expect(production).toMatch(/^name: deploy-production$/m);
     expect(production).toMatch(/\non:\n  push:\n    branches: \[main\]\n/);
