@@ -211,6 +211,50 @@ the services it affects.
 > an external `GET /healthz` returns a Google 404 before reaching the container.
 > Probe `/health` from outside.
 
+## 3b. Production deploys (`.github/workflows/deploy-production.yml`)
+
+`deploy-production.yml` runs exactly deploy-staging's jobs for pushes to `main` (a promotion from
+`integration`), in the `production` GitHub Environment. `tests/deploy-production.test.ts` fails if the
+two workflows differ in anything but the environment, the gate variable, the smoke's API-key secret and
+the failure issue's label (`prod-deploy-failed`), so a change to one is made to both.
+
+It does nothing until all of these exist. Do them **after Apply P** (plan rev 12 Stage 2), in this order:
+
+1. `bash scripts/github-settings.sh --apply`, if it hasn't run since the `production` Environment was added:
+   the Environment accepts `main` only, and the owner approves each run.
+2. The Environment's variables, from the prod Terraform outputs. They are set **on the Environment**,
+   where they override the repo's staging values of the same name; the gate variable is the repo's:
+
+   ```bash
+   cd infra/terraform/envs/prod
+   gh variable set GCP_PROJECT_ID   --env production --body algominutes-prod
+   gh variable set GCP_WIF_PROVIDER --env production --body "$(terraform output -raw wif_provider_name)"
+   gh variable set GCP_DEPLOYER_SA  --env production --body "$(terraform output -raw deployer_service_account_email)"
+   ```
+
+3. The authenticated smoke's key, the **prod** iOS app's Firebase API key (from prod's
+   `GoogleService-Info.plist`, never committed), as an Environment secret:
+
+   ```bash
+   /usr/libexec/PlistBuddy -c 'Print :API_KEY' <path to prod GoogleService-Info.plist> \
+     | gh secret set PROD_FIREBASE_API_KEY --env production
+   ```
+
+4. Anonymous sign-in on in prod Firebase (the smoke signs up an anonymous user), then switch it on and run
+   the first full deploy by hand:
+
+   ```bash
+   gh variable set DEPLOY_PRODUCTION --body true
+   ```
+
+   ```bash
+   gh workflow run deploy-production.yml --ref main -f services=all
+   ```
+
+Every job has a `timeout-minutes` ceiling sized from staging's runs (ci-gate 50, migrate 30, an image 30,
+a rollout 15, the smoke 20), so a hung job fails naming itself. A job that never starts ("waiting", seen
+twice on staging on 2026-10-06) isn't covered by a timeout: cancel the run and re-run it.
+
 ## 4. Give internal testers minutes
 
 A TestFlight build has no DeviceCheck trial and the free floor is 0 minutes, so a
