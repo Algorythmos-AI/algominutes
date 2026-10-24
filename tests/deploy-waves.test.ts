@@ -56,7 +56,8 @@ describe('the staging rollout', () => {
   });
 
   it('reports a red run as a deploy-failed issue', () => {
-    expect(cond('report-failure')).toBe('failure()');
+    // A job killed at its timeout-minutes ends `cancelled`, not `failure`; a run cancelled as a whole is skipped.
+    expect(cond('report-failure')).toBe("!cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))");
     expect(needs('report-failure')).toEqual(expect.arrayContaining(['ci-gate', 'build', 'migrate', 'rollout', 'rollout-solo', 'rollout-meetings', 'rollout-api', 'smoke']));
     expect(jobs['report-failure']).toContain('issues: write');
     expect(jobs['report-failure']).toContain('--label deploy-failed');
