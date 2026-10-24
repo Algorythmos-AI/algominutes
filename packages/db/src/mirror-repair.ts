@@ -47,11 +47,15 @@ export interface FinishedNote { noteId: string; workspaceId: string; status: 're
 export interface FinishedNotesCursor { updatedAt: string; noteId: string }
 
 /**
- * Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first, a page at a time
+ * Notes that finished between `settledMs + windowMs` and `settledMs` ago, newest first, a page at a time
  * (audit Q20): pass the previous page's `next` as `after`; `next` is null on the last page. Paged by the
  * (updated_at, id) watermark on the finished-notes index (migration 039), so every note in the window is
  * seen however many there are. `updated_at` goes out as text, at full microsecond precision, so the
  * watermark never skips a row that shares a millisecond.
+ *
+ * Newest first (plan rev 12 S7): a run cut off by its time budget has checked the notes no run has seen yet. Each
+ * note is in two 15-minute runs' windows; oldest-first spent the budget on the half the last run had checked, so
+ * under load the newest were cut every run and could age out unchecked. The index is read backwards.
  */
 export async function listRecentlyFinishedNotes(input: {
   settledMs: number; windowMs: number; limit: number; after?: FinishedNotesCursor | null;
@@ -61,8 +65,8 @@ export async function listRecentlyFinishedNotes(input: {
       WHERE status IN ('ready', 'error', 'awaiting_minutes') AND deleted_at IS NULL
         AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND updated_at > NOW() - (($1::bigint + $2::bigint) * INTERVAL '1 millisecond')
-        AND ($4::timestamptz IS NULL OR (updated_at, id) > ($4::timestamptz, $5::text))
-      ORDER BY updated_at, id LIMIT $3`,
+        AND ($4::timestamptz IS NULL OR (updated_at, id) < ($4::timestamptz, $5::text))
+      ORDER BY updated_at DESC, id DESC LIMIT $3`,
     [input.settledMs, input.windowMs, input.limit, input.after?.updatedAt ?? null, input.after?.noteId ?? ''],
   );
   const last = rows[rows.length - 1];

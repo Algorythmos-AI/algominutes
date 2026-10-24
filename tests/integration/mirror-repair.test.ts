@@ -104,6 +104,19 @@ describe('listRecentlyFinishedNotes, paged', () => {
     expect(pages).toBe(4); // 2 + 2 + 2 + 1, and the short page says it's the last
   });
 
+  // Plan rev 12 S7: newest first. Oldest-first spent each run's budget on the half of the window the last run
+  // already checked, so under load the newest notes were cut every time, and could age out never checked.
+  it('pages newest first', async () => {
+    for (const id of ['old', 'mid']) await seedNote(id, 'ws', 'u');
+    await finish('ready', 11 * MIN); // n1, the newest
+    await pool.query(`UPDATE notes SET status = 'ready', updated_at = NOW() - INTERVAL '35 minutes' WHERE id = 'old'`);
+    await pool.query(`UPDATE notes SET status = 'ready', updated_at = NOW() - INTERVAL '20 minutes' WHERE id = 'mid'`);
+    const first = await listRecentlyFinishedNotes({ settledMs: 10 * MIN, windowMs: 30 * MIN, limit: 2 });
+    expect(first.notes.map((n) => n.noteId)).toEqual(['n1', 'mid']);
+    const second = await listRecentlyFinishedNotes({ settledMs: 10 * MIN, windowMs: 30 * MIN, limit: 2, after: first.next });
+    expect(second.notes.map((n) => n.noteId)).toEqual(['old']);
+  });
+
   it('reads the finished notes through their own index', async () => {
     const { rows } = await pool.query(`SELECT indexdef FROM pg_indexes WHERE indexname = 'notes_finished_updated_idx'`);
     expect(rows[0]?.indexdef).toMatch(/\(updated_at, id\) WHERE .*status.*ready.*error.*deleted_at IS NULL/);
@@ -248,6 +261,26 @@ describe('the sweep step', () => {
     const log: any = { info: noop, warn: noop, error: noop, child: () => log };
     const deps = { firestore, auth: { deleteUser: async () => {} }, bucket: { getFiles: async () => [[]] } };
     const counts = await sweep.run({ log, env: {}, traceId: 't', deps, repo, noteTerminal });
+    expect(counts.mirror_repair).toBe(1);
+    expect(doc().status).toBe('error');
+  });
+
+  // Plan rev 12 S7: a run cut off by its budget has still checked the newest notes, the ones no run has seen.
+  it('a run cut off after one page has repaired the newest note', async () => {
+    await pool.query(
+      `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, updated_at)
+       SELECT 'bulk-' || g, 'ws', 'u', 'ready', 'recording', NOW() - INTERVAL '30 minutes' + g * INTERVAL '1 millisecond'
+         FROM generate_series(1, 30) g`,
+    );
+    for (let g = 1; g <= 30; g += 1) docs.set(`workspaces/ws/notes/bulk-${g}`, { data: { status: 'ready' }, updateTime: ts(Date.now() - 20 * MIN) });
+    await finish('error', 11 * MIN, 'x'); // n1: the newest in the window, its doc behind
+    setDoc({ status: 'transcribing' });
+    const noop = () => {};
+    const warned: string[] = [];
+    const log: any = { info: noop, warn: (_o: unknown, m: string) => warned.push(m), error: noop, child: () => log };
+    const deps = { firestore, auth: { deleteUser: async () => {} }, bucket: { getFiles: async () => [[]] }, mirrorRepairBudgetMs: 0, mirrorRepairPage: 10 };
+    const counts = await sweep.run({ log, env: {}, traceId: 't', deps, repo, noteTerminal });
+    expect(warned).toContain('mirror_repair_budget_reached');
     expect(counts.mirror_repair).toBe(1);
     expect(doc().status).toBe('error');
   });
