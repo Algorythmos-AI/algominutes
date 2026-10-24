@@ -64,9 +64,9 @@ settings:
       # api.algominutes.com, a domain that isn't registered).
       API_BASE_URL: ""
       BILLING_BASE_URL: ""
-      # The update screen's button (426). TestFlight until the App Store
-      # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
-      UPDATE_URL: itms-beta://
+      # The update screen's button (426): the App Store listing (App Store
+      # Connect app 6816333591). A Release build must never open TestFlight.
+      UPDATE_URL: itms-apps://apps.apple.com/app/id6816333591
       PAYWALL_ENABLED: "NO"
 
 targets:
@@ -211,6 +211,9 @@ targets:
         INFOPLIST_FILE: BroadcastExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: BroadcastExtension/BroadcastExtension.entitlements
         CODE_SIGN_STYLE: Automatic
+        # iPhone only, like the app. XcodeGen's extension default is "1,2",
+        # which would declare an iPad extension inside an iPhone-only app.
+        TARGETED_DEVICE_FAMILY: "1"
 
 schemes:
   AlgoMinutes:

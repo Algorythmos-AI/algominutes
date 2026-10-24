@@ -40,6 +40,20 @@
                 <string>C617.1</string>
             </array>
         </dict>
+        <!--
+            SampleHandler reads volumeAvailableCapacityForImportantUsage to
+            refuse or stop a capture that would fill the disk: the same
+            on-demand disk-space reason as the app target (E174.1). Every
+            bundle declares its own required-reason APIs (ITMS-91053).
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
     </array>
 </dict>
 </plist>

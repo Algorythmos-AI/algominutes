@@ -8,8 +8,10 @@ is two scripts in `apps/ios/ci_scripts/`.
 1. It stamps the build number from `CI_BUILD_NUMBER` (TestFlight needs a new one per upload).
 2. It writes `GoogleService-Info.plist` from the workflow's secret variable
    `GOOGLE_SERVICE_INFO_PLIST_B64` (never committed). It then checks the plist has `CLIENT_ID`,
-   `REVERSED_CLIENT_ID`, `GOOGLE_APP_ID` and `PROJECT_ID`, and is for `com.algorythmos.algominutes`. A
-   wrong or incomplete plist fails here, with its reason.
+   `REVERSED_CLIENT_ID`, `GOOGLE_APP_ID` and `PROJECT_ID`, is for `com.algorythmos.algominutes`, and
+   belongs to the backend the scheme archives against (`CI_XCODE_SCHEME`: `AlgoMinutes` → `algominutes-prod`,
+   `AlgoMinutes-Staging` → `algominutes-staging`). A wrong or incomplete plist fails here, with its reason, so
+   a Release archive can never carry staging's plist.
 3. It generates the Xcode project from `apps/ios/project.yml`, with the pinned XcodeGen
    (`scripts/install-xcodegen.sh`, checksum-verified). The project isn't committed.
 4. It resolves the Swift packages, and fails if that changes the committed `Package.resolved`. Xcode
