@@ -71,9 +71,10 @@ loses data, money or the launch; P1 breaks a user's trust; P2 is hygiene before 
 | S8 | P1 | DeviceCheck: one failed token puts a device on the floor for good; Apple is asked before the deleted-account check | the api kickoff |
 | S9 | P2 | CORS allows `localhost`, `capacitor://`, `ionic://` in prod | `packages/ai/src/cors.cjs:16-22` |
 | S10 | P2 | Share-link IP hashes unsalted; the viewer has no report control (off in 1.0 unless fixed) | share links, `SharedNotePage.tsx` |
-| S11 | P2 | yt-dlp unpinned; alert #131; the sweep's step order vs 900 s; Firestore-only notes outside retention | rev 11 P2 list |
+| S11 | P2 | yt-dlp unpinned; alert #131; the sweep's step order vs 900 s (Firestore-only notes moved to S16) | rev 11 P2 list |
 | S12 | P2 | Stripe: a duplicate's first payment isn't refunded by itself; `unattributed` refunds; keys not in Terraform | H21 "for the owner" |
 | S13 | P2 | The session check is off until `reviewed-dd556da5.tfplan` is applied and `session_check = "on"` | `middleware/auth.js:39,49` |
+| S16 | P1 | Scanned and imported text notes live only in Firestore: outside retention, backups, search, chat and export (designed in R12.8) | `ScanSheet.swift`, `firestore.rules` |
 
 **iPhone**
 
@@ -202,6 +203,91 @@ P0 pauses the phased release; only fixes merge in the first week; the wow featur
 | 11-10 | Load, chaos, tenancy, device pass 2, alerts, the incident runbook |
 | 11-17 | Privacy labels, the listing, the review package; the candidate into external TestFlight |
 | 11-24 → 12-01 | 7 days crash-free; legal sign-off; submission with a phased release |
+
+### R12.8 Scanned and imported text notes in Postgres (S16; design approved in direction by the owner, 2026-10-24)
+
+> The owner chose this over teaching retention to read Firestore: a text note is a note like every other, with
+> Postgres as its source of truth (CLAUDE.md §1). This section is the design; no code lands before it's merged.
+
+**What happens today (read at integration `6ce9c3f0`+, 2026-10-24):**
+- The iPhone's scan sheet (`apps/ios/AlgoMinutes/Features/Scan/ScanSheet.swift`, `createTextNote`) turns a scanned
+  image, a PDF or an imported text file into a note **on the device** (`TextNoteBuilder`: normalised text up to
+  180,000 characters, one transcript line per paragraph, a gist, a title), and writes it **straight into
+  Firestore** as `type: scan_text, status: ready` (`NotesRepository.createNote`). The Firestore rules allow
+  exactly that one client-made `ready` note (`infra/firebase/firestore.rules`, `allow create`). The web never
+  creates one (`ScanPanel.tsx` is imported nowhere); Android has no app.
+- **Postgres never hears of it.** So the note is outside:
+  - retention (`listNotesPastRetention` reads Postgres): it never expires, whatever the user chose;
+  - backups and point-in-time recovery (Cloud SQL only; Firestore has none, R12.3 O7);
+  - search and chat (embeddings come only from the pipeline);
+  - `POST /v1/notes/read` (404), so the iPhone's paged full-transcript export (#357) can't page it;
+  - edits written to Postgres (`update-note.js` answers `pgWritten: false`).
+- **What already works:** deleting it (with no Postgres row, the workspace owner's delete queues a purge that
+  removes the doc, since the admit-personal-workspace fix) and account deletion (the account's Firestore docs
+  are deleted recursively).
+
+**The design**
+
+1. **A contract (three-client change, additive):** `POST /v1/notes/text` with `TextNoteCreateRequest`
+   `{ noteId, workspaceId, title?, text, source: 'scanned_image' | 'pdf' | 'imported' }` and `TextNoteResponse`
+   `{ noteId, status: 'ready' }`. `text` is capped at 180,000 characters (`TextNoteBuilder.maxChars`; 720 KB of
+   UTF-8 at worst, inside the api's 1 MB body limit). `noteId` is the client's, as for recordings, so a retry is
+   the same note. Models regenerated from `packages/contracts`; the web and Android get the types, unused.
+2. **One builder, on the server.** `TextNoteBuilder`'s rules (normalise, truncate with its suffix, paragraphs
+   into lines, the gist, the title) move into `packages/db` (a pure function, unit-tested against the Swift
+   one's cases), so every client gets the same note.
+3. **The repo writes it, Postgres first** (`packages/db`, a new `createTextNote`), in one transaction:
+   - refuse a deleted account (`AccountDeletedError`) and a `noteId` already deleted (`deleted_notes`),
+     ensure the user and the personal workspace (as admission does);
+   - upsert `notes` (`status 'ready'`, `source_type 'scan_text'`, `duration_sec 0`, `word_count`); a note id
+     that exists as **another** source type is refused, never overwritten;
+   - replace its `transcript_lines` (delete-then-insert per note, as the fast path does for unchunked lines:
+     `chunk_id NULL`, `start_ms = end_ms = 0`, ordered by `idx`), and upsert `summaries` (`gist`, `model: null`);
+   - after the commit, mirror to Firestore through the repo's mirror (`rawText`, the first 200 lines as for every
+     note, the summary, `status: ready`), so the iPhone's existing note screen shows it unchanged;
+   - enqueue `embed` for the note, so search and chat cover it. The embedder already redacts PII before Vertex
+     (CLAUDE.md §1).
+   - Replayed with the same body: the same rows (idempotent). No minutes are charged (no audio); the embedding is
+     counted by the spend guard as the pipeline's are.
+4. **The api route** (`services/api/src/routes/text-notes.js`): `authed`, the workspace check every route has, the
+   user rate limit, `createTextNote`, then `{ noteId, status: 'ready' }`. Logs `text_note_created`
+   (noteId, workspaceId, userId, traceId, chars, lines; never the text).
+5. **The iPhone** calls the route instead of writing Firestore. The note list still learns of it from the
+   Firestore listener, as for every note. If the call fails, the sheet keeps the extracted text and offers
+   **Try again**: no offline queue in 1.0 (today's Firestore write queued offline; that is the one behaviour
+   lost, and the sheet says so).
+6. **The old path closes (contract step, after the expand):** once every TestFlight build in use has the new
+   call (the client-version floor in `packages/contracts/src/version.ts` raised past it, so an older build is
+   asked to update), the Firestore rule's `status == 'ready' && type == 'scan_text'` exception is removed, so no
+   new Firestore-only note can appear. Released by a Terraform apply, as the rules are.
+7. **A backfill for what exists:** a db-job, `backfill-text-notes`, finds Firestore notes of type `scan_text` with
+   no Postgres row (a collection-group query, paged), and creates each through `createTextNote` from the doc's own
+   `rawText` (or its transcript when it has none), keeping its id, title and `createdAt`. `MODE=dry-run` counts;
+   `MODE=run` writes and logs counts only. Run once on staging after the route ships; prod starts empty (the public
+   release starts fresh), so it never needs it.
+
+**What this closes:** retention, backups and PITR, search, chat, export and Postgres-written edits cover text
+notes; and the last client-written `ready` note leaves the Firestore rules (CLAUDE.md §1: Postgres is the source of
+truth, Firestore the cache).
+
+**Tests and proofs (each PR's failing test first):**
+- Builder: the Swift `TextNoteBuilder` cases, in vitest, give the same lines, gist and title.
+- Repo (integration, Postgres 16): created once on a replay; a deleted account and a deleted note id refused; a
+  recording's id never overwritten; the two-account tenancy test (B can't create into A's workspace, or read A's
+  text note); `listNotesPastRetention` finds an old text note; `deleteNote` removes its rows.
+- Route: contract-validated, the 180,000-character cap (413 past it), rate limited, log fields (the auditor).
+- iPhone: `ScanSheet` calls the route (a stubbed URLProtocol), keeps the text and offers Try again on a failure.
+- Backfill: dry-run counts, run is idempotent, and a doc with only a transcript is rebuilt from it.
+- Staging: a scan from the iPhone appears in search and chat, exports in full, and a 1-day retention removes it
+  on the next sweep.
+
+**PR sequence (one at a time):** (1) contract + builder, (2) repo `createTextNote` + tests, (3) api route,
+(4) iPhone, (5) backfill job, then the owner runs it on staging, (6) after the floor is raised, the rules'
+exception removed (with its apply). PRs 1–3 deploy nothing a client calls until PR 4.
+
+**Costs and risks:** no new service (CLAUDE.md §2); an embedding per text note (a few hundred thousand characters
+at most, small next to a recording's pipeline). The risk is the window between PRs 4 and 6, when old builds can
+still create Firestore-only notes; the backfill covers them if it runs after the floor is raised.
 
 ---
 
