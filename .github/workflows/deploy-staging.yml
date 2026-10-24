@@ -3,8 +3,8 @@ name: deploy-staging
 # Builds and deploys changed services to the STAGING Cloud Run services
 # Terraform created (infra/terraform/modules/environment/cloud-run.tf).
 # Branch model: `integration` (default) = staging, `main` =
-# production — so this runs on pushes to `integration`; prod deploys from
-# `main` arrive with the prod environment (plan PR-35).
+# production — so this runs on pushes to `integration`; deploy-production.yml
+# runs the same jobs for `main` (tests/deploy-production.test.ts keeps them one).
 #
 # - Order: build → migrate + Vertex smoke → rollout in three waves → smoke. Every image is built first; the
 #   db-job `migrate` handler then applies migrations INSIDE the VPC (Cloud SQL
@@ -38,7 +38,10 @@ name: deploy-staging
 #   docs/runbooks/resume-staging-and-deploy.md). Required repo variables:
 #   GCP_PROJECT_ID, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA. Required secret:
 #   STAGING_FIREBASE_API_KEY (the authenticated smoke signs up a test user).
-# - Prod deploys are added with the prod environment (plan PR-35).
+# - Prod: deploy-production.yml, the same jobs for `main` in the `production`
+#   Environment. Change a job here and there together, or the test fails.
+# - Every job has a timeout-minutes ceiling from measured runs, so a hung job
+#   fails naming itself (a job that never starts, "waiting", is not covered).
 on:
   push:
     branches: [integration]
@@ -74,6 +77,7 @@ jobs:
   changes:
     if: vars.DEPLOY_STAGING == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       services: ${{ steps.pick.outputs.services }}
       # The rollout waves (see the header): who hands work to whom.
@@ -180,6 +184,7 @@ jobs:
     needs: [changes, ci-gate]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: staging
     permissions:
       contents: read
@@ -269,6 +274,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.wave1 != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: staging
     permissions:
       contents: read
@@ -306,6 +312,7 @@ jobs:
     needs: [changes, migrate]
     if: needs.changes.outputs.solo != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: staging
     permissions:
       contents: read
@@ -345,6 +352,7 @@ jobs:
       !cancelled() && needs.changes.outputs.wave2 != '[]' && needs.migrate.result == 'success'
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: staging
     permissions:
       contents: read
@@ -379,6 +387,7 @@ jobs:
       && (needs.rollout.result == 'success' || needs.rollout.result == 'skipped')
       && (needs.rollout-meetings.result == 'success' || needs.rollout-meetings.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: staging
     permissions:
       contents: read
@@ -414,6 +423,7 @@ jobs:
       && needs.rollout.result != 'failure' && needs.rollout-meetings.result != 'failure'
       && needs.rollout-api.result != 'failure'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: staging
     permissions:
       contents: read
@@ -484,6 +494,7 @@ jobs:
     needs: [changes, ci-gate, build, migrate, rollout, rollout-solo, rollout-meetings, rollout-api, smoke]
     if: failure()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
