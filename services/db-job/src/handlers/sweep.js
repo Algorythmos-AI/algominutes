@@ -305,18 +305,15 @@ async function run({
       // watermark (audit Q20). Only the time budget stops it early, and says so:
       // the rest are the next run's (each note is in two runs' windows).
       const started = Date.now();
+      // Seams for tests; production uses the constants.
+      const budgetMs = deps.mirrorRepairBudgetMs ?? MIRROR_REPAIR_BUDGET_MS;
+      const pageSize = deps.mirrorRepairPage ?? MIRROR_REPAIR_PAGE;
       let repaired = 0;
       let failedRepairs = 0;
       let checked = 0;
       let after = null;
       do {
-        if (Date.now() - started > MIRROR_REPAIR_BUDGET_MS) {
-          // Where it stopped, so what was left can be measured: one cut-off run is covered by the next
-          // (each note is in two runs' windows), two in a row leave the notes between them unchecked.
-          log.warn({ checked, budgetMs: MIRROR_REPAIR_BUDGET_MS, reachedUpdatedAt: after && after.updatedAt }, 'mirror_repair_budget_reached');
-          break;
-        }
-        const page = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: MIRROR_REPAIR_PAGE, after });
+        const page = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: pageSize, after });
         const notes = page.notes;
         after = page.next;
         checked += notes.length;
@@ -332,6 +329,12 @@ async function run({
             failedRepairs += 1;
             log.error({ err, ...fields }, 'mirror_repair_failed');
           }
+        }
+        // Checked after a page, so a run always finishes at least one: the newest notes (plan rev 12 S7). Where
+        // it stopped, so what was left can be measured: what's left is the oldest, which the last run checked.
+        if (after && Date.now() - started > budgetMs) {
+          log.warn({ checked, budgetMs, reachedUpdatedAt: after.updatedAt }, 'mirror_repair_budget_reached');
+          break;
         }
       } while (after);
       if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
