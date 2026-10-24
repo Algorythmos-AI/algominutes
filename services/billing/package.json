@@ -18,7 +18,7 @@
     "@algominutes/db": "*",
     "express": "^4.21.2",
     "firebase-admin": "^14.5.0",
-    "googleapis": "^182.0.0",
+    "googleapis": "^187.0.0",
     "helmet": "^8.1.0",
     "stripe": "^23.0.0",
     "tsx": "^4.21.0"
