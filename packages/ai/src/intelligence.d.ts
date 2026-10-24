@@ -1,6 +1,8 @@
 export const MAX_AUDIO_BYTES: number;
 export const RATE_LIMIT_PER_HOUR: number;
 export const RETRY_DEADLINE_MS: number;
+/** One Gemini attempt's cap on audio of this many seconds; undefined (no cap) for an unknown length. */
+export function attemptTimeoutForAudioMs(durationSec: number | null | undefined): number | undefined;
 export const MODEL_LADDER: readonly string[];
 
 export function resolveGeminiAudioMime(hint?: string, storagePath?: string): string;

@@ -55,6 +55,10 @@ async function callGeminiWithLadder({
   apiKey: _ignoredApiKey,        // legacy compat; ADC is used now
   parts,
   deadlineMs = RETRY_DEADLINE_MS,
+  // How long one attempt may take before it's cut and asked again (plan rev 12 S3). Unset, an attempt may use
+  // the whole remaining budget, as before: the summarizer, whose long transcripts take long, leaves it unset.
+  // A hung call on a short clip used to spend the whole 240 s budget and fail the task (BLOCKERS 2026-10-06).
+  attemptTimeoutMs,
   log,
   modelLadder,                   // default: models.cjs activeLadder(), evaluated per call
   generationConfig,
@@ -108,6 +112,11 @@ async function callGeminiWithLadder({
         return { rawText: null, model: null, error: lastErr };
       }
       const startMs = Date.now();
+      // This attempt's own cap, when it's tighter than what's left of the budget: then a timeout is this
+      // attempt's, and another one fits.
+      const leftMs = Math.max(1, deadline - startMs);
+      const cutByAttempt = Number.isFinite(attemptTimeoutMs) && attemptTimeoutMs > 0 && attemptTimeoutMs < leftMs;
+      const attemptMs = cutByAttempt ? attemptTimeoutMs : leftMs;
       try {
         const token = await getToken();
         if (!token) throw new Error('callGeminiWithLadder: failed to mint ADC token');
@@ -123,7 +132,7 @@ async function callGeminiWithLadder({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(bodyFor(modelName, withThinking)),
-          signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+          signal: AbortSignal.timeout(attemptMs),
         });
 
         if (!resp.ok) {
@@ -176,6 +185,15 @@ async function callGeminiWithLadder({
         return { rawText, model: modelName, finishReason, error: null };
       } catch (err) {
         if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+          // Cut at this attempt's own cap, with budget left: ask again, as for a transient error (no backoff:
+          // the wait was the hang itself). The next attempt, or the next rung, gets what's left.
+          if (cutByAttempt && Date.now() < deadline) {
+            // Named TIME_BUDGET too: if every attempt is cut, the caller sees the same "took too long" as a
+            // budget that ran out (intelligence.cjs publicErrorFor matches /TIME_BUDGET/).
+            lastErr = new Error('TIME_BUDGET (attempt cut at its cap)');
+            log.warn({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs, attemptTimeoutMs }, 'gemini_attempt_timeout');
+            continue;
+          }
           // Out of budget mid-call: the same outcome as running out between
           // attempts. The caller fails the task and Cloud Tasks retries it.
           log.warn({ model: modelName, attempt: attempt + 1, latencyMs: Date.now() - startMs }, 'gemini_timeout');

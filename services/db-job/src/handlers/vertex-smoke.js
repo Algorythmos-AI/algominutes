@@ -26,7 +26,13 @@ const { redactPII } = require('@algominutes/ai/redaction.cjs');
 const { getTemplate, DEFAULT_TEMPLATE_ID } = require('@algominutes/ai/summary-templates.cjs');
 const {
   parseSummaryJson, salvageGeminiJson, buildPromptText, FAST_PATH_RESPONSE_SCHEMA, RETRY_DEADLINE_MS,
+  attemptTimeoutForAudioMs,
 } = require('@algominutes/ai/intelligence.cjs');
+
+// The smoke's calls are small (a short synthetic transcript, a two-second clip), so one hung attempt is cut and
+// asked again rather than failing the deploy: on 2026-10-07 a deploy failed on two 240 s hangs here and passed
+// on a re-run (BLOCKERS §0; plan rev 12 S3). The cap is the shared one for a short clip.
+const SMOKE_ATTEMPT_TIMEOUT_MS = attemptTimeoutForAudioMs(2);
 const { embedChunks } = require('@algominutes/ai/embeddings.cjs');
 
 // ~40 minutes of a planning meeting: long enough that thinking + output must
@@ -60,6 +66,7 @@ async function smokeModel({ model, location, log }) {
     modelLadder: [model], // one rung at a time: each must work on its own
     parts: [{ text: template.promptBody }, { text: `\n\nTranscript:\n${syntheticTranscript()}\n` }],
     deadlineMs: RETRY_DEADLINE_MS,
+    attemptTimeoutMs: SMOKE_ATTEMPT_TIMEOUT_MS,
     log,
     location,
     generationConfig: {
@@ -115,6 +122,7 @@ async function smokeAudio({ model, location, log, call = callGeminiWithLadder })
       { text: buildPromptText('recording') },
     ],
     deadlineMs: RETRY_DEADLINE_MS,
+    attemptTimeoutMs: SMOKE_ATTEMPT_TIMEOUT_MS,
     log,
     location,
     generationConfig: {
