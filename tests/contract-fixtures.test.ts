@@ -17,6 +17,7 @@ const SCHEMA_OF: Record<string, { parse: (v: unknown) => unknown } | Record<stri
   'retention.json': S.RetentionResponse,
   'search.json': S.SearchResponse,
   'note-page.json': S.NoteReadPageResponse,
+  'text-note.json': S.TextNoteResponse,
 };
 
 describe('contract fixtures', () => {

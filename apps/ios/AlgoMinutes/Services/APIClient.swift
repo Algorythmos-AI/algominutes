@@ -353,6 +353,20 @@ final class APIClient: Sendable {
         return (json["deleted"] as? Bool) ?? false
     }
 
+    /// The server's answer to a saved text note (the contract's `TextNoteResponse`).
+    struct TextNoteResponse: Decodable, Equatable {
+        let noteId: String
+        let status: String
+    }
+
+    /// Save a text note (a scan, a PDF, an imported file) through the server: Postgres first, then its doc
+    /// (POST /v1/notes/text). The same `noteId` again is the same note.
+    func createTextNote(noteId: String, workspaceId: String, text: String, source: TextNoteSource, title: String?) async throws -> TextNoteResponse {
+        var body: [String: Any] = ["noteId": noteId, "workspaceId": workspaceId, "text": text, "source": source.rawValue]
+        if let title { body["title"] = title }
+        return try await postDecoded(path: "v1/notes/text", body: body)
+    }
+
     /// What sending the notetaker did (POST /v1/meetings/bots).
     enum MeetingBotResult: Equatable {
         /// A notetaker is on its way; its note is `noteId`.

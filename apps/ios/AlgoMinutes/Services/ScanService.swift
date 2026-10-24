@@ -55,7 +55,7 @@ enum ScanService {
 
     struct Extraction {
         var text: String
-        var source: TextNoteBuilder.SourceKind
+        var source: TextNoteSource
     }
 
     static func extractText(fromFileAt url: URL) async throws -> Extraction {
