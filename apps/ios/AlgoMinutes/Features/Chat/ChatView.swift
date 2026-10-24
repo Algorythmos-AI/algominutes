@@ -340,8 +340,10 @@ final class ChatViewModel {
                         assistant.citations = hits
                     case .textDelta(let text):
                         assistant.content += text
-                    case .serverError(let error):
-                        assistant.content += "\n\n_Error: \(error)_"
+                    case .serverError:
+                        // A sentence, never the server's code (UX7); the same words as the web's "cut short".
+                        let sentence = APIError.streamEnded.errorDescription ?? "The answer was cut short. Try again."
+                        assistant.content += assistant.content.isEmpty ? sentence : "\n\n\(sentence)"
                         assistant.failedQuery = query
                     case .done:
                         break
