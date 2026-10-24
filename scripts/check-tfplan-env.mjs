@@ -5,23 +5,28 @@
 //   * the public services (api, billing) skip the invoker IAM check, and no
 //     other service does;
 //   * nothing binds a role to allUsers or allAuthenticatedUsers (the
-//     organization's iam.allowedPolicyMemberDomains policy fails such an apply).
+//     organization's iam.allowedPolicyMemberDomains policy fails such an apply);
+//   * nothing a forgotten TF_VAR would remove: an alert e-mail channel, or an env
+//     var a live service has, like ADMIN_UIDS or a switch (tfplan-removals.mjs).
+//     A removal that is meant passes with --allow-removals.
 //
 // Usage (in infra/terraform/envs/<env>):
 //   terraform show -json reviewed-<sha>.tfplan > /tmp/plan.json
-//   node ../../../../scripts/check-tfplan-env.mjs /tmp/plan.json
+//   node ../../../../scripts/check-tfplan-env.mjs /tmp/plan.json [--allow-removals]
 // Exits 1 and lists every problem, or prints a one-line OK.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { removalProblems } from './tfplan-removals.mjs';
 
 const require = createRequire(import.meta.url);
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const planPath = process.argv[2];
+const planPath = process.argv.slice(2).find((a) => !a.startsWith('--'));
+const allowRemovals = process.argv.includes('--allow-removals');
 if (!planPath) {
-  process.stderr.write('usage: check-tfplan-env.mjs <terraform show -json output>\n');
+  process.stderr.write('usage: check-tfplan-env.mjs <terraform show -json output> [--allow-removals]\n');
   process.exit(2);
 }
 const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
@@ -72,6 +77,7 @@ for (const rc of plan.resource_changes || []) {
 }
 
 if (checked === 0) problems.push('no Cloud Run services or jobs in this plan: is it the right file?');
+problems.push(...removalProblems(plan, { allowRemovals }));
 
 if (problems.length) {
   process.stderr.write(`check-tfplan-env: ${problems.length} problem(s)\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
