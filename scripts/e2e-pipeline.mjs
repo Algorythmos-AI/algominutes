@@ -17,6 +17,9 @@
 //      the api's, the transcoder's, the summarizer's and the embedder's logs, and
 //      no dead letter was recorded for the note;
 //   7. the account is deleted, whatever failed before, so no test user is left.
+// With E2E_DELETE_MID (the 2-minute run), a second copy is uploaded as its own note, kicked off and deleted at
+// once, while the pipeline has it: its doc must never come back as the workers reach it, Postgres must not have
+// it, and nothing is dead-lettered for it.
 //
 // Env: API_URL (the api's run.app URL), FIREBASE_API_KEY, FIREBASE_PROJECT_ID,
 //   E2E_INVITE_CODE, MINUTES (default 2), READY_MS (default 10 minutes plus 20 s per
@@ -145,6 +148,8 @@ export function e2eConfig(env = process.env) {
     logProject: (env.LOG_PROJECT || '').trim(),
     // Held first (plan rev 12 step 1.8): upload with no minutes, expect the kickoff held, then redeem.
     holdFirst: env.E2E_HOLD_FIRST === 'true',
+    // A note deleted mid-pipeline (plan rev 12 step 1.8): a second note, deleted straight after its kickoff.
+    deleteMid: env.E2E_DELETE_MID === 'true',
   };
 }
 
@@ -210,8 +215,13 @@ export async function runPipelineE2E({
   traceId = `e2e-${randomBytes(12).toString('hex')}`,
   // Held first: the recording is uploaded before the invite code is redeemed, so it must be held, then released.
   holdFirst = false,
+  // A second note, deleted straight after its kickoff; its doc is watched for this long as the workers reach it.
+  deleteMid = false,
+  deleteWatchMs = 3 * 60_000,
 }) {
   const results = [];
+  // The note deleted mid-pipeline, when there is one (its dead letters are checked with the logs).
+  let goneId = null;
   // Seconds from kickoff to ready, when it got there (scripts/load-staging.mjs reads it).
   let tookSec = null;
   const check = (name, ok, detail) => {
@@ -308,21 +318,25 @@ export async function runPipelineE2E({
     const done = finished ? await api('POST', `/uploads/${session.uploadId}/complete`) : { status: 0, body: {} };
     if (!check(`the ${Math.round(bytes.length / 1024)} KiB recording uploads, and /complete`, done.status === 200 && done.body.complete === true, finished ? `HTTP ${done.status}` : 'GCS kept refusing')) return { ok: false, results };
 
-    const stamp = new Date(now()).toISOString();
-    const doc = await firestore('POST', `${noteDoc}?documentId=${noteId}`, {
-      fields: {
-        title: str(`E2E ${minutes} min`),
-        status: str('processing'),
-        type: str('recording'),
-        mimeType: str(mime),
-        storagePath: str(session.storagePath),
-        duration: { integerValue: String(minutes * 60) },
-        workspaceId: str(workspaceId),
-        authorId: str(uid),
-        createdAt: str(stamp),
-        updatedAt: str(stamp),
-      },
-    });
+    // The note's doc, with exactly the keys the rules admit, as the apps write it.
+    const noteFields = (title, storagePath) => {
+      const stamp = new Date(now()).toISOString();
+      return {
+        fields: {
+          title: str(title),
+          status: str('processing'),
+          type: str('recording'),
+          mimeType: str(mime),
+          storagePath: str(storagePath),
+          duration: { integerValue: String(minutes * 60) },
+          workspaceId: str(workspaceId),
+          authorId: str(uid),
+          createdAt: str(stamp),
+          updatedAt: str(stamp),
+        },
+      };
+    };
+    const doc = await firestore('POST', `${noteDoc}?documentId=${noteId}`, noteFields(`E2E ${minutes} min`, session.storagePath));
     if (!check("the note's doc, written as the apps write it", doc.status === 200, `HTTP ${doc.status}`)) return { ok: false, results };
 
     const started = now();
@@ -381,6 +395,36 @@ export async function runPipelineE2E({
       check('the chapters reach the last quarter of the meeting', lastStart >= 0.75 * minutes * 60_000, `last starts at ${Math.round(lastStart / 60_000)} min of ${minutes}`);
     }
 
+    // A note deleted while the pipeline has it (plan rev 12 step 1.8): a second copy, uploaded in one piece, kicked
+    // off and deleted at once. Its tasks are still queued or running: the workers must find it gone and bring
+    // nothing back. A missing doc reads as refused (403: the rules read its authorId), so any 200 is it back.
+    if (deleteMid) {
+      goneId = `e2e${randomBytes(12).toString('hex')}`;
+      const made = await api('POST', '/uploads', { noteId: goneId, workspaceId, fileName: `recording.${ext}`, contentType: mime, totalBytes: bytes.length });
+      const url = made.status === 200 ? gcsUploadUrl(made.body.sessionUri) : null;
+      const put = url ? await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${bytes.length - 1}/${bytes.length}` }, body: bytes }) : null;
+      const complete = put && (put.status === 200 || put.status === 201) ? await api('POST', `/uploads/${made.body.uploadId}/complete`) : { status: 0, body: {} };
+      const goneDoc = complete.body?.complete === true
+        ? await firestore('POST', `${noteDoc}?documentId=${goneId}`, noteFields('E2E deleted mid-pipeline', made.body.storagePath))
+        : { status: 0 };
+      const kicked = goneDoc.status === 200
+        ? await api('POST', '/process', { noteId: goneId, workspaceId, type: 'recording', storagePath: made.body.storagePath, mimeType: mime, durationSec: minutes * 60 })
+        : { status: 0, body: {} };
+      if (check('a second note is uploaded and kicked off, to delete mid-pipeline', kicked.status === 200 && kicked.body?.status === 'queued', `HTTP ${made.status}/${put?.status ?? 0}/${complete.status}/${goneDoc.status}/${kicked.status}`)) {
+        const del = await api('POST', '/notes/delete', { noteId: goneId, workspaceId });
+        check('the note deleted mid-pipeline answers deleted', del.status === 200 && del.body?.deleted === true, `HTTP ${del.status}`);
+        let back = 0;
+        const until = now() + deleteWatchMs;
+        while (now() < until) {
+          await sleep(pollMs);
+          if ((await firestore('GET', `${noteDoc}/${goneId}`)).status === 200) back += 1;
+        }
+        check("nothing brings the deleted note's doc back as the workers reach it", back === 0, back ? `its doc was there ${back} times` : '');
+        const gone = await api('POST', '/notes/read', { noteId: goneId, workspaceId });
+        check('the deleted note is gone from Postgres too', gone.status === 404, `HTTP ${gone.status}`);
+      }
+    }
+
     if (!logProject) {
       skip('the traceId in every service, and no dead letters', 'LOG_PROJECT not set');
     } else {
@@ -395,6 +439,10 @@ export async function runPipelineE2E({
       check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
+      if (goneId) {
+        const goneDead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${goneId}"`);
+        check('no dead letter for the note deleted mid-pipeline', goneDead.length === 0, goneDead.length ? `${goneDead.length} recorded` : '');
+      }
       const enqueuedRuns = readLogs(`jsonPayload.msg="kickoff_enqueued" AND jsonPayload.noteId="${noteId}"`);
       check('the note was run once: the replay and the Try again enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
       if (minutes >= CHAPTERS_FROM_MINUTES) {
