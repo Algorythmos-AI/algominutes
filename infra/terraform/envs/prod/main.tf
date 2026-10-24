@@ -143,6 +143,10 @@ module "environment" {
   trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
 
+  # One warm api and billing instance (plan rev 12, Stage 2, O5): a sign-in, a kickoff or a purchase never waits
+  # on a cold start. Billed at Cloud Run's idle rate, roughly A$40 a month for the two (to confirm after Apply P).
+  min_instances = { api = 1, billing = 1 }
+
   # The launch's cost guards (plan rev 12, Stage 2). The api refuses a kickoff, and the transcoder halts queued
   # paid work, once a day's paid work reaches A$60 (about 2,000 minutes at A$0.03), rather than spend-guard's
   # A$200 prod default. Revisit from the measured cost per minute after launch.
