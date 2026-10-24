@@ -33,7 +33,7 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     Staging → Beta workflow or an external group exists), prod Firebase, the Vertex quota page. The owner's
     consoles answer those.
   - [x] 0.1 S1 → #428.
-  - [ ] 0.2 I1, I4, I7 · 0.3 O2 · 0.4 O1's workflow and O3 · 0.6 O8. Each opens as its own PR.
+  - [ ] 0.2 I1, I4, I7 → #430 (open) · 0.3 O2 · 0.4 O1's workflow and O3 · 0.6 O8. Each opens as its own PR.
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
