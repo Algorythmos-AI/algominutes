@@ -86,8 +86,8 @@ These need your Apple account, so they're yours:
   - the production plist (once `algominutes-prod` exists: BLOCKERS "Prod Firebase");
   - distribution **TestFlight and App Store**.
 
-  Release has no API origin until prod is applied. Its "Backend origins are set" build phase fails the
-  archive until `project.yml` has the production origins (`TODO(prod)`).
+  Release talks to production (`algominutes-production`'s Cloud Run origins in `project.yml`). Its "Backend
+  origins are set" build phase fails any archive whose origins are empty.
 - **Unit tests** stay on GitHub Actions (`ios.yml`, free for a public repo). It also builds Staging
   unsigned with a placeholder plist, to check the Google Sign-In URL scheme. Xcode Cloud is only for
   archiving.
