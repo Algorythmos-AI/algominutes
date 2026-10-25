@@ -41,6 +41,8 @@ export const routes: RouteObject[] = [
       { path: 'notetaker', lazy: page(() => import('./app/notetaker/NotetakerPage'), 'NotetakerPage') },
       { path: 'search', lazy: page(() => import('./app/search/SearchPage'), 'SearchPage') },
       { path: 'settings', lazy: page(() => import('./app/settings/SettingsPage'), 'SettingsPage') },
+      // Operators only (the api's ADMIN_UIDS), and not linked: dead letters, SLO 5 (docs/runbooks/production-incident.md §5.5).
+      { path: 'admin/dead-letters', lazy: page(() => import('./app/admin/DeadLettersPage'), 'DeadLettersPage') },
       // Where Stripe sends a buyer back (RELEASE.md PR 28).
       { path: 'billing/success', lazy: page(() => import('./app/billing/BillingReturnPages'), 'BillingSuccessPage') },
       { path: 'billing/cancel', lazy: page(() => import('./app/billing/BillingReturnPages'), 'BillingCancelPage') },

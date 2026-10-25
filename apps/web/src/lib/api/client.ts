@@ -21,6 +21,7 @@ import {
   CompleteUploadResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  DeadLettersResponse,
   DeleteAccountResponse,
   DeleteNoteRequest,
   DeleteNoteResponse,
@@ -44,6 +45,7 @@ import {
   RegenerateSummaryRequest,
   RegenerateSummaryResponse,
   RegisterPushTokenRequest,
+  ResolveDeadLetterResponse,
   RetentionResponse,
   SearchRequest,
   SearchResponse,
@@ -233,6 +235,11 @@ export function createApiClient(opts: ApiClientOptions) {
     createMeetingBot: (body: CreateMeetingBotRequest) => post('/v1/meetings/bots', body, MeetingBotResponse),
     cancelMeetingBot: (botId: string) =>
       post(`/v1/meetings/bots/${encodeURIComponent(botId)}/cancel`, {}, CancelMeetingBotResponse),
+
+    // Operators only (the api's ADMIN_UIDS; anyone else gets 403): dead letters, SLO 5.
+    deadLetters: (opts: { includeResolved?: boolean } = {}) =>
+      get(`/v1/admin/dead-letters${opts.includeResolved ? '?includeResolved=true' : ''}`, DeadLettersResponse),
+    resolveDeadLetter: (id: number) => post(`/v1/admin/dead-letters/${encodeURIComponent(String(id))}/resolve`, {}, ResolveDeadLetterResponse),
 
     // Recording and import
     createUpload: (body: CreateUploadSessionRequest) => post('/v1/uploads', body, CreateUploadSessionResponse),
