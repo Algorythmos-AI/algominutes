@@ -135,19 +135,20 @@ Replace the current strings with these (specific about what is recorded, why, an
 leaves the device):
 
 - **`NSMicrophoneUsageDescription`**
-  > "AlgoMinutes records audio from your microphone only while you are recording a meeting
-  > or note. The audio is uploaded to your AlgoMinutes account to be transcribed and
-  > summarised, and is kept there until you delete it. Recording never starts on its own."
+  > "AlgoMinutes uses your microphone only while you record: a meeting or note in the app,
+  > or your side of a call in another app that you choose to capture. The audio is uploaded
+  > to your AlgoMinutes account to be transcribed and summarised, and is kept there until
+  > you delete it. Recording never starts on its own."
 
 - **`NSCameraUsageDescription`**
   > "AlgoMinutes uses the camera only when you choose to scan text from a document. The
-  > captured image is used to extract text into your notes and, if saved, is stored in
-  > your account until you delete it. It is never used for tracking or advertising."
+  > image stays on your iPhone: only the text read from it is saved to your notes. It is
+  > never used for tracking or advertising."
 
 - **`NSPhotoLibraryUsageDescription`**
-  > "AlgoMinutes opens your photo library only when you pick an image to scan text from.
-  > Only the image you choose is read; it is used to extract text into your notes and is
-  > not scanned for any other purpose."
+  > "AlgoMinutes opens your photo library only when you pick images to scan text from or to
+  > make a PDF. Only the images you choose are read, on your iPhone; only the text read from
+  > them is saved to your notes."
 
 - `TODO(legal):` Confirm the microphone string's "kept until you delete it" phrasing is
   consistent with the final retention policy in `docs/DATA-RETENTION.md`.
