@@ -590,7 +590,7 @@ and both smokes, and `deploy-staging` has been green since.
 
 **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
 
-- [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
+- [ ] **Apply prod:** bootstrap `algominutes-production-tfstate` (done 25 Oct), then `terraform apply` in
       `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).
 - [ ] **Prod Firebase:** enable Firebase (Blaze), Google sign-in, register Web + Android apps, download a
       **fresh** `google-services.json` + create a **prod** `apps/web/.env` — never reuse staging's values

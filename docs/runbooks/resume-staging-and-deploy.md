@@ -226,7 +226,7 @@ the failure issue's label (`prod-deploy-failed`), so a change to one is made to 
 
 It does nothing until all of these exist, and it cannot touch staging while they don't: until the
 `production` Environment and its variables exist, its first job (`changes`) reads the repo's staging
-values, sees that `GCP_PROJECT_ID` is not `algominutes-prod` (the project in
+values, sees that `GCP_PROJECT_ID` is not `algominutes-production` (the project in
 `infra/terraform/envs/prod/terraform.tfvars`), and fails naming the variable, with nothing after it run
 (the WIF provider would refuse the token as well, since the ref is `main`, but later and less clearly).
 Before `DEPLOY_PRODUCTION` is set, not even that runs: every job is skipped. Do these **after Apply P**
@@ -270,7 +270,7 @@ runs), so a hung job fails naming itself. A job that never starts ("waiting", se
 `.github/actions/gcp-auth`, which asks WIF a second time after a transient token-exchange failure (§3).
 
 What the owner creates, in one list. Variables, on the `production` Environment: `GCP_PROJECT_ID`
-(`algominutes-prod`), `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`. Secret, on the Environment:
+(`algominutes-production`), `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`. Secret, on the Environment:
 `PROD_FIREBASE_API_KEY`. Repository variable, last: `DEPLOY_PRODUCTION` (`true`). Optional, on the
 repository, shared with staging: `SWEEPER_HOLD` (`true` keeps `db-sweep` paused). The Environment itself,
 with `main` as its only branch and the owner as its reviewer, comes from `scripts/github-settings.sh`.
