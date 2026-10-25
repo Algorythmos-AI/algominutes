@@ -11,7 +11,10 @@ const { chunkTranscript, embedChunks, vectorToSqlText, EMBED_MODEL } = require('
  * The note's transcript lines to embed, or null when the note is gone or isn't
  * in the task's workspace. Scoped (CLAUDE.md §1): the embeddings are written
  * under the task's workspace_id, so reading lines by note id alone would let a
- * mismatched task index one workspace's words into another's search.
+ * mismatched task index one workspace's words into another's search. In order:
+ * by time, then as stored (id), like every transcript read; a text note's
+ * lines (a scan, a PDF) all start at 0, and by time alone came back in
+ * whatever order the planner read them, so its chunks were shuffled.
  */
 async function loadTranscriptForEmbedding(pool, { noteId, workspaceId }) {
   const note = await pool.query(
@@ -21,7 +24,7 @@ async function loadTranscriptForEmbedding(pool, { noteId, workspaceId }) {
   if (!note.rowCount) return null;
   const { rows } = await pool.query(
     `SELECT speaker_tag AS "speakerTag", start_ms AS "startMs", end_ms AS "endMs", text
-       FROM transcript_lines WHERE note_id = $1 ORDER BY start_ms ASC`,
+       FROM transcript_lines WHERE note_id = $1 ORDER BY start_ms ASC, id ASC`,
     [noteId],
   );
   return rows;

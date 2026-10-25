@@ -142,7 +142,22 @@ module "environment" {
   # with devicecheck_not_configured on each first kickoff. Turned on with them.
   trial_on_first_use = "off"
   notetaker_surfaces = var.notetaker_surfaces
-  monthly_budget     = 300
+
+  # Every new account's minutes before buying (plan rev 12, Stage 3; owner decision 1), so App Review and every
+  # new user can record and see a summary first. At A$0.03 a minute, at most A$3.60 an account a month; the
+  # daily spend cap bounds the total.
+  free_floor_minutes = 120
+
+  # One warm api and billing instance (plan rev 12, Stage 2, O5): a sign-in, a kickoff or a purchase never waits
+  # on a cold start. Billed at Cloud Run's idle rate, roughly A$40 a month for the two (to confirm after Apply P).
+  min_instances = { api = 1, billing = 1 }
+
+  # The launch's cost guards (plan rev 12, Stage 2). The api refuses a kickoff, and the transcoder halts queued
+  # paid work, once a day's paid work reaches A$60 (about 2,000 minutes at A$0.03), rather than spend-guard's
+  # A$200 prod default. Revisit from the measured cost per minute after launch.
+  daily_spend_cap_aud = 60
+  # Alerts only (budget.tf): a month past A$500.
+  monthly_budget = 500
 }
 
 # Re-export module outputs at the root for convenience.

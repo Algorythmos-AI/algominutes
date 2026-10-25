@@ -17,6 +17,9 @@
 //      the api's, the transcoder's, the summarizer's and the embedder's logs, and
 //      no dead letter was recorded for the note;
 //   7. the account is deleted, whatever failed before, so no test user is left.
+// With E2E_DELETE_MID (the 2-minute run), a second copy is uploaded as its own note, kicked off and deleted at
+// once, while the pipeline has it: its doc must never come back as the workers reach it, Postgres must not have
+// it, and nothing is dead-lettered for it.
 //
 // Env: API_URL (the api's run.app URL), FIREBASE_API_KEY, FIREBASE_PROJECT_ID,
 //   E2E_INVITE_CODE, MINUTES (default 2), READY_MS (default 10 minutes plus 20 s per
@@ -143,6 +146,10 @@ export function e2eConfig(env = process.env) {
     minutes,
     readyMs: Number.isFinite(ready) && ready > 0 ? ready : 10 * 60_000 + minutes * 20_000,
     logProject: (env.LOG_PROJECT || '').trim(),
+    // Held first (plan rev 12 step 1.8): upload with no minutes, expect the kickoff held, then redeem.
+    holdFirst: env.E2E_HOLD_FIRST === 'true',
+    // A note deleted mid-pipeline (plan rev 12 step 1.8): a second note, deleted straight after its kickoff.
+    deleteMid: env.E2E_DELETE_MID === 'true',
   };
 }
 
@@ -206,8 +213,15 @@ export async function runPipelineE2E({
   logWaitMs = 60_000,
   write = (s) => process.stdout.write(s),
   traceId = `e2e-${randomBytes(12).toString('hex')}`,
+  // Held first: the recording is uploaded before the invite code is redeemed, so it must be held, then released.
+  holdFirst = false,
+  // A second note, deleted straight after its kickoff; its doc is watched for this long as the workers reach it.
+  deleteMid = false,
+  deleteWatchMs = 3 * 60_000,
 }) {
   const results = [];
+  // The note deleted mid-pipeline, when there is one (its dead letters are checked with the logs).
+  let goneId = null;
   // Seconds from kickoff to ready, when it got there (scripts/load-staging.mjs reads it).
   let tookSec = null;
   const check = (name, ok, detail) => {
@@ -258,9 +272,13 @@ export async function runPipelineE2E({
   };
 
   try {
-    const redeemed = await api('POST', '/beta/redeem', { code: inviteCode });
-    const left = redeemed.body?.entitlement?.remainingMinutes;
-    if (!check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`)) return { ok: false, results };
+    const redeem = async () => {
+      const redeemed = await api('POST', '/beta/redeem', { code: inviteCode });
+      const left = redeemed.body?.entitlement?.remainingMinutes;
+      return check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`);
+    };
+    // Staging's guests start with no minutes. Normally the code is redeemed first; held first, after the kickoff.
+    if (!holdFirst && !(await redeem())) return { ok: false, results };
 
     const bytes = fs.readFileSync(recording);
     const { ext, mime } = FORMATS[format];
@@ -300,30 +318,42 @@ export async function runPipelineE2E({
     const done = finished ? await api('POST', `/uploads/${session.uploadId}/complete`) : { status: 0, body: {} };
     if (!check(`the ${Math.round(bytes.length / 1024)} KiB recording uploads, and /complete`, done.status === 200 && done.body.complete === true, finished ? `HTTP ${done.status}` : 'GCS kept refusing')) return { ok: false, results };
 
-    const stamp = new Date(now()).toISOString();
-    const doc = await firestore('POST', `${noteDoc}?documentId=${noteId}`, {
-      fields: {
-        title: str(`E2E ${minutes} min`),
-        status: str('processing'),
-        type: str('recording'),
-        mimeType: str(mime),
-        storagePath: str(session.storagePath),
-        duration: { integerValue: String(minutes * 60) },
-        workspaceId: str(workspaceId),
-        authorId: str(uid),
-        createdAt: str(stamp),
-        updatedAt: str(stamp),
-      },
-    });
+    // The note's doc, with exactly the keys the rules admit, as the apps write it.
+    const noteFields = (title, storagePath) => {
+      const stamp = new Date(now()).toISOString();
+      return {
+        fields: {
+          title: str(title),
+          status: str('processing'),
+          type: str('recording'),
+          mimeType: str(mime),
+          storagePath: str(storagePath),
+          duration: { integerValue: String(minutes * 60) },
+          workspaceId: str(workspaceId),
+          authorId: str(uid),
+          createdAt: str(stamp),
+          updatedAt: str(stamp),
+        },
+      };
+    };
+    const doc = await firestore('POST', `${noteDoc}?documentId=${noteId}`, noteFields(`E2E ${minutes} min`, session.storagePath));
     if (!check("the note's doc, written as the apps write it", doc.status === 200, `HTTP ${doc.status}`)) return { ok: false, results };
 
     const started = now();
-    const kickoff = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
-    // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
-    if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
-    // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
-    const replay = await api('POST', '/process', { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 });
-    check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
+    const kickoffBody = { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 };
+    const kickoff = await api('POST', '/process', kickoffBody);
+    if (holdFirst) {
+      // H6c: an uploaded recording over the minutes left is held, never refused, and answered as accepted (202).
+      if (!check('with no minutes, the uploaded recording is held', kickoff.status === 202 && kickoff.body?.held === true, `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // H6b: redeeming a code resumes the user's held notes at once; nothing else asks for it.
+      if (!(await redeem())) return { ok: false, results };
+    } else {
+      // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
+      if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
+      const replay = await api('POST', '/process', kickoffBody);
+      check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
+    }
 
     let status = 'processing';
     let error = '';
@@ -350,11 +380,49 @@ export async function runPipelineE2E({
       `HTTP ${read.status}, ${pg.note?.status}, ${pg.transcript?.lines?.length ?? 0} lines`,
     );
     if (chaptersWanted) check(`a ${minutes}-minute recording has chapters`, (pg.summary?.chapters?.length ?? 0) >= 2, `${pg.summary?.chapters?.length ?? 0} chapters`);
+
+    // Try again on a finished note (plan rev 12 step 1.8): answered ready, and nothing runs. On 2026-10-01 a
+    // finished 52-minute note was run again by a second kickoff (#311), paying speech-to-text twice.
+    const lines = pg.transcript?.lines?.length ?? 0;
+    const again = await api('POST', '/process', kickoffBody);
+    check('Try again on a finished note answers ready, and runs nothing', again.status === 200 && again.body?.cached === true, `HTTP ${again.status}${again.body?.status ? `, ${again.body.status}` : ''}`);
+    const reread = await api('POST', '/notes/read', { noteId, workspaceId });
+    check('the transcript is the same after Try again', reread.status === 200 && (reread.body?.transcript?.lines?.length ?? -1) === lines, `${reread.body?.transcript?.lines?.length ?? 0} lines, was ${lines}`);
     if (minutes >= LONG_FROM_MINUTES) {
       const chapters = pg.summary?.chapters ?? [];
       const lastStart = Math.max(0, ...chapters.map((c) => Number(c.startMs) || 0));
       check(`at least ${LONG_MIN_CHAPTERS} chapters`, chapters.length >= LONG_MIN_CHAPTERS, `${chapters.length}`);
       check('the chapters reach the last quarter of the meeting', lastStart >= 0.75 * minutes * 60_000, `last starts at ${Math.round(lastStart / 60_000)} min of ${minutes}`);
+    }
+
+    // A note deleted while the pipeline has it (plan rev 12 step 1.8): a second copy, uploaded in one piece, kicked
+    // off and deleted at once. Its tasks are still queued or running: the workers must find it gone and bring
+    // nothing back. A missing doc reads as refused (403: the rules read its authorId), so any 200 is it back.
+    if (deleteMid) {
+      goneId = `e2e${randomBytes(12).toString('hex')}`;
+      const made = await api('POST', '/uploads', { noteId: goneId, workspaceId, fileName: `recording.${ext}`, contentType: mime, totalBytes: bytes.length });
+      const url = made.status === 200 ? gcsUploadUrl(made.body.sessionUri) : null;
+      const put = url ? await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${bytes.length - 1}/${bytes.length}` }, body: bytes }) : null;
+      const complete = put && (put.status === 200 || put.status === 201) ? await api('POST', `/uploads/${made.body.uploadId}/complete`) : { status: 0, body: {} };
+      const goneDoc = complete.body?.complete === true
+        ? await firestore('POST', `${noteDoc}?documentId=${goneId}`, noteFields('E2E deleted mid-pipeline', made.body.storagePath))
+        : { status: 0 };
+      const kicked = goneDoc.status === 200
+        ? await api('POST', '/process', { noteId: goneId, workspaceId, type: 'recording', storagePath: made.body.storagePath, mimeType: mime, durationSec: minutes * 60 })
+        : { status: 0, body: {} };
+      if (check('a second note is uploaded and kicked off, to delete mid-pipeline', kicked.status === 200 && kicked.body?.status === 'queued', `HTTP ${made.status}/${put?.status ?? 0}/${complete.status}/${goneDoc.status}/${kicked.status}`)) {
+        const del = await api('POST', '/notes/delete', { noteId: goneId, workspaceId });
+        check('the note deleted mid-pipeline answers deleted', del.status === 200 && del.body?.deleted === true, `HTTP ${del.status}`);
+        let back = 0;
+        const until = now() + deleteWatchMs;
+        while (now() < until) {
+          await sleep(pollMs);
+          if ((await firestore('GET', `${noteDoc}/${goneId}`)).status === 200) back += 1;
+        }
+        check("nothing brings the deleted note's doc back as the workers reach it", back === 0, back ? `its doc was there ${back} times` : '');
+        const gone = await api('POST', '/notes/read', { noteId: goneId, workspaceId });
+        check('the deleted note is gone from Postgres too', gone.status === 404, `HTTP ${gone.status}`);
+      }
     }
 
     if (!logProject) {
@@ -371,8 +439,12 @@ export async function runPipelineE2E({
       check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
       const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
       check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
+      if (goneId) {
+        const goneDead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${goneId}"`);
+        check('no dead letter for the note deleted mid-pipeline', goneDead.length === 0, goneDead.length ? `${goneDead.length} recorded` : '');
+      }
       const enqueuedRuns = readLogs(`jsonPayload.msg="kickoff_enqueued" AND jsonPayload.noteId="${noteId}"`);
-      check('the note was run once: the replay enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
+      check('the note was run once: the replay and the Try again enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
       if (minutes >= CHAPTERS_FROM_MINUTES) {
         const salvaged = readLogs(`jsonPayload.msg="summary_salvaged_partial" AND jsonPayload.noteId="${noteId}"`);
         check('the summary came back whole, not salvaged', salvaged.length === 0, salvaged.length ? 'summary_salvaged_partial' : '');

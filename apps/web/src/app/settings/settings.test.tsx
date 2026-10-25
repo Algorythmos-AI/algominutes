@@ -192,6 +192,20 @@ describe('deleting the account', () => {
     expect(auth.adapter.revokeApple).not.toHaveBeenCalled();
   });
 
+  // The 10-16 web journey saw two 401s after the deletion: the deleted account's token was still being sent. The
+  // Settings page itself sends nothing once the account is gone (the journey now names what did).
+  it('sends nothing more to the api once the account is deleted', async () => {
+    handlers['/v1/account/delete'] = () => new Response(JSON.stringify({ ok: true, summary: { workspacesAffected: 1, notesDeleted: 0, notesNotFound: 0, pgMembershipsDeleted: 1, firestoreErrors: 0, pgErrors: 0, authDeleted: true } }), { status: 200 });
+    open();
+    await confirm();
+    await screen.findByRole('heading', { name: 'Sign in to AlgoMinutes' });
+    // Give anything the sign-out set off a moment to fire.
+    await new Promise((r) => setTimeout(r, 50));
+    const at = calls.findIndex((c) => c.path === '/v1/account/delete');
+    expect(at).toBeGreaterThan(-1);
+    expect(calls.slice(at + 1).map((c) => `${c.method} ${c.path}`)).toEqual([]);
+  });
+
   // RELEASE.md PR 28b; App Review 5.1.1(v).
   it('says, before deleting, that an App Store subscription must be cancelled there', async () => {
     open();

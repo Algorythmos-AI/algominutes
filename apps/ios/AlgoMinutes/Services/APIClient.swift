@@ -26,6 +26,8 @@ enum APIError: LocalizedError {
     case quotaExceeded(EntitlementResponse?)
     /// This app version is below the server's minimum (HTTP 426, `please_update`).
     case updateRequired
+    /// The chat stream ended without its `done` frame (plan rev 12 S15): cut short, not answered.
+    case streamEnded
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +36,7 @@ enum APIError: LocalizedError {
         case .invalidResponse: return "The server’s answer couldn’t be read. Please try again."
         case .quotaExceeded: return "You've used up your included minutes. Upgrade to keep going."
         case .updateRequired: return "Please update AlgoMinutes to continue."
+        case .streamEnded: return "The answer was cut short. Try again."
         }
     }
 }
@@ -724,9 +727,16 @@ final class APIClient: Sendable {
                                 continuation.finish()
                                 return
                             }
+                            // The server said it failed, and closes the stream next: the caller has the reason.
+                            if case .serverError = event {
+                                continuation.finish()
+                                return
+                            }
                         }
                     }
-                    continuation.finish()
+                    // Ended without `done` or `error`: cut short.
+                    // On 10-11, 10-18 and 10-20 Cloud Run cut the stream at 61 s, and the answer was left empty.
+                    continuation.finish(throwing: APIError.streamEnded)
                 } catch {
                     continuation.finish(throwing: error)
                 }

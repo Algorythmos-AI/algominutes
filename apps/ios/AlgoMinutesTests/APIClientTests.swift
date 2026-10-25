@@ -300,9 +300,25 @@ final class APIClientTests: XCTestCase {
     }
 
     func testChatStreamsFromV1OnTheInjectedSession() async throws {
-        StubURLProtocol.responder = { _ in (200, Data("data: {\"type\":\"done\"}\n\n".utf8)) }
+        // The server's frame (search-and-chat.cjs): `event: done`. A stream without it was cut short (S15).
+        StubURLProtocol.responder = { _ in (200, Data("event: done\ndata: {}\n\n".utf8)) }
         for try await _ in api.chatStream(query: "q", noteId: "n1") {}
         assertRequest("POST", "/v1/chat")
         XCTAssertEqual(last.body?["noteId"] as? String, "n1")
+    }
+
+    /// Plan rev 12 S15: a stream that ends without `done` throws, so the caller can't take it for an answer.
+    func testAChatStreamThatEndsWithoutDoneThrowsStreamEnded() async {
+        StubURLProtocol.responder = { _ in (200, Data("data: {\"text\":\"half\"}\n\n".utf8)) }
+        var texts: [String] = []
+        do {
+            for try await event in api.chatStream(query: "q", noteId: nil) {
+                if case .textDelta(let t) = event { texts.append(t) }
+            }
+            XCTFail("expected streamEnded")
+        } catch {
+            guard case APIError.streamEnded = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(texts, ["half"])
     }
 }

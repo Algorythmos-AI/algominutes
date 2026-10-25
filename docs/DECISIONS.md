@@ -3,6 +3,29 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## Production launches with a 120-minute free floor, A$60 a day, and a warm api and billing (2026-10-24)
+
+- **Context.** Plan rev 12's audit: a reviewer on production would open on 0 minutes behind an invite code
+  (Guidelines 2.1, 3.1.1); prod's daily spend cap fell back to spend-guard's A$200; every service scaled to zero,
+  so a sign-in or kickoff could wait on a cold start. The owner approved the plan's defaults (decision 1: a free
+  floor for every new account in 1.0).
+- **Decision.**
+  - **Free floor, 120 minutes a month, prod only** (#471): `FREE_FLOOR_MINUTES` per environment
+    (`configuredFreeFloorMinutes`; anything but a whole number from 0 to 1,000 is 0). At A$0.03 a minute, at most
+    A$3.60 an account a month. Staging stays at 0: its beta gives minutes by invite code, and the nightly's
+    held-first case needs a new guest at 0.
+  - **Daily spend cap A$60** (#469): about 2,000 paid minutes a day; the api refuses and the transcoder halts past
+    it. It bounds the free floor's worst case (anonymous sign-ups) too. **Monthly budget alert A$500.**
+  - **One warm api and one warm billing instance** (#470): billed at Cloud Run's idle rate, roughly **A$40 a month**
+    for the two (an estimate; confirm from billing after Apply P). Workers stay at zero, behind queues.
+  - All three change nothing until Apply P.
+- **Rejected.**
+  - **A reviewer-only grant instead of a floor:** App Review accepts it, but every other new user would meet a
+    paywall before hearing a single summary.
+  - **The constant in `packages/contracts`:** one number for every environment, so staging's beta would change
+    with prod's; and a contract change is a three-client change for a server-only setting.
+  - **Warm workers:** their latency is a queue's, not a user's; the cost would buy nothing a user sees.
+
 ## Speech-to-text can run in Sydney, but can't tell speakers apart there (spike S1, 2026-09-30)
 
 - **Context.**
