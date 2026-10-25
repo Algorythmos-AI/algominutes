@@ -127,7 +127,7 @@ identity; mail addressed to it lands in **Zoho** (§6). MX records were never to
 **Free trial credit:** A$431.69, **expires 14 November 2026**. Shared across *both* projects — it is
 per billing account, not per project.
 
-### 4.3 Projects — ✅ both inside the organisation
+### 4.3 Projects — staging inside the organisation, production not yet
 
 | Environment | Project ID | Project number | Parent org |
 |---|---|---|---|
