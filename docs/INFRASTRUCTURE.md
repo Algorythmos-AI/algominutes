@@ -127,16 +127,15 @@ identity; mail addressed to it lands in **Zoho** (§6). MX records were never to
 **Free trial credit:** A$431.69, **expires 14 November 2026**. Shared across *both* projects — it is
 per billing account, not per project.
 
-### 4.3 Projects — staging inside the organisation, production not yet
+### 4.3 Projects — ✅ both inside the organisation
 
 | Environment | Project ID | Project number | Parent org |
 |---|---|---|---|
 | Staging | `algominutes-staging` | `627101926311` | `327264144426` |
-| Production | `algominutes-production` | `43914754953` | none: outside the organisation (25 Oct 2026) |
+| Production | `algominutes-production` | `43914754953` | `327264144426` |
 
 Both verified `billingEnabled: true` against `01FDC8-CD8E58-F91D06`. Project IDs are **permanent**.
-⚠️ `algominutes-production` has no parent, so the organisation's policies don't apply to it. Moving it into
-`327264144426` (`gcloud projects move`) is an owner step.
+`algominutes-production` was created outside the organisation and migrated into it on 25 Oct 2026.
 
 Moved with `gcloud beta projects move` — the command lives in the **beta** track, not GA.
 
