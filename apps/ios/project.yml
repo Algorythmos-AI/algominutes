@@ -48,6 +48,7 @@ settings:
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
       PAYWALL_ENABLED: "YES"
+      INVITE_CODES_ENABLED: "YES"
     Staging:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
@@ -56,6 +57,8 @@ settings:
       # there, nobody is charged). Until the products exist in App Store Connect
       # the paywall offers the invite code instead of a dead end.
       PAYWALL_ENABLED: "YES"
+      # The beta's way to minutes (BETA-XXXXX-... codes, RELEASE.md rev 10).
+      INVITE_CODES_ENABLED: "YES"
     Release:
       # TODO(prod): the production Cloud Run origins, once prod is applied
       # (https://api-<prod project number>.australia-southeast1.run.app). Until
@@ -67,7 +70,11 @@ settings:
       # The update screen's button (426): the App Store listing (App Store
       # Connect app 6816333591). A Release build must never open TestFlight.
       UPDATE_URL: itms-apps://apps.apple.com/app/id6816333591
-      PAYWALL_ENABLED: "NO"
+      # The App Store build (plan rev 12, Stage 3, I2): Pro is sold with StoreKit, and nothing of the beta shows
+      # (no invite code entry, no beta wording). A Release archive needs prod and its App Store Connect products
+      # first, so this sells nothing until they exist.
+      PAYWALL_ENABLED: "YES"
+      INVITE_CODES_ENABLED: "NO"
 
 targets:
   AlgoMinutes:

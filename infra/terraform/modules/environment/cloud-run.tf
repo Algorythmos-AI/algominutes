@@ -90,6 +90,11 @@ locals {
   # before paid work). Unset, spend-guard.cjs uses its per-environment default.
   spend_env = var.daily_spend_cap_aud == null ? {} : { DAILY_SPEND_CAP_AUD = tostring(var.daily_spend_cap_aud) }
 
+  # The free floor's minutes (FREE_FLOOR_MINUTES), on every service and job (any may resolve an entitlement). Unset, a new
+  # account on the free floor has 0 (packages/db configuredFreeFloorMinutes): staging's beta, where an invite code
+  # gives minutes.
+  free_floor_env = var.free_floor_minutes == null ? {} : { FREE_FLOOR_MINUTES = tostring(var.free_floor_minutes) }
+
   # Per-service extra plain env, merged over common_env. Every name a service's
   # src/env-spec.cjs requires must be set here, non-blank
   # (tests/tf-env-contract.test.ts).
@@ -183,7 +188,9 @@ resource "google_cloud_run_v2_service" "services" {
     max_instance_request_concurrency = each.value.concurrency
 
     scaling {
-      min_instance_count = 0
+      # Warm instances where the environment names them (prod: the api and billing, the user's first request),
+      # zero elsewhere: the workers are behind queues.
+      min_instance_count = lookup(var.min_instances, each.key, 0)
       # From the connection budget, so max instances x pools x PG_POOL_MAX fits
       # the database (connection-budget.json). Also the cost guard.
       max_instance_count = var.connection_budget.services[each.key].max_instances
@@ -214,6 +221,7 @@ resource "google_cloud_run_v2_service" "services" {
       dynamic "env" {
         for_each = merge(
           local.common_env,
+          local.free_floor_env,
           local.service_env[each.key],
           contains(local.db_services, each.key) ? { PG_POOL_MAX = tostring(var.connection_budget.services[each.key].pool_max) } : {},
         )
@@ -280,7 +288,7 @@ resource "google_cloud_run_v2_job" "db_job" {
           limits = { cpu = "1", memory = "1Gi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
+          for_each = merge(local.common_env, local.free_floor_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
           content {
             name  = env.key
             value = env.value

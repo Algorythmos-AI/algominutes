@@ -100,6 +100,12 @@ jobs:
           API_URL: ${{ steps.env.outputs.api }}
           LOG_PROJECT: ${{ steps.env.outputs.logs }}
           MINUTES: ${{ matrix.minutes }}
+          # The 2-minute run goes held first (plan rev 12 step 1.8): its user uploads with no minutes, the kickoff
+          # must hold the recording, and redeeming the invite code must release it to ready (H6).
+          E2E_HOLD_FIRST: ${{ matrix.minutes == 2 }}
+          # It also deletes a second note straight after its kickoff (plan rev 12 step 1.8): the workers must find
+          # it gone and bring nothing back (no doc, no Postgres row, no dead letter).
+          E2E_DELETE_MID: ${{ matrix.minutes == 2 }}
           FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           FIREBASE_API_KEY: ${{ secrets.STAGING_FIREBASE_API_KEY }}
           E2E_INVITE_CODE: ${{ secrets.E2E_INVITE_CODE }}

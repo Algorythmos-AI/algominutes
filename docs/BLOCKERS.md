@@ -86,6 +86,94 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     on that file fixes it if CI ever sees it.
   - **This Mac can't start worktree sessions:** 4.5 GB free against the 5.4 GB a worktree needs. Stage 0 ran in
     one checkout, one branch per PR.
+- **Stage 1, the hardening sprint (plan rev 12 R12.5), as of 2026-10-24 21:00 UTC.** Each fix opened with a test
+  that failed before it; the server ones pass the full suite and gates, the iPhone ones build for testing with
+  Xcode 27 and run their tests in CI (this Mac has no simulator runtime). None is verified on a device yet.
+  - [x] **S3 → #437.** A hung Gemini attempt is cut at a cap from the audio's length (60 s + 9 s a minute, at
+    most 150 s) and asked again within the 240 s budget; the summarizer keeps no per-attempt cap.
+  - [x] **S2's alert half → #442.** `gemini_rate_limited` tells a quota refusal from an outage; alerts on it, on
+    `gemini_model_exhausted` and on `gemini_attempt_timeout`. **Owner:** apply the next staging plan for the
+    three policies to exist, and ask Google for gemini-3.5-flash quota or provisioned throughput in Sydney.
+  - [x] **The login retry → #438 (another session's), and a timed-out job counts as failed → #439.** Proven on
+    the 17:11 deploy: all 19 jobs that talk to Google Cloud logged in through `.github/actions/gcp-auth` on the
+    first try; every retry step `outcome=skipped`.
+  - [x] **S14 → #443.** `/v1/chat` closed at exactly 61 s on 10-11, 10-18 and 10-20 (Cloud Run's request
+    timeout; staging logs): Vertex sent nothing and nothing bounded the wait. An attempt with no text by 15 s is
+    cut and asked again; an answer ends inside 45 s, with `event: error` if it must. Found by the
+    pii-scrub-compliance audit of the change: each attempt reads with its own SSE buffer.
+  - [ ] **S15 → #444.** The web client has read a cut stream as `stream_ended` since #191 (the page says "cut
+    short"; a test now pins it). The **iPhone** didn't: `chatStream` finished normally, leaving the answer empty
+    with nothing to retry. It now throws `streamEnded`, and a server error reads as a sentence, not its code.
+  - [ ] **S4 → #450.** The declared length opens the upload session (`X-Upload-Content-Length`), so Cloud
+    Storage refuses any byte past it. The planned lifecycle rule for unfinished uploads is dropped: an
+    unfinished resumable upload is never an object.
+  - [x] **S5: closed, not a bug (owner, 2026-10-24).** A search hit's note title is the user's own title, shown
+    only to them, and never enters a prompt or the embedder (the chunk text does, redacted). Redacting it would
+    show "<<REDACTED:…>>" where they typed a title.
+  - [ ] **S6 → #451.** A failed Apple revocation asks Try again (a fresh Apple prompt) or Delete anyway; it used
+    to delete silently. A hard stop was rejected: a misconfigured Apple provider would block every Apple user's
+    deletion (5.1.1(v)).
+  - [ ] **S7 → #452.** Mirror repair pages newest first, and checks its budget after a page, so a cut-off run has
+    checked the notes no run has seen.
+  - [ ] **S8 → #453 (server) and #456 (iPhone).** A deleted account is refused before Apple's DeviceCheck is
+    asked (an Apple outage gave it a 500, not a 401); a failed DeviceCheck token is asked for once more.
+  - [ ] **S9 → #454.** Production allows only `ALLOWED_ORIGINS`; staging and local development add localhost;
+    the Capacitor/Ionic origins are gone.
+  - [ ] **S11 → #455 and #457.** yt-dlp pinned to 2026.10.21 (what staging ran), with a test that every pip
+    install names a version; the sweep runs account deletions and queued purges first and logs `durationsMs` per
+    step. **Left in S11:**
+    - Code-scanning alert #131 is a false positive: the nightly pipeline test uploading its own fixture to Cloud
+      Storage, the host already restricted. **Owner:** dismiss it as "used in tests".
+    - Notes that live only in Firestore (scanned text) moved to **S16**, below.
+  - [ ] **S16 (new, P1): scanned and imported text notes live only in Firestore.** The iPhone writes them straight
+    into Firestore as `ready` (the rules' one client-made `ready` note), so Postgres never has them: outside
+    retention, backups and PITR, search, chat, `/v1/notes/read` and its paged export, and Postgres-written edits.
+    Deletion and account deletion already work. **The owner chose (2026-10-24) to move them into Postgres like
+    every other note**; the design is RELEASE.md R12.8: a `POST /v1/notes/text` route and a repo
+    `createTextNote` (Postgres first, then the mirror and an embedding), the iPhone calling it, a backfill job for
+    staging, and the rules' exception removed once the version floor passes the new build. Six PRs, one at a time.
+    **As of 2026-10-24 23:50 UTC:** PR 1 (contract and builder) → #461; PR 2 (`createTextNote`) → #463; PR 3
+    (the route) → #464; PR 4 (the iPhone, a draft until the route is on staging) → #465; PR 5 (the
+    `backfill-text-notes` db-job) → #466; and #462 (merged), the embedder reading lines in order when their times
+    tie, since every text-note line starts at 0. Two dual-write audits of PR 2 found five gaps (an orphan doc on a
+    delete in between, the exists-then-write race, a replay overwriting edits, a failed clean-up the retry never
+    reached, a replay doc built from the retry's input); each fixed with its own test, mutation-checked. Also
+    found and fixed: `transcriptTruncated` means "the mirror is a preview" (200 lines), and `rawText` stays off a
+    doc past 400 KB so a long text can't exceed Firestore's 1 MiB. **Owner, after #464 and #465 are on staging:**
+    `JOB_NAME=backfill-text-notes` with `MODE=dry-run`, then `MODE=run` (#466). PR 6 (the rules' exception
+    removed) waits for the version floor.
+  - [x] **1.8, the nightly failure cases → #459 (merged 21:09):** Try again on a finished note (every length) and held first, then
+    released (the 2-minute run). Proven by the first nightly after the merge.
+  - [ ] **1.8's last case → #467:** the 2-minute run deletes a second note straight after its kickoff and watches
+    for three minutes that nothing brings it back (no doc, no Postgres row, no dead letter). A Gemini 429/503
+    can't be injected into real staging; the ladder's own tests cover it. CodeQL flags its upload (alert #138),
+    the same false positive as #131. **Owner:** dismiss both as "used in tests".
+  - [ ] **O2's 401s after a deletion → #468 (merged):** the journey now names the failing resource; the Settings page
+    itself sends nothing after the delete (a new web test). The next red journey says which request it was.
+  - **Still open in Stage 1:** I3's kill-safe capture and device pass 1 (both
+    need the owner's iPhone).
+- **Stages 2–5, the code that needs no owner input (2026-10-24, overnight).** Each test-first; none changes
+  production until Apply P, and none is verified on a device.
+  - [ ] **Stage 2:** the prod cost guards, A$60 a day and an A$500 monthly alert → #469; one warm api and billing
+    instance → #470 (merged). Costs in DECISIONS.
+  - [ ] **Stage 3 (I2):** the free floor per environment, 120 minutes in prod → #471; the App Store build sells Pro
+    and shows nothing of the beta (no invite codes, no beta wording, the trial promised only during one) → #472;
+    an App Store Offer Code entry in Settings → #473.
+  - [ ] **Stage 3 (I8):** a test that the app links no analytics or advertising SDK → #475 (merged).
+  - [ ] **Stage 5 (rejection 4):** the App Privacy answers rewritten from the privacy manifest, held equal by a test;
+    the manifest adds Performance Data and Other Diagnostic Data, which the app sends → #474.
+  - [x] **Stage 4 (O6):** `docs/runbooks/production-incident.md` → #477 (merged). It found:
+    - a kill-switch flip is a Terraform apply, and a saved plan resets Cloud Run images (minutes on the
+      placeholder until the redeploy);
+    - a re-plan made without `TF_VAR_alert_emails` and `TF_VAR_admin_uids` drops them;
+    - resolving a dead letter replays nothing, and there's no operator tool for one note;
+    - there's no status channel but a site notice shipped by a promotion;
+    - the site's uptime alert lives in staging's project until Apply P moves `site_uptime_host`.
+    Each is a `TODO(verify)` in the runbook for the Stage 4 drill or the owner.
+  - **Not started, needs the owner:** S12 (Stripe keys as Terraform secret references: staging's live billing
+    config must be read first, and gcloud auth has expired); S10 (share-link IP hashes need a secret pepper; share
+    links are off in 1.0); an API latency alert (the request metric has no route label, so chat's 45-second answers
+    share one p95 with everything: set the threshold from Stage 4's load numbers).
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the

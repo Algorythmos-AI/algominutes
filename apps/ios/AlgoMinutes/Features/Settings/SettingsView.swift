@@ -244,11 +244,13 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                // Beta testers' minutes come from the code in their invitation.
-                Divider().overlay(Theme.borderSoft)
-                Button("Enter an invite code") { env.billing.presentInviteSheet() }
-                    .font(Typography.body(15))
-                    .foregroundStyle(Theme.body)
+                // Beta testers' minutes come from the code in their invitation; the App Store build has no beta.
+                if AppConfig.inviteCodesEnabled {
+                    Divider().overlay(Theme.borderSoft)
+                    Button("Enter an invite code") { env.billing.presentInviteSheet() }
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                }
                 if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
                     Button("Restore Purchases") {
@@ -343,11 +345,11 @@ struct SettingsView: View {
 
     private var planLabel: String { Self.planLabel(env.billing.entitlement, trialDaysRemaining: env.billing.trialDaysRemaining) }
 
-    /// The plan, as the card's headline: a grant's minutes say so, so a tester
-    /// never takes them for a purchase.
-    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?) -> String {
+    /// The plan, as the card's headline: in the beta, a grant's minutes say so, so a tester never takes them for
+    /// a purchase. The App Store build has no beta, and a grant there is just Pro.
+    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?, beta: Bool = AppConfig.inviteCodesEnabled) -> String {
         switch entitlement?.state {
-        case .active?: return entitlement?.isGrant == true ? "Pro · beta minutes" : "Pro"
+        case .active?: return entitlement?.isGrant == true && beta ? "Pro · beta minutes" : "Pro"
         case .trialing?:
             if let days = trialDaysRemaining {
                 return "Free trial · \(days) day\(days == 1 ? "" : "s") left"
@@ -459,6 +461,8 @@ struct DeleteAccountSheet: View {
     @State private var confirmationText = ""
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    /// Apple couldn't confirm the revocation: the main button asks again, and Delete anyway appears (S6).
+    @State private var revocationFailed = false
     @State private var revocation = AppleTokenRevocation()
 
     private var canDelete: Bool {
@@ -525,7 +529,7 @@ struct DeleteAccountSheet: View {
             } label: {
                 HStack {
                     if isDeleting { ProgressView().tint(.white) }
-                    Text(isDeleting ? "Deleting…" : "Delete forever")
+                    Text(isDeleting ? "Deleting…" : (revocationFailed ? "Try again" : "Delete forever"))
                 }
                 .font(Typography.label(16))
                 .foregroundStyle(Theme.onInverse)
@@ -536,6 +540,14 @@ struct DeleteAccountSheet: View {
             .disabled(!canDelete)
             .opacity(canDelete ? 1 : 0.5)
 
+            // Only after Apple couldn't confirm the revocation (plan rev 12 S6): the account can always be deleted.
+            if revocationFailed {
+                Button("Delete anyway") { Task { await deleteAccount(skipRevocation: true) } }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .foregroundStyle(Theme.danger)
+                    .disabled(isDeleting)
+            }
+
             Button("Cancel") { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(isDeleting)
@@ -545,21 +557,36 @@ struct DeleteAccountSheet: View {
         .interactiveDismissDisabled(isDeleting)
     }
 
-    private func deleteAccount() async {
+    /// `skipRevocation`: the person chose Delete anyway after a failed revocation (AppleRevocationStep).
+    private func deleteAccount(skipRevocation: Bool = false) async {
         guard canDelete else { return }
         isDeleting = true
         errorMessage = nil
+        revocationFailed = false
         // Apple first (it requires the revocation, and a deleted account can't
-        // be asked again). A dismissed prompt stops the deletion; a failed
-        // revocation doesn't, since removing the user's data comes first.
-        do {
-            if try await revocation.revokeIfLinked() == .cancelled {
-                errorMessage = "Deleting an account that uses Sign in with Apple needs Apple's confirmation. Please try again."
+        // be asked again). A dismissed prompt stops the deletion; a failed one
+        // asks: Try again, or Delete anyway (plan rev 12 S6).
+        if !skipRevocation {
+            let result: Result<AppleTokenRevocation.Outcome, Error>
+            do { result = .success(try await revocation.revokeIfLinked()) } catch { result = .failure(error) }
+            switch AppleRevocationStep.after(result) {
+            case .delete:
+                break
+            case .stop:
+                errorMessage = AppleRevocationStep.cancelledMessage
+                isDeleting = false
+                return
+            case .askTryAgainOrDeleteAnyway:
+                if case .failure(let error) = result {
+                    AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+                }
+                errorMessage = AppleRevocationStep.failedMessage
+                revocationFailed = true
                 isDeleting = false
                 return
             }
-        } catch {
-            AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+        } else {
+            AppLog.info("account_delete_without_apple_revocation")
         }
         do {
             try await env.api.deleteAccount()
