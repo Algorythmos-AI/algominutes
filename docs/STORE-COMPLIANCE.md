@@ -6,10 +6,12 @@
 > `apps/ios/AlgoMinutes/Info.plist`, `apps/android/app/src/main/AndroidManifest.xml`, and
 > `docs/DATA-RETENTION.md`.
 >
-> **Load-bearing fact:** Firebase Analytics is **OFF** (A6.9 / A10 decision — no
-> `getAnalytics()` call exists in any client). Every declaration below therefore answers
-> **"analytics / tracking = NONE"**. That is a deliberate choice, not the form default —
-> do not "helpfully" tick analytics because most apps do.
+> **Load-bearing facts:** there is **no analytics or advertising SDK** (Firebase Analytics is off, A6.9 / A10:
+> no `getAnalytics()` call in any client, and `tests/ios-linked-sdks.test.ts` pins the linked products), and
+> **nothing is used for tracking**. The app does send its **own funnel events** (`POST /v1/events`:
+> `first_recording`, `paywall_viewed`, and the rest), tied to the account: that is **Product Interaction, for
+> Analytics**, and it is declared. Saying "analytics: none" would be untrue (plan rev 12's audit found exactly
+> that contradiction).
 
 ---
 
@@ -43,26 +45,34 @@ Notes:
 
 ## 2. Apple Privacy Nutrition Labels (App Store Connect answers)
 
-Answer the App Privacy questionnaire as follows. For **every** data type: *Used for
-Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the account).
+Answered **from the app's privacy manifest** (`apps/ios/AlgoMinutes/PrivacyInfo.xcprivacy`), type by type:
+`tests/app-privacy-answers.test.ts` fails if this table and the manifest disagree on a type, a purpose or
+"linked". For **every** type: *Used to track you?* **No**; *Linked to the user?* **Yes** (all of it is tied to the
+account, Crashlytics' by a hashed uid). Purposes are Apple's own (there is no "Account Management" purpose).
 
-| Nutrition Label data type | Collected? | Purpose(s) | Linked | Tracking |
-|---|---|---|---|---|
-| Audio Data | **Yes** | App Functionality | Yes | No |
-| Other User Content (transcripts, scanned text/images) | **Yes** | App Functionality | Yes | No |
-| Email Address | **Yes** | App Functionality, Account Management | Yes | No |
-| User ID (Firebase uid) | **Yes** | App Functionality | Yes | No |
-| Device ID / Push token | **Yes** | App Functionality (notifications) | Yes | No |
-| Purchase History / subscription | **Yes** | App Functionality | Yes | No |
-| Crash Data / Diagnostics | **Yes** | App Functionality (diagnostics) | Yes | No |
-| **Usage Data / Analytics** | **No** | — | — | — |
-| **Identifiers for advertising / tracking** | **No** | — | — | — |
-| Location, Contacts, Health, Financial info, Browsing history | **No** | — | — | — |
+| Data type | Category | Purpose | Linked | Tracking | What it is |
+|---|---|---|---|---|---|
+| Name | Contact Info | App Functionality | Yes | No | The display name from Sign in with Apple or Google |
+| Email Address | Contact Info | App Functionality | Yes | No | The account's email (Firebase Auth) |
+| Purchase History | Purchases | App Functionality | Yes | No | Subscription state (App Store, Stripe on the web) |
+| Audio Data | User Content | App Functionality | Yes | No | Recordings, to transcribe and summarise |
+| Customer Support | User Content | App Functionality | Yes | No | Messages sent from Settings › Help › Contact support (`/v1/support`) |
+| Other User Content | User Content | App Functionality | Yes | No | Transcripts, summaries, scanned or imported text, edits |
+| User ID | Identifiers | App Functionality | Yes | No | The Firebase uid |
+| Device ID | Identifiers | App Functionality | Yes | No | The push token (FCM/APNs), to say a note is ready |
+| Product Interaction | Usage Data | Analytics | Yes | No | The app's own funnel events (`/v1/events`), never an SDK |
+| Crash Data | Diagnostics | App Functionality | Yes | No | Crashlytics crash reports |
+| Performance Data | Diagnostics | App Functionality | Yes | No | MetricKit's hangs, CPU and disk use, and exits, via Crashlytics |
+| Other Diagnostic Data | Diagnostics | App Functionality | Yes | No | The logs and keys Crashlytics reports carry |
 
-- **"Data Used to Track You" section: empty.** Confirm this matches `NSPrivacyTracking =
-  false` in the `.xcprivacy` files.
-- `TODO(legal):` Confirm whether "Purchase History" and "Crash Data" should be declared as
-  Linked vs Not-Linked given they always carry uid — recommend Linked (conservative).
+**Not collected:** Location, Contacts, Health & Fitness, Financial Info, Sensitive Info, Browsing History,
+Search History (search and chat questions are answered and not kept; logs hold their length only), Photos or
+Videos (a scan is read on the iPhone; only its text is sent), Identifiers for advertising, and every other type.
+
+- **"Data Used to Track You": empty.** Both manifests say `NSPrivacyTracking = false` with no tracking domains.
+- **Checked against the archive** before submission: Xcode's Privacy Report for the candidate build must list the
+  same types (Stage 5).
+- `TODO(legal):` confirm the answers with the privacy review (Stage 5).
 
 ---
 
@@ -75,7 +85,7 @@ Tracking?* = **No**; *Linked to the user?* = **Yes** (all data is tied to the ac
 | **Personal info → Email address** | Yes | No | Account management, App functionality | No | No |
 | **Personal info → User IDs** (uid) | Yes | No | App functionality | No | No |
 | **Device or other IDs** (FCM push token) | Yes | No | App functionality (notifications) | No | No |
-| **App activity → App interactions / Analytics** | **No** | — | — | — | — |
+| **App activity → App interactions** (the app's own funnel events) | Yes | No | Analytics | No | No |
 | **App info & performance → Crash logs / Diagnostics** | Yes | No | App functionality (diagnostics) | No | No |
 | **Financial info → Purchase history** | Yes | No | App functionality | No | No |
 | **Location** | **No** | — | — | — | — |
@@ -98,39 +108,26 @@ Play form global answers:
 - **Is all collected data encrypted in transit?** Yes (HTTPS/TLS). State it.
 - **Do you provide a way for users to request that their data is deleted?** **Yes** — see
   §6 (in-app **and** a web-accessible deletion request URL — Play requires the URL).
-- **Does your app use any advertising or analytics?** **No.**
+- **Does your app use any advertising or analytics?** No advertising. Analytics: only the app's own funnel
+  events (App interactions, above), no analytics SDK.
 
 ---
 
 ## 4. iOS: exact `PrivacyInfo.xcprivacy` + `Info.plist` entries
 
-### 4.1 `PrivacyInfo.xcprivacy` — required entries (app target)
+### 4.1 `PrivacyInfo.xcprivacy` (app target and broadcast extension)
 
-Current file already declares `NSPrivacyTracking=false`, empty `NSPrivacyTrackingDomains`,
-and collected types **EmailAddress / AudioData / UserID** (all `Linked=true`,
-`Tracking=false`, purpose `AppFunctionality`). **Required additions/confirmations:**
+The app's manifest is the source of §2: `NSPrivacyTracking = false`, no tracking domains, and the twelve collected
+types in §2's table, each linked and not tracking. Its required-reason APIs:
 
-- **Keep:** `NSPrivacyTracking = false`; `NSPrivacyTrackingDomains = <empty array>`.
-- **Keep:** collected data types `NSPrivacyCollectedDataTypeEmailAddress`,
-  `NSPrivacyCollectedDataTypeAudioData`, `NSPrivacyCollectedDataTypeUserID`
-  (Linked=true, Tracking=false, purpose `NSPrivacyCollectedDataTypePurposeAppFunctionality`).
-- **ADD** `NSPrivacyCollectedDataTypeOtherUserContent` (transcripts + scanned text/images)
-  — Linked=true, Tracking=false, purpose AppFunctionality.
-- **ADD** `NSPrivacyCollectedDataTypeDeviceID` (FCM push token) — Linked=true,
-  Tracking=false, purpose AppFunctionality.
-- **ADD** `NSPrivacyCollectedDataTypeCrashData` — Linked=true, Tracking=false, purpose
-  AppFunctionality (diagnostic context).
-- **API-usage reasons — keep the two already present, confirm sufficiency:**
-  - `NSPrivacyAccessedAPICategoryUserDefaults` → reason **`CA92.1`** (app's own defaults;
-    the consent flag `instant_recorder_consent_shown` lives here).
-  - `NSPrivacyAccessedAPICategoryFileTimestamp` → reason **`C617.1`** (RecordingStore
-    reads file timestamps for the local upload lifecycle).
-  - `TODO(eng):` If the disk-space guard's `volumeAvailableCapacity...` counts as
-    **`NSPrivacyAccessedAPICategoryDiskSpace`**, add it with reason **`E174.1`** /
-    **`85F4.1`** as applicable. Verify against the current API list before shipping.
-- **Broadcast extension target** (`apps/ios/BroadcastExtension/PrivacyInfo.xcprivacy`):
-  mirror `NSPrivacyTracking=false` + empty domains; declare **AudioData** (app-audio
-  capture). Keep it minimal — the extension captures, it does not manage accounts.
+- `NSPrivacyAccessedAPICategoryUserDefaults` → **`CA92.1`** (the app's own defaults) and **`1C8F.1`** (the App
+  Group the broadcast extension shares).
+- `NSPrivacyAccessedAPICategoryFileTimestamp` → **`C617.1`** (recordings' local upload lifecycle).
+- `NSPrivacyAccessedAPICategoryDiskSpace` → **`E174.1`** (the low-disk guard before recording).
+
+The **broadcast extension** (`apps/ios/BroadcastExtension/PrivacyInfo.xcprivacy`) declares no tracking, Audio Data
+only, and the same three API categories (DiskSpace `E174.1` since #430). `tests/app-privacy-answers.test.ts`
+checks it declares nothing the app doesn't.
 
 ### 4.2 `Info.plist` — rewritten usage descriptions (specific: what / why / where)
 
