@@ -65,6 +65,9 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'readNotePage', run: (c) => c.readNotePage({ noteId: 'n1', workspaceId: 'w1', cursor: 'c2' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/read`, body: { noteId: 'n1', workspaceId: 'w1', cursor: 'c2' } },
   { name: 'updateNote', run: (c) => c.updateNote({ noteId: 'n1', workspaceId: 'w1', title: 'T' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/update`, body: { noteId: 'n1', workspaceId: 'w1', title: 'T' } },
   { name: 'deleteNote', run: (c) => c.deleteNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/delete`, body: { noteId: 'n1', workspaceId: 'w1' } },
+  { name: 'deadLetters', run: (c) => c.deadLetters(), method: 'GET', url: `${ORIGINS.api}/v1/admin/dead-letters` },
+  { name: 'deadLetters', run: (c) => c.deadLetters({ includeResolved: true }), method: 'GET', url: `${ORIGINS.api}/v1/admin/dead-letters?includeResolved=true` },
+  { name: 'resolveDeadLetter', run: (c) => c.resolveDeadLetter(7), method: 'POST', url: `${ORIGINS.api}/v1/admin/dead-letters/7/resolve`, body: {} },
   { name: 'createTextNote', run: (c) => c.createTextNote({ noteId: 'n1', workspaceId: 'w1', text: 'Receipt', source: 'pdf' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/text`, body: { noteId: 'n1', workspaceId: 'w1', text: 'Receipt', source: 'pdf' } },
   { name: 'noteAudioUrl', run: (c) => c.noteAudioUrl({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/audio-url`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'createMeetingBot', run: (c) => c.createMeetingBot({ meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' }), method: 'POST', url: `${ORIGINS.api}/v1/meetings/bots`, body: { meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' } },
@@ -106,13 +109,13 @@ describe('every call sends the right request', () => {
     expect(s.headers['Content-Type']).toBe(body === undefined ? undefined : 'application/json');
   });
 
-  it('covers every operation in the published api contract (bar health and admin)', () => {
+  it('covers every operation in the published api contract (bar health)', () => {
     const operations = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
       .flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ':p')}`))
-      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
+      .filter((op) => !/\/v1\/health/.test(op) && op !== 'DELETE /v1/account/delete')
       .sort();
-    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
-      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)
+    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage' && !(c.name === 'deadLetters' && c.url.includes('?')))
+      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/admin\/dead-letters\/[^/]+\/resolve$/, '/v1/admin/dead-letters/:p/resolve').replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)
       .sort();
     expect(covered).toEqual(operations);
   });
