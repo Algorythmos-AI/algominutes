@@ -68,7 +68,7 @@ real images), the GitHub WIF pool + deployer SA, the Scheduler jobs and the Fire
 
 ## 4. Firebase app configs — REGENERATE per env, never copy the client's
 
-For **each** project (`algominutes-staging`, `algominutes-prod`):
+For **each** project (`algominutes-staging`, `algominutes-production`):
 
 ```bash
 firebase use algominutes-<env>

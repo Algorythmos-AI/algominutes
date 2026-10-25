@@ -346,8 +346,9 @@ locals {
 resource "google_storage_bucket" "buckets" {
   for_each = toset(local.bucket_suffixes)
 
+  # Bucket names are global: named after the project, so a project never reuses another's names.
   project                     = var.project_id
-  name                        = "algominutes-${var.env}-${each.value}"
+  name                        = "${var.project_id}-${each.value}"
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"

@@ -17,7 +17,7 @@ locals {
   # Public "hello" image used only until the deploy pipeline pushes the real one.
   placeholder_image = "us-docker.pkg.dev/cloudrun/container/hello"
 
-  region_bucket = { for s in local.bucket_suffixes : s => "algominutes-${var.env}-${s}" }
+  region_bucket = { for s in local.bucket_suffixes : s => "${var.project_id}-${s}" }
 
   # Deterministic Cloud Run URLs (see header).
   service_names = ["api", "transcoder", "summarizer", "embedder", "extractor", "billing", "notifier", "meetings"]

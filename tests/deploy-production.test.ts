@@ -80,7 +80,7 @@ describe('the production deploy', () => {
     const tfvarsProject = (env: string) =>
       fs.readFileSync(`infra/terraform/envs/${env}/terraform.tfvars`, 'utf8').match(/^project_id\s*=\s*"([^"]+)"/m)?.[1];
     expect(tfvarsProject('staging')).toBe('algominutes-staging');
-    expect(tfvarsProject('prod')).toBe('algominutes-prod');
+    expect(tfvarsProject('prod')).toBe('algominutes-production');
     for (const [file, env, target] of [[staging, 'staging', 'staging'], [production, 'production', 'production']] as const) {
       const changes = jobs(file).split(/\n  (?=[a-z-]+:\n)/)[1];
       expect(changes.startsWith('changes:\n')).toBe(true);

@@ -1,7 +1,7 @@
 # Runbook: a production incident
 
 > Plan rev 12, Stage 4 (`docs/plans/RELEASE.md`): per-service Cloud Run rollback, "prod is down", "a note is
-> stuck", who is paged, and the status message. **Production (`algominutes-prod`) is not provisioned yet
+> stuck", who is paged, and the status message. **Production (`algominutes-production`) is not provisioned yet
 > (Apply P, Stage 2).** Every prod command below has been run only against staging's equivalent, or not at
 > all. Re-check each one on staging during the Stage 4 chaos drill before relying on it.
 
@@ -10,7 +10,7 @@ You act as **`algorythmos.france@gmail.com`** (Owner on the project), as in
 
 ```bash
 gcloud auth login algorythmos.france@gmail.com --no-activate   # once per machine
-export PROJECT=algominutes-prod REGION=australia-southeast1 ACCOUNT=algorythmos.france@gmail.com
+export PROJECT=algominutes-production REGION=australia-southeast1 ACCOUNT=algorythmos.france@gmail.com
 export AR="$REGION-docker.pkg.dev/$PROJECT/algominutes"        # images: $AR/<service>:<full commit sha>
 ```
 
@@ -420,7 +420,7 @@ foreground or page load.
 ```bash
 cd infra/terraform/envs/prod
 export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token --account="$ACCOUNT")
-export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-prod \
+export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-production \
   --account="$ACCOUNT" --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 # A saved plan fixes its variables. Re-export EVERY plan-time value the last applied plan had, or this plan
 # removes them: the alert e-mails (alerts then e-mail nobody), ADMIN_UIDS (the admin view then answers 403),

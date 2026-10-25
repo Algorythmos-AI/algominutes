@@ -38,7 +38,7 @@ variable "db_edition" {
   default = "ENTERPRISE"
 }
 # Not committed (public repo). Derive at plan time:
-#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-prod \
+#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-production \
 #     --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 variable "billing_account" {
   type = string
