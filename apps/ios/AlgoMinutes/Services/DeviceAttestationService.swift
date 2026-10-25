@@ -17,20 +17,36 @@ enum DeviceAttestationService {
     static let platformHeaderValue = "ios"
 
     /// A base64 DeviceCheck token, or nil when unavailable (Simulator /
-    /// unsupported device / transient failure). Never throws into callers —
+    /// unsupported device / failed twice). Never throws into callers —
     /// attestation is best-effort and must not block a legitimate action.
     static func attestationToken() async -> String? {
-        let device = DCDevice.current
-        guard device.isSupported else {
+        await attestationToken(
+            supported: DCDevice.current.isSupported,
+            generate: { try await DCDevice.current.generateToken() },
+            wait: { try? await Task.sleep(for: .seconds(1)) }
+        )
+    }
+
+    /// A failed token is asked for once more, a second later (plan rev 12 S8): the token decides a new user's
+    /// trial, and a user's row is never changed afterwards, so one passing failure left them on the free floor for
+    /// good. The seams are for tests.
+    static func attestationToken(
+        supported: Bool,
+        generate: () async throws -> Data,
+        wait: () async -> Void
+    ) async -> String? {
+        guard supported else {
             AppLog.info("devicecheck_unsupported")
             return nil
         }
-        do {
-            let data = try await device.generateToken()
-            return data.base64EncodedString()
-        } catch {
-            AppLog.error("devicecheck_token_failed: \(error.localizedDescription)")
-            return nil
+        for attempt in 1...2 {
+            do {
+                return try await generate().base64EncodedString()
+            } catch {
+                AppLog.error("devicecheck_token_failed: attempt \(attempt): \(error.localizedDescription)")
+                if attempt == 1 { await wait() }
+            }
         }
+        return nil
     }
 }
