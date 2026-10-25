@@ -98,7 +98,7 @@ prod). Required before this service can transact (each is a `TODO(A11)` in code)
 | `STRIPE_WEBHOOK_SECRET` | `/webhooks/stripe` signature |
 | `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_ANNUAL` | checkout line items |
 | `BILLING_SUCCESS_URL`, `BILLING_CANCEL_URL`, `BILLING_PORTAL_RETURN_URL` | Stripe redirects |
-| `APPLE_PRODUCT_PRO_MONTHLY`, `APPLE_PRODUCT_PRO_ANNUAL` | Apple SKU → plan mapping |
+| `APPLE_PRODUCT_PRO_MONTHLY`, `APPLE_PRODUCT_PRO_ANNUAL` | Apple SKU → plan mapping (default: `com.algorythmos.algominutes.pro.monthly` / `.annual`, the App Store Connect products) |
 | `GOOGLE_PRODUCT_PRO_MONTHLY`, `GOOGLE_PRODUCT_PRO_ANNUAL`, `PLAY_PACKAGE_NAME` | Play SKU / package |
 | `GOOGLE_CLOUD_PROJECT` | firebase-admin ADC |
 

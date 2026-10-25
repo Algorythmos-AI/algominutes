@@ -10,8 +10,9 @@
 // dependency on the contracts package's zod/OpenAPI graph — but they are NOT a
 // secret and NOT the charging authority.
 //
-// The per-store product identifiers ARE environment-driven (Secret Manager /
-// config in prod) and must never be hardcoded.
+// The per-store product identifiers can be overridden by env. The Apple ones
+// default to the products in App Store Connect, which the iPhone sells
+// (apps/ios/AlgoMinutes/Models/Entitlement.swift, tests/billing-plans.test.ts).
 
 const PRICING = { currency: 'AUD', proMonthly: 14.99, proAnnual: 149.9 };
 
@@ -27,8 +28,8 @@ export function productCatalog() {
       plan: 'pro',
       period: 'monthly',
       priceDisplay: `A$${PRICING.proMonthly}`,
-      // TODO(A11): real App Store / Play / Stripe product + price ids from Secret Manager.
-      appleProductId: process.env.APPLE_PRODUCT_PRO_MONTHLY || 'pro_monthly',
+      // TODO(A11): real Play / Stripe product + price ids from Secret Manager.
+      appleProductId: process.env.APPLE_PRODUCT_PRO_MONTHLY || 'com.algorythmos.algominutes.pro.monthly',
       googleProductId: process.env.GOOGLE_PRODUCT_PRO_MONTHLY || 'pro_monthly',
       stripePriceId: process.env.STRIPE_PRICE_PRO_MONTHLY || null,
     },
@@ -37,8 +38,8 @@ export function productCatalog() {
       plan: 'pro',
       period: 'annual',
       priceDisplay: `A$${PRICING.proAnnual}`,
-      // TODO(A11): real App Store / Play / Stripe product + price ids from Secret Manager.
-      appleProductId: process.env.APPLE_PRODUCT_PRO_ANNUAL || 'pro_annual',
+      // TODO(A11): real Play / Stripe product + price ids from Secret Manager.
+      appleProductId: process.env.APPLE_PRODUCT_PRO_ANNUAL || 'com.algorythmos.algominutes.pro.annual',
       googleProductId: process.env.GOOGLE_PRODUCT_PRO_ANNUAL || 'pro_annual',
       stripePriceId: process.env.STRIPE_PRICE_PRO_ANNUAL || null,
     },
