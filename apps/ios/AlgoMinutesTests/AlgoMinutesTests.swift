@@ -148,55 +148,6 @@ final class SSEParserTests: XCTestCase {
     }
 }
 
-// MARK: - TextNoteBuilder (parity with finalizeExtractedTextNote)
-
-final class TextNoteBuilderTests: XCTestCase {
-    func testBasicBuild() {
-        let result = TextNoteBuilder.build(text: "First paragraph line.\n\nSecond paragraph.", source: .scannedImage)
-        XCTAssertEqual(result.transcript.count, 2)
-        XCTAssertEqual(result.transcript[0].speaker, "Scanned image")
-        XCTAssertEqual(result.wordCount, 5)
-        XCTAssertTrue(result.gist.hasPrefix("Scanned image - 5 words extracted."))
-        XCTAssertEqual(result.title, "First paragraph line.")
-        XCTAssertFalse(result.transcriptTruncated)
-    }
-
-    func testEmptyText() {
-        let result = TextNoteBuilder.build(text: "", source: .pdf)
-        XCTAssertEqual(result.transcript.count, 1)
-        XCTAssertTrue(result.transcript[0].text.contains("No text detected"))
-        XCTAssertNil(result.title)
-    }
-
-    func testTruncation() {
-        let long = String(repeating: "a", count: 200_000)
-        let result = TextNoteBuilder.build(text: long, source: .imported)
-        XCTAssertTrue(result.transcriptTruncated)
-        XCTAssertTrue(result.rawText.hasSuffix("[Text truncated for mobile display.]"))
-        XCTAssertTrue(result.gist.contains("(truncated)"))
-    }
-
-    func testTitleCapsAt60() {
-        let line = String(repeating: "t", count: 90)
-        let result = TextNoteBuilder.build(text: line, source: .imported)
-        XCTAssertEqual(result.title, String(repeating: "t", count: 60) + "...")
-    }
-
-    func testStripsNulCharacters() {
-        let result = TextNoteBuilder.build(text: "a\0b", source: .imported)
-        XCTAssertEqual(result.rawText, "ab")
-    }
-
-    func testRepeatedParagraphsGetDistinctIdentities() {
-        // Same speaker, same (empty) time, identical text — the exact shape
-        // that collided under the old content-derived id.
-        let result = TextNoteBuilder.build(text: "Yes.\n\nYes.\n\nYes.", source: .imported)
-        XCTAssertEqual(result.transcript.count, 3)
-        XCTAssertEqual(Set(result.transcript.map(\.id)).count, 3)
-        XCTAssertEqual(result.transcript.map(\.index), [0, 1, 2])
-    }
-}
-
 // MARK: - Export scope and plain text
 
 final class ExportScopeTests: XCTestCase {

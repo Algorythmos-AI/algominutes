@@ -16,6 +16,14 @@ final class ContractFixturesTests: XCTestCase {
         try JSONDecoder().decode(type, from: try XCTUnwrap(data, file: file, line: line))
     }
 
+    func testTextNoteSavedAnswer() throws {
+        let c = try cases("text-note.json")
+        XCTAssertEqual(c.count, 1)
+        let ready = try decode(APIClient.TextNoteResponse.self, c["ready"])
+        XCTAssertEqual(ready.status, "ready")
+        XCTAssertFalse(ready.noteId.isEmpty)
+    }
+
     func testEntitlementEveryCaseAndWhatTheAppMakesOfIt() throws {
         let c = try cases("entitlement.json")
         XCTAssertEqual(c.count, 6)
