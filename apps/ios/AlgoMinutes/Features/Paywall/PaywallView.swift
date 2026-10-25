@@ -147,6 +147,13 @@ struct PaywallView: View {
         return "Billed every \(unit), auto-renews"
     }
 
+    /// What the paywall says with nothing to sell. The App Store build has no invite codes to offer instead.
+    static func unavailableMessage(inviteCodes: Bool) -> String {
+        inviteCodes
+            ? "Plans are unavailable right now. Please try again shortly, or add minutes with an invite code."
+            : "Plans are unavailable right now. Please try again shortly."
+    }
+
     private var unavailableState: some View {
         VStack(spacing: Theme.Spacing.md) {
             if store.isLoadingProducts {
@@ -156,13 +163,15 @@ struct PaywallView: View {
                     .foregroundStyle(Theme.muted)
             } else {
                 // No products (none in App Store Connect yet, or the App Store
-                // unreachable): the beta's invite code is the other way to minutes.
-                Text("Plans are unavailable right now. Please try again shortly, or add minutes with an invite code.")
+                // unreachable): in the beta, its invite code is the other way to minutes.
+                Text(Self.unavailableMessage(inviteCodes: env.billing.inviteCodesEnabled))
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
-                Button("Enter an invite code") { env.billing.switchToInviteSheet() }
-                    .buttonStyle(SecondaryButtonStyle())
+                if env.billing.inviteCodesEnabled {
+                    Button("Enter an invite code") { env.billing.switchToInviteSheet() }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
             }
         }
         .frame(maxWidth: .infinity)
