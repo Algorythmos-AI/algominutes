@@ -53,6 +53,26 @@ describe('embedder transcript read', () => {
     await pool.query(`DELETE FROM notes WHERE id = 'note-a'`);
     expect(await loadTranscriptForEmbedding(pool, { noteId: 'note-a', workspaceId: 'ws-a' })).toBeNull();
   });
+
+  // A text note's lines (a scan, a PDF) all start at 0: the read must keep their order, as every other transcript
+  // read does (start_ms, then id), or its search chunks are the paragraphs shuffled. Stored here out of id order.
+  it('keeps lines that start at the same time in their order', async () => {
+    await pool.query(`DELETE FROM transcript_lines WHERE note_id = 'note-a'`);
+    for (const id of [903, 901, 902]) {
+      await pool.query(`INSERT INTO transcript_lines (id, note_id, start_ms, end_ms, text) VALUES ($1, 'note-a', 0, 0, $2)`, [id, `p${id}`]);
+    }
+    // Without the (start_ms, id) index the planner reads the heap, as it may for any note: the order must come from
+    // the query, not from an index that happens to be used.
+    const c = await pool.connect();
+    try {
+      await c.query('SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_indexonlyscan = off');
+      const lines = await loadTranscriptForEmbedding(c, { noteId: 'note-a', workspaceId: 'ws-a' });
+      expect(lines.map((l: { text: string }) => l.text)).toEqual(['p901', 'p902', 'p903']);
+    } finally {
+      await c.query('RESET ALL');
+      c.release();
+    }
+  });
 });
 
 describe('note-terminal markNoteFailed', () => {

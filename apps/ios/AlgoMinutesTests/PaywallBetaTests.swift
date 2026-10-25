@@ -57,7 +57,7 @@ final class PaywallBetaTests: XCTestCase {
     }
 
     func testAPaywallWithNothingToSellHandsOverToTheInviteCode() {
-        let billing = BillingService(api: api(), paywallEnabled: true)
+        let billing = BillingService(api: api(), paywallEnabled: true, inviteCodesEnabled: true)
         billing.presentPaywall(.manual)
         XCTAssertTrue(billing.isPaywallPresented)
         billing.switchToInviteSheet()
@@ -75,7 +75,7 @@ final class PaywallBetaTests: XCTestCase {
         XCTAssertFalse(billing.isInviteSheetPresented)
     }
 
-    func testTheStagingBuildSellsProAndReleaseDoesNotYet() throws {
+    func testTheStagingAndStoreBuildsSellPro() throws {
         // project.yml's PAYWALL_ENABLED, as the Info.plist carries it.
         let yml = try String(contentsOfFile: #filePath.replacingOccurrences(of: "AlgoMinutesTests/PaywallBetaTests.swift", with: "project.yml"), encoding: .utf8)
         func flag(_ config: String) -> String? {
@@ -85,7 +85,7 @@ final class PaywallBetaTests: XCTestCase {
             return line.split(separator: "\"").dropFirst().first.map(String.init)
         }
         XCTAssertEqual(flag("Staging"), "YES")
-        XCTAssertEqual(flag("Release"), "NO")
+        XCTAssertEqual(flag("Release"), "YES")
         XCTAssertTrue(AppConfig.paywallEnabled(info: ["AlgoMinutesPaywallEnabled": "YES"]))
         XCTAssertFalse(AppConfig.paywallEnabled(info: ["AlgoMinutesPaywallEnabled": "NO"]))
     }

@@ -10,6 +10,7 @@ export * from './chat';
 export * from './export';
 export * from './share';
 export * from './updateNote';
+export * from './textNote';
 export * from './deleteNote';
 export * from './noteAudio';
 export * from './noteSpeakers';

@@ -124,10 +124,56 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     step. **Left in S11:**
     - Code-scanning alert #131 is a false positive: the nightly pipeline test uploading its own fixture to Cloud
       Storage, the host already restricted. **Owner:** dismiss it as "used in tests".
-    - Notes that live only in Firestore (scanned text) are outside retention and backups: deleting them on a
-      schedule removes user data, so it needs a design (move scans into Postgres, or retention reading Firestore).
-  - **Still open in Stage 1:** the nightly failure cases (1.8), I3's kill-safe capture and device pass 1 (both
+    - Notes that live only in Firestore (scanned text) moved to **S16**, below.
+  - [ ] **S16 (new, P1): scanned and imported text notes live only in Firestore.** The iPhone writes them straight
+    into Firestore as `ready` (the rules' one client-made `ready` note), so Postgres never has them: outside
+    retention, backups and PITR, search, chat, `/v1/notes/read` and its paged export, and Postgres-written edits.
+    Deletion and account deletion already work. **The owner chose (2026-10-24) to move them into Postgres like
+    every other note**; the design is RELEASE.md R12.8: a `POST /v1/notes/text` route and a repo
+    `createTextNote` (Postgres first, then the mirror and an embedding), the iPhone calling it, a backfill job for
+    staging, and the rules' exception removed once the version floor passes the new build. Six PRs, one at a time.
+    **As of 2026-10-24 23:50 UTC:** PR 1 (contract and builder) → #461; PR 2 (`createTextNote`) → #463; PR 3
+    (the route) → #464; PR 4 (the iPhone, a draft until the route is on staging) → #465; PR 5 (the
+    `backfill-text-notes` db-job) → #466; and #462 (merged), the embedder reading lines in order when their times
+    tie, since every text-note line starts at 0. Two dual-write audits of PR 2 found five gaps (an orphan doc on a
+    delete in between, the exists-then-write race, a replay overwriting edits, a failed clean-up the retry never
+    reached, a replay doc built from the retry's input); each fixed with its own test, mutation-checked. Also
+    found and fixed: `transcriptTruncated` means "the mirror is a preview" (200 lines), and `rawText` stays off a
+    doc past 400 KB so a long text can't exceed Firestore's 1 MiB. **Owner, after #464 and #465 are on staging:**
+    `JOB_NAME=backfill-text-notes` with `MODE=dry-run`, then `MODE=run` (#466). PR 6 (the rules' exception
+    removed) waits for the version floor.
+  - [x] **1.8, the nightly failure cases → #459 (merged 21:09):** Try again on a finished note (every length) and held first, then
+    released (the 2-minute run). Proven by the first nightly after the merge.
+  - [ ] **1.8's last case → #467:** the 2-minute run deletes a second note straight after its kickoff and watches
+    for three minutes that nothing brings it back (no doc, no Postgres row, no dead letter). A Gemini 429/503
+    can't be injected into real staging; the ladder's own tests cover it. CodeQL flags its upload (alert #138),
+    the same false positive as #131. **Owner:** dismiss both as "used in tests".
+  - [ ] **O2's 401s after a deletion → #468 (merged):** the journey now names the failing resource; the Settings page
+    itself sends nothing after the delete (a new web test). The next red journey says which request it was.
+  - **Still open in Stage 1:** I3's kill-safe capture and device pass 1 (both
     need the owner's iPhone).
+- **Stages 2–5, the code that needs no owner input (2026-10-24, overnight).** Each test-first; none changes
+  production until Apply P, and none is verified on a device.
+  - [ ] **Stage 2:** the prod cost guards, A$60 a day and an A$500 monthly alert → #469; one warm api and billing
+    instance → #470 (merged). Costs in DECISIONS.
+  - [ ] **Stage 3 (I2):** the free floor per environment, 120 minutes in prod → #471; the App Store build sells Pro
+    and shows nothing of the beta (no invite codes, no beta wording, the trial promised only during one) → #472;
+    an App Store Offer Code entry in Settings → #473.
+  - [ ] **Stage 3 (I8):** a test that the app links no analytics or advertising SDK → #475 (merged).
+  - [ ] **Stage 5 (rejection 4):** the App Privacy answers rewritten from the privacy manifest, held equal by a test;
+    the manifest adds Performance Data and Other Diagnostic Data, which the app sends → #474.
+  - [x] **Stage 4 (O6):** `docs/runbooks/production-incident.md` → #477 (merged). It found:
+    - a kill-switch flip is a Terraform apply, and a saved plan resets Cloud Run images (minutes on the
+      placeholder until the redeploy);
+    - a re-plan made without `TF_VAR_alert_emails` and `TF_VAR_admin_uids` drops them;
+    - resolving a dead letter replays nothing, and there's no operator tool for one note;
+    - there's no status channel but a site notice shipped by a promotion;
+    - the site's uptime alert lives in staging's project until Apply P moves `site_uptime_host`.
+    Each is a `TODO(verify)` in the runbook for the Stage 4 drill or the owner.
+  - **Not started, needs the owner:** S12 (Stripe keys as Terraform secret references: staging's live billing
+    config must be read first, and gcloud auth has expired); S10 (share-link IP hashes need a secret pepper; share
+    links are off in 1.0); an API latency alert (the request metric has no route label, so chat's 45-second answers
+    share one p95 with everything: set the threshold from Stage 4's load numbers).
 
 - [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
   - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
