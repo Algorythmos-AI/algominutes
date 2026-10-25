@@ -26,6 +26,8 @@ const { reverseNoteUsage } = ledgerReversal as {
 };
 import { lockNoteId } from './note-lock';
 import { isNoteDeleted, recordNoteDeleted } from './deleted-notes-repo';
+import { buildTextNote, TEXT_NOTE_TRUNCATION_SUFFIX } from './text-note-builder';
+import type { TextNoteSource } from '@algominutes/contracts/schemas';
 import { advanceBotStatus, botFromRow, enqueueRecallPurge, purgeRecallBotsOf, toNotetakerStatus, BOT_STATUS_RANK, type BotStatus, type MeetingBot } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
@@ -1493,4 +1495,215 @@ export async function advanceNotetaker(
     log.error({ err, noteId: bot.noteId, workspaceId: bot.workspaceId, userId: bot.uid }, 'notetaker_mirror_note_gone');
   }
   return result;
+}
+
+// ── Text notes (plan rev 12 R12.8, S16) ────────────────────────────────────────────────────────────────────────
+
+/** The note id is already another kind of note (a recording, an import), or another workspace's text note. */
+export class TextNoteConflictError extends Error {
+  readonly code = 'TEXT_NOTE_CONFLICT';
+  readonly status = 409;
+  constructor(noteId: string) {
+    super(`note ${noteId} is not this workspace's text note`);
+    this.name = 'TextNoteConflictError';
+  }
+}
+
+/** The note id was deleted: a stale client can't bring it back. */
+export class TextNoteDeletedError extends Error {
+  readonly code = 'NOTE_DELETED';
+  readonly status = 409;
+  constructor(noteId: string) {
+    super(`note ${noteId} was deleted`);
+    this.name = 'TextNoteDeletedError';
+  }
+}
+
+/** Lines mirrored to the note's Firestore doc, as for every note (mirror-repair.ts, the transcoder's mirror). */
+const TEXT_NOTE_MIRROR_LINES = 200;
+/**
+ * The doc carries rawText (the iPhone's export reads it) only up to this size: Firestore refuses a doc over 1 MiB, and
+ * a long text in a script of 3- or 4-byte characters is that much as rawText and again as lines. Past it the text is
+ * in Postgres only, where the full transcript and the export come from.
+ */
+const TEXT_NOTE_MIRROR_RAW_BYTES = 400_000;
+
+/** The note as stored, which is what the doc mirrors: a replay's input can differ from it. */
+type StoredTextNote = {
+  title: string;
+  createdAt: Date;
+  wordCount: number;
+  gist: string;
+  rawText: string;
+  lines: { speaker: string; text: string }[];
+};
+
+/**
+ * A text note (a scanned image, a PDF, an imported file) from the text the app extracted: Postgres first, in one
+ * transaction (the user and the personal workspace ensured as admission does, the note, its lines and its summary),
+ * then the Firestore doc the apps read, shaped as the iPhone wrote it itself.
+ *
+ * A replay is the same note, and rewrites nothing in Postgres: an existing text note is answered ready as it stands,
+ * so a late retry can never undo an edit. Only a missing doc is written again (the first try committed, then failed
+ * before the doc), and from what Postgres holds, not from the replay's text. Refused: a deleted account
+ * (AccountDeletedError), a deleted note id (TextNoteDeletedError), a workspace the caller isn't in
+ * (WorkspaceBoundaryError), and an id that is another kind of note, or another workspace's or author's
+ * (TextNoteConflictError). Nothing is charged: there is no audio. The caller enqueues the note's embedding.
+ */
+export async function createTextNote(
+  firestore: Firestore,
+  input: {
+    uid: string;
+    email?: string | null;
+    name?: string | null;
+    workspaceId: string;
+    noteId: string;
+    text: string;
+    source: TextNoteSource;
+    /** The app's fallback (a file's name); the text's own first line wins. */
+    title?: string;
+    /** Kept by the backfill job: the note's original time. */
+    createdAt?: Date;
+    traceId?: string;
+  },
+  log: { info: (o: any, m?: string) => void; warn: (o: any, m?: string) => void; error: (o: any, m?: string) => void },
+): Promise<{ noteId: string; status: 'ready'; lines: number; truncated: boolean; replay: boolean }> {
+  const built = buildTextNote(input.text, input.source);
+  const createdAt = input.createdAt ?? new Date();
+  // The same title in both stores (Postgres, the doc), the app's fallback, then a dated one.
+  const title = built.title ?? (input.title?.trim() || `Import ${createdAt.toISOString().slice(0, 10)}`);
+  const ref = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
+
+  let stored: StoredTextNote | null;
+  try {
+    stored = await withTx(async (client) => {
+      // Refuses a deleted account (AccountDeletedError), as every first write does.
+      await ensureUser(client, { uid: input.uid, email: input.email, name: input.name });
+      await ensureWorkspaceAccess(client, input.workspaceId, input.uid, input.name ? `${input.name}'s Workspace` : 'My Workspace');
+      // One writer per note id at a time (the kickoff's lock): a replay waits for the first.
+      await lockNoteId(client, input.noteId);
+      if (await isNoteDeleted(client, { noteId: input.noteId, workspaceId: input.workspaceId })) {
+        throw new TextNoteDeletedError(input.noteId);
+      }
+      const { rows: [existing] } = await client.query(
+        `SELECT n.source_type, n.workspace_id, n.author_uid, n.deleted_at, n.title, n.created_at, n.word_count, s.gist
+           FROM notes n LEFT JOIN summaries s ON s.note_id = n.id WHERE n.id = $1`,
+        [input.noteId],
+      );
+      if (existing) {
+        const ours = existing.source_type === 'scan_text' && existing.workspace_id === input.workspaceId
+          && existing.author_uid === input.uid && existing.deleted_at === null;
+        if (!ours) throw new TextNoteConflictError(input.noteId);
+        const { rows } = await client.query(
+          'SELECT speaker_name, text FROM transcript_lines WHERE note_id = $1 ORDER BY idx',
+          [input.noteId],
+        );
+        const lines = rows.map((r: any) => ({ speaker: r.speaker_name ?? '', text: r.text }));
+        return {
+          title: existing.title, createdAt: new Date(existing.created_at), wordCount: existing.word_count ?? 0,
+          gist: existing.gist ?? '', rawText: lines.map((l: { text: string }) => l.text).join('\n\n'), lines,
+        };
+      }
+      // Claimed for embedding with the note (the caller enqueues it): a lost enqueue is re-driven by the sweep.
+      await client.query(
+        `INSERT INTO notes (id, workspace_id, author_uid, title, status, source_type, duration_sec, word_count, created_at,
+                            updated_at, embedder_enqueued_at)
+           VALUES ($1, $2, $3, $4, 'ready', 'scan_text', 0, $5, $6, NOW(), NOW())`,
+        [input.noteId, input.workspaceId, input.uid, title, built.wordCount, createdAt],
+      );
+      // In idx order, so the ids follow the paragraphs: every transcript read orders by (start_ms, id), all 0 here.
+      await client.query(
+        `INSERT INTO transcript_lines (note_id, chunk_id, idx, speaker_name, start_ms, end_ms, text)
+           SELECT $1, NULL, l.idx, l.speaker, 0, 0, l.text
+             FROM jsonb_to_recordset($2::jsonb) AS l(idx integer, speaker text, text text)
+            ORDER BY l.idx`,
+        [input.noteId, JSON.stringify(built.lines)],
+      );
+      await client.query(`INSERT INTO summaries (note_id, gist, model) VALUES ($1, $2, NULL)`, [input.noteId, built.gist]);
+      return null;
+    }, { log, fields: { noteId: input.noteId, workspaceId: input.workspaceId, userId: input.uid } });
+  } catch (err) {
+    // A deleted note's doc may be left from a try whose clean-up below failed: this retry is refused before any
+    // Firestore call, so it removes the doc too (a missing doc is fine).
+    if (err instanceof TextNoteDeletedError) await ref.delete();
+    throw err;
+  }
+  const replay = stored !== null;
+  const note: StoredTextNote = stored ?? {
+    title, createdAt, wordCount: built.wordCount, gist: built.gist, rawText: built.rawText, lines: built.lines,
+  };
+
+  // The doc the apps read, after the commit. create() only: a doc already there is this note's (a replay, or a
+  // concurrent one that got here first), and is never overwritten.
+  try {
+    const now = new Date().toISOString();
+    await ref.create({
+      title: note.title,
+      status: 'ready',
+      type: 'scan_text',
+      duration: 0,
+      ...(Buffer.byteLength(note.rawText) <= TEXT_NOTE_MIRROR_RAW_BYTES ? { rawText: note.rawText } : {}),
+      wordCount: note.wordCount,
+      // "The mirror is a preview: fetch the rest", as the iPhone reads it and mirror-repair writes it.
+      transcriptTruncated: note.lines.length > TEXT_NOTE_MIRROR_LINES,
+      transcript: note.lines.slice(0, TEXT_NOTE_MIRROR_LINES).map((l) => ({ speaker: l.speaker, text: l.text, time: '' })),
+      summary: { gist: note.gist, actionItems: [], keyDecisions: [] },
+      workspaceId: input.workspaceId,
+      authorId: input.uid,
+      createdAt: note.createdAt.toISOString(),
+      updatedAt: now,
+    });
+  } catch (err) {
+    // silent-catch-ok: ALREADY_EXISTS is this note's doc, written by a replay or the first try; anything else throws
+    if (!isFirestoreAlreadyExists(err)) throw err;
+  }
+  // Deleted between the commit and the doc? Then the doc is an orphan nothing else would remove (the delete's purge
+  // may already have run): take it back out, and say the note is gone. If that fails, the client's retry does it.
+  const live = await getPool().query(
+    'SELECT 1 FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [input.noteId, input.workspaceId],
+  );
+  if (!live.rowCount) {
+    await ref.delete();
+    throw new TextNoteDeletedError(input.noteId);
+  }
+
+  // The text was cut at the limit when its last line is the cut's notice.
+  const truncated = note.lines[note.lines.length - 1]?.text === TEXT_NOTE_TRUNCATION_SUFFIX.trim();
+  log.info({
+    noteId: input.noteId, workspaceId: input.workspaceId, userId: input.uid, traceId: input.traceId,
+    source: input.source, lines: note.lines.length, chars: note.rawText.length, truncated, replay,
+  }, 'text_note_created');
+  return { noteId: input.noteId, status: 'ready', lines: note.lines.length, truncated, replay };
+}
+
+/** Which of these note ids Postgres has (any kind, any workspace): the text-note backfill skips them. */
+export async function existingNoteIds(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const { rows } = await getPool().query('SELECT id FROM notes WHERE id = ANY($1::text[])', [ids]);
+  return new Set(rows.map((r: { id: string }) => r.id));
+}
+
+/**
+ * The text notes the iPhone wrote straight into Firestore (before R12.8 PR 4), a page at a time, workspace by
+ * workspace: each workspace's `notes` queried by type, which needs no collection-group index. The backfill job
+ * (db-job backfill-text-notes) creates the ones Postgres lacks through createTextNote.
+ */
+export async function* firestoreTextNotePages(
+  firestore: Firestore,
+  pageSize: number,
+): AsyncGenerator<{ workspaceId: string; docs: { id: string; data: Record<string, any> }[] }> {
+  const workspaces = await firestore.collection('workspaces').listDocuments();
+  for (const ws of workspaces) {
+    let last: any = null;
+    for (;;) {
+      let q = ws.collection('notes').where('type', '==', 'scan_text').limit(pageSize);
+      if (last) q = q.startAfter(last);
+      const snap = await q.get();
+      if (snap.empty) break;
+      last = snap.docs[snap.docs.length - 1];
+      yield { workspaceId: ws.id, docs: snap.docs.map((d) => ({ id: d.id, data: d.data() })) };
+      if (snap.docs.length < pageSize) break;
+    }
+  }
 }
