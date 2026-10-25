@@ -226,6 +226,27 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
+    path: `${API_BASE_PATH}/notes/text`,
+    summary: 'Save a text note (a scanned image, a PDF, an imported file) from text extracted on the device: Postgres, then the Firestore mirror; ready at once. A retry with the same noteId is the same note.',
+    tags: ['notes'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.TextNoteCreateRequest) },
+    responses: {
+      200: { description: 'The note is saved and ready (or already was); its embedding is queued.', ...json(S.TextNoteResponse) },
+      400: errorResponse('Invalid body, noteId or workspaceId.'),
+      401: errorResponse('Missing or invalid token, or the account was deleted (error: account_deleted).'),
+      403: errorResponse("Not the caller's workspace."),
+      404: errorResponse('That note id was deleted.'),
+      409: errorResponse('The note id is another kind of note, or another account\'s (error: text_note_conflict).'),
+      413: errorResponse('The text is longer than the contract allows.'),
+      500: errorResponse('Saving failed; safe to retry.'),
+      503: errorResponse('Postgres is unavailable; safe to retry.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
     path: `${API_BASE_PATH}/notes/{id}/speakers`,
     summary: 'Name the diarised speakers of a note (per-note, ADR 0005).',
     tags: ['notes'],
