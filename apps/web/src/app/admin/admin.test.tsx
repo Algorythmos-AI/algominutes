@@ -23,7 +23,7 @@ const entry = (id: number, over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   calls.length = 0;
-  handlers = { 'GET /v1/admin/dead-letters': () => json({ deadLetters: [entry(7), entry(8, { queue: 'sweep', reason: 'stuck_in_flight' })] }) };
+  handlers = { 'GET /v1/admin/dead-letters?limit=1000': () => json({ deadLetters: [entry(7), entry(8, { queue: 'sweep', reason: 'stuck_in_flight' })] }) };
 });
 afterEach(() => cleanup());
 
@@ -40,14 +40,14 @@ describe('the dead-letter page', () => {
     // The log query to follow it across services.
     expect(within(row).getByText('jsonPayload.traceId="trace-7"')).toBeTruthy();
     expect(screen.getByText('note-8')).toBeTruthy();
-    expect(calls).toContainEqual({ method: 'GET', path: '/v1/admin/dead-letters', search: '' });
+    expect(calls).toContainEqual({ method: 'GET', path: '/v1/admin/dead-letters', search: '?limit=1000' });
   });
 
   it('resolves one only once confirmed, and says resolving replays nothing', async () => {
     // As the api does: a resolved entry leaves the unresolved list.
     let resolved = false;
     handlers['POST /v1/admin/dead-letters/7/resolve'] = () => { resolved = true; return json({ ok: true, id: 7 }); };
-    handlers['GET /v1/admin/dead-letters'] = () =>
+    handlers['GET /v1/admin/dead-letters?limit=1000'] = () =>
       json({ deadLetters: [...(resolved ? [] : [entry(7)]), entry(8, { queue: 'sweep', reason: 'stuck_in_flight' })] });
     open();
     const row = (await screen.findByText('note-7')).closest('tr')!;
@@ -62,7 +62,7 @@ describe('the dead-letter page', () => {
   });
 
   it('shows resolved ones too when asked', async () => {
-    handlers['GET /v1/admin/dead-letters?includeResolved=true'] = () =>
+    handlers['GET /v1/admin/dead-letters?includeResolved=true&limit=1000'] = () =>
       json({ deadLetters: [entry(5, { resolvedAt: '2026-10-24T09:00:00.000Z' })] });
     open();
     await screen.findByText('note-7');
@@ -71,14 +71,23 @@ describe('the dead-letter page', () => {
     expect(within(screen.getByText('note-5').closest('tr')!).queryByRole('button', { name: 'Mark resolved' })).toBeNull();
   });
 
+  // The api reads newest first, at most 1,000, with no offset: a full page says so, rather than hiding the rest.
+  it('asks for as many as the api gives, and says when there may be older ones', async () => {
+    handlers['GET /v1/admin/dead-letters?limit=1000'] = () =>
+      json({ deadLetters: Array.from({ length: 1000 }, (_, i) => entry(i + 1)) });
+    open();
+    expect(await screen.findByText(/Showing the newest 1,000/)).toBeTruthy();
+    expect(calls).toContainEqual({ method: 'GET', path: '/v1/admin/dead-letters', search: '?limit=1000' });
+  }, 20_000);
+
   it('says when nothing is waiting', async () => {
-    handlers['GET /v1/admin/dead-letters'] = () => json({ deadLetters: [] });
+    handlers['GET /v1/admin/dead-letters?limit=1000'] = () => json({ deadLetters: [] });
     open();
     expect(await screen.findByText(/Nothing is waiting/)).toBeTruthy();
   });
 
   it('tells anyone not on the operators list, and shows nothing', async () => {
-    handlers['GET /v1/admin/dead-letters'] = () => json({ error: 'Forbidden' }, 403);
+    handlers['GET /v1/admin/dead-letters?limit=1000'] = () => json({ error: 'Forbidden' }, 403);
     open();
     expect(await screen.findByText(/for AlgoMinutes operators/)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();

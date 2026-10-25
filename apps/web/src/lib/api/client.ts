@@ -237,8 +237,13 @@ export function createApiClient(opts: ApiClientOptions) {
       post(`/v1/meetings/bots/${encodeURIComponent(botId)}/cancel`, {}, CancelMeetingBotResponse),
 
     // Operators only (the api's ADMIN_UIDS; anyone else gets 403): dead letters, SLO 5.
-    deadLetters: (opts: { includeResolved?: boolean } = {}) =>
-      get(`/v1/admin/dead-letters${opts.includeResolved ? '?includeResolved=true' : ''}`, DeadLettersResponse),
+    deadLetters: (opts: { includeResolved?: boolean; limit?: number } = {}) => {
+      const q = new URLSearchParams();
+      if (opts.includeResolved) q.set('includeResolved', 'true');
+      if (opts.limit) q.set('limit', String(opts.limit));
+      const qs = q.toString();
+      return get(`/v1/admin/dead-letters${qs ? `?${qs}` : ''}`, DeadLettersResponse);
+    },
     resolveDeadLetter: (id: number) => post(`/v1/admin/dead-letters/${encodeURIComponent(String(id))}/resolve`, {}, ResolveDeadLetterResponse),
 
     // Recording and import

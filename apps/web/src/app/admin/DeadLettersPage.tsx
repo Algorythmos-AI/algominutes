@@ -5,6 +5,9 @@ import { Modal } from '../Modal';
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
 
+/** The most the api returns in one read (dead-letter-repo: newest first, at most 1,000, no offset). */
+const MAX_ENTRIES = 1000;
+
 type Load = { state: 'loading' } | { state: 'refused' } | { state: 'failed'; message: string } | { state: 'loaded'; entries: DeadLetterEntry[] };
 
 /**
@@ -26,7 +29,7 @@ export function DeadLettersPage() {
 
   useEffect(() => {
     let cancelled = false;
-    api.deadLetters({ includeResolved }).then(
+    api.deadLetters({ includeResolved, limit: MAX_ENTRIES }).then(
       ({ deadLetters }) => !cancelled && setLoad({ state: 'loaded', entries: deadLetters }),
       (err: unknown) => {
         if (cancelled) return;
@@ -73,6 +76,11 @@ export function DeadLettersPage() {
       {load.state === 'failed' && <p role="alert" className="mt-6 text-danger">{load.message}</p>}
       {load.state === 'loaded' && load.entries.length === 0 && (
         <p className="mt-6 text-body">Nothing is waiting{includeResolved ? '.' : ' to be reviewed.'}</p>
+      )}
+      {load.state === 'loaded' && load.entries.length >= MAX_ENTRIES && (
+        <p role="status" className="mt-6 text-body">
+          Showing the newest {MAX_ENTRIES.toLocaleString('en')}. There may be older ones: they appear here as these are resolved.
+        </p>
       )}
       {load.state === 'loaded' && load.entries.length > 0 && (
         <div className="mt-6 overflow-x-auto rounded-2xl border border-border bg-card">
