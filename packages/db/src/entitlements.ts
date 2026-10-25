@@ -7,7 +7,7 @@
  * State → included minutes:
  *   trialing   → Pro-level minutes (full features, bounded — trialIncludedMinutes)
  *   active     → the paid plan's minutes (monthlyIncludedMinutes)
- *   free_floor → FREE_FLOOR_MINUTES (config, UNSET → fails safe to 0)
+ *   free_floor → FREE_FLOOR_MINUTES (per environment, configuredFreeFloorMinutes; UNSET → fails safe to 0)
  *
  * A live manual grant (entitlement_grants, internal testers) counts as `active`
  * on the granted plan, unless a real paid subscription is already active.
@@ -17,7 +17,6 @@ import {
   EntitlementState,
   monthlyIncludedMinutes,
   trialIncludedMinutes,
-  freeFloorMinutes,
   type EntitlementSource,
   type SubscriptionRail,
 } from '@algominutes/contracts';
@@ -42,6 +41,18 @@ export interface Entitlement {
 }
 
 const RAILS: readonly string[] = ['apple_storekit', 'stripe', 'google_play'];
+
+/**
+ * The free floor's minutes, per environment (FREE_FLOOR_MINUTES; plan rev 12, Stage 3: 120 in prod for 1.0, so
+ * a reviewer and every new user can record before buying). Unset on staging, where an invite code is how a guest
+ * gets minutes. Anything but a whole number from 0 to 1,000 is 0: a typo fails safe, never an unbounded bill.
+ */
+export function configuredFreeFloorMinutes(env: Record<string, string | undefined> = process.env): number {
+  const v = String(env.FREE_FLOOR_MINUTES ?? '').trim();
+  if (!/^\d{1,4}$/.test(v)) return 0;
+  const n = Number(v);
+  return n <= 1000 ? n : 0;
+}
 
 /**
  * `db` is the pool by default. markQueued passes its transaction's client, so
@@ -77,7 +88,7 @@ export async function resolveEntitlement(
     source = 'trial';
   } else {
     plan = 'free';
-    included = freeFloorMinutes(); // UNSET config → 0 (fail safe)
+    included = configuredFreeFloorMinutes(); // UNSET config → 0 (fail safe)
     source = 'free';
   }
 
@@ -115,8 +126,8 @@ export class QuotaExceededError extends Error {
  * Assert a user may consume `requestedMinutes`. Call BEFORE queuing transcode
  * (A9.2 — never pay Google for STT on over-quota work). Throws QuotaExceededError
  * if it would exceed the current entitlement. Note: on the free floor with an
- * UNSET FREE_FLOOR_MINUTES this is 0, so ALL metered work is blocked until the
- * number is set post-COGS (A9-pricing) — deliberate fail-safe, not a bug.
+ * UNSET FREE_FLOOR_MINUTES this is 0, so ALL metered work is blocked where the
+ * environment doesn't set it (staging's beta) — deliberate fail-safe, not a bug.
  */
 export async function assertCanMeter(uid: string, requestedMinutes: number): Promise<Entitlement> {
   const ent = await resolveEntitlement(uid);

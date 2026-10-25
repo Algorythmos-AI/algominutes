@@ -55,6 +55,30 @@ final class RecoveryStatesTests: XCTestCase {
         XCTAssertEqual(vm.messages[1].failedQuery, "q")
     }
 
+    /// Plan rev 12 S15. On 10-11, 10-18 and 10-20 Cloud Run cut the api's chat stream before it sent `done` or
+    /// `error` (S14 fixed the api). A stream that just ends left the answer empty, with nothing to retry.
+    func testAStreamThatEndsWithoutDoneWasCutShortAndIsRetryable() async {
+        let vm = model()
+        StubURLProtocol.responder = { _ in (200, Data("event: citations\ndata: {\"hits\":[]}\n\ndata: {\"text\":\"Half an\"}\n\n".utf8)) }
+        vm.draft = "q"
+        vm.send()
+        await finish(vm)
+        XCTAssertEqual(vm.messages[1].failedQuery, "q")
+        XCTAssertTrue(vm.messages[1].content.contains("Half an"), vm.messages[1].content)
+        XCTAssertTrue(vm.messages[1].content.contains("The answer was cut short."), vm.messages[1].content)
+    }
+
+    /// The server's error frame says what happened in a sentence (UX7), never its code.
+    func testAServerErrorReadsAsASentence() async {
+        let vm = model()
+        StubURLProtocol.responder = { _ in (200, Data("event: error\ndata: {\"error\":\"stream_failed\"}\n\n".utf8)) }
+        vm.draft = "q"
+        vm.send()
+        await finish(vm)
+        XCTAssertFalse(vm.messages[1].content.contains("stream_failed"), vm.messages[1].content)
+        XCTAssertTrue(vm.messages[1].content.contains("The answer was cut short."), vm.messages[1].content)
+    }
+
     func testANormalAnswerHasNothingToRetry() async {
         let vm = model()
         StubURLProtocol.responder = { _ in (200, Data("data: {\"text\":\"ok\"}\n\nevent: done\ndata: {}\n\n".utf8)) }
