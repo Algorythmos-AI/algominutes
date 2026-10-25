@@ -40,6 +40,11 @@ function world(opts: {
   sessionUri?: string;
   tryAgainRuns?: boolean;
   holdIgnored?: boolean;
+  /** The note deleted mid-pipeline: its doc seen again after the delete, still readable, or dead-lettered. */
+  goneComesBack?: boolean;
+  goneStillReadable?: boolean;
+  goneDeadLetters?: number;
+  goneNotDeleted?: boolean;
 } = {}) {
   const calls: Call[] = [];
   let held = 0;
@@ -52,6 +57,9 @@ function world(opts: {
   let redeemed = false;
   let readyNow = false;
   let lines = 1;
+  // A second note (deleted mid-pipeline): its own upload, kickoff and delete.
+  let goneId = '';
+  let goneDeleted = false;
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
   const fetch = async (url: string, init: RequestInit = {}) => {
     const call: Call = { method: init.method ?? 'GET', url, headers: (init.headers ?? {}) as Record<string, string>, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body };
@@ -61,6 +69,24 @@ function world(opts: {
     if (key === 'POST /v1/beta/redeem') {
       redeemed = opts.redeem === undefined;
       return opts.redeem === undefined ? json(200, { entitlement: { remainingMinutes: 600 } }) : json(opts.redeem, { error: 'invite_used_up' });
+    }
+    if (key === 'POST /v1/uploads' && noteId && call.body.noteId !== noteId) {
+      goneId = call.body.noteId;
+      return json(200, { uploadId: 'up-gone', sessionUri: `${SESSION}&n=gone`, chunkSize: 256 * 1024, storagePath: `recordings/workspace_${UID}/${goneId}.ogg` });
+    }
+    if (key === 'PUT SESSION&n=gone') return new Response(null, { status: 200 });
+    if (key === 'POST /v1/uploads/up-gone/complete') return json(200, { complete: true });
+    if (goneId && key === 'POST /v1/process' && call.body.noteId === goneId) return json(200, { success: true, noteId: goneId, status: 'queued' });
+    if (key === 'POST /v1/notes/delete') {
+      goneDeleted = call.body.noteId === goneId;
+      return json(200, { ok: true, noteId: call.body.noteId, deleted: !opts.goneNotDeleted });
+    }
+    // A missing doc is refused by the rules (they read its authorId), so it answers 403.
+    if (goneId && key === `GET FS/${goneId}`) {
+      return goneDeleted && !opts.goneComesBack ? json(403, { error: { status: 'PERMISSION_DENIED' } }) : json(200, { fields: { status: { stringValue: 'error' } } });
+    }
+    if (goneId && key === 'POST /v1/notes/read' && call.body.noteId === goneId) {
+      return goneDeleted && !opts.goneStillReadable ? json(404, { error: 'Note not found' }) : json(200, { note: { status: 'ready' } });
     }
     if (key === 'POST /v1/uploads') {
       noteId = call.body.noteId;
@@ -122,12 +148,15 @@ function world(opts: {
     return json(404, { error: `unexpected ${key}` });
   };
   const readLogs = (filter: string) => {
-    if (filter.includes('dead_letter_recorded')) return Array.from({ length: opts.deadLetters ?? 0 }, () => ({}));
+    if (filter.includes('dead_letter_recorded')) {
+      const n = goneId && filter.includes(goneId) ? opts.goneDeadLetters ?? 0 : opts.deadLetters ?? 0;
+      return Array.from({ length: n }, () => ({}));
+    }
     if (filter.includes('summary_salvaged_partial')) return Array.from({ length: opts.salvaged ?? 0 }, () => ({}));
     if (filter.includes('kickoff_enqueued')) return Array.from({ length: opts.kickoffsEnqueued ?? 1 }, () => ({}));
     return (opts.services ?? TRACED_SERVICES).map((s: string) => ({ resource: { labels: { service_name: s } } }));
   };
-  return { fetch, readLogs, calls, deleted: () => deleted, noteId: () => noteId };
+  return { fetch, readLogs, calls, deleted: () => deleted, noteId: () => noteId, goneId: () => goneId, goneDeleted: () => goneDeleted };
 }
 
 async function run(w: ReturnType<typeof world>, over: Record<string, unknown> = {}) {
@@ -171,6 +200,39 @@ describe('the pipeline e2e', () => {
   });
 
   // RELEASE.md rev 11, §4.6: the failure cases the nightly proves on staging.
+  // Plan rev 12 step 1.8's last case: a note deleted while the pipeline has it. Its workers must find it gone and
+  // bring nothing back: no doc, no Postgres row, no dead letter.
+  it('deletes a second note mid-pipeline, and nothing brings it back (E2E_DELETE_MID)', async () => {
+    const w = world();
+    const r = await run(w, { deleteMid: true });
+    expect(r.fails).toEqual([]);
+    expect(w.goneId()).toMatch(/^e2e[0-9a-f]{24}$/);
+    expect(w.goneId()).not.toBe(w.noteId());
+    expect(w.goneDeleted()).toBe(true);
+    // Deleted straight after its kickoff, before any poll of it.
+    const kicked = w.calls.findIndex((c) => c.url.endsWith('/v1/process') && c.body?.noteId === w.goneId());
+    expect(kicked).toBeGreaterThan(-1);
+    expect(w.calls[kicked + 1].url).toBe(`${API}/v1/notes/delete`);
+    expect(w.calls[kicked + 1].body).toEqual({ noteId: w.goneId(), workspaceId: `workspace_${UID}` });
+    // Its doc is watched while the workers reach it.
+    expect(w.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/${w.goneId()}`)).length).toBeGreaterThan(3);
+    expect(r.out).toContain("ok   nothing brings the deleted note's doc back");
+  });
+
+  it('fails when the deleted note comes back, is still read, or dead-letters', async () => {
+    expect((await run(world({ goneComesBack: true }), { deleteMid: true })).fails).toEqual(["nothing brings the deleted note's doc back as the workers reach it"]);
+    expect((await run(world({ goneStillReadable: true }), { deleteMid: true })).fails).toEqual(['the deleted note is gone from Postgres too']);
+    expect((await run(world({ goneDeadLetters: 1 }), { deleteMid: true })).fails).toEqual(['no dead letter for the note deleted mid-pipeline']);
+    expect((await run(world({ goneNotDeleted: true }), { deleteMid: true })).fails).toContain('the note deleted mid-pipeline answers deleted');
+  });
+
+  it('leaves the second note out unless asked', async () => {
+    const w = world();
+    await run(w);
+    expect(w.goneId()).toBe('');
+    expect(w.calls.some((c) => c.url.endsWith('/v1/notes/delete'))).toBe(false);
+  });
+
   it('probes the upload after its first chunk, as a cut-off upload would resume', async () => {
     const w = world();
     const r = await run(w);
@@ -354,13 +416,16 @@ describe('its workflow', () => {
     expect(wf).toMatch(/apt-get install -y -q ffmpeg espeak-ng/);
   });
 
-  it('the 2-minute run goes held first, and only it', () => {
+  it('the 2-minute run goes held first and deletes a note mid-pipeline, and only it', () => {
     const ENV = { API_URL: 'https://api/', FIREBASE_API_KEY: 'k', FIREBASE_PROJECT_ID: 'p', E2E_INVITE_CODE: 'c' };
     const wf = fs.readFileSync('.github/workflows/e2e.yml', 'utf8');
     expect(wf).toContain('E2E_HOLD_FIRST: ${{ matrix.minutes == 2 }}');
+    expect(wf).toContain('E2E_DELETE_MID: ${{ matrix.minutes == 2 }}');
     expect(e2eConfig({ ...ENV, E2E_HOLD_FIRST: 'true' }).holdFirst).toBe(true);
     expect(e2eConfig({ ...ENV, E2E_HOLD_FIRST: 'false' }).holdFirst).toBe(false);
     expect(e2eConfig(ENV).holdFirst).toBe(false);
+    expect(e2eConfig({ ...ENV, E2E_DELETE_MID: 'true' }).deleteMid).toBe(true);
+    expect(e2eConfig(ENV).deleteMid).toBe(false);
   });
 
   it('runs in the staging environment (the only one the deployer trusts), one length at a time', () => {

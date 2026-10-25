@@ -24,6 +24,7 @@ export * from './kickoff.js';
 export * from './held-notes.js';
 export * from './meetings-repo.js';
 export * from './redrive-repo.js';
+export * from './text-note-builder.js';
 // Only the prune: the tombstone's write and check are correct only inside a
 // transaction holding the note lock, so the repo calls them itself.
 export { pruneDeletedNotes } from './deleted-notes-repo.js';
