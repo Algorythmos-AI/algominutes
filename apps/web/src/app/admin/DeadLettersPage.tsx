@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type DeadLetterEntry } from '@algominutes/contracts';
 import { useApi } from '../ApiContext';
 import { Modal } from '../Modal';
@@ -21,20 +21,25 @@ export function DeadLettersPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchEntries = useCallback(async () => {
-    try {
-      const { deadLetters } = await api.deadLetters({ includeResolved });
-      setLoad({ state: 'loaded', entries: deadLetters });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) return setLoad({ state: 'refused' });
-      setLoad({ state: 'failed', message: err instanceof ApiError ? err.message : 'The dead letters could not be loaded.' });
-      if (!(err instanceof ApiError)) reportCrash('admin.deadLetters', err);
-    }
-  }, [api, includeResolved]);
+  // Bumped after a resolve, so the list is read again.
+  const [round, setRound] = useState(0);
 
   useEffect(() => {
-    void fetchEntries();
-  }, [fetchEntries]);
+    let cancelled = false;
+    api.deadLetters({ includeResolved }).then(
+      ({ deadLetters }) => !cancelled && setLoad({ state: 'loaded', entries: deadLetters }),
+      (err: unknown) => {
+        if (cancelled) return;
+        // 403: not on the api's ADMIN_UIDS. Said plainly, not reported: it's the guard working.
+        if (err instanceof ApiError && err.status === 403) return setLoad({ state: 'refused' });
+        setLoad({ state: 'failed', message: err instanceof ApiError ? err.message : 'The dead letters could not be loaded.' });
+        if (!(err instanceof ApiError)) reportCrash('admin.deadLetters', err);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, includeResolved, round]);
 
   const resolve = async (entry: DeadLetterEntry) => {
     setBusy(true);
@@ -42,7 +47,7 @@ export function DeadLettersPage() {
     try {
       await api.resolveDeadLetter(entry.id);
       setConfirming(null);
-      await fetchEntries();
+      setRound((r) => r + 1);
     } catch (err) {
       setError(err instanceof ApiError ? `Not resolved. ${err.message}` : 'Not resolved. Try again.');
       if (!(err instanceof ApiError)) reportCrash('admin.resolveDeadLetter', err);
