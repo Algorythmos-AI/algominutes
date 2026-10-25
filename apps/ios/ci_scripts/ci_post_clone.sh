@@ -46,7 +46,7 @@ if [ -n "${GOOGLE_SERVICE_INFO_PLIST_B64:-}" ]; then
   # A Release archive carrying staging's plist would ship an App Store build
   # signed in to the test project.
   case "${CI_XCODE_SCHEME:-}" in
-    AlgoMinutes) EXPECTED_PROJECT=algominutes-prod ;;
+    AlgoMinutes) EXPECTED_PROJECT=algominutes-production ;;
     AlgoMinutes-Staging) EXPECTED_PROJECT=algominutes-staging ;;
     *) EXPECTED_PROJECT="" ;;
   esac
