@@ -49,10 +49,10 @@ gcloud storage buckets create gs://algominutes-staging-tfstate \
 gcloud storage buckets update gs://algominutes-staging-tfstate --versioning
 
 # prod
-gcloud storage buckets create gs://algominutes-prod-tfstate \
-  --project=algominutes-prod --location=australia-southeast1 \
+gcloud storage buckets create gs://algominutes-production-tfstate \
+  --project=algominutes-production --location=australia-southeast1 \
   --uniform-bucket-level-access --public-access-prevention
-gcloud storage buckets update gs://algominutes-prod-tfstate --versioning
+gcloud storage buckets update gs://algominutes-production-tfstate --versioning
 ```
 
 > ⚠️ **State contains the DB password in plaintext.** It lives only in these

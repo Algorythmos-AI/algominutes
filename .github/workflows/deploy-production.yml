@@ -15,7 +15,7 @@ name: deploy-production
 # (workers, then meetings, then the api; billing on its own) → the reachability smoke and the authenticated
 # smoke (a real user, end to end, then deleted) → the sweeper resumed. Every job has deploy-staging's ceiling,
 # authenticates through .github/actions/gcp-auth (a second attempt after a transient token-exchange failure),
-# and the first job checks the Environment's variables name algominutes-prod before anything waits on CI.
+# and the first job checks the Environment's variables name algominutes-production before anything waits on CI.
 #
 # The `production` Environment holds prod's GCP_PROJECT_ID, GCP_WIF_PROVIDER and GCP_DEPLOYER_SA (environment
 # variables override the repo's staging ones of the same name; until the Environment and its variables exist,

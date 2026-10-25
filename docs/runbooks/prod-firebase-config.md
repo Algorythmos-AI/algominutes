@@ -1,25 +1,25 @@
 # Runbook — repeat the staging Firebase/config wiring for PRODUCTION
 
 Staging (`algominutes-staging`) is provisioned and its Firebase configs are wired. Production is the **same
-steps against `algominutes-prod`** — with **separate config values that must never reuse staging's**. Run
+steps against `algominutes-production`** — with **separate config values that must never reuse staging's**. Run
 from a shell authed as `algorythmos.france@gmail.com` (primary working account).
 
 > ⚠️ **Never copy staging's config into prod.** Different project → different `apiKey`, `appId`,
-> `messagingSenderId` (= prod project number `758033737651`), `authDomain`, `storageBucket`,
+> `messagingSenderId` (= prod project number `43914754953`), `authDomain`, `storageBucket`,
 > `measurementId`. Copying staging values silently points prod at the staging backend.
 
 ## 1. Provision the infra (if not already applied)
 Bootstrap the state bucket and apply, exactly as `gcp-provisioning.md` §1–2 but in the **prod** env:
 ```bash
-gcloud storage buckets create gs://algominutes-prod-tfstate --project=algominutes-prod \
+gcloud storage buckets create gs://algominutes-production-tfstate --project=algominutes-production \
   --location=australia-southeast1 --uniform-bucket-level-access --public-access-prevention
-gcloud storage buckets update gs://algominutes-prod-tfstate --versioning
+gcloud storage buckets update gs://algominutes-production-tfstate --versioning
 cd infra/terraform/envs/prod && terraform init && terraform plan -out=tfplan   # REVIEW
 terraform apply tfplan     # prod: deletion_protection ON, Firestore location PERMANENT
 ```
 
 ## 2. Firebase (console / CLI) — prod project
-- Enable Firebase on `algominutes-prod` (**Blaze** plan).
+- Enable Firebase on `algominutes-production` (**Blaze** plan; it already has a Firebase shell, with no apps).
 - Enable the sign-in providers the app uses: **Anonymous** (every new user starts as a guest),
   **Google** (support email `gcp-admin@algorythmos.com`), and **Apple** (Services ID, Key ID, `.p8`;
   account deletion revokes Apple tokens through it).

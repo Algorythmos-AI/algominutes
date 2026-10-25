@@ -13,7 +13,7 @@ variable "env" {
 }
 
 variable "project_id" {
-  description = "GCP project ID (permanent). e.g. algominutes-staging / algominutes-prod."
+  description = "GCP project ID (permanent). e.g. algominutes-staging / algominutes-production."
   type        = string
 }
 

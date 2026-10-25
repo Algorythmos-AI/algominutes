@@ -1025,7 +1025,7 @@ is rare-path robustness, and was scoped as two PRs, 5a and 5b.
 |---|---|---|
 | 39 | `feat(infra,ci)` S3-PR4 | • the prod root finished, and `deploy-production.yml` (runs from `main` after a promotion, with migrate, vertex-smoke, rollout and both smokes)<br>• the Release origins in `project.yml`<br>• the prod CSP and `/__/auth` in `vercel.json`<br>• PITR and deletion protection on |
 | 40 | `fix(api,db)` S3-PR11 | • the api checks token revocation (`verifyIdToken(…, true)`, `middleware/auth.js:34`)<br>• shared workspaces on account deletion |
-| — | **Yours: Apply P** | • bootstrap `algominutes-prod-tfstate`, then apply<br>• prod Firebase: Blaze, providers, APNs key, iOS/web apps, VAPID<br>• a prod Apple Services ID return URL<br>• a prod Recall account<br>• Vercel Production env plus `APP_ENABLED`<br>• re-scope the prod budget |
+| — | **Yours: Apply P** | • bootstrap `algominutes-production-tfstate`, then apply<br>• prod Firebase: Blaze, providers, APNs key, iOS/web apps, VAPID<br>• a prod Apple Services ID return URL<br>• a prod Recall account<br>• Vercel Production env plus `APP_ENABLED`<br>• re-scope the prod budget |
 | — | **Yours: promotion P3** | Then the first prod deploy, the authenticated smoke, and a prod restore drill |
 | 41 | `build(ios)` Release → External | A new Xcode Cloud workflow on `main` (scheme `AlgoMinutes`, the prod plist). `UPDATE_URL` stays `itms-beta` until 1.0 |
 | — | **Beta moves to prod** | • A final staging build tells testers that the next build is the public service and beta notes stay behind, with export shown. Then the first prod build goes to the same external group.<br>• Invites and the trial work on prod, with DeviceCheck enforced.<br>• Stripe stays in test mode until 1.0. |

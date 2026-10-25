@@ -132,9 +132,10 @@ per billing account, not per project.
 | Environment | Project ID | Project number | Parent org |
 |---|---|---|---|
 | Staging | `algominutes-staging` | `627101926311` | `327264144426` |
-| Production | `algominutes-prod` | `758033737651` | `327264144426` |
+| Production | `algominutes-production` | `43914754953` | `327264144426` |
 
 Both verified `billingEnabled: true` against `01FDC8-CD8E58-F91D06`. Project IDs are **permanent**.
+`algominutes-production` was created outside the organisation and migrated into it on 25 Oct 2026.
 
 Moved with `gcloud beta projects move` — the command lives in the **beta** track, not GA.
 
@@ -177,9 +178,10 @@ production. Record tier differences in `docs/DECISIONS.md`.
   (`docs/runbooks/resume-staging-and-deploy.md`; applies B, C and D since, BLOCKERS §0). All eight Cloud Run
   services deploy from `integration` (`deploy-staging.yml`), `algominutes-staging-pg` is RUNNABLE with backups
   and PITR on, and the nightly e2e runs against it.
-- **`algominutes-prod`: ⏳ not yet applied.** Same Terraform, run from an owner shell. As of 24 Oct 2026 the
-  project has the Cloud Run, Cloud Tasks and Secret Manager APIs disabled, no Cloud SQL instance and no
-  `algominutes-prod-tfstate` bucket; plan rev 12 Stage 2 (`docs/plans/RELEASE.md`) is the apply.
+- **`algominutes-production`: ⏳ not yet applied.** Same Terraform, run from an owner shell; its state bucket
+  `algominutes-production-tfstate` exists (25 Oct 2026). Plan rev 12 Stage 2 (`docs/plans/RELEASE.md`) is the
+  apply. Production was first applied into `algominutes-prod` (758033737651) on 25 Oct; the owner then chose
+  `algominutes-production`, and the old project is to be shut down (#488).
 
 > History: the 27 Aug 2026 pause stopped `algominutes-staging-pg` (`activation-policy=NEVER`) and deleted the
 > Serverless VPC Access connector out of band (a connector cannot scale below `min_instances = 2`). The
