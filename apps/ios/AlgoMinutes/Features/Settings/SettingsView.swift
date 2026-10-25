@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 import UIKit
 
@@ -7,6 +8,7 @@ struct SettingsView: View {
     @State private var showDeleteSheet = false
     @State private var confirmingSignOut = false
     @State private var copiedUserID = false
+    @State private var redeemingOfferCode = false
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
@@ -163,6 +165,10 @@ struct SettingsView: View {
         } message: {
             Text(Self.signOutWarning(isGuest: env.auth.isAnonymous, pendingRecordings: env.pendingRecordingsAtRisk))
         }
+        // Apple's own sheet; a redeemed code's subscription reaches the server like a purchase (Transaction.updates).
+        .offerCodeRedemption(isPresented: $redeemingOfferCode) { _ in
+            Task { await env.billing.refresh() }
+        }
         .sheet(isPresented: $showDeleteSheet) {
                 DeleteAccountSheet()
                     .algoMinutesSheet([.medium, .large])
@@ -258,6 +264,12 @@ struct SettingsView: View {
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
+                    if Self.offersOfferCode(paywallEnabled: AppConfig.paywallEnabled, entitlement: env.billing.entitlement) {
+                        Divider().overlay(Theme.borderSoft)
+                        Button("Redeem an offer code") { redeemingOfferCode = true }
+                            .font(Typography.body(15))
+                            .foregroundStyle(Theme.body)
+                    }
                     // Only a subscription bought in the App Store is managed there: not
                     // a grant, and not one billed on the web (RELEASE.md PR 26b).
                     if env.billing.entitlement?.isManagedInAppStore == true {
@@ -271,6 +283,15 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Whether Settings offers an App Store Offer Code (plan rev 12, Stage 3, I2): the store build's way to give free
+    /// time, where Pro is sold. Not to a subscriber billed on the web or Google Play: a code would start a second
+    /// subscription, past the check that refuses one before buying (BillingService.purchaseGate).
+    static func offersOfferCode(paywallEnabled: Bool, entitlement: EntitlementResponse?) -> Bool {
+        guard paywallEnabled else { return false }
+        guard let e = entitlement, e.isSubscription else { return true }
+        return e.isManagedInAppStore
     }
 
     /// What signing out will lose. A guest's notes aren't backed up to an
