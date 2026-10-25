@@ -36,6 +36,7 @@ const HANDLERS = {
   'grant-tester':   () => require('./handlers/grant-tester.js'),
   'grant-notetaker': () => require('./handlers/grant-notetaker.js'),
   'beta-invite':    () => require('./handlers/beta-invite.js'),
+  'backfill-text-notes': () => require('./handlers/backfill-text-notes.js'),
 };
 
 async function main() {
