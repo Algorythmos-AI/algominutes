@@ -11,6 +11,7 @@ import { getSubscription } from '@algominutes/db';
 import siteUrlModule from '@algominutes/ai/site-url.cjs';
 
 import { getStripe } from '../lib/stripe.js';
+import { webAppOrigin } from '../lib/return-origin.js';
 
 const { publicSiteUrl } = siteUrlModule;
 
@@ -25,8 +26,10 @@ export async function portalRoute(req, res) {
 
   const stripe = getStripe();
 
-  // The public site's billing page unless an override is set.
-  const returnUrl = process.env.BILLING_PORTAL_RETURN_URL || `${publicSiteUrl()}/billing`;
+  // Back to the web app's Settings when the request came from one we serve
+  // (lib/return-origin.js); otherwise the public site's billing page, or an override.
+  const app = webAppOrigin(req.headers?.origin);
+  const returnUrl = app ? `${app}/app/settings` : process.env.BILLING_PORTAL_RETURN_URL || `${publicSiteUrl()}/billing`;
 
   // TODO(A11): verify against live Stripe.
   const session = await stripe.billingPortal.sessions.create({

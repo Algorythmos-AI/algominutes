@@ -20,10 +20,30 @@ extension Color {
 /// surfaces; `muted` (#8A8D9C) is the floor for meaningful text; `placeholder`/
 /// `tertiary` (#5A5D6E) is decorative/disabled only.
 enum Theme {
+    /// The hex values the contrast rule above is tested against (ThemeContrastTests).
+    enum Hex {
+        static let surfaceElevated: UInt32 = 0x1C1C27
+        static let muted: UInt32 = 0x8A8D9C
+        static let tertiary: UInt32 = 0x5A5D6E
+    }
+
+    /// WCAG 2 contrast ratio between two sRGB colours, 1...21.
+    static func contrastRatio(_ a: UInt32, _ b: UInt32) -> Double {
+        func luminance(_ hex: UInt32) -> Double {
+            let channels = [(hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF].map { value -> Double in
+                let c = Double(value) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+        }
+        let (la, lb) = (luminance(a), luminance(b))
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
     static let background = Color(hex: 0x0B0B10)          // color.dark.bg
     static let recordingBackground = Color(hex: 0x0B0B10) // color.dark.bg
     static let surface = Color(hex: 0x16161F)             // color.dark.surface
-    static let surfaceElevated = Color(hex: 0x1C1C27)     // color.dark.cardHover
+    static let surfaceElevated = Color(hex: Hex.surfaceElevated) // color.dark.cardHover
     static let card = Color(hex: 0x14141C)                // color.dark.card
 
     /// Brand accent (tokens.json `brand.*`). Available for on-brand controls;
@@ -42,8 +62,8 @@ enum Theme {
 
     static let heading = Color(hex: 0xF5F6FA)            // color.dark.heading
     static let body = Color(hex: 0xC8CAD6)               // color.dark.body
-    static let muted = Color(hex: 0x8A8D9C)              // color.dark.muted
-    static let tertiary = Color(hex: 0x5A5D6E)           // color.dark.placeholder
+    static let muted = Color(hex: Hex.muted)             // color.dark.muted
+    static let tertiary = Color(hex: Hex.tertiary)       // color.dark.placeholder
 
     /// Status colours (tokens.json `color.status.*`).
     static let success = Color(hex: 0x22C55E)

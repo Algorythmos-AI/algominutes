@@ -13,7 +13,7 @@ variable "env" {
 }
 
 variable "project_id" {
-  description = "GCP project ID (permanent). e.g. algominutes-staging / algominutes-prod."
+  description = "GCP project ID (permanent). e.g. algominutes-staging / algominutes-production."
   type        = string
 }
 
@@ -75,7 +75,13 @@ variable "db_activation_policy" {
 variable "task_max_attempts" {
   description = "Max Cloud Tasks delivery attempts per queue. Single source of truth: services are deployed with MAX_TASK_ATTEMPTS set to this same value so the DLQ write fires on the true last attempt."
   type        = number
-  default     = 5
+  default     = 10
+}
+
+variable "summarize_max_attempts" {
+  description = "Max delivery attempts for the summarize queue alone, with a 600s max backoff: about an hour to ride out a Gemini overload, because from gemini-2.5-flash's retirement (2026-10-20) the ladder has one Sydney model (DECISIONS 2026-09-28). The summarizer is deployed with MAX_TASK_ATTEMPTS set to this same value."
+  type        = number
+  default     = 10
 }
 
 # --- Cloud Run ---------------------------------------------------------------
@@ -134,6 +140,40 @@ variable "broadcast_capture" {
   validation {
     condition     = contains(["on", "off"], var.broadcast_capture)
     error_message = "broadcast_capture must be \"on\" or \"off\"."
+  }
+}
+
+variable "notetaker_surfaces" {
+  description = "The online-meeting notetaker surfaces switched on (NOTETAKER, served by GET /v1/config): comma-separated, from bot, calendar, zoomImport, extension. Empty (the default) is off everywhere. Even on, a surface is only reported for a caller in notetaker_testers (migration 024) and only once it is built (services/api/src/routes/app-config.js)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = alltrue([for s in compact([for v in split(",", var.notetaker_surfaces) : trimspace(v)]) : contains(["bot", "calendar", "zoomImport", "extension"], s)])
+    error_message = "notetaker_surfaces must be empty or a comma-separated list of bot, calendar, zoomImport, extension."
+  }
+}
+
+variable "trial_on_first_use" {
+  description = "Whether a brand-new user starts the 7-day reverse trial (TRIAL_ON_FIRST_USE on the api). \"off\" opens new users on the free floor, so minutes come only from a grant, an invite code or a purchase; existing users are unchanged. The external beta on staging runs \"off\" until the server checks DeviceCheck with Apple (docs/plans/RELEASE.md, DECISIONS 2026-09-29)."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.trial_on_first_use)
+    error_message = "trial_on_first_use must be \"on\" or \"off\"."
+  }
+}
+
+variable "daily_spend_cap_aud" {
+  description = "The §4.6 daily spend cap in AUD (DAILY_SPEND_CAP_AUD on the api, which refuses a kickoff at the cap, and the transcoder, which halts queued work). null leaves it unset: spend-guard.cjs then uses its per-environment default (staging A$20, prod A$200)."
+  type        = number
+  default     = null
+
+  validation {
+    # A conditional, not ||: Terraform evaluates both sides of || , and null > 0 is an error.
+    condition     = var.daily_spend_cap_aud == null ? true : (var.daily_spend_cap_aud > 0 && var.daily_spend_cap_aud <= 2000)
+    error_message = "daily_spend_cap_aud must be null or between 0 and 2000 (AUD a day)."
   }
 }
 
@@ -244,6 +284,29 @@ variable "alert_emails" {
   }
 }
 
+variable "free_floor_minutes" {
+  description = "Minutes a month on the free floor (FREE_FLOOR_MINUTES): every new account's, and where an ended trial lands. null leaves it unset, which is 0 (staging's beta, where invite codes give minutes)."
+  type        = number
+  default     = null
+
+  validation {
+    # A conditional, not ||: Terraform evaluates both sides of ||, and null >= 0 is an error.
+    condition     = var.free_floor_minutes == null ? true : (var.free_floor_minutes >= 0 && var.free_floor_minutes <= 1000 && floor(var.free_floor_minutes) == var.free_floor_minutes)
+    error_message = "free_floor_minutes must be a whole number of minutes from 0 to 1000, or null."
+  }
+}
+
+variable "min_instances" {
+  description = "Instances kept warm per Cloud Run service (by name); a service left out scales to zero. Each warm instance is billed at Cloud Run's idle rate."
+  type        = map(number)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for n in values(var.min_instances) : n >= 0 && floor(n) == n && n <= 3])
+    error_message = "min_instances values must be whole numbers from 0 to 3."
+  }
+}
+
 variable "monthly_budget" {
   description = "Monthly GROSS cost budget for this project, in the billing account's currency (AUD)."
   type        = number
@@ -326,4 +389,66 @@ variable "sweep_schedule" {
   description = "Cron schedule (UTC) for the db-sweep job."
   type        = string
   default     = "*/15 * * * *"
+}
+
+# --- Online meetings -----------------------------------------------------------
+
+variable "recall_region" {
+  description = "The Recall.ai region of this environment's Recall account (docs/plans/MEETINGS.md). Recall has no Australian region; ap-northeast-1 (Tokyo) is the closest. Disclosed as an overseas processor in apps/site/src/data/processing.json."
+  type        = string
+  default     = "ap-northeast-1"
+}
+
+variable "devicecheck_key_id" {
+  description = "The Key ID of the Apple key with DeviceCheck enabled (RELEASE.md PR 22). Its .p8 goes into the devicecheck-key secret, never here. Empty: DeviceCheck is off, and a new iOS user gets no trial (turn trial_on_first_use on only once this is set)."
+  type        = string
+  default     = ""
+}
+
+variable "apple_team_id" {
+  description = "The Apple Developer Team ID that owns the DeviceCheck key (the JWT's issuer)."
+  type        = string
+  default     = ""
+}
+
+# --- App Store subscriptions ---------------------------------------------------
+
+variable "app_store_issuer_id" {
+  description = "The App Store Connect API issuer id (Users and Access, Integrations, In-App Purchase) for the key billing asks Apple about subscriptions with (RELEASE.md PR 26). Its .p8 goes into the app-store-server-key secret, never here. Empty: billing's Apple reconcile checks nothing."
+  type        = string
+  default     = ""
+}
+
+variable "app_store_key_id" {
+  description = "The Key ID of that In-App Purchase key."
+  type        = string
+  default     = ""
+}
+
+variable "sql_connections_alert" {
+  description = "Cloud SQL connections above which an alert fires (alerting-pipeline.tf). Staging's db-f1-micro allows 25."
+  type        = number
+  default     = 20
+}
+
+# --- Share links ---------------------------------------------------------------
+
+variable "share_links" {
+  description = "Share links in the apps (RELEASE.md PR 29): \"on\" shows them; anything else hides them. A link is public, and opens the web app's viewer on share_viewer_origin, so turn it on only once that host is public (the beta's)."
+  type        = string
+  default     = "off"
+}
+
+variable "share_viewer_origin" {
+  description = "The https origin a share link opens on (/app/s/<token>): the host where the web app is public, e.g. the beta's. Empty: the public site."
+  type        = string
+  default     = ""
+}
+
+# --- Session check ---------------------------------------------------------------
+
+variable "session_check" {
+  description = "Refuse a disabled account or revoked sessions within a minute (RELEASE.md PR 40): \"on\" has the api and billing ask Firebase Auth about each active user once a minute; anything else leaves verifyIdToken alone. The grant it needs (firebaseauth.users.get) is made either way, so turn it on in a second apply, or the same one."
+  type        = string
+  default     = "off"
 }

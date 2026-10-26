@@ -3,6 +3,380 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## `main` no longer requires a promotion to be up to date with it (2026-10-26)
+
+- **Context.** The second promotion (#490, `integration → main`) was blocked as "behind" `main`. `main` required
+  branches to be up to date (`strict`), even for admins (`enforce_admins`). Each promotion is merged as a merge
+  commit, and that commit exists only on `main`. `integration` accepts changes only through its squash merge queue,
+  so the commit can never reach it. Every promotion after the first would be blocked the same way, although the
+  missing commit adds no content: #198's merge commit has the same tree as its `integration` parent.
+- **Decision.** The owner turned `strict` off on `main` (2026-10-26), using the API on their instruction:
+  `PATCH branches/main/protection/required_status_checks strict=false`. The 23 required checks, `enforce_admins`,
+  and the deletion and force-push rules are unchanged.
+- **Why it's safe.** `main` takes only promotion PRs from `integration` (the `promotion-guard` check), and
+  `integration` takes only PRs that passed the same checks in its merge queue. The required checks still run on
+  the promotion's own head, which is `integration`'s tip, so what merges is exactly what passed.
+- **Rejected.**
+  - **Syncing `main` back into `integration` after each promotion:** the squash queue drops the merge commit's
+    ancestry, so it would never count.
+  - **Turning it off for one merge each time:** a manual settings change before every release, easily forgotten.
+
+## Production launches with a 120-minute free floor, A$60 a day, and a warm api and billing (2026-10-24)
+
+- **Context.** Plan rev 12's audit: a reviewer on production would open on 0 minutes behind an invite code
+  (Guidelines 2.1, 3.1.1); prod's daily spend cap fell back to spend-guard's A$200; every service scaled to zero,
+  so a sign-in or kickoff could wait on a cold start. The owner approved the plan's defaults (decision 1: a free
+  floor for every new account in 1.0).
+- **Decision.**
+  - **Free floor, 120 minutes a month, prod only** (#471): `FREE_FLOOR_MINUTES` per environment
+    (`configuredFreeFloorMinutes`; anything but a whole number from 0 to 1,000 is 0). At A$0.03 a minute, at most
+    A$3.60 an account a month. Staging stays at 0: its beta gives minutes by invite code, and the nightly's
+    held-first case needs a new guest at 0.
+  - **Daily spend cap A$60** (#469): about 2,000 paid minutes a day; the api refuses and the transcoder halts past
+    it. It bounds the free floor's worst case (anonymous sign-ups) too. **Monthly budget alert A$500.**
+  - **One warm api and one warm billing instance** (#470): billed at Cloud Run's idle rate, roughly **A$40 a month**
+    for the two (an estimate; confirm from billing after Apply P). Workers stay at zero, behind queues.
+  - All three change nothing until Apply P.
+- **Rejected.**
+  - **A reviewer-only grant instead of a floor:** App Review accepts it, but every other new user would meet a
+    paywall before hearing a single summary.
+  - **The constant in `packages/contracts`:** one number for every environment, so staging's beta would change
+    with prod's; and a contract change is a three-client change for a server-only setting.
+  - **Warm workers:** their latency is a queue's, not a user's; the cost would buy nothing a user sees.
+
+## Speech-to-text can run in Sydney, but can't tell speakers apart there (spike S1, 2026-09-30)
+
+- **Context.**
+  - The transcoder's long path (over 10 minutes) calls speech-to-text v2 at `locations/global`, with the system
+    recognizer and the `long` model (`stt.js`, `STT_RECOGNIZER` unset). That's outside Sydney, against residency
+    (A4), and it has no speaker separation, so every line of a long note says "Speaker" (RELEASE.md rev 11, N2 and
+    LM5).
+  - Spike S1 probed the Sydney endpoint (`australia-southeast1-speech.googleapis.com`) on staging with the 9 s e2e
+    fixture, as the owner's account. Results:
+
+    | Model | Sydney | Speaker separation |
+    |---|---|---|
+    | `long`, `latest_long`, `short`, `latest_short`, `telephony` | serves | refused ("unsupported fields") |
+    | `chirp`, `chirp_2`, `chirp_3`, `telephony_short` | "does not exist in the location" | — |
+    | v1 `speech:recognize` (any model) | 501, not served | — |
+
+  - Gemini in Sydney: a fresh probe confirms the 2026-09-28 finding. Only gemini-3.5-flash and gemini-2.5-flash
+    answer. 3.5-flash accepts **both** `thinkingConfig.thinkingLevel` (`MINIMAL` gave 0 thought tokens, `LOW` 183,
+    `HIGH` 351 on the same prompt) and `thinkingBudget` (`0` gave 0, `512` gave 180). It accepts
+    `maxOutputTokens` up to **65,536**; 65,537 is refused.
+- **Decision (proposed; the owner decides with RELEASE.md rev 11 decisions 4–5).**
+  - **H10:** the long path moves to the Sydney recognizer with the same `long` model, so transcripts stay in
+    Australia. Same model, so quality doesn't change. This closes N2 without any privacy change.
+  - **H24 (speaker labels on long notes):** Google can't separate speakers in Sydney. The in-region route is Gemini
+    audio per chunk, which the fast path already does for notes of 10 minutes or less (its lines carry
+    `speaker`). The open problem is keeping a speaker's label consistent across 10-minute chunks (the 30 s overlap
+    is the bridge). The alternative, AssemblyAI (D7), processes in the US and changes the privacy page.
+  - **H8:** summaries cap thinking with `thinkingBudget: 2048`, and set `maxOutputTokens` to 65,536 when chapters
+    are asked for. The cap stops thought tokens eating the output budget that chapters (written last) need.
+    **Not `thinkingLevel`:** gemini-2.5-flash, the fallback until 2026-10-20, answers it with a 400 ("thinking_level
+    is not supported by this model"), which the ladder treats as non-retryable, so it would have disabled the
+    fallback. Both rungs accept `thinkingBudget` 2048 with a 65,536 cap (probed 2026-10-01).
+    **Corrected the same day:** "both rungs accept `thinkingBudget`" was wrong. On staging gemini-3.5-flash refused
+    it on 7 of 12 calls ("Thinking budget is not supported for this model"); a two-call probe had hit the backends
+    that take it. Re-probed with 14 calls each: 3.5 with `thinkingLevel: LOW` 14/14, 3.5 with no thinking config
+    14/14, 2.5 with `thinkingBudget: 2048` 14/14. The cap is now chosen per model (`models.cjs`
+    `thinkingConfigFor`: `thinkingLevel` for the 3.x family, `thinkingBudget` otherwise), applied per rung by the
+    shared ladder, and dropped for one more ask if Vertex still answers 400 (`gemini_thinking_cap_refused`).
+    Lesson: an intermittent refusal needs a probe of ten or more calls, not two.
+- **Rejected.** Keeping `global` for speech-to-text: it's the only place Google offers Chirp and speaker
+  separation, but it moves the audio out of Australia for one feature.
+- **Correction (2026-10-01).** The Sydney move doesn't ship yet. A batchRecognize probe run as the owner's user
+  account failed on the speech service agent's read of the chunk, and that was wrongly taken to mean the long path
+  was broken for everyone. The transcoder's own service account reads its chunks fine: the 15-minute e2e (run
+  36742160404) passed in `global`. #297's Terraform (Sydney plus a speech-agent grant) was never applied and is
+  reverted. H10 moves to Sydney only after a batchRecognize there passes **as the transcoder's service account**,
+  and only with `LANGUAGE_CODES=en-AU`, the one language Sydney's `long` model takes. Probes that stand in for a
+  service must run as that service's identity.
+
+## The merge queue doesn't re-run an iOS check on inputs it already passed (2026-09-30)
+
+- **Context.** Each iOS PR ran the Swift CodeQL scan (about 40 minutes) and the iOS tests (about 15) on the PR,
+  again in the merge queue, and a third time on the push to integration. In the serial PR train, the queue's
+  copy was the long pole: #278 and #283 each waited 40 minutes there for an answer already given. The scan's
+  build itself spent about 11 of its minutes fetching Swift packages under CodeQL's tracer.
+- **Decision.**
+  - `scripts/ios-inputs-changed.sh`, shared by `ios.yml` and `codeql-swift.yml`: a job runs when its inputs
+    changed (`apps/ios`, and for the tests `packages/contracts`, and the workflow itself). In the merge queue
+    it's also skipped when the queue's commit has exactly the inputs of the queued PR's head and that head passed
+    the same check: the check could only answer as it did. Anything ahead in the queue that touched the inputs
+    makes them differ, and it runs; any doubt runs it. A skipped job satisfies the required check.
+  - After the merge, the push to integration skips the iOS tests by the same rule (the merged PR's head passed them
+    on the same inputs): re-running them only held one of the org's few macOS runners while the next PR waited for
+    it. The Swift scan still runs on that push, so the default branch's code-scanning results are the merged
+    code's.
+  - The Swift packages are fetched before CodeQL starts tracing, into a directory kept in the Actions cache per
+    `Package.resolved` (both workflows).
+  - A new push to a PR cancels that PR's run still going on its previous commit, in both macOS workflows; queue
+    and push runs are never cancelled.
+- **Rejected.** Dropping the scan from the queue altogether: a queue with another iOS change ahead of the PR is
+  new code, and must be scanned.
+
+
+- **Context.**
+  - The owner wants external testers as soon as possible, on staging, before prod exists
+    (`docs/plans/RELEASE.md`, rev 10).
+  - The free floor is 0 minutes (`FREE_FLOOR_MINUTES` unset), so a tester needs a trial or a grant.
+  - Today's trial is keyed to a SHA-256 of the app's DeviceCheck token. That token differs on every call, and
+    nothing checks it with Apple, so each reinstall gets a fresh 7-day, 1,500-minute trial. On an external beta
+    that's spend anyone with the build can reset, up to the daily cap.
+  - Granting each tester by hand (`grant-tester`) doesn't scale past a few people.
+- **Decision (owner).**
+  - **Invite codes.** Each code (`BETA-XXXXX-XXXXX-XXXXX`, 75 random bits) gives a time-limited Pro grant, and
+    the notetaker too when the invite says so.
+    - Redeeming is `POST /v1/beta/redeem`, one transaction in `beta-invites-repo.ts`: the invite row is locked, a
+      replay is idempotent, and a live grant is never shortened or shrunk.
+    - Only a code's SHA-256 ever leaves the owner's machine. `scripts/new-invite-code.sh` prints the code (for the
+      tester) and its hash, and the db-job `beta-invite` handler takes only the hash (it refuses a plaintext
+      code). So a code is never in the job's env overrides, the audit log, the application logs or Postgres.
+    - No code is logged: the route logs the invite id, and a malformed request body is now logged without its
+      contents (`services/api/src/app.js`), since body-parser's error message quotes part of the body.
+    - A redemption never takes from a live grant. The invite replaces it only when it's as good on both counts
+      (ends no sooner, no fewer minutes); otherwise the live grant stays exactly as it is, and two grants are
+      never mixed into one bigger than either.
+  - **The trial switch.** `TRIAL_ON_FIRST_USE` (default on) is turned off on staging for the beta. A new user
+    opens on the free floor and gets minutes from a code. Existing users keep what they have.
+  - The trial comes back on in Wave 2, once the server checks DeviceCheck with Apple (RELEASE.md PR 22).
+- **Rejected.**
+  - **Everyone gets beta minutes automatically:** the easiest for testers, but anyone with a public link could
+    spend the budget.
+  - **Manual grants only:** each tester waits for the owner.
+  - **HMAC with a server pepper instead of SHA-256:** a 75-bit code can't be guessed from its hash, and a pepper
+    would be one more secret to rotate.
+
+## After gemini-2.5-flash retires, summaries run on one Sydney model (2026-09-28)
+
+- **Context.**
+  - The ladder is gemini-3.5-flash, then gemini-2.5-flash. 2.5-flash retires on **2026-10-20**.
+  - A free `countTokens` probe of the Sydney endpoint on staging (`scripts/probe-vertex-models.mjs`) found that of
+    16 Gemini ids, **only 3.5-flash and 2.5-flash are served in australia-southeast1**. Every 3.x pro,
+    3.1/3.6/3.7/3.8-flash, 2.5-pro and all flash-lite returned 404.
+  - So from 2026-10-20 there's no in-region second rung.
+- **Decision (owner).**
+  - Keep every Gemini call in Sydney (residency, DECISIONS A4) and run on one rung.
+  - Ride out an overload with a longer retry window on the **summarize** queue only: 10 attempts, backoff up to
+    600 s.
+  - That's about 21 minutes of backoff plus up to 10 × the ladder's 240 s budget, so about an hour before a note
+    fails.
+  - The summarizer is deployed with the same `MAX_TASK_ATTEMPTS` (`summarize_max_attempts`), so its dead-letter
+    write still fires on the true last attempt. `tests/task-config.test.ts` pins the pairing.
+  - transcode keeps 5 attempts, because a transcode retry can re-run paid speech-to-text.
+- **Visibility.**
+  - A new log alert, `gemini_transient`: more than 20 overloads in 15 minutes.
+  - The model tripwire now requires, 45 days out, either a live second rung or this recorded decision
+    (`SINGLE_RUNG_DECISION` in `models.cjs`). Losing the fallback can't happen silently again.
+- **Rejected.**
+  - **Falling back to another region:** summaries rarely wait, but transcripts would be processed outside
+    Australia, so the privacy page would have to change.
+  - **Provisioned Throughput in Sydney:** guaranteed capacity, but a monthly commitment that isn't worth it before
+    real traffic. Revisit if `gemini_transient` fires in production.
+- **Owner step:** the queue and env change is Terraform, so the owner applies the next reviewed staging plan.
+
+## Online meetings are captured by a Recall.ai notetaker bot first (2026-09-28)
+
+- **Context.**
+  - The owner wants notes from Zoom, Google Meet and Teams meetings.
+  - Today a meeting can only be captured three ways:
+    - the iOS ReplayKit broadcast, which picks up another app's audio;
+    - web tab capture, desktop Chromium only (#206);
+    - a recording imported afterwards.
+  - None of these hears a Zoom desktop call. None gives real participant names: diarisation is off on long
+    recordings, and fast-path lines carry no speaker tag.
+  - BUILD-PLAN "Later" listed the server-side meeting bot and the Mac as out of scope. **This entry reverses both.**
+- **Decision (owner).**
+  - First, a visible notetaker bot through Recall.ai, starting with Google Meet.
+  - Then calendar auto-join, a Chrome/Edge extension, and cloud-recording import (Zoom first).
+  - Later, a Mac app that captures system audio with Core Audio process taps (macOS 14.2+).
+  - Robustness hardening runs in parallel. The design and the PR train are in `docs/plans/MEETINGS.md`.
+- **Why a vendor bot, not our own.**
+  - Recall joins Zoom, Meet, Teams, Webex and more through one API, and absorbs each platform's bot and SDK churn.
+  - It returns mixed audio plus a speaker timeline with participant names.
+  - Aligning that timeline with our STT word times gives real names from **one** STT pass. Per-participant tracks
+    would multiply STT cost by the number of participants.
+  - Price: US$0.50 per recording hour, US$0.25 at the startup rate for the first 10k hours
+    (https://www.recall.ai/pricing).
+- **Rules that must hold** (each has a test in the PR train):
+  - **One bot gives one note in one workspace**, owned by the user who asked for it.
+    - The dedup key includes the workspace id.
+    - A second workspace in the same meeting gets its own bot, charge and notice.
+    - A recording is never shared across workspaces (CLAUDE.md multi-tenancy).
+  - **Creating a bot is adopt-or-create.**
+    - Recall's `Idempotency-Key` lasts one hour (https://docs.recall.ai/reference/idempotency.md).
+    - So every retry or replay first looks up the bot by our `metadata.meeting_bot_id`.
+  - **Webhooks:**
+    - verified over the raw body (every signature, two secrets during rotation, ±5 min);
+    - matched on our metadata;
+    - stored and answered 2xx, never 4xx for an unknown bot, because Svix disables an endpoint after 5 days of
+      failures.
+  - **Ingest starts only after both** `audio_mixed.done` and `participant_events.done`.
+  - **Server-created notes use only existing values** (`status: recording`, `type: online_meeting`). The web drops
+    a note with an unknown status or type, and iOS maps unknown values to defaults.
+- **Region and privacy.**
+  - Recall has no Australian region; data stays in the chosen region (https://docs.recall.ai/docs/regions.md).
+  - We use **ap-northeast-1 (Tokyo)**, the closest, with one account per environment.
+  - The media is deleted through `delete_media` as soon as it's in our GCS bucket, with a 72-hour retention as a
+    backstop.
+  - `apps/site/src/data/processing.json` and the privacy page disclose Recall as an overseas processor (APP 5,
+    APP 8) before any tester uses it. The site-facts test pins the entry to the code.
+  - Meeting URLs are encrypted at rest and never logged. Non-users' participant data is limited to display names.
+- **Consent.**
+  - The bot is named "{First name}'s notetaker (AlgoMinutes)" and posts a pinned chat notice on joining.
+  - Calendar auto-join is off by default.
+  - The notetaker stays with allowlisted testers until the written legal opinion in `docs/CONSENT.md` §4 is
+    received. NSW requires the consent of all parties.
+- **Operating cost of the new service** (CLAUDE.md §2):
+  - `services/meetings`: public like billing, so third-party webhooks stay off the api's pool; scale-to-zero;
+    about 1×1×1 in the connection budget.
+  - One `meetings` queue with Postgres dead letters and replay.
+  - Two Recall secrets per environment.
+  - One dashboard.
+  - Alerts:
+    - fatal and not-admitted rates;
+    - ingest older than 45 minutes;
+    - webhook signature failures;
+    - Recall 5xx and 429 rates;
+    - Recall's "endpoint disabled" email;
+    - Recall spend drifting from our meter.
+  - One SLO: p95 of 5 minutes or less from media ready to `queued`.
+  - Recall's usage fees.
+- **Cost gate.**
+  - With Google STT, a 1-hour bot meeting costs about US$1.45, so 600 notetaker minutes would cost more than Pro's
+    price.
+  - Notetaker minutes go only to allowlisted and trial users until diarisation moves off Google STT and the
+    measured cost per minute (`usage_events.cost_usd`) sets the quota.
+- **Rejected.**
+  - **Building our own bots:** a separate integration and review for each platform, and Meet has no official API
+    for a bot to join, so a Meet bot has to drive a browser client.
+  - **Only bot-free capture:** it can't hear a Zoom desktop call.
+  - **Recall's own transcription:** it would add a second transcript path that skips our PII redaction.
+
+## integration's protection is a ruleset, so the merge queue is reviewed code (2026-09-28)
+
+- **Context.** The owner turned on four settings in the UI: a merge queue in integration's classic protection
+  rule, auto-merge, "Always suggest updating pull request branches", and rebase merging.
+  `scripts/github-settings.sh` set none of them.
+- **The classic API can't hold a queue.**
+  - `PUT /repos/{owner}/{repo}/branches/{branch}/protection` has no merge-queue field (REST reference,
+    "Update branch protection"), and its GET doesn't report one
+    ([community #50893](https://github.com/orgs/community/discussions/50893)).
+  - GitHub doesn't document whether that PUT keeps a queue made in the UI, and nothing in the API could
+    restore one. So `--apply` must not depend on it.
+- **Rulesets can hold one.** A repository ruleset's `merge_queue` rule takes all seven queue settings
+  (`POST /repos/{owner}/{repo}/rulesets`). Rulesets and branch protection "work alongside each other, and all
+  applicable rules are enforced" ("About rulesets").
+- **Change: integration's protection moves into one ruleset, `integration`.**
+  - It holds PR-only, squash only, no force-push or deletion, conversations resolved, the same 22 checks, no
+    bypass actors (admins included) and the queue.
+  - Why all of it, not only the queue: a classic rule plus a ruleset could carry two queues that disagree, and
+    rule layering applies "the most restrictive version", which means nothing for a merge method.
+  - `--apply` writes the ruleset (a PUT by id when it exists, else a POST), then deletes integration's classic
+    rule, and the UI's queue with it. If GitHub refuses the ruleset, the script stops before the delete.
+- **Queue settings.**
+  - Squash: feature PRs squash, and the live queue said MERGE.
+  - A 90-minute check timeout: the live queue said 60, and the Swift CodeQL job takes about 40.
+  - "Only merge non-failing pull requests" (ALLGREEN).
+  - Build 5 at once; merge 1–5 per group; wait up to 5 minutes to fill a group.
+- **Not strict.** The queue "provides the same benefits as the **Require branches to be up to date before
+  merging** branch protection, but does not require a pull request author to update their pull request branch"
+  ("Managing a merge queue").
+- **Repo settings.** `allow_auto_merge` and `allow_update_branch` are now set by the script. `allow_rebase_merge`
+  stays false, so `--apply` unticks the rebase box.
+- **main is unchanged:** classic protection, strict, `guard` required, no queue.
+- **Required checks.**
+  - The script's 22 are exactly the names #225's CI reported, and each runs on `merge_group`.
+  - The live list couldn't be read where this was written (no `gh`, no API access). BLOCKERS still has
+    `site-build` waiting on a re-apply, so the owner's dry run should show `+ site-build`.
+  - The dry run now prints how each branch's live required checks (classic and rulesets) differ from the
+    script's.
+- **Not verified.**
+  - The docs' rulesets page shows "Require merge queue" for GHEC and GHES only
+    (`data/features/repo-rules-merge-queue.yml`), while the github.com REST reference lists the rule. If
+    github.com refuses it, the script stops before the delete, and integration keeps its classic rule and
+    queue.
+  - Apply with the queue empty. For a moment the classic queue and the ruleset's both apply, and the docs don't
+    say what that does to queued PRs.
+
+## integration merges through a merge queue (2026-09-28)
+
+- **Why.** `integration`'s protection requires a PR to be up to date. So each merge left every other open PR
+  behind, needing an update and a fresh CI run, and a batch of eight PRs needed a person at every step.
+- **Change.** A merge queue tests each queued PR on top of the ones ahead of it, then merges in order. Every
+  workflow behind a required check also runs on `merge_group`.
+- **The iOS gates** (`ios.yml`, `codeql-swift.yml`) diff the group against `merge_group.base_sha`, so the
+  40-minute Swift analysis still runs only when the group changes the iOS app.
+- **`dependency-review`** skips in the queue, because each PR was reviewed on its own; a skipped job satisfies a
+  required check.
+- **Queue settings:** first set by hand in Settings → Branches; now reviewed code in
+  `scripts/github-settings.sh` (the entry above).
+
+## The app icon is a Liquid Glass "ai", 85% of the tile, in the official Algorythmos gradient (2026-09-27)
+
+- **Context.** On a home screen the icon read as small and flat. The "ai" filled 49% of the tile's height, and
+  its colours were sampled off a raster (`#3716DF → #6A2DF2`), not taken from the parent brand.
+- **Colours.** The official Algorythmos gradient, from the owner's `Brand_Colors` sheet and cover art: blue
+  `#3715E0` → violet `#6D00FF`, with deep purple `#7658E7` as the secondary. They live in `tokens.json` as
+  `brand.algorythmos`, and `brand.mark` uses them.
+- **Size.** The measured mark is scaled ×1.75 about its bounding box and centred in the tile: 85% of the height,
+  76 px clear at the top and bottom of a 1024 tile. The dot and the bubble's tail stay inside the squircle's
+  corner arcs. `tests/brand-assets.test.ts` holds this as an invariant, so the icon can't quietly shrink again.
+- **Treatment: Liquid Glass.** The owner chose it from rendered previews over "extruded" and "listening orb".
+  - A frosted-glass glyph with a light rim, over an aurora of the brand blue, violet and a magenta accent
+    (`#C04BFF`) on a deep base (`#1A0A6E`).
+  - On iOS 26 it ships as an Icon Composer `.icon`, so the system renders the glass and its moving specular
+    light; older iOS gets flattened fallbacks.
+  - At 64 px and below (favicons), the glyph is solid white so it stays legible.
+- **Wordmark: Geist** (OFL). It's outlined to vector paths, so no font ships with an asset.
+- **Visual language** for social and marketing images:
+  - deep-space navy `#07051A`, the aurora glows, a faint grid;
+  - an audio waveform as the secondary motif (minutes are voice);
+  - glass chips such as "BY ALGORYTHMOS".
+- **Where it lives.**
+  - The kit is generated from tokens by one renderer (`generate-app-icon.swift`, later `brand/`).
+  - The owner's `LOGO & IDEAS` folder stays local and git-ignored: it holds third-party partner logos and
+    screenshots that don't belong in a public repo.
+- **Revised the same day, with the owner: a white mark for contrast.** The frosted glyph let the purple through
+  and read lavender-grey at home-screen size, and the three-bloom aurora competed with it.
+  - The glyph and the dot are now one solid white material, on a soft shadow.
+  - The tile is the official blue → violet diagonal, lifted with a violet glow behind the mark and darker at the
+    foot.
+  - On iOS 26 the mark is still glass, with translucency off, so the system adds its light and depth and the
+    mark stays white.
+  - `tests/brand-assets.test.ts` checks white's contrast on both ends of the gradient (AA).
+- **Not in this change.** The app's UI accent (`brand.accent`, `#5B67F0`) stays as it is. Moving it to the brand
+  violet is a three-client change, with its own contrast review.
+
+## A false positive in git history is exempted by fingerprint in `.gitleaksignore` (2026-09-27, #212)
+
+- **Context.** gitleaks 8.30.x's `generic-api-key` rule matches `"api_latency_p95"` in the `dash_order`
+  list of `infra/terraform/modules/environment/monitoring.tf` (added in cf1a581, #133). It's a list of
+  dashboard tile names, not a secret. The pinned 8.21.2 doesn't flag it, so the finding would turn
+  the `gitleaks` check red as soon as CI's version is bumped.
+- **Why an inline allow isn't enough.** `# gitleaks:allow` on today's line clears the working tree and
+  every later commit. But `gitleaks detect --log-opts=--all` scans each commit's own patch, and the
+  patch in cf1a581 has no comment, so the finding is still reported.
+- **Decision.** Keep the inline allow on the current line. Add one fingerprint
+  (`<commit>:<file>:<rule>:<line>`) to `.gitleaksignore` for the historical patch. The fingerprint is
+  pinned to that commit, file, rule and line, so it can't hide any other finding. A wrong fingerprint
+  suppresses nothing (checked). `.gitleaks.toml` keeps its empty allowlist (§4.2, CLAUDE.md §6).
+- **Rules for `.gitleaksignore`.**
+  - It holds full fingerprints only, and only for a false positive in history that an inline allow
+    can't reach.
+  - Each entry has a comment saying why it's not a secret, and a line in this log.
+  - A real secret is never fingerprinted. It is an incident: rotate it, then purge history.
+- **Rejected.**
+  - A rule allowlist or stopword in `.gitleaks.toml`: it widens the allowlist.
+  - Scanning only the PR/push range: it drops coverage of every other historical commit.
+  - Rewriting history: a force-push to `integration` and `main` for something that isn't a secret.
+  - Staying on 8.21.2: it only defers the problem.
+- **Evidence.** Across the full history (277 commits, all branches, `--redact`), 8.30.1 reports this
+  one finding and 8.21.2 reports none. With the fingerprint, `detect --log-opts=--all` exits 0 on both
+  versions.
+- **Operating cost:** $0, one file.
+
 ## The web app is rebuilt on a clean shell at /app, not split in place (2026-09-26, plan W1)
 
 - **Context.** `apps/web` was a Capacitor-era app in one 2,865-line `App.tsx`. It calls seven `/api/*` routes

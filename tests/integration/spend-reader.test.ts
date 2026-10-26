@@ -6,7 +6,7 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote } from './helpers';
 // to paid work in the last 24 hours (usage_events), times a blended cost per
 // minute. Real Postgres.
 const require = createRequire(import.meta.url);
-const { createPaidWorkSpendReader, cogsPerMinuteAUD, DEFAULT_COGS_AUD_PER_MINUTE } = require('@algominutes/db/spend-repo.cjs');
+const { createPaidWorkSpendReader, cogsPerMinuteAUD, DEFAULT_COGS_AUD_PER_MINUTE, cogsPerChatAUD, DEFAULT_COGS_AUD_PER_CHAT } = require('@algominutes/db/spend-repo.cjs');
 
 const paid = (noteId: string, seconds: number | null, ago = '1 hour', event = 'stt_call') => pool.query(
   `INSERT INTO usage_events (uid, workspace_id, note_id, event, audio_seconds, created_at)
@@ -43,6 +43,21 @@ describe('createPaidWorkSpendReader', () => {
     expect(await read()).toBe(10);
     t += 2_000;
     expect(await read()).toBe(15);
+  });
+
+  // RELEASE.md rev 11, H9: chat was the one paid call a capped day didn't stop.
+  it('counts each chat answer of the last 24 hours at the chat rate, on top of the audio', async () => {
+    await paid('n1', 600);
+    await paid('n1', null, '2 hours', 'chat_call');
+    await paid('n2', null, '3 hours', 'chat_call');
+    await paid('n2', null, '25 hours', 'chat_call');
+    const read = createPaidWorkSpendReader({ pool: () => pool, ratePerMinute: 0.1, ratePerChat: 0.5 });
+    expect(await read()).toBeCloseTo(1 + 2 * 0.5);
+  });
+
+  it('COGS_AUD_PER_CHAT when it is a positive number, else the default', () => {
+    expect(cogsPerChatAUD({ COGS_AUD_PER_CHAT: '0.004' })).toBe(0.004);
+    for (const bad of [undefined, '', '0', '-1', 'abc']) expect(cogsPerChatAUD({ COGS_AUD_PER_CHAT: bad })).toBe(DEFAULT_COGS_AUD_PER_CHAT);
   });
 
   it('nothing paid for is 0, not null', async () => {

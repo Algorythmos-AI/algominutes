@@ -52,7 +52,8 @@ struct NoteProcessingStage: Equatable, Sendable {
     static func from(
         status: NoteStatus,
         progress: NoteProgress?,
-        uploadPercent: Int?
+        uploadPercent: Int?,
+        notetaker: NoteNotetaker? = nil
     ) -> NoteProcessingStage {
         // The upload is the one phase the client measures directly, so it is
         // the one place a percentage is honest. Bounded to 1...99: 0 means
@@ -99,13 +100,20 @@ struct NoteProcessingStage: Equatable, Sendable {
                 label: "Preparing audio", detail: nil
             )
 
+        case .recording where notetaker != nil:
+            // A notetaker in a meeting: what it's doing, not "Recording".
+            return NoteProcessingStage(
+                phase: .upload, fill: .indeterminate,
+                label: notetaker?.label ?? status.label, detail: nil
+            )
+
         case .queued, .processing, .recording:
             return NoteProcessingStage(
                 phase: .upload, fill: .indeterminate,
                 label: status.label, detail: nil
             )
 
-        case .ready, .error:
+        case .ready, .error, .awaitingMinutes:
             // Not rendered by the processing pane; mapped so the type stays
             // total rather than trapping on a status the caller mis-routed.
             return NoteProcessingStage(

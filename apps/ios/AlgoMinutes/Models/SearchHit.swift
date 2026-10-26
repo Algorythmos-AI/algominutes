@@ -23,6 +23,8 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     var role: Role
     var content: String
     var citations: [SearchHit]?
+    /// An answer that failed: the question, so it can be asked again (Retry).
+    var failedQuery: String? = nil
 }
 
 /// Format milliseconds as `MM:SS` — parity with the web `fmtTime`.

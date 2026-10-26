@@ -17,6 +17,15 @@ const CLIENT_ERROR_FIELD_CAPS = {
   url: 200, userAgent: 300, componentStack: 2000, source: 200,
 };
 
+// Reports that describe what happened rather than a crash (the web's sign-in
+// trace and CSP reporter: apps/web/src/lib/diagnostics). Everything else is a crash.
+//
+// A refused screen wake lock is one of those: a browser refuses it for a hidden
+// tab or a low battery, and headless Chrome always does. The recording carries
+// on; only the screen may sleep. It was 51 of staging's 57 error lines on
+// 2026-10-06, every one from the web journey.
+const DIAGNOSTIC_KINDS = new Set(['auth.signInCancelled', 'csp.violation', 'record.wakeLock', 'record.wakeLockRelease']);
+
 export function clientErrorRoute(req, res) {
   const log = req.log;
   const body = req.body || {};
@@ -38,9 +47,13 @@ export function clientErrorRoute(req, res) {
     // (The web beacon's one numeric field, `line`, isn't in the caps.)
   }
 
-  // A stable event name so a log-based metric can count it. Logged as an
-  // error because a blank screen for a doctor is one.
-  log.error({ ...report, ua: report.userAgent }, 'web_client_crash');
+  // A stable event name so a log-based metric can count it. A crash is logged as
+  // an error, because a blank screen for a doctor is one. A diagnostic report is
+  // a warning: a sign-in window closed without a result (people close it on
+  // purpose, and it's what a blocked flow looks like) and a CSP violation are
+  // worth reading, but mustn't look like crashes to an error-rate alert.
+  const diagnostic = DIAGNOSTIC_KINDS.has(report.kind ?? '');
+  (diagnostic ? log.warn : log.error).call(log, { ...report, ua: report.userAgent }, diagnostic ? 'web_client_diagnostic' : 'web_client_crash');
   // 204 rather than a body: sendBeacon ignores the response, and there is
   // nothing useful to say back to a page that has already crashed.
   return res.status(204).send('');

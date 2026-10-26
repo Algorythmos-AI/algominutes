@@ -5,6 +5,9 @@ name: invariants
 
 on:
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
   push:
     branches: [integration, main]
 
@@ -52,3 +55,6 @@ jobs:
 
       - name: Every workspace declares the packages it imports
         run: node scripts/check-declared-deps.mjs
+
+      - name: A frozen-clock integration test passes its clock to every call
+        run: node scripts/check-frozen-clock.mjs

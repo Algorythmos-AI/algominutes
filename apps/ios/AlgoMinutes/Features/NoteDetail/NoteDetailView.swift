@@ -11,11 +11,26 @@ import UIKit
 struct NoteDetailView: View {
     @Environment(AppEnvironment.self) private var env
     let noteId: String
+    /// Open on the transcript at this moment (ms into the recording): a search result's (RELEASE.md rev 11,
+    /// UX8). It used to open the note at the top of its summary, and the match had to be found again.
+    var openAtMs: Double?
 
     @Environment(\.dismiss) private var dismiss
+    /// The moment still to be shown, until the transcript has the line and the screen has scrolled to it.
+    @State private var pendingMomentMs: Double?
+    /// The line that moment landed on, kept marked.
+    @State private var momentIndex: Int?
     @State private var viewModel = NoteDetailViewModel()
+    /// The note's action items with their ids and ticks, read from the server; nil until then.
+    @State private var ticks: [ActionItemTick]?
     /// A10 #4: present the support composer for a "bad transcript" report.
     @State private var reportingBadTranscript = false
+    /// A notetaker cancel or stop waiting for the user's confirmation: its bot and which.
+    @State private var notetakerAction: (String, NoteNotetaker.Action)?
+    @State private var notetakerBusy = false
+    /// The speaker being renamed (their tag), and the name being typed.
+    @State private var renamingTag: Int?
+    @State private var renameText = ""
 
     /// Re-derived every render rather than captured. The Firestore listener is
     /// the source of truth for the screen, so a mirror write — a status change,
@@ -64,6 +79,13 @@ struct NoteDetailView: View {
         .sheet(item: $viewModel.shareItem) { item in
             ActivityShareSheet(items: item.items)
         }
+        // The account prompt a guest is owed after their first summary goes up as they leave it, not over it.
+        .onDisappear { env.billing.onLeftNote(isGuest: env.auth.isAnonymous) }
+        .task(id: noteId) {
+            guard let openAtMs, pendingMomentMs == nil, momentIndex == nil else { return }
+            viewModel.tab = .transcript
+            pendingMomentMs = openAtMs
+        }
         .sheet(item: $viewModel.activeSheet) { sheet in
             if let note {
                 switch sheet {
@@ -85,9 +107,17 @@ struct NoteDetailView: View {
                         onCopy: { copy(note) },
                         onPrint: { NotePrinter.print(note: note) { env.alertMessage = $0 } },
                         onRegenerate: { viewModel.activeSheet = .templatePicker },
+                        onEditSummary: { viewModel.activeSheet = .editSummary },
                         onDelete: { viewModel.confirmingDelete = true }
                     )
                     .algoMinutesSheet([.medium])
+                case .editSummary:
+                    if let summary = note.summary {
+                        EditSummarySheet(summary: summary) { edited in
+                            await env.saveSummary(noteId: note.id, summary: edited)
+                        }
+                        .algoMinutesSheet([.large])
+                    }
                 case .templatePicker:
                     TemplatePickerSheet(
                         current: viewModel.template,
@@ -106,27 +136,42 @@ struct NoteDetailView: View {
                         note: note,
                         transcript: exportLines(for: note),
                         onExport: { scope, format in
-                            viewModel.export(
-                                note: note, scope: scope, format: format,
-                                transcript: exportLines(for: note), api: env.api
-                            ) { env.alertMessage = $0 }
+                            withWholeTranscript(of: note, scope: scope) { lines in
+                                viewModel.export(
+                                    note: note, scope: scope, format: format,
+                                    transcript: lines, api: env.api
+                                ) { env.alertMessage = $0 }
+                            }
                         },
                         onEmail: { scope, format in
-                            viewModel.emailExport(
-                                note: note, scope: scope, format: format,
-                                transcript: exportLines(for: note), api: env.api
-                            ) { env.alertMessage = $0 }
+                            withWholeTranscript(of: note, scope: scope) { lines in
+                                viewModel.emailExport(
+                                    note: note, scope: scope, format: format,
+                                    transcript: lines, api: env.api
+                                ) { env.alertMessage = $0 }
+                            }
                         },
-                        // A public link opens on the site, which has no viewer
-                        // yet: offered only when SHARE_LINKS_ENABLED is on.
-                        onCreateLink: AppConfig.shareLinksEnabled ? { scope in
+                        // A public link, opening the web app's viewer: offered
+                        // only while the server says so (AppSwitches, PR 29).
+                        onCreateLink: env.switches.shareLinks ? { scope in
                             viewModel.createShareLink(
                                 scope: scope, noteId: note.id, workspaceId: note.workspaceId,
                                 api: env.api
                             ) { env.alertMessage = $0 }
                         } : nil,
                         mintedLink: viewModel.mintedShareLink,
-                        isMintingLink: viewModel.isMintingShareLink
+                        isMintingLink: viewModel.isMintingShareLink,
+                        links: viewModel.shareLinks ?? [],
+                        linksFailed: viewModel.shareLinksFailed,
+                        revokingShareId: viewModel.revokingShareId,
+                        onLoadLinks: env.switches.shareLinks ? {
+                            viewModel.loadShareLinks(noteId: note.id, workspaceId: note.workspaceId, api: env.api)
+                        } : nil,
+                        onRevokeLink: { link in
+                            viewModel.revokeShareLink(
+                                link, noteId: note.id, workspaceId: note.workspaceId, api: env.api
+                            ) { env.alertMessage = $0 }
+                        }
                     )
                     .algoMinutesSheet([.medium, .large])
                 }
@@ -148,6 +193,27 @@ struct NoteDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The recording, transcript and summary are removed. This cannot be undone.")
+        }
+        .confirmationDialog(
+            notetakerAction?.1 == .stop ? "Stop the notetaker?" : "Cancel the notetaker?",
+            isPresented: Binding(get: { notetakerAction != nil }, set: { if !$0 { notetakerAction = nil } }),
+            titleVisibility: .visible,
+            presenting: notetakerAction
+        ) { pending in
+            Button(pending.1 == .stop ? "Stop it" : "Cancel it", role: .destructive) { endNotetaker(botId: pending.0, action: pending.1) }
+            Button("Keep it", role: .cancel) {}
+        } message: { pending in
+            Text(pending.1 == .stop
+                 ? "It leaves the meeting now. What it has recorded so far becomes this note."
+                 : "It won't join the meeting, and nothing is recorded or charged.")
+        }
+        .alert("Rename speaker", isPresented: Binding(get: { renamingTag != nil }, set: { if !$0 { renamingTag = nil } })) {
+            TextField("Name", text: $renameText)
+                .textInputAutocapitalization(.words)
+            Button("Save") { if let tag = renamingTag { renameSpeaker(tag: tag, to: renameText) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every line by this speaker in this note takes the new name. Leave it empty for \"Speaker\" again.")
         }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { viewModel.alertMessage != nil },
@@ -187,15 +253,25 @@ struct NoteDetailView: View {
                         errorMessage: note.errorMessage,
                         diagnosticCode: note.diagnosticCode
                     ) { retry(note) }
+                case .awaitingMinutes:
+                    HeldForMinutesPane()
                 default:
                     ProcessingPane(
                         stage: NoteProcessingStage.from(
                             status: note.status,
                             progress: note.progress,
-                            uploadPercent: env.uploadProgress[note.id]
+                            uploadPercent: env.uploadProgress[note.id],
+                            notetaker: note.notetaker
                         ),
                         isSlow: env.notes.slowNoteIds.contains(note.id)
                     )
+                    if note.status == .recording, let bot = note.notetaker, let action = bot.action {
+                        Button(action == .stop ? "Stop the notetaker" : "Cancel the notetaker") {
+                            notetakerAction = (bot.botId, action)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(notetakerBusy)
+                    }
                 }
             }
             .padding(20)
@@ -241,10 +317,17 @@ struct NoteDetailView: View {
 
         switch viewModel.tab {
         case .summary:
-            SummaryPane(summary: note.summary, onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil)
+            SummaryPane(
+                summary: note.summary,
+                onSeek: note.hasPlayableAudio ? { env.player.seek(to: $0) } : nil,
+                ticks: ticks,
+                onTick: { tick, done in setTick(tick, done: done, note: note) }
+            )
+                // Again whenever the items change: an edit of the summary gives them new ids.
+                .task(id: note.summary?.actionItems) { await loadTicks(note) }
                 // A9.6 + A6.3: the moment the first summary is actually on screen.
-                // Fires `first_summary_viewed` once and, for a guest, presents the
-                // account prompt (or the paywall if the trial is already over).
+                // Fires `first_summary_viewed` once and, for a guest, owes the account
+                // prompt for when they leave (or shows the paywall if the trial is over).
                 .onAppear {
                     env.billing.onFirstSummaryViewed(isGuest: env.auth.isAnonymous)
                     // A10 #6: a successful summary is the value moment — ask for a
@@ -273,9 +356,18 @@ struct NoteDetailView: View {
                 // mirror is the whole transcript would claim to be clipped.
                 isTruncated: note.transcriptTruncated == true
                     && env.transcripts.state == .failed,
-                onRetry: { loadFullTranscript(note) }
+                onRetry: { loadFullTranscript(note) },
+                onRenameSpeaker: { line in
+                    guard let tag = line.speakerTag else { return }
+                    renameText = line.speaker.hasPrefix("Speaker ") ? "" : line.speaker
+                    renamingTag = tag
+                },
+                focusIndex: momentIndex
             )
             .task(id: note.id) { loadFullTranscript(note) }
+            // Opened from a search result: go to its line once the transcript has it. A long note's mirror
+            // holds only its first lines, so this runs again as the rest arrives.
+            .task(id: lines.count) { showPendingMoment(in: lines, note: note) }
 
             // Which notes transcribe badly is a question the corpus cannot
             // answer on its own; this is the only signal that tells us.
@@ -300,6 +392,41 @@ struct NoteDetailView: View {
         }
     }
 
+    /// Without the ids the items stay plain bullets, as they were: a failed read costs the ticks, not the list.
+    private func loadTicks(_ note: Note) async {
+        guard !(note.summary?.actionItems.isEmpty ?? true), let workspaceId = env.auth.workspaceId else {
+            ticks = nil
+            return
+        }
+        do {
+            ticks = try await env.api.fetchActionItems(noteId: note.id, workspaceId: workspaceId)
+        } catch is CancellationError {
+            return
+        } catch {
+            AppLog.error("action_items_read_failed: \(error)")
+            ticks = nil
+        }
+    }
+
+    /// Shown at once, then sent; put back if the server refuses it.
+    private func setTick(_ tick: ActionItemTick, done: Bool, note: Note) {
+        guard let workspaceId = env.auth.workspaceId else { return }
+        ticks = ActionItemTicks.setting(ticks, id: tick.id, done: done)
+        Task {
+            do {
+                try await env.api.setActionItemDone(noteId: note.id, workspaceId: workspaceId, itemId: tick.id, done: done)
+            } catch where ActionItemTicks.isGone(error) {
+                // The summary was edited elsewhere: the items have new ids. Read them again.
+                AppLog.error("action_item_gone_rereading: \(error)")
+                await loadTicks(note)
+            } catch {
+                AppLog.error("action_item_tick_failed: \(error)")
+                ticks = ActionItemTicks.setting(ticks, id: tick.id, done: tick.done)
+                env.alertMessage = "Couldn't save that tick. Please try again."
+            }
+        }
+    }
+
     /// Page in the rest of the transcript when Firestore only mirrored a
     /// preview. Cheap to call repeatedly — the repository ignores a request
     /// for a note it has already loaded or is already loading.
@@ -312,9 +439,47 @@ struct NoteDetailView: View {
     /// Lines an export should carry: the full transcript when it has been
     /// fetched, the mirrored preview otherwise — so the file matches what the
     /// user is looking at rather than silently exporting less.
+    /// Scroll to the line a search result matched, once: when the transcript on this iPhone reaches it.
+    private func showPendingMoment(in lines: [TranscriptLine], note: Note) {
+        guard let ms = pendingMomentMs else { return }
+        // Complete when the mirror was the whole transcript, or the rest has loaded (or can't be).
+        let complete: Bool
+        switch env.transcripts.state {
+        case .loaded, .failed: complete = true
+        default: complete = note.transcriptTruncated != true && !lines.isEmpty
+        }
+        guard let index = TranscriptPane.momentIndex(in: lines, atMs: ms, complete: complete) else { return }
+        pendingMomentMs = nil
+        momentIndex = lines[index].index
+        viewModel.scrollTarget = TranscriptPane.anchor(lines[index].index)
+    }
+
     private func exportLines(for note: Note) -> [TranscriptLine] {
         env.transcripts.displayLines(mirrored: note.transcript, for: note.id)
     }
+
+    /// Run an export with the whole transcript (RELEASE.md rev 11, H17 / LM7). A long note's mirror is its
+    /// first 200 lines: an export made before the rest had loaded held only those, and nothing said so. It
+    /// waits for the rest now, and if that can't be loaded it says so and exports nothing.
+    private func withWholeTranscript(of note: Note, scope: ExportScope, run: @escaping ([TranscriptLine]) -> Void) {
+        let mirrored = note.transcript ?? []
+        guard TranscriptRepository.exportNeedsFull(scope: scope, mirroredCount: mirrored.count) else {
+            run(exportLines(for: note))
+            return
+        }
+        viewModel.isExporting = true
+        Task {
+            guard let whole = await env.transcripts.whole(noteId: note.id, workspaceId: note.workspaceId) else {
+                viewModel.isExporting = false
+                env.alertMessage = Self.wholeTranscriptNeededMessage
+                return
+            }
+            run(TranscriptRepository.preferred(full: whole, fullNoteId: note.id, mirrored: mirrored, noteId: note.id))
+        }
+    }
+
+    static let wholeTranscriptNeededMessage =
+        "The whole transcript couldn’t be loaded, so nothing was exported. Check your connection and try again."
 
     /// Copy the note as plain text — the same payload the share sheet sends.
     private func copy(_ note: Note) {
@@ -346,6 +511,36 @@ struct NoteDetailView: View {
             catch { env.alertMessage = "Couldn't delete this note. Please try again." }
         }
         dismiss()
+    }
+
+    private func renameSpeaker(tag: Int, to raw: String) {
+        let name = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard let note = env.notes.notes.first(where: { $0.id == noteId }) else { return }
+        Task {
+            do {
+                try await env.api.setNoteSpeaker(noteId: note.id, workspaceId: note.workspaceId, speakerTag: tag, name: name)
+                env.transcripts.renameSpeaker(tag: tag, to: name, noteId: note.id)
+            } catch {
+                AppLog.error("speaker_rename_failed: \(error.localizedDescription)")
+                viewModel.alertMessage = "The speaker wasn't renamed. Please try again."
+            }
+        }
+    }
+
+    private func endNotetaker(botId: String, action: NoteNotetaker.Action) {
+        notetakerBusy = true
+        Task {
+            defer { notetakerBusy = false }
+            do {
+                try await env.api.cancelMeetingBot(botId: botId)
+                viewModel.alertMessage = action == .stop
+                    ? "The notetaker is leaving. What it recorded is on its way."
+                    : "The notetaker is cancelled."
+            } catch {
+                AppLog.error("notetaker_cancel_failed: \(error.localizedDescription)")
+                viewModel.alertMessage = "The notetaker wasn't stopped. Please try again."
+            }
+        }
     }
 
     private func retry(_ note: Note) {

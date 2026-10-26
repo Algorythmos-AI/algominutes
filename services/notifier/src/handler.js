@@ -18,20 +18,20 @@ const { noteDeepLink } = require('./deep-link');
 const VALID_TYPES = new Set(['note_ready', 'note_failed']);
 const NOTICE_ID = /^[0-9]{1,19}$/;
 
-// FCM per-token errors that mean the token is dead and should be pruned. Codes
-// are the messaging/* strings firebase-admin puts on response.error.code.
+// FCM per-token errors that mean THE TOKEN is dead and should be pruned: the app
+// was uninstalled or the token rotated (UNREGISTERED), or the string was never a
+// token. Codes are the messaging/* strings firebase-admin puts on
+// response.error.code. Not 'invalid-argument': FCM also answers that for a bad
+// MESSAGE (a payload over the size limit, an invalid field), and pruning on it
+// deleted every recipient's working token.
 const DEAD_TOKEN_CODES = new Set([
   'messaging/registration-token-not-registered', // UNREGISTERED
   'messaging/invalid-registration-token',
-  'messaging/invalid-argument',
 ]);
 
 function isDeadTokenError(err) {
   const code = err && err.code ? String(err.code) : '';
-  return DEAD_TOKEN_CODES.has(code)
-    || code.includes('registration-token-not-registered')
-    || code.includes('invalid-argument')
-    || code.includes('invalid-registration-token');
+  return DEAD_TOKEN_CODES.has(code);
 }
 
 function defaultCopy(type, title, body) {
@@ -63,10 +63,11 @@ async function handleNotify(reqBody, headers, deps) {
 
   const noticeOk = noticeId === undefined || NOTICE_ID.test(String(noticeId));
   if (!VALID_TYPES.has(type) || !noteId || !uid || !noticeOk) {
-    // A malformed payload will never succeed on retry — ack it so Cloud Tasks
-    // does not retry-storm, and log loudly so it is visible.
+    // A malformed payload will never succeed on retry, so it's acknowledged
+    // (2xx: Cloud Tasks retries EVERY other status, 4xx included, until the
+    // queue's last attempt) and logged loudly so it's visible.
     log.error({ hasType: VALID_TYPES.has(type), hasNoteId: !!noteId, hasUid: !!uid, noticeOk }, 'notify_bad_payload');
-    return { status: 400, json: { error: 'bad_payload' } };
+    return { status: 200, json: { ok: false, error: 'bad_payload' } };
   }
 
   const id = noticeId === undefined ? null : String(noticeId);

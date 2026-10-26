@@ -30,8 +30,15 @@ struct RootView: View {
         }
         // A9.5 paywall — presented from billing state (quota hit, metered gate,
         // trial banner, Settings), never at launch.
-        .sheet(isPresented: $billing.isPaywallPresented) {
+        .sheet(isPresented: $billing.isPaywallPresented, onDismiss: { billing.paywallDismissed() }) {
             PaywallView()
+                .environment(env)
+                .algoMinutesSheet([.large])
+        }
+        // The beta's invite code (RELEASE.md PR 8): with the paywall off, a quota
+        // hit or a recording with no minutes left opens it; so does Settings.
+        .sheet(isPresented: $billing.isInviteSheetPresented) {
+            InviteCodeSheet()
                 .environment(env)
                 .algoMinutesSheet([.large])
         }
@@ -85,6 +92,18 @@ struct RootView: View {
         } message: {
             Text("Confirm you have permission from everyone whose voice was captured. If others were present, let them know it was recorded.")
         }
+        // The microphone was refused when recording started: the way back is Settings.
+        .alert(MicPermission.deniedTitle, isPresented: Binding(
+            get: { env.micPermissionDenied },
+            set: { env.micPermissionDenied = $0 }
+        )) {
+            if let url = MicPermission.settingsURL {
+                Button("Open Settings") { UIApplication.shared.open(url) }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text(MicPermission.deniedMessage)
+        }
         .alert("AlgoMinutes", isPresented: Binding(
             get: { env.alertMessage != nil },
             set: { if !$0 { env.alertMessage = nil } }
@@ -111,6 +130,14 @@ struct BootstrapSplash: View {
                 ProgressView().tint(Theme.heading)
             }
         }
+    }
+}
+
+extension MainTabView {
+    /// Home presents the recording screen, so go there and ask for it.
+    fileprivate func openRecordingScreen() {
+        selectedTab = 0
+        env.recordingScreenRequested = true
     }
 }
 
@@ -149,6 +176,24 @@ struct MainTabView: View {
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(2)
+        }
+        // A recording that carries on behind the app (Back minimises): said on every tab, with the way back.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if RecordingBar.isShown(isRecording: env.recorder.isRecording, screenVisible: env.isRecordingScreenVisible) {
+                RecordingBar { openRecordingScreen() }
+            }
+        }
+        // The recorder stopped itself (the cap, a full disk) or failed while its screen was away: bring the
+        // screen back to say so and to save what was recorded.
+        .onChange(of: env.recorder.autoStopped) { _, autoStop in
+            guard autoStop != nil, !env.isRecordingScreenVisible else { return }
+            env.recorderOutcomePending = true
+            openRecordingScreen()
+        }
+        .onChange(of: env.recorder.recordingError) { _, error in
+            guard error != nil, !env.isRecordingScreenVisible else { return }
+            env.recorderOutcomePending = true
+            openRecordingScreen()
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
         // A tapped push (or an algominutes://note link) opens its note on Home,

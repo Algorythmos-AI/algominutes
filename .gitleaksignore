@@ -1,0 +1,10 @@
+# Per-finding exemptions for gitleaks, one fingerprint per line
+# (<commit>:<file>:<rule>:<line>). Each fingerprint is pinned to one commit,
+# file, rule and line, so it cannot hide any other finding. Only for a false
+# positive that lives in git history, where an inline `# gitleaks:allow` on
+# today's line can't reach it. Every entry is recorded in docs/DECISIONS.md.
+# .gitleaks.toml keeps its empty allowlist (CLAUDE.md §6).
+
+# #133 dash_order: dashboard tile names ("api_latency_p95"), not a secret.
+# generic-api-key on gitleaks >= 8.30. The current line carries an inline allow.
+cf1a581a8dd1775472706d42acd15d5beec90d7d:infra/terraform/modules/environment/monitoring.tf:generic-api-key:146

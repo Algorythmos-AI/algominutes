@@ -40,12 +40,47 @@ async function noteExists(client, { noteId, workspaceId }) {
  * The note's status in the task's workspace, or null when it is gone or isn't
  * there (the kickoff's replay guard).
  */
+/** A note's status and its current run (notes.run_seq, which each markQueued bumps), scoped like noteStatus. */
+async function noteRun(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT status, run_seq FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? { status: rows[0].status, runSeq: Number(rows[0].run_seq) } : null;
+}
+
 async function noteStatus(client, { noteId, workspaceId }) {
   const { rows } = await client.query(
     'SELECT status FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
     [noteId, workspaceId],
   );
   return rows[0] ? rows[0].status : null;
+}
+
+// How a note's audio arrived (notes.source_kind: device|upload|bot|...). A
+// notetaker's note ('bot') takes the chunked path whatever its length: the fast
+// path has no word timings to put the meeting's speaker names on (RELEASE.md
+// PR 20). Scoped to the task's workspace; null for a note that isn't there.
+async function noteSourceKind(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    'SELECT source_kind FROM notes WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL',
+    [noteId, workspaceId],
+  );
+  return rows[0] ? rows[0].source_kind : null;
+}
+
+// Who spoke when in a notetaker's meeting (meetings-repo saveMeetingSpeakers),
+// in order: what its transcript's words are aligned with. Empty for every other
+// note. Scoped to the task's workspace through the note.
+async function speakerSegments(client, { noteId, workspaceId }) {
+  const { rows } = await client.query(
+    `SELECT s.start_ms, s.end_ms, s.speaker_tag
+       FROM meeting_speaker_segments s JOIN notes n ON n.id = s.note_id
+      WHERE s.note_id = $1 AND n.workspace_id = $2
+      ORDER BY s.seq`,
+    [noteId, workspaceId],
+  );
+  return rows.map((r) => ({ startMs: Number(r.start_ms), endMs: Number(r.end_ms), speakerTag: Number(r.speaker_tag) }));
 }
 
 // Scoped to the task's workspace (CLAUDE.md §1): a note id from another
@@ -92,8 +127,62 @@ async function insertAudioChunkRow(client, { noteId, idx, startSec, endSec, stor
   return rows[0].id;
 }
 
-async function setChunkOperation(client, { chunkId, operationName }) {
-  await client.query('UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1', [chunkId, operationName]);
+// How long a claim holds before another attempt may take the chunk over: an attempt that holds it only
+// extracts, uploads and starts one chunk (seconds), so a claim this old belongs to an attempt that died.
+const STT_CLAIM_STALE_MS = 2 * 60 * 1000;
+
+/**
+ * Claims a chunk's speech job for this attempt (RELEASE.md rev 11, L6). Returns the claim (its timestamp, as
+ * Postgres prints it) when this attempt may start the job: the chunk is pending, has no operation, and no other
+ * attempt holds a live claim. Null otherwise. Atomic, so of two attempts racing for one chunk exactly one gets a
+ * claim. The claim fences what follows: renew it before the paid start, and release only your own.
+ */
+async function claimChunkStt(client, { chunkId, staleMs = STT_CLAIM_STALE_MS }) {
+  const { rows } = await client.query(
+    `UPDATE audio_chunks SET stt_claimed_at = NOW()
+      WHERE id = $1 AND status = 'pending' AND stt_operation_id IS NULL
+        AND (stt_claimed_at IS NULL OR stt_claimed_at < NOW() - $2::bigint * INTERVAL '1 millisecond')
+      RETURNING stt_claimed_at::text AS claim`,
+    [chunkId, staleMs],
+  );
+  return rows[0] ? rows[0].claim : null;
+}
+
+/**
+ * Renews this attempt's claim just before the paid start: preparing a chunk (cut, upload) can outlast the claim,
+ * and another attempt may have taken it over meanwhile. Returns the renewed claim, or null when the claim is no
+ * longer this attempt's (or an operation was saved): then this attempt must not start the job.
+ */
+async function renewChunkStt(client, { chunkId, claim }) {
+  const { rows } = await client.query(
+    `UPDATE audio_chunks SET stt_claimed_at = NOW()
+      WHERE id = $1 AND stt_operation_id IS NULL AND stt_claimed_at = $2::timestamptz
+      RETURNING stt_claimed_at::text AS claim`,
+    [chunkId, claim],
+  );
+  return rows[0] ? rows[0].claim : null;
+}
+
+/** Gives this attempt's claim back after the start failed, so a retry needn't wait for it to go stale. */
+async function releaseChunkStt(client, { chunkId, claim }) {
+  await client.query(
+    'UPDATE audio_chunks SET stt_claimed_at = NULL WHERE id = $1 AND stt_operation_id IS NULL AND stt_claimed_at = $2::timestamptz',
+    [chunkId, claim],
+  );
+}
+
+/**
+ * Saves a chunk's operation unless one is already saved and, given the attempt's claim, only while that claim is
+ * still its own: a start that outlasted the claim may have been taken over, and then the takeover's job is the one
+ * saved. True when this one was saved.
+ */
+async function setChunkOperation(client, { chunkId, operationName, claim = null }) {
+  const { rowCount } = await client.query(
+    `UPDATE audio_chunks SET stt_operation_id = $2
+      WHERE id = $1 AND stt_operation_id IS NULL AND ($3::timestamptz IS NULL OR stt_claimed_at = $3::timestamptz)`,
+    [chunkId, operationName, claim],
+  );
+  return rowCount === 1;
 }
 
 async function markChunkDone(client, { chunkId, noteId }) {
@@ -368,12 +457,12 @@ async function persistFastPathResult(pool, { noteId, workspaceId, lines, summary
       [noteId, summary.gist || '', null, JSON.stringify(summary.actionItems || []), model || null],
     );
     await client.query('DELETE FROM action_items WHERE note_id = $1', [noteId]);
-    for (const item of summary.actionItems || []) {
-      await client.query('INSERT INTO action_items (note_id, text) VALUES ($1, $2)', [noteId, item]);
+    for (const [position, item] of (summary.actionItems || []).entries()) {
+      await client.query('INSERT INTO action_items (note_id, text, position) VALUES ($1, $2, $3)', [noteId, item, position]);
     }
     await client.query('DELETE FROM key_decisions WHERE note_id = $1', [noteId]);
-    for (const dec of summary.keyDecisions || []) {
-      await client.query('INSERT INTO key_decisions (note_id, text) VALUES ($1, $2)', [noteId, dec]);
+    for (const [position, dec] of (summary.keyDecisions || []).entries()) {
+      await client.query('INSERT INTO key_decisions (note_id, text, position) VALUES ($1, $2, $3)', [noteId, dec, position]);
     }
     notice = await recordNotice(client, { noteId, workspaceId, kind: 'note_ready', traceId: trace });
     await client.query('COMMIT');
@@ -392,10 +481,17 @@ module.exports = {
   recordPaidWork,
   noteExists,
   noteStatus,
+  noteRun,
+  noteSourceKind,
+  speakerSegments,
   fetchPriorChunkEndMs,
   upsertNoteStatus,
   insertAudioChunkRow,
   setChunkOperation,
+  claimChunkStt,
+  renewChunkStt,
+  releaseChunkStt,
+  STT_CLAIM_STALE_MS,
   markChunkDone,
   claimSummarizerEnqueue,
   claimEmbedderEnqueue,

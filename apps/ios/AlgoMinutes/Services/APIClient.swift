@@ -26,15 +26,44 @@ enum APIError: LocalizedError {
     case quotaExceeded(EntitlementResponse?)
     /// This app version is below the server's minimum (HTTP 426, `please_update`).
     case updateRequired
+    /// The chat stream ended without its `done` frame (plan rev 12 S15): cut short, not answered.
+    case streamEnded
 
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: return "Not signed in"
-        case .http(let status, let message): return message ?? "Request failed (\(status))"
-        case .invalidResponse: return "Invalid server response"
+        case .notSignedIn: return "Please sign in to do that."
+        case .http(let status, let message): return Self.sentence(status: status, serverText: message)
+        case .invalidResponse: return "The server’s answer couldn’t be read. Please try again."
         case .quotaExceeded: return "You've used up your included minutes. Upgrade to keep going."
         case .updateRequired: return "Please update AlgoMinutes to continue."
+        case .streamEnded: return "The answer was cut short. Try again."
         }
+    }
+}
+
+extension APIError {
+    /// What a failed request says (RELEASE.md rev 11, UX7). The server's own sentence when it sent one; a
+    /// sentence for the status when it sent a code ("rate_limited", "Forbidden") or nothing. An alert used to
+    /// read "Request failed (500)" or the bare code.
+    static func sentence(status: Int, serverText: String?) -> String {
+        if let text = serverText?.trimmingCharacters(in: .whitespacesAndNewlines), isSentence(text) { return text }
+        switch status {
+        case 401: return "Please sign in again."
+        case 403: return "You don’t have access to that."
+        case 404: return "That couldn’t be found. It may have been deleted."
+        case 408, 504: return "That took too long. Please try again."
+        case 409: return "That’s already under way. Give it a moment."
+        case 413: return "That’s too large to send."
+        case 429: return "Too many requests just now. Please wait a moment and try again."
+        case 500...599: return "Something went wrong on our side. Please try again in a moment."
+        default: return "That didn’t work. Please try again."
+        }
+    }
+
+    /// Written for a person: more than one word, and not a code like `rate_limited` or `Not Found`.
+    static func isSentence(_ text: String) -> Bool {
+        guard text.contains(" "), !text.contains("_") else { return false }
+        return text.split(separator: " ").count >= 3
     }
 }
 
@@ -182,6 +211,14 @@ final class APIClient: Sendable {
         var durationSec: Double?
     }
 
+    /// A kickoff the server held for minutes (RELEASE.md rev 11, H6c): a 202
+    /// with `held: true`. The recording is uploaded and kept, uncharged, and is
+    /// processed once minutes arrive; the caller offers Pro or the invite code,
+    /// as it did for the 402 this replaces.
+    static func kickoffWasHeld(_ answer: [String: Any]) -> Bool {
+        answer["held"] as? Bool == true
+    }
+
     @discardableResult
     func processAudio(_ r: ProcessAudioRequest) async throws -> [String: Any] {
         var body: [String: Any] = [
@@ -194,13 +231,11 @@ final class APIClient: Sendable {
         if let m = r.mimeType { body["mimeType"] = m }
         if let d = r.durationSec, d > 0 { body["durationSec"] = d }
 
-        // A10 #7: the process request is the trial kickoff. Bind it to the
-        // device with a DeviceCheck token so the server (which hashes it into
-        // trial_device_hash) can refuse a second fresh trial from the same
-        // device. Best-effort: an absent token just omits the header, and the
-        // server falls back to account-level trial checks.
-        // TODO(A4-apple): server-side DeviceCheck validation needs the Apple
-        // DeviceCheck key configured; the client half is wired here.
+        // A10 #7: the process request is the trial kickoff. It carries a
+        // DeviceCheck token, and the server asks Apple whether this device has
+        // had a trial (RELEASE.md PR 22), so a reinstall can't start a second.
+        // An absent token just omits the header: the server then starts no
+        // trial on this device.
         var req = try await request(path: "v1/process", body: body)
         req.setValue(DeviceAttestationService.platformHeaderValue, forHTTPHeaderField: "X-Device-Platform")
         if let token = await DeviceAttestationService.attestationToken() {
@@ -316,6 +351,66 @@ final class APIClient: Sendable {
     func deleteNote(noteId: String, workspaceId: String) async throws -> Bool {
         let json = try await post(path: "v1/notes/delete", body: ["noteId": noteId, "workspaceId": workspaceId])
         return (json["deleted"] as? Bool) ?? false
+    }
+
+    /// The server's answer to a saved text note (the contract's `TextNoteResponse`).
+    struct TextNoteResponse: Decodable, Equatable {
+        let noteId: String
+        let status: String
+    }
+
+    /// Save a text note (a scan, a PDF, an imported file) through the server: Postgres first, then its doc
+    /// (POST /v1/notes/text). The same `noteId` again is the same note.
+    func createTextNote(noteId: String, workspaceId: String, text: String, source: TextNoteSource, title: String?) async throws -> TextNoteResponse {
+        var body: [String: Any] = ["noteId": noteId, "workspaceId": workspaceId, "text": text, "source": source.rawValue]
+        if let title { body["title"] = title }
+        return try await postDecoded(path: "v1/notes/text", body: body)
+    }
+
+    /// What sending the notetaker did (POST /v1/meetings/bots).
+    enum MeetingBotResult: Equatable {
+        /// A notetaker is on its way; its note is `noteId`.
+        case sent(botId: String, noteId: String)
+        /// One was already on its way to this meeting (409): that note is the one to watch.
+        case alreadyOnItsWay(noteId: String)
+    }
+
+    /// Send the notetaker to a meeting now (docs/plans/MEETINGS.md). `requestId`
+    /// is the idempotency key: the same id returns the same notetaker. A refusal
+    /// is an `APIError.http` carrying the server's own sentence (notetaker
+    /// minutes used up, an unsupported link, busy).
+    func createMeetingBot(meetingUrl: String, title: String?, requestId: String) async throws -> MeetingBotResult {
+        var body: [String: Any] = ["meetingUrl": meetingUrl, "requestId": requestId]
+        if let title, !title.isEmpty { body["title"] = title }
+        let req = try await request(path: "v1/meetings/bots", body: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        switch http.statusCode {
+        case 200..<300:
+            guard let botId = json?["botId"] as? String, let noteId = json?["noteId"] as? String else { throw APIError.invalidResponse }
+            return .sent(botId: botId, noteId: noteId)
+        case 409:
+            if let noteId = json?["noteId"] as? String { return .alreadyOnItsWay(noteId: noteId) }
+            throw APIError.http(status: 409, message: json?["error"] as? String)
+        case 402:
+            // The notetaker's own minutes, not the recording quota: its message, not the paywall.
+            throw APIError.http(status: 402, message: json?["message"] as? String ?? "You've used this month's notetaker minutes.")
+        default:
+            throw Self.httpError(status: http.statusCode, json: json)
+        }
+    }
+
+    /// Cancel a notetaker before it records, or stop one that is (it leaves,
+    /// and what it recorded becomes the note): POST /v1/meetings/bots/{id}/cancel.
+    /// Returns the notetaker's status afterwards.
+    @discardableResult
+    func cancelMeetingBot(botId: String) async throws -> String? {
+        guard let id = botId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) else {
+            throw APIError.invalidResponse
+        }
+        let json = try await post(path: "v1/meetings/bots/\(id)/cancel", body: [:])
+        return json["status"] as? String
     }
 
     /// Persist a manual note edit.
@@ -461,6 +556,59 @@ final class APIClient: Sendable {
         return ShareLink(shareId: id, url: url, expiresAt: json["expiresAt"] as? String)
     }
 
+    /// One of the caller's links for a note (`ShareListItem` in the contract). Never the link itself: the
+    /// server keeps only the token's hash, so a link can be listed and stopped, not shown again.
+    struct ListedShareLink: Sendable, Equatable, Identifiable {
+        let shareId: String
+        let createdAt: Date?
+        let expiresAt: Date?
+        let revokedAt: Date?
+        let readCount: Int
+        /// False once it's revoked or expired; those stay listed, for the owner's record.
+        let live: Bool
+
+        var id: String { shareId }
+
+        /// Nil for a row without an id, which can't be stopped and so isn't shown.
+        init?(json: [String: Any]) {
+            // The contract allows a string or a number; today it's a UUID.
+            if let id = json["shareId"] as? String, !id.isEmpty {
+                shareId = id
+            } else if let id = json["shareId"] as? NSNumber {
+                shareId = id.stringValue
+            } else {
+                return nil
+            }
+            func date(_ key: String) -> Date? {
+                guard let iso = json[key] as? String else { return nil }
+                return ISO8601DateFormatter.entitlement.date(from: iso) ?? ISO8601DateFormatter.entitlementPlain.date(from: iso)
+            }
+            createdAt = date("createdAt")
+            expiresAt = date("expiresAt")
+            revokedAt = date("revokedAt")
+            readCount = (json["readCount"] as? Int) ?? 0
+            // Absent means not live: a link is only offered as stoppable when the server says it still opens.
+            live = (json["live"] as? Bool) ?? false
+        }
+
+        /// Whether it still opens, in words (as the web's share dialog says it).
+        func stateText(format: (Date) -> String) -> String {
+            if revokedAt != nil { return "stopped" }
+            if !live { return "expired" }
+            if let expiresAt { return "opens until \(format(expiresAt))" }
+            return "still opens"
+        }
+
+        var readText: String { readCount == 1 ? "read once" : "read \(readCount) times" }
+    }
+
+    /// The caller's links for a note, newest first (RELEASE.md rev 11, H20).
+    func listShareLinks(noteId: String, workspaceId: String) async throws -> [ListedShareLink] {
+        let json = try await post(path: "v1/shares/list", body: ["noteId": noteId, "workspaceId": workspaceId])
+        guard let rows = json["shares"] as? [[String: Any]] else { throw APIError.invalidResponse }
+        return rows.compactMap(ListedShareLink.init(json:))
+    }
+
     /// Revoke a link. Idempotent server-side, so retrying is safe.
     @discardableResult
     func revokeShareLink(noteId: String, workspaceId: String, shareId: String) async throws -> Bool {
@@ -528,6 +676,27 @@ final class APIClient: Sendable {
         return try JSONDecoder().decode(TranscriptPageResponse.self, from: data).transcript
     }
 
+    /// A note's action items with their ids and ticks. The first page of the note read, asked for
+    /// with one transcript line: the items ride on that page whatever its size.
+    func fetchActionItems(noteId: String, workspaceId: String) async throws -> [ActionItemTick] {
+        let req = try await request(path: "v1/notes/read", body: ["noteId": noteId, "workspaceId": workspaceId, "limit": 1])
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.httpError(status: http.statusCode, json: (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+        }
+        return try ActionItemTicks.parse(data)
+    }
+
+    /// Tick or untick one action item. 404 when the item is gone (see `ActionItemTicks.isGone`).
+    @discardableResult
+    func setActionItemDone(noteId: String, workspaceId: String, itemId: String, done: Bool) async throws -> [String: Any] {
+        try await post(
+            path: "v1/notes/action-items/status",
+            body: ["noteId": noteId, "workspaceId": workspaceId, "itemId": itemId, "done": done]
+        )
+    }
+
     /// Streams `/v1/chat`. The stream finishes on `done`, throws on transport
     /// failure, and surfaces server-sent errors as `.serverError` events.
     ///
@@ -572,9 +741,16 @@ final class APIClient: Sendable {
                                 continuation.finish()
                                 return
                             }
+                            // The server said it failed, and closes the stream next: the caller has the reason.
+                            if case .serverError = event {
+                                continuation.finish()
+                                return
+                            }
                         }
                     }
-                    continuation.finish()
+                    // Ended without `done` or `error`: cut short.
+                    // On 10-11, 10-18 and 10-20 Cloud Run cut the stream at 61 s, and the answer was left empty.
+                    continuation.finish(throwing: APIError.streamEnded)
                 } catch {
                     continuation.finish(throwing: error)
                 }
@@ -586,7 +762,13 @@ final class APIClient: Sendable {
     // MARK: - A10 compliance (terms, retention, support)
     //
     // Field names mirror packages/contracts/src/schemas/compliance.ts exactly:
-    //   AcceptTermsRequest, SetRetentionRequest, SupportRequest.
+    //   AcceptTermsRequest, SetRetentionRequest, RetentionResponse, SupportRequest.
+
+    /// The account's note retention, as last set on any device (RELEASE.md PR 12b).
+    struct RetentionResponse: Decodable, Equatable, Sendable {
+        /// `nil` is "keep until I delete".
+        let retentionDays: Int?
+    }
 
     /// A10 #3: record timestamped acceptance of the Terms + Privacy Policy at
     /// signup. The server stamps the time and stores (uid, versions). Idempotent
@@ -605,6 +787,12 @@ final class APIClient: Sendable {
         ]
         if let appVersion { body["appVersion"] = appVersion }
         return try await post(path: "v1/account/accept-terms", body: body)
+    }
+
+    /// The account's retention (GET /v1/account/retention): a limit set in the web
+    /// app or on another iPhone shows here too.
+    func retention() async throws -> RetentionResponse {
+        try await getDecoded(path: "v1/account/retention")
     }
 
     /// A10 #5: set the note-retention window. `days == nil` means "keep until I
@@ -670,6 +858,14 @@ final class APIClient: Sendable {
     /// truth for trial/active/free_floor state and the trial countdown.
     func fetchEntitlement() async throws -> EntitlementResponse {
         try await getDecoded(path: "v1/entitlement")
+    }
+
+    /// Redeem a beta invite code (POST /v1/beta/redeem): time-limited Pro
+    /// minutes. A refusal is `APIError.http` with the server's code:
+    /// `invite_invalid` (400, also a revoked code), `invite_expired` (410),
+    /// `invite_used_up` (409), or `rate_limited` (429).
+    func redeemInvite(code: String) async throws -> RedeemInviteResponse {
+        try await postDecoded(path: "v1/beta/redeem", body: ["code": code])
     }
 
     /// Server-side feature switches (`AppSwitches`).

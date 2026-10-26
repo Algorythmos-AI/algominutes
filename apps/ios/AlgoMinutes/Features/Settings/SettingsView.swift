@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 import UIKit
 
@@ -7,15 +8,9 @@ struct SettingsView: View {
     @State private var showDeleteSheet = false
     @State private var confirmingSignOut = false
     @State private var copiedUserID = false
+    @State private var redeemingOfferCode = false
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
-
-    private static let adminEmails: Set<String> = ["skalaliya@gmail.com"]
-
-    private var isAdmin: Bool {
-        guard let email = env.auth.user?.email?.lowercased() else { return false }
-        return Self.adminEmails.contains(email)
-    }
 
     // Real client-side usage — no quotas, no paywall. Minutes counts ready
     // notes created in the current calendar month.
@@ -100,9 +95,11 @@ struct SettingsView: View {
                         }
                     }
 
-                    if isAdmin {
-                        AdminCostsCard()
-                    }
+                    // The cost estimates are for whoever builds the app from Xcode:
+                    // they're compiled out of every build testers get (RELEASE.md PR 11).
+                    #if DEBUG
+                    AdminCostsCard()
+                    #endif
 
                     // A guest's notes live only under this guest: offer to keep
                     // them (create an account in place) before anything else.
@@ -168,6 +165,10 @@ struct SettingsView: View {
         } message: {
             Text(Self.signOutWarning(isGuest: env.auth.isAnonymous, pendingRecordings: env.pendingRecordingsAtRisk))
         }
+        // Apple's own sheet; a redeemed code's subscription reaches the server like a purchase (Transaction.updates).
+        .offerCodeRedemption(isPresented: $redeemingOfferCode) { _ in
+            Task { await env.billing.refresh() }
+        }
         .sheet(isPresented: $showDeleteSheet) {
                 DeleteAccountSheet()
                     .algoMinutesSheet([.medium, .large])
@@ -215,7 +216,8 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.heading)
                     }
                     Spacer()
-                    if env.billing.entitlement?.state != .active, AppConfig.paywallEnabled {
+                    // Anyone without a subscription, beta minutes included (RELEASE.md PR 27).
+                    if env.billing.entitlement?.isSubscription != true, AppConfig.paywallEnabled {
                         Button("Go Pro") { env.billing.presentPaywall(.manual) }
                             .font(Typography.label(14))
                             .foregroundStyle(Theme.onInverse)
@@ -229,6 +231,32 @@ struct SettingsView: View {
                         .font(Typography.body(13))
                         .foregroundStyle(Theme.muted)
                 }
+                // The same figure as a bar, with what's left and when it renews (RELEASE.md rev 11, H18), as the web shows it.
+                if let bar = MinutesBar(env.billing.entitlement) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Theme.border)
+                                Capsule().fill(bar.level.color).frame(width: geo.size.width * bar.fraction)
+                            }
+                        }
+                        .frame(height: 8)
+                        .accessibilityElement()
+                        .accessibilityLabel("Minutes used this month")
+                        .accessibilityValue("\(Int((bar.fraction * 100).rounded())) percent")
+                        Text(bar.caption)
+                            .font(Typography.body(13))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // Beta testers' minutes come from the code in their invitation; the App Store build has no beta.
+                if AppConfig.inviteCodesEnabled {
+                    Divider().overlay(Theme.borderSoft)
+                    Button("Enter an invite code") { env.billing.presentInviteSheet() }
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                }
                 if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
                     Button("Restore Purchases") {
@@ -236,7 +264,15 @@ struct SettingsView: View {
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
-                    if env.billing.entitlement?.state == .active {
+                    if Self.offersOfferCode(paywallEnabled: AppConfig.paywallEnabled, entitlement: env.billing.entitlement) {
+                        Divider().overlay(Theme.borderSoft)
+                        Button("Redeem an offer code") { redeemingOfferCode = true }
+                            .font(Typography.body(15))
+                            .foregroundStyle(Theme.body)
+                    }
+                    // Only a subscription bought in the App Store is managed there: not
+                    // a grant, and not one billed on the web (RELEASE.md PR 26b).
+                    if env.billing.entitlement?.isManagedInAppStore == true {
                         Divider().overlay(Theme.borderSoft)
                         Button("Manage Subscription") {
                             Task { await env.billing.store.showManageSubscriptions() }
@@ -247,6 +283,15 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Whether Settings offers an App Store Offer Code (plan rev 12, Stage 3, I2): the store build's way to give free
+    /// time, where Pro is sold. Not to a subscriber billed on the web or Google Play: a code would start a second
+    /// subscription, past the check that refuses one before buying (BillingService.purchaseGate).
+    static func offersOfferCode(paywallEnabled: Bool, entitlement: EntitlementResponse?) -> Bool {
+        guard paywallEnabled else { return false }
+        guard let e = entitlement, e.isSubscription else { return true }
+        return e.isManagedInAppStore
     }
 
     /// What signing out will lose. A guest's notes aren't backed up to an
@@ -264,6 +309,53 @@ struct SettingsView: View {
         return parts.joined(separator: "\n\n")
     }
 
+    /// The month's minutes as a bar (RELEASE.md rev 11, H18): how full, what's left, when they renew. From the
+    /// server's metering only, so it never disagrees with what the quota enforces. Nil when unknown or unmetered.
+    struct MinutesBar: Equatable {
+        enum Level: Equatable {
+            case fine, nearlyUsed, used
+            var color: Color {
+                switch self {
+                case .fine: return Theme.accent
+                case .nearlyUsed: return Theme.warning
+                case .used: return Theme.danger
+                }
+            }
+        }
+
+        /// 0...1 of the month's minutes used.
+        let fraction: Double
+        let level: Level
+        /// "1,160 left. Your minutes renew on 1 November."
+        let caption: String
+
+        init?(_ entitlement: EntitlementResponse?, calendar: Calendar = .current, locale: Locale = .current) {
+            guard let e = entitlement, let included = e.includedMinutes, included > 0 else { return nil }
+            fraction = min(1, max(0, e.usedMinutes / included))
+            level = fraction >= 1 ? .used : fraction >= 0.8 ? .nearlyUsed : .fine
+            let left = Int(max(0, included - e.usedMinutes).rounded())
+            if let renews = Self.renewalDay(period: e.billingPeriod, calendar: calendar, locale: locale) {
+                caption = "\(left.formatted()) left. Your minutes renew on \(renews)."
+            } else {
+                caption = "\(left.formatted()) left."
+            }
+        }
+
+        /// The first day of the month after `period` ("YYYY-MM"), as "1 November". Nil if the period can't be read.
+        static func renewalDay(period: String, calendar: Calendar = .current, locale: Locale = .current) -> String? {
+            let parts = period.split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 2, (1...12).contains(parts[1]) else { return nil }
+            var first = DateComponents()
+            first.year = parts[1] == 12 ? parts[0] + 1 : parts[0]
+            first.month = parts[1] == 12 ? 1 : parts[1] + 1
+            first.day = 1
+            guard let date = calendar.date(from: first) else { return nil }
+            var style = Date.FormatStyle(locale: locale).day().month(.wide)
+            style.timeZone = calendar.timeZone
+            return date.formatted(style)
+        }
+    }
+
     /// "340 of 1,500 minutes used this month", from the server's metering
     /// (the same numbers the quota enforces). Nil when unknown or unmetered.
     static func minutesLine(_ entitlement: EntitlementResponse?) -> String? {
@@ -272,11 +364,15 @@ struct SettingsView: View {
         return "\(used.formatted()) of \(total.formatted()) minutes used this month"
     }
 
-    private var planLabel: String {
-        switch env.billing.entitlement?.state {
-        case .active?: return "Pro"
+    private var planLabel: String { Self.planLabel(env.billing.entitlement, trialDaysRemaining: env.billing.trialDaysRemaining) }
+
+    /// The plan, as the card's headline: in the beta, a grant's minutes say so, so a tester never takes them for
+    /// a purchase. The App Store build has no beta, and a grant there is just Pro.
+    static func planLabel(_ entitlement: EntitlementResponse?, trialDaysRemaining: Int?, beta: Bool = AppConfig.inviteCodesEnabled) -> String {
+        switch entitlement?.state {
+        case .active?: return entitlement?.isGrant == true && beta ? "Pro · beta minutes" : "Pro"
         case .trialing?:
-            if let days = env.billing.trialDaysRemaining {
+            if let days = trialDaysRemaining {
                 return "Free trial · \(days) day\(days == 1 ? "" : "s") left"
             }
             return "Free trial"
@@ -316,7 +412,7 @@ struct SettingsView: View {
             Text(label.uppercased())
                 .font(Typography.label(10))
                 .kerning(1.2)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
             Text(value)
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.body)
@@ -386,6 +482,8 @@ struct DeleteAccountSheet: View {
     @State private var confirmationText = ""
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    /// Apple couldn't confirm the revocation: the main button asks again, and Delete anyway appears (S6).
+    @State private var revocationFailed = false
     @State private var revocation = AppleTokenRevocation()
 
     private var canDelete: Bool {
@@ -406,6 +504,13 @@ struct DeleteAccountSheet: View {
             }
 
             Text("This permanently deletes your account, every recording, every transcript, every summary, and every search index entry. It cannot be undone.")
+                .font(Typography.body(14))
+                .foregroundStyle(Theme.body)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // RELEASE.md PR 28b; App Review 5.1.1(v): deleting the account doesn't
+            // cancel an App Store subscription, and only the App Store can.
+            Text("A subscription bought in the App Store isn't cancelled with your account: cancel it in Settings, your name, then Subscriptions. One bought on the web is cancelled for you.")
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.body)
                 .fixedSize(horizontal: false, vertical: true)
@@ -445,7 +550,7 @@ struct DeleteAccountSheet: View {
             } label: {
                 HStack {
                     if isDeleting { ProgressView().tint(.white) }
-                    Text(isDeleting ? "Deleting…" : "Delete forever")
+                    Text(isDeleting ? "Deleting…" : (revocationFailed ? "Try again" : "Delete forever"))
                 }
                 .font(Typography.label(16))
                 .foregroundStyle(Theme.onInverse)
@@ -456,6 +561,14 @@ struct DeleteAccountSheet: View {
             .disabled(!canDelete)
             .opacity(canDelete ? 1 : 0.5)
 
+            // Only after Apple couldn't confirm the revocation (plan rev 12 S6): the account can always be deleted.
+            if revocationFailed {
+                Button("Delete anyway") { Task { await deleteAccount(skipRevocation: true) } }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .foregroundStyle(Theme.danger)
+                    .disabled(isDeleting)
+            }
+
             Button("Cancel") { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(isDeleting)
@@ -465,21 +578,36 @@ struct DeleteAccountSheet: View {
         .interactiveDismissDisabled(isDeleting)
     }
 
-    private func deleteAccount() async {
+    /// `skipRevocation`: the person chose Delete anyway after a failed revocation (AppleRevocationStep).
+    private func deleteAccount(skipRevocation: Bool = false) async {
         guard canDelete else { return }
         isDeleting = true
         errorMessage = nil
+        revocationFailed = false
         // Apple first (it requires the revocation, and a deleted account can't
-        // be asked again). A dismissed prompt stops the deletion; a failed
-        // revocation doesn't, since removing the user's data comes first.
-        do {
-            if try await revocation.revokeIfLinked() == .cancelled {
-                errorMessage = "Deleting an account that uses Sign in with Apple needs Apple's confirmation. Please try again."
+        // be asked again). A dismissed prompt stops the deletion; a failed one
+        // asks: Try again, or Delete anyway (plan rev 12 S6).
+        if !skipRevocation {
+            let result: Result<AppleTokenRevocation.Outcome, Error>
+            do { result = .success(try await revocation.revokeIfLinked()) } catch { result = .failure(error) }
+            switch AppleRevocationStep.after(result) {
+            case .delete:
+                break
+            case .stop:
+                errorMessage = AppleRevocationStep.cancelledMessage
+                isDeleting = false
+                return
+            case .askTryAgainOrDeleteAnyway:
+                if case .failure(let error) = result {
+                    AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+                }
+                errorMessage = AppleRevocationStep.failedMessage
+                revocationFailed = true
                 isDeleting = false
                 return
             }
-        } catch {
-            AppLog.error("apple_token_revoke_failed: \(error.localizedDescription)")
+        } else {
+            AppLog.info("account_delete_without_apple_revocation")
         }
         do {
             try await env.api.deleteAccount()
@@ -492,8 +620,10 @@ struct DeleteAccountSheet: View {
     }
 }
 
+#if DEBUG
 // MARK: - Admin costs (parity with AdminCostsCard.tsx)
 
+/// Debug builds only: it names no one, and no tester's build carries it.
 struct AdminCostsCard: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -563,3 +693,4 @@ struct AdminCostsCard: View {
         }
     }
 }
+#endif

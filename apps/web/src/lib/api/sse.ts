@@ -14,7 +14,11 @@ export interface SseEvent {
  * the connection) at once, whatever the fetch underneath does with it.
  */
 export async function* readSse(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<SseEvent> {
-  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  // TextDecoderStream accepts any BufferSource, a superset of Uint8Array, but
+  // TypeScript 6's DOM types pair its writable side too strictly for
+  // pipeThrough. Name the pair it really is.
+  const decoder = new TextDecoderStream() as ReadableWritablePair<string, Uint8Array>;
+  const reader = body.pipeThrough(decoder).getReader();
   const onAbort = () => {
     void (async () => {
       try {

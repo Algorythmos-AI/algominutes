@@ -1,4 +1,4 @@
-import { Navigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useSearchParams } from 'react-router';
 import { SITE_URL } from '../site';
 import { useAuth } from './AuthContext';
 
@@ -22,9 +22,12 @@ export function SignInPage() {
         <p className="mt-2 text-muted">Every meeting, summed up.</p>
       </div>
       {error && (
-        <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-body">
-          {error}
-        </p>
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-body">
+          <p>{error}</p>
+          <p className="mt-1 text-sm">
+            Still not working? <Link to="/diagnostics">Run a sign-in check</Link>.
+          </p>
+        </div>
       )}
       <div className="flex flex-col gap-3">
         <button type="button" disabled={busy || status === 'loading'} onClick={() => signIn('apple')} className={`${button} bg-white text-black`}>

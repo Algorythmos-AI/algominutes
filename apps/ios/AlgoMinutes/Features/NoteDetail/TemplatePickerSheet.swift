@@ -40,7 +40,7 @@ struct TemplatePickerSheet: View {
 
             Text("Replaces the current summary. The transcript is not changed.")
                 .font(Typography.body(12))
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button {

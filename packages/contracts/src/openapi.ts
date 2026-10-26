@@ -81,12 +81,18 @@ export function buildRegistry(): OpenAPIRegistry {
     ['ShareCreateResponse', S.ShareCreateResponse],
     ['ShareRevokeRequest', S.ShareRevokeRequest],
     ['ShareRevokeResponse', S.ShareRevokeResponse],
+    ['ShareListRequest', S.ShareListRequest],
+    ['ShareListItem', S.ShareListItem],
+    ['ShareListResponse', S.ShareListResponse],
     ['SharedNoteRequest', S.SharedNoteRequest],
     ['SharedSummary', S.SharedSummary],
     ['SharedNoteResponse', S.SharedNoteResponse],
     ['NoteEditSummary', S.NoteEditSummary],
     ['UpdateNoteRequest', S.UpdateNoteRequest],
     ['UpdateNoteResponse', S.UpdateNoteResponse],
+    ['TextNoteSource', S.TextNoteSource],
+    ['TextNoteCreateRequest', S.TextNoteCreateRequest],
+    ['TextNoteResponse', S.TextNoteResponse],
     ['NoteSpeaker', S.NoteSpeaker],
     ['SetNoteSpeakersRequest', S.SetNoteSpeakersRequest],
     ['SetNoteSpeakersResponse', S.SetNoteSpeakersResponse],
@@ -220,6 +226,27 @@ export function buildRegistry(): OpenAPIRegistry {
 
   registry.registerPath({
     method: 'post',
+    path: `${API_BASE_PATH}/notes/text`,
+    summary: 'Save a text note (a scanned image, a PDF, an imported file) from text extracted on the device: Postgres, then the Firestore mirror; ready at once. A retry with the same noteId is the same note.',
+    tags: ['notes'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.TextNoteCreateRequest) },
+    responses: {
+      200: { description: 'The note is saved and ready (or already was); its embedding is queued.', ...json(S.TextNoteResponse) },
+      400: errorResponse('Invalid body, noteId or workspaceId.'),
+      401: errorResponse('Missing or invalid token, or the account was deleted (error: account_deleted).'),
+      403: errorResponse("Not the caller's workspace."),
+      404: errorResponse('That note id was deleted.'),
+      409: errorResponse('The note id is another kind of note, or another account\'s (error: text_note_conflict).'),
+      413: errorResponse('The text is longer than the contract allows.'),
+      500: errorResponse('Saving failed; safe to retry.'),
+      503: errorResponse('Postgres is unavailable; safe to retry.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
     path: `${API_BASE_PATH}/notes/{id}/speakers`,
     summary: 'Name the diarised speakers of a note (per-note, ADR 0005).',
     tags: ['notes'],
@@ -335,6 +362,22 @@ export function buildRegistry(): OpenAPIRegistry {
       503: errorResponse('Postgres not provisioned.'),
     },
   });
+  registry.registerPath({
+    method: 'post',
+    path: `${API_BASE_PATH}/shares/list`,
+    summary: "The caller's links for a note, to see and revoke (never the token).",
+    tags: ['share'],
+    security: authed,
+    parameters: commonHeaders,
+    request: { body: json(S.ShareListRequest) },
+    responses: {
+      200: { description: 'The links, newest first.', ...json(S.ShareListResponse) },
+      400: errorResponse('Missing or invalid fields.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      503: errorResponse('Postgres not provisioned.'),
+    },
+  });
 
   registry.registerPath({
     method: 'post',
@@ -399,10 +442,25 @@ export function buildRegistry(): OpenAPIRegistry {
       402: { description: 'Over the plan quota.', ...json(S.QuotaExceededResponse) },
       403: errorResponse('Workspace mismatch, or not your note.'),
       404: errorResponse('Note or audio not found.'),
-      413: errorResponse('Recording over the size limit.'),
+      413: errorResponse('Recording over the size limit, or longer than the plan allows for one note.'),
       429: errorResponse('Hourly processing or upload limit reached.'),
       500: errorResponse('Could not queue the audio.'),
-      503: errorResponse('Service is being upgraded.'),
+      503: errorResponse("Service is being upgraded, or today's processing limit is reached (nothing was charged)."),
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/notes/action-items/status`, tags: ['notes'], security: authed, parameters: commonHeaders,
+    summary: 'Tick or untick one of a note’s action items. Idempotent. The tick is read back on the note read (ActionItem.status).',
+    request: { body: json(S.ActionItemStatusRequest) },
+    responses: {
+      200: { description: 'The item’s status after the change.', ...json(S.ActionItemStatusResponse) },
+      400: errorResponse('Invalid fields, or an item id that isn’t one.'),
+      401: errorResponse('Missing or invalid token.'),
+      403: errorResponse('Workspace mismatch.'),
+      404: errorResponse('No such item on a note you can reach.'),
+      500: errorResponse('Could not save it.'),
+      503: errorResponse('Unavailable until Postgres is provisioned.'),
     },
   });
 
@@ -491,11 +549,56 @@ export function buildRegistry(): OpenAPIRegistry {
   });
 
   registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/beta/redeem`, tags: ['billing'], security: authed, parameters: commonHeaders,
+    summary: 'Redeem a beta invite code for time-limited Pro minutes (and the notetaker, when the invite includes it). Redeeming the same code again returns the same answer and uses nothing.',
+    request: { body: json(S.RedeemInviteRequest) },
+    responses: {
+      200: { description: 'Redeemed (or already redeemed by this user).', ...json(S.RedeemInviteResponse) },
+      400: { description: 'Not a valid code (unknown or revoked).', ...json(S.RedeemInviteError) },
+      401: errorResponse('Missing or invalid token, or the account was deleted.'),
+      409: { description: 'Every use of this code is taken.', ...json(S.RedeemInviteError) },
+      410: { description: 'The code has expired.', ...json(S.RedeemInviteError) },
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many attempts; try again later.'),
+    },
+  });
+
+  registry.registerPath({
     method: 'get', path: `${API_BASE_PATH}/config`, tags: ['config'], security: authed, parameters: commonHeaders,
     summary: 'Server-side feature switches the apps read at launch (e.g. broadcast capture).',
     responses: {
       200: { description: 'Switches.', ...json(S.AppConfigResponse) },
       401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  // ── online meetings (docs/plans/MEETINGS.md) ──────────────────────────
+  // Behind GET /v1/config `notetaker.bot`: 503 feature_disabled while it's off.
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/meetings/bots`, tags: ['meetings'], security: authed, parameters: commonHeaders,
+    summary: 'Send the notetaker to a meeting now. The same requestId returns the same bot (idempotent).',
+    request: { body: json(S.CreateMeetingBotRequest) },
+    responses: {
+      202: { description: 'The notetaker is on its way; its note is created in the recording state.', ...json(S.MeetingBotResponse) },
+      400: errorResponse('Invalid or unsupported meeting link.'),
+      401: errorResponse('Missing or invalid token.'),
+      402: errorResponse('No notetaker minutes left.'),
+      426: errorResponse('Client too old — please update.'),
+      429: errorResponse('Too many notetakers at once.'),
+      503: { description: 'The notetaker is switched off.', ...json(S.FeatureDisabledError) },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post', path: `${API_BASE_PATH}/meetings/bots/{botId}/cancel`, tags: ['meetings'], security: authed, parameters: commonHeaders,
+    summary: 'Cancel a notetaker, or make it leave the meeting. Idempotent.',
+    request: { params: z.object({ botId: S.Id }) },
+    responses: {
+      200: { description: 'Cancelled, or already finished.', ...json(S.CancelMeetingBotResponse) },
+      401: errorResponse('Missing or invalid token.'),
+      404: errorResponse('No such notetaker (or not yours).'),
+      426: errorResponse('Client too old — please update.'),
+      503: { description: 'The notetaker is switched off.', ...json(S.FeatureDisabledError) },
     },
   });
 
@@ -517,6 +620,15 @@ export function buildRegistry(): OpenAPIRegistry {
     responses: {
       200: { description: 'Registered.', ...json(S.OkResponse) },
       400: errorResponse('Missing or invalid fields.'),
+      401: errorResponse('Missing or invalid token.'),
+    },
+  });
+
+  registry.registerPath({
+    method: 'get', path: `${API_BASE_PATH}/account/retention`, tags: ['account'], security: authed, parameters: commonHeaders,
+    summary: "The account's note retention (days), or null to keep until deleted: the same on every device.",
+    responses: {
+      200: { description: 'The retention last set on any device.', ...json(S.RetentionResponse) },
       401: errorResponse('Missing or invalid token.'),
     },
   });

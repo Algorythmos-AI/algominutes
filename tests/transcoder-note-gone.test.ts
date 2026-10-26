@@ -65,10 +65,11 @@ describe('transcoder kickoff for a deleted note', () => {
   // status writes and mirror writes together.
   function deps({
     exists = [true] as boolean[], upsertErr = null as Error | null, upsertErrOn = 'later' as 'later' | 'chunking',
-    mirrorStatusErr = null as Error | null,
+    mirrorStatusErr = null as Error | null, sourceKind = null as string | null,
   } = {}) {
     const calls: string[] = [];
     const order: string[] = [];
+    const infos: Array<{ o: any; m: string }> = [];
     const warns: Array<{ o: any; m: string }> = [];
     const errors: Array<{ o: any; m: string }> = [];
     const answers = [...exists];
@@ -76,15 +77,18 @@ describe('transcoder kickoff for a deleted note', () => {
     return {
       calls,
       order,
+      infos,
       warns,
       errors,
       deps: {
-        log: { info: () => {}, error: (o: any, m: string) => void errors.push({ o, m }), warn: (o: any, m: string) => void warns.push({ o, m }) },
+        log: { info: (o: any, m: string) => void infos.push({ o, m }), error: (o: any, m: string) => void errors.push({ o, m }), warn: (o: any, m: string) => void warns.push({ o, m }) },
         db: {
           pool: () => ({ connect: async () => client }),
           // The kickoff's pre-check reads the status; a later re-check asks noteExists.
           noteStatus: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? 'queued' : null),
+          noteRun: async () => ((answers.length > 1 ? answers.shift() : answers[0]) ? { status: 'queued', runSeq: 0 } : null),
           noteExists: async () => (answers.length > 1 ? answers.shift() : answers[0]),
+          noteSourceKind: async () => sourceKind,
           upsertNoteStatus: async (_c: unknown, { status }: { status: string }) => {
             order.push(`pg:${status}`);
             if (upsertErr && (upsertErrOn === 'chunking') === (status === 'chunking')) throw upsertErr;
@@ -107,6 +111,8 @@ describe('transcoder kickoff for a deleted note', () => {
         stt: {},
         youtube: {},
         traceId: 't',
+        // The charge-settling step (measured-length.ts) has its own Postgres tests.
+        meter: { settleMeasuredLength: async () => ({ kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 }) },
       },
     };
   }
@@ -153,6 +159,22 @@ describe('transcoder kickoff for a deleted note', () => {
     expect(d.errors).toContainEqual(expect.objectContaining({ m: 'transcoder_mirror_doc_missing' }));
   });
 
+  // RELEASE.md PR 20: a notetaker's speaker names need word timings, which the fast path doesn't have.
+  it('a short notetaker recording takes the chunked path; any other short one the fast path', async () => {
+    const bot = deps({ sourceKind: 'bot' });
+    const outcome = await handler.handle(kickoff, bot.deps).then(() => 'done', (err: Error) => err);
+    expect(bot.calls).not.toContain('fastPath');
+    expect(bot.order).toContain('pg:chunking');
+    expect(bot.infos.find((i) => i.m === 'transcoder_routed')?.o).toMatchObject({ decision: 'chunked', forcedBy: 'notetaker', durationSec: 30 });
+    // The chunked path itself isn't faked here: it stops at its first repo call this harness doesn't fake.
+    expect((outcome as Error).message).toMatch(/is not a function/);
+
+    const device = deps({ sourceKind: 'device' });
+    await handler.handle(kickoff, device.deps);
+    expect(device.calls).toContain('fastPath');
+    expect(device.infos.find((i) => i.m === 'transcoder_routed')?.o).toEqual({ noteId: 'n1', workspaceId: 'w1', durationSec: 30, decision: 'fast' });
+  });
+
   it("any other failure throws so the task retries, and mirrors no failure Postgres doesn't have", async () => {
     const d = deps({ upsertErr: new Error('connection reset') });
     await expect(handler.handle(kickoff, d.deps)).rejects.toThrow('connection reset');
@@ -164,21 +186,21 @@ describe('transcoder kickoff for a deleted note', () => {
 // Firestore-only error mirror left Postgres at 'queued', which the idempotent
 // kickoff reads as "in flight", so a retry was refused for 3 h.
 describe('transcoder kickoff: a permanent YouTube failure', () => {
-  it('marks the note failed in Postgres (then the mirror), runs the terminal hooks, and acknowledges', async () => {
+  it('marks the note failed in Postgres (then the mirror), with its dead letter in the same statement, and acknowledges', async () => {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
       release: () => {},
       query: async (sql: string, params: unknown[]) => {
         queries.push({ sql, params });
         // markNoteFailed's UPDATE returns the status it replaced.
-        return /SELECT prev_status, error_message[\s\S]*FROM upd/.test(sql) ? { rows: [{ prev_status: 'queued' }], rowCount: 1 } : { rows: [], rowCount: 1 };
+        return /SELECT prev_status, error_message[\s\S]*FROM upd/.test(sql) ? { rows: [{ prev_status: 'queued', dead_letter_id: 7 }], rowCount: 1 } : { rows: [], rowCount: 1 };
       },
     };
     const mirrored: any[] = [];
     const hooks: string[] = [];
     const deps = {
       log: { info: () => {}, error: () => {}, warn: () => {} },
-      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true, noteStatus: async () => 'queued', upsertNoteStatus: async () => {} },
+      db: { pool: () => ({ connect: async () => client }), noteExists: async () => true, noteStatus: async () => 'queued', noteRun: async () => ({ status: 'queued', runSeq: 0 }), upsertNoteStatus: async () => {} },
       mirror: {
         mirrorStatus: async () => {},
         mirrorError: async () => { throw new Error('the Firestore-only error mirror must not be used here'); },
@@ -194,10 +216,13 @@ describe('transcoder kickoff: a permanent YouTube failure', () => {
     await expect(handler.handle({ kind: 'kickoff', noteId: 'n1', workspaceId: 'w1', type: 'youtube', sourceUrl: 'https://youtu.be/x' }, deps))
       .resolves.toBeUndefined();
     const failed = queries.find((q) => /UPDATE notes n SET status = 'error'/.test(q.sql));
-    // The recording's traceId goes into the statement, for the failure's notice.
-    expect(failed?.params).toEqual(['n1', 'This video is private.', 'w1', null, null, 't']);
+    // The recording's traceId goes into the statement, for the failure's notice; so does its dead letter
+    // (RELEASE.md PR 5a), with its reason.
+    expect(failed?.params.slice(0, 6)).toEqual(['n1', 'This video is private.', 'w1', null, null, 't']);
+    expect([failed?.params[6], failed?.params[10]]).toEqual(['transcode', 'youtube_permanent_failure']);
     expect(mirrored).toEqual([{ path: 'workspaces/w1/notes/n1', data: expect.objectContaining({ status: 'error', errorMessage: 'This video is private.' }) }]);
-    expect(hooks).toEqual(['terminal']);
+    // Written with the failure: the tail records nothing more.
+    expect(hooks).toEqual([]);
   });
 });
 

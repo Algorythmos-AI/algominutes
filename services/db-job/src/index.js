@@ -20,6 +20,7 @@ function loadShared(name) {
   // or symlinked from the repo root (local dev).
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }
@@ -33,6 +34,9 @@ const HANDLERS = {
   'eval-recall':    () => require('./handlers/eval-recall.js'),
   'eval-diarisation': () => require('./handlers/eval-diarisation.js'),
   'grant-tester':   () => require('./handlers/grant-tester.js'),
+  'grant-notetaker': () => require('./handlers/grant-notetaker.js'),
+  'beta-invite':    () => require('./handlers/beta-invite.js'),
+  'backfill-text-notes': () => require('./handlers/backfill-text-notes.js'),
 };
 
 async function main() {

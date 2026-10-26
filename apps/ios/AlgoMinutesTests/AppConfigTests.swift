@@ -33,11 +33,14 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(APIClient.baseURL, AppConfig.apiBaseURL)
     }
 
-    /// The update screen's button: the TestFlight app in every build for now,
-    /// and no button for an unset or unexpanded value.
+    /// The update screen's button: the TestFlight app in Debug and Staging
+    /// (this test host is Debug), the App Store listing in Release, and no
+    /// button for an unset or unexpanded value.
     func testUpdateURL() {
         XCTAssertEqual(AppConfig.updateURL?.scheme, "itms-beta")
-        XCTAssertEqual(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "itms-apps://apps.apple.com/app/id1"])?.scheme, "itms-apps")
+        let release = AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "itms-apps://apps.apple.com/app/id6816333591"])
+        XCTAssertEqual(release?.scheme, "itms-apps")
+        XCTAssertEqual(release?.absoluteString, "itms-apps://apps.apple.com/app/id6816333591")
         XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "$(UPDATE_URL)"]))
         XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": ""]))
         XCTAssertNil(AppConfig.updateURL(info: ["AlgoMinutesUpdateURL": "http://example.com"]))
@@ -63,12 +66,13 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(schemes.contains { $0.contains("909388484461") })
     }
 
-    /// Share links open on the public site, which has no viewer yet.
-    func testShareLinksAreOffUntilTheSiteCanShowThem() {
-        XCTAssertFalse(AppConfig.shareLinksEnabled)
+    /// A build flag is on only when set: an unset build setting reads literally.
+    func testABuildFlagIsOnOnlyWhenSet() {
         XCTAssertTrue(AppConfig.flag("k", info: ["k": " yes "]))
         XCTAssertFalse(AppConfig.flag("k", info: ["k": "NO"]))
-        XCTAssertFalse(AppConfig.flag("k", info: ["k": "$(SHARE_LINKS_ENABLED)"]))
+        XCTAssertFalse(AppConfig.flag("k", info: ["k": "$(SOME_FLAG)"]))
         XCTAssertFalse(AppConfig.flag("k", info: nil))
+        // Share links follow the server now (AppSwitches, PR 29), not a build flag.
+        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "AlgoMinutesShareLinksEnabled"))
     }
 }

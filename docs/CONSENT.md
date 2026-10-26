@@ -3,9 +3,10 @@
 > Launch-blocker artifact. Scope: what v1.0 **ships** for recording consent, and the
 > deeper legal layer the code **must not implement or guess** before a written legal
 > opinion exists. Publisher: **Algorythmos Pty Ltd** (Sydney, NSW, Australia), shipping
-> globally on iOS + Android. Web reads/manages/pays and does **not** capture audio, so it
-> is out of scope for the capture-consent flow (but see §6 for the signup-time policy
-> acceptance shared with all clients).
+> globally on iOS, Android and the web. Since W6 (#204) and W7 (#206) the web **does**
+> capture audio (the microphone, and another tab's call on desktop Chromium), behind the same
+> per-session gate as iOS (§2.2). The meeting notetaker bot is covered by §2.4. §6 covers the
+> signup-time policy acceptance shared by all clients.
 
 ---
 
@@ -74,6 +75,36 @@ responsibility-shifting notice, **not** a substitute for the jurisdiction-aware 
   assert any specific legal standard is met until reviewed.
 - `TODO(brand):` Final visual treatment of the consent sheet (icon, emphasis) — copy is
   frozen pending `TODO(legal)`; artwork only.
+
+### 2.4 The meeting notetaker bot (2026-09-28, `docs/plans/MEETINGS.md`)
+
+A Recall.ai bot joins an online meeting at the user's explicit request. That means a pasted link, a meeting they
+chose from their calendar, or a rule they turned on. It records the meeting for that user alone. This is a new
+capture path, so it gets its own defaults:
+
+- **Visible and named.** It joins as "{First name}'s notetaker (AlgoMinutes)", and the suffix can't be removed.
+  Everyone in the meeting sees it in the participant list, and the host can remove it at any time. On Zoom, the host
+  is also asked to allow recording, and a denial ends the recording.
+- **A pinned chat notice.** When the bot joins, it posts a notice to everyone and pins it. Late joiners get it too.
+  - The notice says AlgoMinutes is recording and transcribing the meeting for the named user, and links to a page
+    explaining the notetaker.
+  - Like §2.2, it's a **transparency notice**. It must not say that recording is lawful or compliant anywhere (§3).
+  - Each note records the notice's version, when it was sent, whether the bot was admitted, and the recording
+    permission (`meeting_consents`).
+- **Never automatic by default.** Calendar auto-join is **off** until the user turns on a rule, and each meeting can
+  be switched off.
+- **The same affirmation as §2.2.** Before the first bot and before turning on auto-join, the user ticks: "I have
+  permission from anyone whose voice may be captured. If others are present, I'll let them know the meeting is
+  being recorded."
+- **Tenancy.** The recording goes to one note in the requesting user's workspace only. It's never shared with
+  anyone else in the meeting.
+- **Overseas processing, disclosed.** The audio is processed by Recall.ai in Tokyo. The privacy page names Recall,
+  its region and what it receives (APP 5, APP 8). Recall's copy is deleted as soon as ours is stored.
+- **`TODO(legal)`.** NSW requires the consent of all parties to a private conversation.
+  - Until the written legal opinion in §4 is received, the notetaker is available **only to allowlisted testers**,
+    behind the `/v1/config` notetaker switch, which defaults to off.
+  - Whether a visible bot plus a pinned notice amounts to consent from all parties is for that opinion to decide.
+    This document doesn't assume it does.
 
 ---
 

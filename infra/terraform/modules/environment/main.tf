@@ -64,6 +64,7 @@ locals {
     "logging.googleapis.com",              # Cloud Logging
     "monitoring.googleapis.com",           # Cloud Monitoring
     "cloudresourcemanager.googleapis.com", # Resource Manager (IAM bindings)
+    "cloudkms.googleapis.com",             # Cloud KMS: the notetaker's meeting-link key (kms.tf)
     "billingbudgets.googleapis.com",       # Budgets + alerts (budget.tf)
     "iap.googleapis.com",                  # IAP TCP forwarding (SSH to the proof VM, bastion.tf)
   ]
@@ -195,6 +196,14 @@ resource "google_sql_database_instance" "pg" {
       ssl_mode = "ENCRYPTED_ONLY"
     }
 
+    # Updates land in a quiet hour: Sunday 16:00 UTC is Monday 02:00–03:00 in Sydney (rev 11, H7). Without a
+    # window, Google picks any time, and a restart mid-meeting drops the pools' connections.
+    maintenance_window {
+      day          = 7
+      hour         = 16
+      update_track = "stable"
+    }
+
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = var.db_point_in_time_recovery
@@ -254,6 +263,64 @@ resource "google_secret_manager_secret" "db_password" {
   depends_on = [google_project_service.apis]
 }
 
+# Recall.ai's API key and webhook signing secret (docs/plans/MEETINGS.md), one
+# Recall account per environment. Terraform creates the empty secrets; the owner
+# adds each value (docs/BLOCKERS.md, "Online meetings"), so no secret value is
+# ever in the plan or the state. services/meetings reads them at run time, not
+# through the Cloud Run env, so a deploy never waits for them.
+resource "google_secret_manager_secret" "recall" {
+  for_each  = toset(["recall-api-key", "recall-webhook-secret"])
+  project   = var.project_id
+  secret_id = each.key
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# The Apple key DeviceCheck is signed with (RELEASE.md PR 22): a .p8 PEM the owner
+# adds as a version. The api reads it at run time (services/api/src/device-check.js),
+# so a deploy never waits for it; with none, no new iOS user gets a trial.
+resource "google_secret_manager_secret" "devicecheck_key" {
+  project   = var.project_id
+  secret_id = "devicecheck-key"
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# The App Store Connect in-app purchase key billing asks Apple about subscriptions with
+# (RELEASE.md PR 26): a .p8 PEM the owner adds as a version. Billing reads it at run
+# time (services/billing/src/lib/app-store-server.js); with none, its reconcile task
+# checks nothing and logs apple_reconcile_not_configured.
+resource "google_secret_manager_secret" "app_store_server_key" {
+  project   = var.project_id
+  secret_id = "app-store-server-key"
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_secret_manager_secret_version" "db_password" {
   secret      = google_secret_manager_secret.db_password.id
   secret_data = random_password.db.result
@@ -279,8 +346,9 @@ locals {
 resource "google_storage_bucket" "buckets" {
   for_each = toset(local.bucket_suffixes)
 
+  # Bucket names are global: named after the project, so a project never reuses another's names.
   project                     = var.project_id
-  name                        = "algominutes-${var.env}-${each.value}"
+  name                        = "${var.project_id}-${each.value}"
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
@@ -326,7 +394,24 @@ resource "google_storage_bucket" "buckets" {
 # Retry config is sane-default; tune per queue later if a stage needs it.
 # ---------------------------------------------------------------------------
 locals {
-  queues = ["transcode", "summarize", "embed", "extract", "notify"]
+  queues = ["transcode", "summarize", "embed", "extract", "notify", "meetings"]
+
+  # Per-queue retry budget. summarize alone gets a longer window: from
+  # gemini-2.5-flash's retirement the ladder has one Sydney model, and a Gemini
+  # overload is ridden out by the queue rather than failing the note (DECISIONS
+  # 2026-09-28). 10 attempts with backoffs 5,10,20,40,80,160,240,320,400s is about
+  # 21 min of waiting plus up to 10 x the ladder's 240s budget: about an hour.
+  # transcode keeps 5: a transcode retry can re-run paid speech-to-text.
+  #
+  # Every queue now backs off up to 600 s (RELEASE.md rev 11, H7): 5 attempts in about 75 s dropped transcode,
+  # embed and notify work over a short outage. transcode's retries no longer re-pay speech-to-text: a chunk's
+  # job is started by one attempt, and a retry polls it (migration 036, claimChunkStt).
+  queue_retry = {
+    for q in local.queues : q => {
+      max_attempts = q == "summarize" ? var.summarize_max_attempts : var.task_max_attempts
+      max_backoff  = "600s"
+    }
+  }
 }
 
 resource "google_cloud_tasks_queue" "queues" {
@@ -338,7 +423,7 @@ resource "google_cloud_tasks_queue" "queues" {
 
   rate_limits {
     max_dispatches_per_second = 100
-    max_concurrent_dispatches = 50
+    max_concurrent_dispatches = local.queue_capacity[each.value]
   }
 
   retry_config {
@@ -346,14 +431,35 @@ resource "google_cloud_tasks_queue" "queues" {
     # with MAX_TASK_ATTEMPTS set to this SAME value so the terminal-failure/DLQ
     # write (packages/db/note-terminal.cjs isFinalAttempt) fires on the queue's
     # genuine last attempt — not before, not after.
-    max_attempts       = var.task_max_attempts
+    max_attempts       = local.queue_retry[each.value].max_attempts
     min_backoff        = "5s"
-    max_backoff        = "300s"
+    max_backoff        = local.queue_retry[each.value].max_backoff
     max_doublings      = 4
     max_retry_duration = "0s" # 0 = retry up to max_attempts with no time cap
   }
 
   depends_on = [google_project_service.apis]
+}
+
+locals {
+  # The service each queue delivers to (its enqueuers' target URLs: api and the
+  # transcoder's tasks-client.js, regenerate-summary.js, notify.cjs).
+  queue_service = {
+    transcode = "transcoder"
+    summarize = "summarizer"
+    embed     = "embedder"
+    extract   = "extractor"
+    notify    = "notifier"
+    meetings  = "meetings"
+  }
+  # Never dispatch more at once than the service can serve. Past max instances x
+  # request concurrency Cloud Run answers 429, which Cloud Tasks counts as a
+  # failed attempt, so a burst used to burn retries and dead-letter notes (every
+  # queue allowed 50; prod runs at most 4 single-request transcoders). Extra
+  # tasks now wait in the queue instead.
+  queue_capacity = {
+    for q, svc in local.queue_service : q => var.connection_budget.services[svc].max_instances * local.service_config[svc].concurrency
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -397,6 +503,7 @@ locals {
     "run-extractor"  = "AlgoMinutes Extractor (Cloud Run runtime SA)"
     "run-billing"    = "AlgoMinutes Billing (Cloud Run runtime SA)"
     "run-notifier"   = "AlgoMinutes Notifier (Cloud Run runtime SA)"
+    "run-meetings"   = "AlgoMinutes Meetings: the Recall.ai notetaker (Cloud Run runtime SA)"
     "run-db-job"     = "AlgoMinutes db-job (Cloud Run Job runtime SA)"
     # Identity that Cloud Tasks HTTP tasks carry (OIDC) and that invokes the
     # private Cloud Run services. Enqueuing services actAs this SA; it holds
@@ -474,6 +581,14 @@ locals {
       # is console-only; sdkAdminServiceAgent is the correct programmatic grant.
       "roles/firebase.sdkAdminServiceAgent",
     ])
+    # Grows with the notetaker's PRs (Firestore mirror, Cloud Tasks, Storage),
+    # each role with the code that needs it (tests/tf-iam-contract.test.ts).
+    "run-meetings" = concat(local.common_roles, [
+      "roles/cloudsql.client",
+      "roles/secretmanager.secretAccessor", # the db password, and recall-api-key / recall-webhook-secret
+      "roles/datastore.user",               # the notetaker's note mirror (through the repo layer)
+      "roles/cloudtasks.enqueuer",          # its own tasks: process each webhook, create and cancel bots
+    ])
     "run-db-job" = concat(local.common_roles, [
       "roles/cloudsql.client",
       "roles/secretmanager.secretAccessor",
@@ -537,6 +652,14 @@ resource "google_storage_bucket_iam_member" "object_admin" {
   bucket = google_storage_bucket.buckets[each.value.bucket].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime[each.value.sa].email}"
+}
+
+# The meetings service writes a bot's recording into recordings/{ws}/{noteId} and deletes it with the note
+# (RELEASE.md PR 17, for PR 19's ingest): the recordings bucket only, not imports or scans.
+resource "google_storage_bucket_iam_member" "meetings_recordings" {
+  bucket = google_storage_bucket.buckets["recordings"].name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime["run-meetings"].email}"
 }
 
 # Logs (traceId, uid, noteId, workspaceId; never transcript text) are kept 30

@@ -5,9 +5,11 @@
 //   2. when APP_ENABLED=true, the web app (apps/web, Vite base /app/), copied
 //      into apps/site/dist/app in place of the "coming soon" placeholder.
 //
-// APP_ENABLED is set on Vercel's Preview environment (staging) and, from the
-// prod launch (plan Phase 3), on Production. Anything else leaves the
-// placeholder, so the app can't reach the public by accident.
+// APP_ENABLED is set on Vercel's Preview environment (staging), on the beta
+// project's Production (integration at beta.algominutes.algorythmos.com, for
+// testers: RELEASE.md PR 7), and, from the prod launch (plan Phase 3), on the
+// site's Production. Anything else leaves the placeholder, so the app can't
+// reach the public by accident.
 //
 //   APP_ENABLED=true node scripts/build-site.mjs
 import { execFileSync } from 'node:child_process';
@@ -34,6 +36,7 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
   const rule = config.headers.find((r) => r.source === '/app(/.*)?');
   const csp = rule?.headers.find((h) => h.key === 'Content-Security-Policy')?.value ?? '';
   const connect = (/(?:^|;)\s*connect-src ([^;]*)/.exec(csp)?.[1] ?? '').trim().split(/\s+/);
+  const frames = (/(?:^|;)\s*frame-src ([^;]*)/.exec(csp)?.[1] ?? '').trim().split(/\s+/);
   const problems = [];
   for (const name of ['VITE_API_ORIGIN', 'VITE_BILLING_ORIGIN']) {
     const raw = String(env[name] ?? '').trim();
@@ -60,7 +63,11 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
   const project = String(env.VITE_FIREBASE_PROJECT_ID ?? '').trim();
   const authDomain = String(env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim();
   if (!authDomain) problems.push('VITE_FIREBASE_AUTH_DOMAIN is not set');
-  else if (project && authDomain !== `${project}.firebaseapp.com`) {
+  else if (project && authDomain === `${project}.firebaseapp.com`) {
+    // Signing in on Firebase's own domain (staging: Vercel Authentication would intercept Apple's cross-site
+    // POST to our /__/auth proxy). Its sign-in iframe then comes from there, so /app must be able to frame it.
+    if (!frames.includes(`https://${authDomain}`)) problems.push(`https://${authDomain} is not in /app's frame-src in apps/site/vercel.json`);
+  } else if (project) {
     const proxied = (config.rewrites || []).some(
       (r) => r.source === '/__/auth/:path*'
         && r.destination === `https://${project}.firebaseapp.com/__/auth/:path*`
@@ -73,7 +80,10 @@ export function checkAppEnv(env = process.env, vercelJson = path.join(ROOT, 'app
 
 /** Puts the web build at dist/app, replacing the placeholder (both would be served at /app). */
 export function compose(siteDist = SITE_DIST, webDist = WEB_DIST) {
-  if (!fs.existsSync(path.join(webDist, 'index.html'))) throw new Error(`build-site: ${webDist}/index.html is missing; the web build failed`);
+  // Both halves of the web build: the app, and its service worker (built second, vite.sw.config.ts).
+  for (const f of ['index.html', 'sw.js']) {
+    if (!fs.existsSync(path.join(webDist, f))) throw new Error(`build-site: ${webDist}/${f} is missing; the web build failed`);
+  }
   const target = path.join(siteDist, 'app');
   if (fs.existsSync(target)) throw new Error(`build-site: ${target} already exists; the site must not have an app/ directory of its own`);
   fs.rmSync(path.join(siteDist, 'app.html'), { force: true });

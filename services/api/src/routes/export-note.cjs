@@ -93,12 +93,12 @@ async function fetchForExport({ noteId, uid, workspaceId, scope, log }) {
       }),
       withQueryTimeout({
         timeoutMs: TIMEOUT_MS,
-        text: `SELECT s.text FROM action_items s ${MEMBERSHIP_JOIN} ORDER BY s.created_at ASC, s.id ASC`,
+        text: `SELECT s.text FROM action_items s ${MEMBERSHIP_JOIN} ORDER BY s.position ASC NULLS LAST, s.created_at ASC, s.id ASC`,
         values: [noteId, uid, workspaceId], log, op: 'export_note_items',
       }),
       withQueryTimeout({
         timeoutMs: TIMEOUT_MS,
-        text: `SELECT s.text FROM key_decisions s ${MEMBERSHIP_JOIN} ORDER BY s.created_at ASC, s.id ASC`,
+        text: `SELECT s.text FROM key_decisions s ${MEMBERSHIP_JOIN} ORDER BY s.position ASC NULLS LAST, s.created_at ASC, s.id ASC`,
         values: [noteId, uid, workspaceId], log, op: 'export_note_decisions',
       }),
     ]);

@@ -3,23 +3,594 @@
 Batched list of everything that needs a human decision or credential. Nothing here stopped the A2/A3
 run; each item has a safe reversible default already applied. Grouped by type.
 
+## 0. The release plan (rev 12, 2026-10-24; rev 11, 2026-09-30; rev 10, 2026-09-29)
+
+Rev 12 leads `docs/plans/RELEASE.md`: the App-Review readiness check of 2026-10-24, its bug list (S1–S13,
+I1–I9, O1–O9), and the five stages to a submission that passes. Each bug closes here under its id, with a
+failing-then-passing test and staging evidence. Rev 11's entries follow, then rev 10's.
+
+- **The readiness check of 2026-10-24 (plan rev 12 R12.1), at integration `6ce9c3f0`.** Read-only: docs, CI
+  history, the public site, both GCP projects (read-only), an App-Review audit of `apps/ios`, a backend and
+  operations audit. Findings and their ids are in RELEASE.md R12.3. The facts that decide the plan:
+  - No merge from 2026-10-07 to 10-24. `main` is 218 commits behind `integration`; its only promotion is the site
+    (#198). `algominutes-prod` has Cloud Run, Cloud Tasks and Secret Manager disabled, no Cloud SQL and no
+    tfstate bucket (O1). `ci/deploy-production` (e335e107) was never merged.
+  - **CI red for every new PR from 2026-10-18** (#422–#427): `tests/integration/beta-invites.test.ts:544` made a
+    14-day invite at a frozen 2026-10-01 and redeemed it at the real clock (S1). Reproduced locally against
+    Postgres 16 + pgvector: `expected 'expired' to be 'redeemed'`, 1 failed of 34. **Fixed in #428**, which also
+    adds `scripts/check-frozen-clock.mjs` to `invariants.yml`: it flagged the test before the fix (and one
+    two-clock block in `entitlement-grants.test.ts`, now on one clock) and passes after, 50 of 50 across both
+    files.
+  - The nightly pipeline e2e is green 10-13 → 10-23 (10-22 cancelled), so the one-model ladder works after
+    gemini-2.5-flash's retirement. The scheduled web journey failed 10-16, 10-17, 10-18 and 10-20 (the chat answer
+    at 120 s, a call note's summary at 480 s) and was killed at 40 minutes on 10-23 (O2).
+  - The Release build: empty origins (`project.yml`, by design until prod), `UPDATE_URL` `itms-beta://`, the
+    extension at device family `"1,2"`, no DiskSpace reason in the extension's manifest (I1, I4), the invite path
+    and the paywall-off posture (I2), no products in App Store Connect.
+  - Terms and Privacy live at version 2026-09-26, still "pending legal review"; `/delete-account` and `/support`
+    200; `/notetaker` 404 on prod until P3.
+  - **Could not be read from here:** App Store Connect (products, agreements, Test Information, whether a
+    Staging → Beta workflow or an external group exists), prod Firebase, the Vertex quota page. The owner's
+    consoles answer those.
+  - [x] 0.1 S1 → #428 (90c8ef9f). Every workflow green on the merge commit's push, including `ci`'s integration
+    job (run 40093802631) and `invariants` with the new frozen-clock step (run 40093802643).
+  - [x] 0.5 the plan → #429 (586bb218): rev 12 in RELEASE.md, this entry, the two audits under `docs/audits/`,
+    INFRASTRUCTURE.md and EXTRACTION-AUDIT.md corrected.
+- **Stage 0, the rest (plan rev 12 R12.5), as of 2026-10-24 14:45 UTC.** Opened, each with auto-merge on (the
+  owner's go-ahead, 2026-10-24), so each lands only when its checks pass:
+  - [ ] **0.2 I1, I4, I7 → #430.** Release `UPDATE_URL` → `itms-apps://apps.apple.com/app/id6816333591`; the
+    extension `TARGETED_DEVICE_FAMILY "1"` (the generated project shows `1` in Debug, Staging and Release); the
+    extension's manifest declares DiskSpace `E174.1`; `ci_post_clone.sh` fails an archive whose plist project
+    doesn't match its scheme; `ensureWorkspaceDoc` logs. Evidence: `plutil -lint` OK on both manifests,
+    `shellcheck` OK, `xcodebuild build-for-testing` for `generic/platform=iOS` exit 0. **Not run here:** the unit
+    tests (this Mac has no simulator runtime; CI's `ios-test` runs them). **Not verifiable until the first Release
+    archive:** the post-clone check against prod's plist, and the Privacy Report.
+  - [ ] **0.3 O2 → #431.** Measured from the runs' own `ok`/`FAIL` lines:
+
+    | Step | Green (10-19, 10-21, 10-22) | Wait | Red |
+    |---|---|---|---|
+    | A question gets an answer | 2–3 s | 120 s | timed out 10-18, 10-20 |
+    | A recorded call becomes a note | 20–38 s | 480 s | 499 s on 10-17; 110 s on 10-18 |
+    | Install Chromium and ffmpeg | 38–54 s | none | 2,366 s on 10-23, job killed at 40 min |
+
+    The waits are 40–60 times the green time: the red nights were an apt hang and pipeline failures, not budgets.
+    #431 bounds the install like `ci.yml`'s ffmpeg step, adds what the page showed (its alerts and statuses) to
+    every failed wait, and opens a `web-e2e-failed` issue on a red night. Budgets unchanged. 20 of 20 journey
+    tests pass; with the script reverted the two new ones fail. **Still open, now under S2/S3:** why the chat answer
+    and a summary stall; the next red night's FAIL line will say what the page showed.
+  - [ ] **0.4 O1's workflow half, O3 → #432.** `deploy-production.yml` regenerated from today's
+    `deploy-staging.yml` (the 09-30 branch predated the billing solo lane, the live-env preflight and the failure
+    issue), with its own `prod-deploy-failed` label; `tests/deploy-production.test.ts` (5 tests) fails on any
+    other difference, and a one-line change to staging alone turned it red. Every deploy job has a
+    `timeout-minutes` ceiling from staging's last six deploys (ci-gate peaked at 7 min, migrate at 9, the rest at
+    1 or less). Runbook `resume-staging-and-deploy.md` §3b lists the owner's steps after Apply P. **Then, the
+    hardening the plan asked for alongside it:** every deploy job authenticates through
+    `.github/actions/gcp-auth`, which asks WIF a second time after a transient "Unable to retrieve Identity Pool
+    subject token" (the 10-06 sighting), both workflows' first job runs in its Environment and fails by name when
+    a variable is missing or names the wrong project (so production's workflow can't fall through to the repo's
+    staging values), and each ceiling says what was measured (seven green deploys, 10-07 to 10-24; the header
+    names the runs). **Not exercised live:** the retry path needs a token-exchange failure to happen; the next
+    red auth step is the test.
+  - [ ] **0.6 O8.** Dependabot rebased #422, #423, #427 and #433 (which replaced #425) onto the fixed base, and
+    each has auto-merge on. #424 and #426 hadn't rebased by 14:45; asked again, with auto-merge on, so they land
+    only on a green run at the new base. #422 (motion 13 → 14.5) and #423 (`@firebase/rules-unit-testing` 5 → 6)
+    are majors: they land on CI's say-so, which covers the web build and the rules tests.
+  - [ ] **The Stage 0 gate:** CI green through the merge queue on each of the above; an Xcode Cloud Staging build
+    green after #430 lands; two green scheduled web journeys after #431.
+- **Found during Stage 0, not fixed yet:**
+  - **After deleting the account, the web app still sends a request with the deleted account's token** (two
+    401s on the 10-16 web journey, after `the account is deleted from Settings`). Under O2; a fix stops the app's
+    polling at deletion.
+  - **`tests/ios-what-to-test.test.ts` times out locally** (2 of 8, at vitest's default 5 s): each test makes a
+    dozen real git commits, too slow on this Mac's nearly full disk. Passes on a re-run and in CI. A `testTimeout`
+    on that file fixes it if CI ever sees it.
+  - **This Mac can't start worktree sessions:** 4.5 GB free against the 5.4 GB a worktree needs. Stage 0 ran in
+    one checkout, one branch per PR.
+- **Stage 1, the hardening sprint (plan rev 12 R12.5), as of 2026-10-24 21:00 UTC.** Each fix opened with a test
+  that failed before it; the server ones pass the full suite and gates, the iPhone ones build for testing with
+  Xcode 27 and run their tests in CI (this Mac has no simulator runtime). None is verified on a device yet.
+  - [x] **S3 → #437.** A hung Gemini attempt is cut at a cap from the audio's length (60 s + 9 s a minute, at
+    most 150 s) and asked again within the 240 s budget; the summarizer keeps no per-attempt cap.
+  - [x] **S2's alert half → #442.** `gemini_rate_limited` tells a quota refusal from an outage; alerts on it, on
+    `gemini_model_exhausted` and on `gemini_attempt_timeout`. **Owner:** apply the next staging plan for the
+    three policies to exist, and ask Google for gemini-3.5-flash quota or provisioned throughput in Sydney.
+  - [x] **The login retry → #438 (another session's), and a timed-out job counts as failed → #439.** Proven on
+    the 17:11 deploy: all 19 jobs that talk to Google Cloud logged in through `.github/actions/gcp-auth` on the
+    first try; every retry step `outcome=skipped`.
+  - [x] **S14 → #443.** `/v1/chat` closed at exactly 61 s on 10-11, 10-18 and 10-20 (Cloud Run's request
+    timeout; staging logs): Vertex sent nothing and nothing bounded the wait. An attempt with no text by 15 s is
+    cut and asked again; an answer ends inside 45 s, with `event: error` if it must. Found by the
+    pii-scrub-compliance audit of the change: each attempt reads with its own SSE buffer.
+  - [ ] **S15 → #444.** The web client has read a cut stream as `stream_ended` since #191 (the page says "cut
+    short"; a test now pins it). The **iPhone** didn't: `chatStream` finished normally, leaving the answer empty
+    with nothing to retry. It now throws `streamEnded`, and a server error reads as a sentence, not its code.
+  - [ ] **S4 → #450.** The declared length opens the upload session (`X-Upload-Content-Length`), so Cloud
+    Storage refuses any byte past it. The planned lifecycle rule for unfinished uploads is dropped: an
+    unfinished resumable upload is never an object.
+  - [x] **S5: closed, not a bug (owner, 2026-10-24).** A search hit's note title is the user's own title, shown
+    only to them, and never enters a prompt or the embedder (the chunk text does, redacted). Redacting it would
+    show "<<REDACTED:…>>" where they typed a title.
+  - [ ] **S6 → #451.** A failed Apple revocation asks Try again (a fresh Apple prompt) or Delete anyway; it used
+    to delete silently. A hard stop was rejected: a misconfigured Apple provider would block every Apple user's
+    deletion (5.1.1(v)).
+  - [ ] **S7 → #452.** Mirror repair pages newest first, and checks its budget after a page, so a cut-off run has
+    checked the notes no run has seen.
+  - [ ] **S8 → #453 (server) and #456 (iPhone).** A deleted account is refused before Apple's DeviceCheck is
+    asked (an Apple outage gave it a 500, not a 401); a failed DeviceCheck token is asked for once more.
+  - [ ] **S9 → #454.** Production allows only `ALLOWED_ORIGINS`; staging and local development add localhost;
+    the Capacitor/Ionic origins are gone.
+  - [ ] **S11 → #455 and #457.** yt-dlp pinned to 2026.10.21 (what staging ran), with a test that every pip
+    install names a version; the sweep runs account deletions and queued purges first and logs `durationsMs` per
+    step. **Left in S11:**
+    - Code-scanning alert #131 is a false positive: the nightly pipeline test uploading its own fixture to Cloud
+      Storage, the host already restricted. **Owner:** dismiss it as "used in tests".
+    - Notes that live only in Firestore (scanned text) moved to **S16**, below.
+  - [ ] **S16 (new, P1): scanned and imported text notes live only in Firestore.** The iPhone writes them straight
+    into Firestore as `ready` (the rules' one client-made `ready` note), so Postgres never has them: outside
+    retention, backups and PITR, search, chat, `/v1/notes/read` and its paged export, and Postgres-written edits.
+    Deletion and account deletion already work. **The owner chose (2026-10-24) to move them into Postgres like
+    every other note**; the design is RELEASE.md R12.8: a `POST /v1/notes/text` route and a repo
+    `createTextNote` (Postgres first, then the mirror and an embedding), the iPhone calling it, a backfill job for
+    staging, and the rules' exception removed once the version floor passes the new build. Six PRs, one at a time.
+    **As of 2026-10-24 23:50 UTC:** PR 1 (contract and builder) → #461; PR 2 (`createTextNote`) → #463; PR 3
+    (the route) → #464; PR 4 (the iPhone, a draft until the route is on staging) → #465; PR 5 (the
+    `backfill-text-notes` db-job) → #466; and #462 (merged), the embedder reading lines in order when their times
+    tie, since every text-note line starts at 0. Two dual-write audits of PR 2 found five gaps (an orphan doc on a
+    delete in between, the exists-then-write race, a replay overwriting edits, a failed clean-up the retry never
+    reached, a replay doc built from the retry's input); each fixed with its own test, mutation-checked. Also
+    found and fixed: `transcriptTruncated` means "the mirror is a preview" (200 lines), and `rawText` stays off a
+    doc past 400 KB so a long text can't exceed Firestore's 1 MiB. **Owner, after #464 and #465 are on staging:**
+    `JOB_NAME=backfill-text-notes` with `MODE=dry-run`, then `MODE=run` (#466). PR 6 (the rules' exception
+    removed) waits for the version floor.
+  - [x] **1.8, the nightly failure cases → #459 (merged 21:09):** Try again on a finished note (every length) and held first, then
+    released (the 2-minute run). Proven by the first nightly after the merge.
+  - [ ] **1.8's last case → #467:** the 2-minute run deletes a second note straight after its kickoff and watches
+    for three minutes that nothing brings it back (no doc, no Postgres row, no dead letter). A Gemini 429/503
+    can't be injected into real staging; the ladder's own tests cover it. CodeQL flags its upload (alert #138),
+    the same false positive as #131. **Owner:** dismiss both as "used in tests".
+  - [ ] **O2's 401s after a deletion → #468 (merged):** the journey now names the failing resource; the Settings page
+    itself sends nothing after the delete (a new web test). The next red journey says which request it was.
+  - **Still open in Stage 1:** I3's kill-safe capture and device pass 1 (both
+    need the owner's iPhone).
+- **Stages 2–5, the code that needs no owner input (2026-10-24, overnight).** Each test-first; none changes
+  production until Apply P, and none is verified on a device.
+  - [ ] **Stage 2:** the prod cost guards, A$60 a day and an A$500 monthly alert → #469; one warm api and billing
+    instance → #470 (merged). Costs in DECISIONS.
+  - [ ] **Stage 3 (I2):** the free floor per environment, 120 minutes in prod → #471; the App Store build sells Pro
+    and shows nothing of the beta (no invite codes, no beta wording, the trial promised only during one) → #472;
+    an App Store Offer Code entry in Settings → #473.
+  - [ ] **Stage 3 (I8):** a test that the app links no analytics or advertising SDK → #475 (merged).
+  - [ ] **Stage 5 (rejection 4):** the App Privacy answers rewritten from the privacy manifest, held equal by a test;
+    the manifest adds Performance Data and Other Diagnostic Data, which the app sends → #474.
+  - [x] **Stage 4 (O6):** `docs/runbooks/production-incident.md` → #477 (merged). It found:
+    - a kill-switch flip is a Terraform apply, and a saved plan resets Cloud Run images (minutes on the
+      placeholder until the redeploy);
+    - a re-plan made without `TF_VAR_alert_emails` and `TF_VAR_admin_uids` drops them;
+    - resolving a dead letter replays nothing, and there's no operator tool for one note;
+    - there's no status channel but a site notice shipped by a promotion;
+    - the site's uptime alert lives in staging's project until Apply P moves `site_uptime_host`.
+    Each is a `TODO(verify)` in the runbook for the Stage 4 drill or the owner.
+  - **Not started, needs the owner:** S12 (Stripe keys as Terraform secret references: staging's live billing
+    config must be read first, and gcloud auth has expired); S10 (share-link IP hashes need a secret pepper; share
+    links are off in 1.0); an API latency alert (the request metric has no route label, so chat's 45-second answers
+    share one p95 with everything: set the threshold from Stage 4's load numbers).
+
+- [x] **Staging deploys failed from #280 (2026-09-30 01:02 UTC) to Apply B; the api was stuck on 539ad93.**
+  - #280 (run 36653187535): `ci-gate` refused, because `ci.yml` failed on `integration` (run 36653187471) after the
+    merge queue had passed it. The cause is a flaky test: `apps/web/src/app/settings/settings.test.tsx:135-147`
+    calls `answer()` before the mocked fetch has run (`TypeError: answer is not a function`). → **H0.**
+  - #281 onward (run 36655399482 and later): `rollout (billing)` fails at boot. `env-spec.cjs` requires
+    `BILLING_URL` and `JOBS_SA_EMAIL`, which only Apply B sets. Because `rollout-meetings`, `rollout-api` and
+    `smoke` need every wave-1 rollout, they're skipped, so #280–#288 aren't live. → **H1**, then **Apply B**.
+  - Done when a deploy at the head is green, the api's image is at the head, and smoke passes.
+  - **Fixed 2026-09-30.** The owner applied Apply B (`reviewed-460da81.tfplan`: 54 added, 10 changed, 0
+    destroyed), which gives billing `BILLING_URL`. Then `services=all` at 460da81 (run 36711017769) passed every
+    job: migrate, 7 rollouts, rollout-meetings, rollout-api and smoke. `scripts/train.sh` (H1c) confirmed all 8
+    services serve 460da81, including billing-00040. #280-#289 are live. H0 (#290) fixed the flaky test. H1a/H1b
+    make sure a missing variable can't do this again.
+- [x] **Web recordings stuck at "Uploading… 0%" (P0, found by the owner's live Meet test, 2026-09-30).**
+  - The api minted the Cloud Storage session without the browser's origin, and the bucket has no CORS
+    policy. So every chunk's answer came back without `Access-Control-Allow-Origin`: stored (HTTP 200), but
+    hidden from the page. Reproduced against the staging bucket, with and without an origin.
+  - Fixed in #293. `train.sh` confirmed the api is live at 15b5942.
+  - [ ] **Owner:** record 30 seconds from Chrome on staging, and check the note reaches ready.
+- [x] **The deploy workflow's new safety nets ran green (#294, H1b).** Run 36735730763 (`services=all` at
+  c054199) passed every job, including billing's own lane (`rollout-solo`) and the live-env preflight before
+  each rollout. `train.sh` confirmed all 8 services serve c054199.
+- [x] **Retracted (2026-10-01): "every recording over 10 minutes fails at speech-to-text" was wrong.**
+  - The claim came from a batchRecognize probe run **as the owner's user account**, which failed on "the speech
+    service agent does not have storage.objects.get access". The transcoder runs as its own service account, and
+    for it the read works.
+  - Evidence: the 15-minute e2e (run 36742160404) went through the long path on staging: chunked
+    speech-to-text in `global`, 340 s to ready, about 1,000 transcript lines, 3 chapters, gemini-3.5-flash with
+    `finishReason: STOP`. The 2-minute e2e (run 36742148442) passed the fast path the same night.
+  - #297 had already merged a Sydney move and a speech-agent grant built on the wrong finding. Neither was
+    applied, so the live transcoder never changed (no `STT_LOCATION`, `LANGUAGE_CODES=en-US,en-GB,en-AU`).
+    `fix/stt-stay-global-until-proven` takes both back out of Terraform.
+  - Kept from the probe: a finished job whose one file failed used to be saved as silence. That is fixed on its
+    own (`fix/stt-file-error-not-silence`).
+  - Sydney (N2, H10) is still wanted, but only once a batchRecognize there is proven **as the transcoder's
+    service account**, and with `en-AU` being the only language Sydney's `long` model takes.
+  - The owner's 45-60 minute proof meeting can go ahead now.
+- [ ] **Safety nets not yet switched on:**
+  - [x] The pipeline e2e: the owner set `E2E_INVITE_CODE` (2026-09-30). After #295 fixed what it expected of a
+    short recording, both sizes passed on staging: 2 minutes (run 36742148442, the fast path) and 15 minutes (run
+    36742160404, the long path, the first time it ran on this staging).
+  - [x] web-e2e: the owner set `VERCEL_AUTOMATION_BYPASS_SECRET`, and its `e2e` job ran for the first time
+    (run 36746303857, bddc7cd). It failed every step that processes a note (the import, search, the browser
+    recording, the cut-off recording's upload), and passed the rest. Staging's guests start with no minutes
+    (`TRIAL_ON_FIRST_USE=off`), so the web app refused before uploading. Fix: `fix/web-e2e-invite` (the guest
+    redeems `E2E_INVITE_CODE` in Settings first; the code has 1,000 uses). Closed at its first green run.
+    **First green run 2026-10-01** (36854145067, all 20 steps), after #318 (the invite code) and #323 (the fake
+    shared tab's own camera message). Green again on 59d8587 (run 36991396876, 2026-10-02).
+  - [x] The nightly schedule's first green night. **It does fire** (GitHub runs it some hours late): green on
+    2026-09-30, 10-01, 10-02 and 10-03 (2, 15 and 60 minutes). An earlier note here said it hadn't; that was wrong.
+  - [ ] **The weekly long run (120 and 240 minutes), first fired 2026-10-03 (run 37144914602): 120 passed, 240
+    failed one check.** The 4-hour note was ready in 466 s (the bar is 25 min) with 12 chapters, but the last
+    chapter started at minute 84 of 240.
+    - Cause: every recording over 10 minutes was saved **one word a line**. Speech-to-text gives words no speaker
+      without diarization, and `stt.wordsToLines` took each untagged word for a new speaker. The 4-hour note had
+      25,728 lines and a 332,305-token summary prompt; the owner's 52-minute meeting has 7,942.
+    - Fix: `fix/stt-words-into-lines` (an untagged word is speaker 0, as its line is: about 470 lines for 4
+      hours). Notes already processed keep their one-word lines until they are run again.
+    - Closed when a 240-minute run passes the last-quarter check. If the chapters still stop early with normal
+      lines, the chapters instruction needs to name the recording's end.
+- [x] **The 10-15 proof: a real meeting on gemini-3.5-flash alone (2026-10-01).** The owner's 51.7-minute
+  recording from the iPhone (note tccLBaIAvLIWpcgI6cg4, staging): the chunked path, the summary by
+  gemini-3.5-flash with `finishReason: STOP`, 5 chapters, ready 297 s after the kickoff (the bar for an hour is
+  10 minutes).
+- [x] **The owner's 30-second Chrome recording reached ready (2026-10-01)**, about 30 s after Stop (note
+  webe10a79655650481ba5291f59e39002d4): the web upload fix (#293) on staging. Its first Gemini call got a 400
+  INVALID_ARGUMENT and the retry succeeded; `fix/vertex-refusal-detail` keeps the refused field and reason for
+  the next one.
+- [x] **Apply C applied (2026-10-01, reviewed-65b2a93: 8 added, 22 changed).** Verified: the transcoder's timeout
+  1800 s, `MAX_TASK_ATTEMPTS` 10, the transcode queue's 10 attempts and 600 s backoff, the Cloud SQL maintenance
+  window. Redeployed `services=all` (run 36787844649); all 8 services on the head.
+- [x] **New P0, found on the proof meeting: a finished note was run again.** Four minutes after it was ready, the
+  iPhone (which was showing a retry) sent a second kickoff, and the server re-ran all 52 minutes: speech-to-text
+  paid twice, the summary replaced. The api's "already ready" check read only the Firestore doc, which a client
+  can write. Fix: `fix/ready-note-not-rerun` (Postgres decides; the doc is repaired at once). Why the app
+  offered a retry on a finished note is still open; two callers on one upload is the likely cause
+  (`fix/ios-upload-never-stuck`).
+  - **Fixed on the server 2026-10-01:** #311 (live at ab84756; the kickoff answers `ready` and repairs the doc;
+    `markQueued` refuses it under the note's lock). #312 stops a client writing a finished or held note's
+    status in the rules; **the rules are released by Apply D, applied 2026-10-05 (below).**
+  - [ ] Still open: why iPhone build 25 showed "Processing failed" on a note that was ready. #331 (one upload
+    with many waiters) and #326 are the likely fix; confirm on a TestFlight build with a long recording.
+- [x] **The merge queue can miss a PR (process, found 2026-10-01).** #300 had every required check green and
+  was CLEAN, with auto-merge on, but never entered the queue. `gh pr merge` only turns auto-merge on, and its
+  trigger was missed. Enqueuing it directly (the GraphQL `enqueuePullRequest`) worked. The overnight train runs
+  a watcher that does this for any PR still waiting after two looks, 2 minutes apart.
+- **H6, held for minutes, as built (2026-10-01; four PRs in the train):**
+  - H6a `feat/held-for-minutes`: the transcoder's settle holds a note over the minutes left
+    (`awaiting_minutes`, uncharged, its measured length kept); the web and iOS say so; mirror repair covers it.
+  - H6b `feat/resume-held-notes`: the db-sweep step `resume_held_notes` queues a held note through the kickoff
+    once its author has minutes, oldest first per user, and only while it's still held (checked under the
+    note's lock).
+  - H6c `feat/kickoff-holds`: an uploaded recording over the minutes left is held at the kickoff (202, shaped as
+    the in-flight answer so every client reads it as accepted; `held: true` for the ones that know). iOS still
+    offers Pro or the invite code, as it did for the 402. A YouTube link keeps the 402. Redeeming an invite
+    resumes the user's held notes at once. A note held at the kickoff has no measured length: its resume is
+    charged 0, and the transcoder's settle charges the measured length or holds it again.
+  - H6d `feat/web-minutes-left`: the web record page says the minutes left, and that a recording past them is
+    kept. iOS's equivalent is still open.
+  - **Merged and live (2026-10-02):** H6a #328 (2093172), H6b #329 (bc46fed), H6c #330 (c37b41a), H6d web #340.
+    Each server PR's deploy was followed to its images by `train.sh`. Not yet exercised by hand on staging: an
+    account that runs out mid-test, then redeems a code.
+- [x] **A regression of mine in #302, fixed in #321 (2026-10-01).** #302 capped thinking with `thinkingBudget`
+  on both rungs. gemini-3.5-flash refuses that field on some of its Sydney backends ("Thinking budget is not
+  supported for this model"): 7 of 12 first attempts failed on staging, and the retry usually landed on a backend
+  that takes it, so notes still finished, slower. #321 sends each model its own field (`thinkingLevel` for 3.x,
+  `thinkingBudget` otherwise) and asks once more without a cap if Vertex still answers 400.
+  - Evidence: since the deploy of 59d8587, 11 `gemini_ok` on gemini-3.5-flash, 0 `gemini_non_retryable`,
+    0 `gemini_thinking_cap_refused` (the 2 on gemini-2.5-flash are db-job's Vertex smoke test).
+  - Lesson (DECISIONS, S1): an intermittent refusal needs a probe of ten or more calls, not two.
+- [x] **CI: a hung `apt-get install ffmpeg` held the merge queue for 20 minutes, twice (2026-10-01).** #335
+  bounds the step, turns man-db's trigger off and keeps its output. Not seen since.
+- [x] **The train of 2026-10-01/02: #320–#346 merged, staging on 59d8587.** The pipeline e2e (run 36991393156)
+  and the web journey (run 36991396876, 20 of 20) pass on that head.
+- [ ] **P0s found by the rev 11 audits** (RELEASE.md R11.4). Each closes with a failing-then-passing test and
+  staging evidence here:
+  - L2: a note can spin forever (iOS deletes the file before the kickoff is accepted) → H2/H3. **Merged:** #308
+    (the server finds an upload no note followed), #326, #331, #334 (iOS; in CI only, no device run yet).
+  - L3: Try again doubles the transcript (`markQueued` leaves the old lines) → H2. **Fixed:** #303.
+  - L6: no kickoff lease, so a duplicate can double-pay speech-to-text → H2. **Fixed:** #299 (one attempt
+    claims a chunk's speech job).
+  - N1: a phone call over 5 minutes ends an iPhone recording → H4. **Merged:** #325 (CI only; the device proof
+    is the 3 h recording with a 30-minute call).
+  - N2: speech-to-text runs in `locations/global`, not Sydney → S1 (done: `long` serves in Sydney; DECISIONS
+    2026-09-30), H10.
+  - N3: the web caps Pro at 2 h when the plan fetch fails → H5. **Fixed:** #313.
+  - LM1: a 4 h recording fails the zero-slack length check → H5. **Fixed:** #304 (server), #313 (web).
+  - N4, L8–L11: broadcast captures and uploads → H3, H11. **Partly:** L8, L9 #337; L10 #334; L11, N5 #331.
+    **Open:** N4 (the capture queue, ADTS in the extension, `writer.status`, the cap and the disk check).
+  - Also merged from the sprint: H7 #301 (Apply C), H8 #302 + #321, H9 #309, #310, #332, #346, H10's line cap
+    #327, H12 #320, H13 #338, #339, H14 #315–#317, #345, H15 #336, #341, H17's audio link #344, H18 web #343,
+    H20's server half #342.
+  - **Built in the second train (2026-10-04; each PR's own branch, in the order merged):** the notetaker from
+    the web #348 and from iOS #349; share links behind the server's switch #350, with the list and Stop sharing
+    on the web #351 and on iOS (`feat/ios-share-links-list`, H20); an export that waits for the whole transcript
+    (`fix/ios-export-whole-transcript`, H17/LM7); minutes left on the recording screen (`feat/ios-minutes-left`,
+    H6d); pause and resume (`feat/ios-pause-resume`) and Back minimises (`feat/ios-back-minimises`), H13/UX4;
+    readable secondary text (`fix/ios-readable-secondary-text`, H19/UX13); one consent sheet
+    (`feat/ios-one-consent-sheet`, H13/UX2); "Record a call" with three steps (`feat/ios-record-a-call`,
+    H19/UX11); the minutes bar in Settings (`feat/ios-minutes-bar`, H18); and the call capture's list of
+    unclaimed captures, writer status, disk check, 4 h cap and clocked heartbeat
+    (`fix/ios-broadcast-captures-kept`, H11/N4); and the three latest notes on Home, with their status
+    (`feat/ios-home-recent-notes`, the first part of H16/UX5).
+    - **Later in the same train (#370–#374):** Files searches transcripts as you type (UX8); a chat answer can
+      be copied or shared, with three starter questions (UX9); a failed request says what happened in a sentence
+      (UX7); find in a note's transcript (UX12); and the iOS tests' shared network stub records under a lock.
+    - **Server, from the weekly long run's failure (#353, #355, #356):** words are grouped into lines again, the
+      chapters instruction names the recording's end, and a chat about one note sees its summary and chapters
+      (LM10). The 240-minute e2e passes on them: run 37189798506, 477 lines, a 42,970-token prompt, 30 chapters,
+      the last at minute 232, ready in 384 s.
+    - Evidence: the queue replayed in order builds on Xcode 27 and passes the unit tests on the simulator (340
+      tests); each PR passed CI's `ios-test` on Xcode 26.3.
+    - **Not verified on a device:** every iOS item above. Pause and resume, Back minimises and the call capture
+      change the recorder or the broadcast extension; the extension's changes have never run (ReplayKit doesn't
+      run in the simulator). The device proofs in RELEASE.md (a long recording with a call in the middle, a real
+      call capture) cover them.
+    - **Home to recording is three taps, not the two rev 11 targets:** the card, the tick, Start. Two means
+      dropping the per-recording tick, which is a consent decision for the owner (CONSENT.md).
+  - **Built in the third train (2026-10-05 to 10-06, #365–#395; integration `b75a949`):**
+    - **iPhone:** Home says how far an upload is and roughly when a note will be ready (#379, H16/UX5); a
+      note's summary can be edited by hand (#380, UX12); a search result opens its note at the moment it
+      matched (#381, UX8).
+    - **Action items keep their order and can be ticked:** migration 038 adds a nullable `position` to
+      `action_items` and `key_decisions`, written by every writer and read `NULLS LAST` (#382);
+      `POST /v1/notes/action-items/status` ticks one, joined to the workspace's members, and a hand edit of the
+      summary carries the ticks across (#383); the web note page has the checkboxes (#384). From the
+      dual-write audit of #383: the ticks are taken with `DELETE … RETURNING` inside the edit's transaction, and
+      a replayed summarize task for a note already ready is acknowledged without rewriting it
+      (`summarizer_replay_note_already_ready`).
+    - **Dependencies:** the runtime group (#376) and Stripe 22 → 23 (#367). None of Stripe 23's breaking
+      changes touch the calls billing makes (subscriptions retrieve and cancel, checkout and portal sessions,
+      `webhooks.constructEvent`, API version 2024-06-20). **Not verified:** a checkout on staging in test mode.
+    - **CI:** the Firestore emulator step is retried once on a failed download only (#378); the web journey
+      presses Search again until the note's index exists (#385). The journey's run 37407318477 searched at
+      03:06:54.0 and `embeddings_indexed` is at 03:06:59.0; the re-run on the same head (37408457396) passed.
+    - Evidence: on `35f4280` the pipeline e2e passed; the tick endpoint answers 401 without a token on
+      staging (404 before its deploy).
+    - **Not verified:** a tick end to end on staging with a signed-in account; every iOS item above on a device.
+    - **A word in a transcript is found by keyword (#388).** The gap the journey hit had a bug behind it: the
+      keyword half of search compared the query with the whole line (`similarity`, threshold 0.3), and one
+      word against a sentence scores about 0.1, so a word was only ever found through its embedding. The
+      query now also looks inside the line (`word_similarity`, the same trigram index). Integration tests,
+      red before: found with no embeddings and with the embed call failing; another workspace's line never
+      returned. On staging at `6651d64`. **Open, seen in its audit:** a hit's note title reaches the client
+      unredacted (as before the change; it never enters a prompt).
+    - **The iPhone ticks action items too (#387):** the ids come from the note read, a refused tick is put
+      back, and a 404 reads the items again. 382 unit tests on the simulator. **Not verified:** on a device,
+      or against staging.
+    - **Seen once, not fixed:** four rollout preflights failed on GitHub's token exchange with Google
+      ("Unable to retrieve Identity Pool subject token") after #376; re-running the failed jobs passed. A retry
+      is worth adding if it recurs.
+    - **One vocabulary, the wording half (#390):** the iPhone says Summary / Transcript, Action items, Key
+      decisions, Couldn't process, Try again, Waiting to start, Transcribing and Summarising, as the web does.
+      382 unit tests on the simulator; not looked at on a device. **For the owner, the naming half:** Files
+      (iPhone) or Notes (web) for the list; End or Stop and save; Delete or Discard for an unsent recording;
+      Chat / Ask AI or Ask your notes; Import Files or Import a recording; and whether the iPhone keeps its
+      two "Upgrade…" messages where the web names only the invite code.
+    - **UX13's 44 pt targets, checked in the code at `6133505`:** no control has a fixed frame under 44 pt
+      (the three small frames found are glyphs inside larger buttons), and no icon-only button lacks a
+      VoiceOver label (a pattern search, not a screen-by-screen pass). What is left of UX13 is the VoiceOver
+      and large-text pass on a device.
+    - **The rest of H16 (#394, #395):** Home shows the example note until there is a real one, under the
+      same switch as Files; and a guest is asked to make an account when they leave their first summary, not
+      over it (kept across launches; not asked if they made one in the meantime). "On leaving the note" is
+      one reading of the plan's "after reading": a timer or a scroll is a few lines if the owner prefers.
+      387 unit tests on the simulator. **Not verified on a device,** in particular that every way out of
+      the note screen (a tab switch, not only Back) raises the prompt.
+    - **Dependabot alert 15 closed (#392):** `http-cache-semantics` 4.2.0 to 4.3.0 in the lockfile (Astro's
+      site build only). **Alerts 11 and 12 stay open:** `@grpc/grpc-js` < 1.13.6 comes from
+      `@firebase/firestore` 4.17.2, which pins `~1.9.0`, and firebase 12.19.0 is the latest.
+    - **Seen once:** `image (billing)` sat in "waiting" for ten minutes on the deploy of #392 while the other
+      image jobs finished; cancelling and re-running the unfinished jobs passed (run 37439623593).
+    - **From a health sweep of staging and the scheduled runs (2026-10-06, #397–#399; staging `23f9997`):**
+      - The nightly site smoke was red every night from 09-29: it checked production (`main`) with
+        `integration`'s script. On schedule it now checks out `main` (#397); `main`'s script passes against
+        production by hand. Its next scheduled run is the check.
+      - 51 of staging's 57 error-level lines were refused screen wake locks from the web journey, logged as
+        `web_client_crash`. They are `web_client_diagnostic` warnings now (#398): still logged, not crashes.
+      - Chat failed on the model's first 429 (twice that day, `chat_stream_failed`). It asks again after 1 s
+        and 3 s before anything streams (#399); integration tests for 429, 503, still busy, and a 400.
+      - The nightly web journey was red on 10-04 and 10-05 with the search race fixed in #385 and #388.
+      - **Asking the same model again was not enough (#401).** That evening (13:58 UTC) 3.5-flash answered
+        429 three times in 25 s and the web journey's question failed (run 37473186924). Each chat retry now
+        goes to the ladder's next model, then round again. The journey passes on `d9bd76a` (run 37481331327).
+      - **For the owner, before 2026-10-20: gemini-3.5-flash is busy on staging at almost no traffic.** In
+        the day to 10-06 14:00 UTC: 96 `gemini_ok`, 9 `gemini_transient`, 5 `gemini_timeout`, 1
+        `gemini_model_exhausted` (finished on 2.5-flash), and 3 failed chats. When 2.5-flash retires there is
+        no second model in Sydney (DECISIONS.md): that exhausted call fails its attempt and waits for the
+        task's retry, and a chat fails after three tries. A quota increase or provisioned throughput for
+        3.5-flash in `australia-southeast1` is the owner's to ask for. **Not checked:** whether the refusals
+        are the project's quota or Google's shared capacity (the project's quota page shows which).
+      - **Traced:** the transcoder fast-path attempt that ran out of its time budget (`kickoff_failed`,
+        TIME_BUDGET, note `web72f6…`): the model hung for the whole 240 s on a ten-second recording, the
+        task's retry answered in 3 s, and the note was ready at 01:45:17, four minutes late. One hang; a
+        shorter budget for short audio is the lever if it recurs.
+      - **Corrected:** an earlier entry here said the chat handler's older log lines name no `userId`. They
+        do: the auth middleware binds `uid` and `userId` on the request's logger (`middleware/auth.js`), so
+        every line in the handler carries both. Nothing to fix.
+    - **A staging deploy job hung in "waiting" twice on 10-06** (`image (billing)` on #392, run 37439623593;
+      `rollout (embedder)` on #393, run 37444736236, for three hours, holding every deploy behind it). The
+      staging environment has only a branch rule. Cancelling let the next run through each time. Cause
+      unknown: a third time needs a proper look. A `timeout-minutes` would not help: it counts from when a
+      job starts, and these never started.
+    - **The branches left from 2026-09-30, rebased and landed (2026-10-07, #407–#413; staging `9a16345`):**
+      - #407: Firestore's refusal codes, as mirror repair reads them, pinned against the emulator (PR 30c).
+      - #408: mirror repair pages through its whole window and repairs a failed note's message (PR 30a,
+        audits Q20, Q21); migration 039. From its dual-write audit: two cut-off runs in a row would leave
+        the notes between them unrepaired; the warning now says where it stopped
+        (`mirror_repair_budget_reached.reachedUpdatedAt`). Not seen; a signal to page newest-first if it is.
+      - #409: an upload can start before its length is known (PR 33a); migration 040; additive to the
+        contract. A finished upload of unknown length reports the size that arrived, not 0.
+      - #411: `scripts/load-staging.mjs` (PR 31). **Not run:** it spends real minutes (about A$22.50 at the
+        defaults) and needs `LOAD_CONFIRM=run`; the owner's call.
+      - #412: one set of `/v1` fixtures, parsed by the schemas and decoded by the iPhone app (PR 30d).
+      - #413: a disabled account or revoked sessions refused within a minute (PR 40), **off until the owner
+        applies the pending plan (`reviewed-dd556da5.tfplan`, below)** (3 added: a role with only `firebaseauth.users.get` for the api
+        and billing; 10 changed: the usual no-ops plus `SESSION_CHECK=off` on both; images unchanged) and
+        then sets `session_check = "on"`. As written on 09-30 it would have made a refused call on every
+        request: neither service account could read Auth users. **Not verified:** that the grant is enough
+        as those accounts; `auth_session_check_failed` staying silent once it is on is the check.
+      - `test/rate-limit-cold-start` needed nothing: both its changes were already in.
+      - **Not landed:** `ci/deploy-production` (the production pipeline: the owner's) and the extension
+        stack (8 commits, a new sign-in path; Wave 3).
+    - **For the owner, from #409's audit (both true before it):** nothing bounds the bytes of an upload in
+      progress, and an oversized upload that is never completed stays in the recordings bucket (no lifecycle
+      rule: `recordings_lifecycle_days = 0`; the session row goes after 7 days). A lifecycle rule for
+      unfinished uploads, or Cloud Storage enforcing the declared length, closes it.
+    - **A deploy failed on the model, not the code (2026-10-07 02:26 UTC, run 37560412278):** the smoke
+      that asks every active model hung twice on gemini-3.5-flash for its whole time budget
+      (`gemini_timeout`, `TIME_BUDGET`). Re-running the failed jobs passed. With the capacity numbers above,
+      this is the case for asking Google for quota or provisioned throughput before 2026-10-20.
+    - **H21, Stripe you can trust (2026-10-07, #415–#418; staging `dd556da`).** None of its six items was
+      done. Four are now, against a fake Stripe only:
+      - #415: only a refund of the whole charge ends Pro; a replayed refund changes nothing.
+      - #416: `customer.subscription.updated`/`.deleted` and `invoice.payment_failed` read the subscription
+        back from Stripe and write that (a stale "payment failed" used to put a renewed account in arrears);
+        both API shapes are read (period end on the subscription or its item; an invoice's subscription
+        directly or under `parent`).
+      - #417: one subscription per account. A checkout completing for an account already paying on another
+        subscription is queued for the cancel-stripe task and not activated;
+        `checkout.sessions.create` carries an idempotency key (buyer, product, price, return pages, a
+        ten-minute window).
+      - #418, from the audit of the three before it: only a completed checkout puts an account on a
+        subscription, and every other event acts only on that one. Without it a duplicate's first invoice
+        moved the account onto the duplicate, and the by-hand refund of the duplicate's payment would have
+        ended the paying account's Pro. Stripe unreachable now answers 500 (Stripe delivers again) instead
+        of writing the event as the state.
+      - **For the owner:**
+        - `stripe_duplicate_subscription` (error) means a second payment was taken and the duplicate is
+          being cancelled: **its first payment is not refunded automatically.** Refund it by hand.
+        - `stripe_refund_not_this_accounts` with `reason: unattributed` (error) means a whole refund whose
+          charge carries no invoice: Pro is kept. On a Stripe API version whose charges don't name their
+          invoice, every whole refund lands here. Check it when Stripe is first configured.
+        - **Stripe's keys are not in Terraform** (no `STRIPE_*` in `cloud-run.tf`, no Secret Manager secret),
+          and an apply would revert any set by hand. H21's last item, secrets as Terraform references, is
+          open and needs the owner's secret values.
+        - **Not verified against Stripe itself.** The test-mode checkout on staging is the proof.
+      - **Not done:** a table of seen event ids (the handlers are safe to repeat instead).
+    - **The plan to apply is now `reviewed-dd556da5.tfplan`** (the same 3 added and 10 changed as
+      `reviewed-9a163459`, re-made after the Stripe deploys so the images in it are the live ones).
+  - **Still open:** N4's kill-safe capture (an extension killed mid-way leaves an unreadable `.m4a`; a single
+    mixed ADTS stream needs a device to build against), the naming half of one vocabulary (H16), the rest of UX12 (the summary first), the VoiceOver
+    pass of UX13 on a device,
+    Sydney speech-to-text (N2; waits for a probe as the transcoder's identity).
+  - [x] **Apply D applied (2026-10-05, `reviewed-9992dc9.tfplan`: 4 added, 10 changed, 2 destroyed).** Verified:
+    the released Firestore ruleset (1a178557) is `infra/firebase/firestore.rules` byte for byte, so a client can
+    no longer change the status of a finished or held note (#312); the `upload_never_processed` alert policy
+    exists and is enabled; the api carries `SHARE_LINKS=off`; every service kept its image (api 2892df7, the
+    rest 2af14ad) and its latest revision is ready, so no redeploy was needed.
+- [x] **Invite minutes corrected in the docs (2026-09-30):** the code's default is Pro's monthly minutes, 1,500
+  (`beta-invites-repo.ts:149`). The runbook and RELEASE.md said 600. The e2e code below is explicitly made with 600.
+
+### Rev 10 (2026-09-29)
+
+The order of work to the beta and production is `docs/plans/RELEASE.md`: three beta waves (iPhone and Chrome;
+the notetaker and Pro; the Chrome extension), then prod-ready. It supersedes rev 9. Evidence for each wave's
+checks is recorded here, under the wave.
+
+- [x] **Staging deploys were stuck from 2026-09-28 08:23 UTC to 2026-09-29.** Run 36397066772 (13acfc2) sat
+  "waiting" at `migrate` for the `staging` environment, which has only a branch policy and no reviewers. It held
+  the `deploy-staging` concurrency group, so every later deploy was cancelled while pending, and #236–#248 never
+  reached staging. Cancelled on 2026-09-29; the run for 41ec920 took its place. If a run waits at an environment
+  again, cancel it and check the environment's protection rules
+  (`gh api repos/Algorythmos-AI/algominutes/environments/staging`).
+- [x] **Invite codes built (RELEASE.md PR 2):** migration 025, `beta-invites-repo.ts`, `POST /v1/beta/redeem`, the
+  db-job `beta-invite` handler and `scripts/new-invite-code.sh`, plus the `TRIAL_ON_FIRST_USE` switch (DECISIONS
+  2026-09-29).
+  - Tested on Postgres (26 cases), each safeguard mutation-checked:
+    - replay, expired, revoked, used up, and a deterministic race for the last use;
+    - a live grant never reduced or mixed, including an owner's grant committed mid-redemption;
+    - the notetaker window, account deletion, a deleted account;
+    - no code in any log line, or in a malformed request body's log line;
+    - a 402, then redeem, then a queued retry with the trial off.
+  - The real script's hash is checked against the server's (`tests/new-invite-code.test.ts`).
+  - [ ] **Owner, after Apply A** (which turns the trial off on staging): make the reviewer's code and each cohort's
+    codes with `scripts/new-invite-code.sh`, which prints the code for the tester and the exact command to register
+    its hash. The clients' code entry lands in PR 8 (iOS) and PR 9 (web).
+- [x] **Notifier and the 426 gate (RELEASE.md PR 4, rev 9's S2-PR1):**
+  - A malformed notify task is acknowledged (2xx) and logged. It answered 400, which Cloud Tasks retries like any
+    other non-2xx.
+  - A push token is pruned only when FCM says the token is dead (`registration-token-not-registered`,
+    `invalid-registration-token`). `invalid-argument`, which FCM also answers for a bad message, used to delete
+    every recipient's working token.
+  - The api's 426 floors are the contract's `MIN_SUPPORTED_CLIENT`, one list.
+  - Unit-tested (`tests/notifier-handler.test.ts`, `tests/client-version.test.ts`), each change mutation-checked.
+- [ ] **The pipeline e2e (RELEASE.md PR 14): `.github/workflows/e2e.yml` runs 2 and 15 minutes nightly and 180
+  minutes weekly.** Each run is a real anonymous user, redeeming an invite code, uploading as the apps do and kicking
+  off. It checks the note ready in Firestore, then Postgres agreeing (`/v1/notes/read`), chapters from 15 minutes,
+  one traceId in the api, transcoder, summarizer and embedder logs, and no dead letter. It deletes the account
+  whatever happens (`tests/e2e-pipeline.test.ts`, mutation-checked).
+  - [ ] **Owner:** make a code for it with `scripts/new-invite-code.sh` (1000 uses, 365 days, 600 minutes), register
+    its hash, and save the code as the repository secret `E2E_INVITE_CODE`. Then run the workflow once by hand
+    (2 minutes).
+  - The log checks need `roles/logging.viewer` on gha-deployer (in this PR's Terraform, applied with Apply B). Until
+    then they print `skip`, never `ok`.
+  - Done when the first nightly is green on staging; its time to summary goes here.
+- [x] **Apply A (RELEASE.md PR 6) applied 2026-09-29: staging is the beta.** Checked after the apply and a
+  `services=all` redeploy (run 36519201500: migrate, rollouts and both smokes green, every service and the db-job on
+  162fc1f):
+  - Cloud SQL has deletion protection on, and PITR on with 7 days of logs.
+  - The recordings bucket has no lifecycle rule for live objects.
+  - The api has `TRIAL_ON_FIRST_USE=off` and `DAILY_SPEND_CAP_AUD=50`; the transcoder's cap is 50.
+  - A preflight from the beta web origin answers 204.
+  - Known gaps:
+    - Firestore still shows `DELETE_PROTECTION_DISABLED`: `ABANDON` only stops Terraform deleting it. A later
+      infra PR sets `delete_protection_state` for staging and prod.
+    - It was planned without `TF_VAR_admin_uids`, so the dead-letter admin view is off until your uid is in a plan.
+- [x] **Owner: Apply A (RELEASE.md PR 6), staging becomes the beta.** After PR 6 merges I re-plan read-only as
+  `reviewed-<sha>.tfplan` in `~/algominutes-apply`, with `check-tfplan-env.mjs`. You apply it; I redeploy
+  `services=all` (a saved plan resets Cloud Run images) and check every image.
+  - A sanity plan on the PR branch showed 20 to add, 21 to change, 0 to destroy, nothing replaced.
+    - Adds: the meetings service (placeholder image), KMS and Recall secrets from #243 and #245, and the
+      `gemini_transient` alert from #236.
+    - Changes: Cloud SQL (PITR, deletion protection), the buckets, Firestore, the queue caps (#236, #238), the
+      services' env and the budget.
+  - **Enabling PITR restarts Cloud SQL once**; open connections are closed and the pools reconnect. Harmless before
+    testers.
+  - Plan with `TF_VAR_admin_uids` set to your uid, which turns on the dead-letter admin view.
+  - The figures in the PR are my suggestions and yours to change before the plan: `daily_spend_cap_aud = 50`,
+    `monthly_budget = 250`.
+  - Known: `db-f1-micro` is shared-core and outside the Cloud SQL SLA. The dashboard's Cloud SQL CPU and connections
+    decide a bump.
+- [ ] **Owner, start today (long lead times):**
+  - send the Terms, the Privacy Policy and `docs/CONSENT.md` for legal review, including recording consent (NSW is
+    all-party), bots in meetings and APP 8 cross-border;
+  - Recall.ai: two accounts in Tokyo (staging, prod), the startup-rate application, and the DPA with a
+    no-training confirmation;
+  - Apple: the Paid Apps agreement and the Small Business Program;
+  - Chrome Web Store and Edge Add-ons developer accounts;
+  - auto-renew for `algorythmos.com` (expires 2026-12-06) and the Zoho aliases `support@` and `privacy@`.
+
 ## 1. Needs your action before/at A4 (repo & infra)
 
-- [ ] **Enable branch protection (yours).** `main` and `integration` are pushed and in use (PRs into
-      `integration`, promotions to `main`). Neither branch is protected yet: the GitHub API answers "Branch not
-      protected". Run `scripts/github-settings.sh --apply` (required checks, no direct pushes, the approval-gated
-      `production` Environment).
+- [x] **Branch protection (checked 2026-09-28).** Both branches are protected by active rulesets
+      (`gh api repos/Algorythmos-AI/algominutes/rulesets`).
+      - `integration`: merge queue, pull requests only, no deletion or force-push, and 22 required checks,
+        including `site-build`, `ios-test` and `analyze (swift)`.
+      - `main`: `protect-main`.
+      - Kept as reviewed code in `scripts/github-settings.sh` (DECISIONS 2026-09-28).
 - [ ] **Rotate the exposed Gemini API key + purge source history** (EXTRACTION-AUDIT §5). Source-side,
       in `~/src/wasssup-meeting`; not touched by this run.
 
 ## 2. A4 provisioning
 
-**Staging: paused since 2026-08-27** (Cloud SQL `activation_policy` NEVER, no Cloud Run services). Firebase
-is enabled (Blaze), Google sign-in on, Web, Android and iOS apps registered (the configs are git-ignored).
-Resuming it is one reviewed `terraform apply` (runbook `resume-staging-and-deploy.md`), then the first
-deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both). **Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
+**Staging: up since 2026-09-26.** The owner applied `reviewed-f8ba5fc` on 2026-09-26, then `reviewed-195bb02`,
+then `reviewed-5e1a3fb` on 2026-09-27. The first deploy (run 36217054635) passed migrate, vertex-smoke, rollout
+and both smokes, and `deploy-staging` has been green since.
+- Firebase sign-in on staging (checked 2026-09-28 through the Identity Toolkit admin API): **Anonymous**,
+  **Apple** and **Google** are enabled.
+- The web app signs in end to end at `staging.algominutes.algorythmos.com/app`, and a recording became a
+  ready note (2026-09-28). `node scripts/check-signin-chain.mjs --env staging` passes 12/12.
+- Paused 2026-08-27 to 2026-09-26 for cost (Cloud SQL `activation_policy` NEVER).
 
-- [ ] **Apply prod:** bootstrap `algominutes-prod-tfstate`, then `terraform apply` in
+**Prod: ⏳ pending.** Remaining, all from a primary-account (`algorythmos.france@gmail.com`) shell:
+
+- [ ] **Apply prod:** bootstrap `algominutes-production-tfstate` (done 25 Oct), then `terraform apply` in
       `infra/terraform/envs/prod` (runbook `gcp-provisioning.md`).
 - [ ] **Prod Firebase:** enable Firebase (Blaze), Google sign-in, register Web + Android apps, download a
       **fresh** `google-services.json` + create a **prod** `apps/web/.env` — never reuse staging's values
@@ -31,19 +602,23 @@ deploy. Enable **Anonymous** and **Apple** sign-in too (the iOS app needs both).
 - [x] **Domain decided (2026-09-26):** `algorythmos.com` (owned; Cloudflare DNS, Zoho mail). The site is
       `algominutes.algorythmos.com`, mail is `support@` / `privacy@algorythmos.com`, and the api keeps its
       `run.app` URLs (DECISIONS). `algominutes.com` is **not registered**, so nothing may point at it: the
-      server moved in #170, the iOS app in its "nothing to trip on" PR. The web's `apiUrl.ts` still names
-      `api.algominutes.com`; the web isn't deployed, and it moves with its `/v1` migration.
+      server moved in #170, the iOS app in its "nothing to trip on" PR. The web app names no origin in code:
+      `apiUrl.ts` is gone, and it reads `VITE_API_ORIGIN` / `VITE_BILLING_ORIGIN` with no fallback
+      (`apps/web/src/lib/api/config.ts`, checked 2026-09-29).
 - [ ] **Owner:** turn on auto-renew for `algorythmos.com` (expires 2026-12-06); add the Zoho aliases.
-- [ ] Staging's **Browser** API key (auto-created by Firebase) allows the referrers `localhost` and
-      `https://algominutes.com/*`. Set it to the real site before any web deploy. Referrers can be
-      spoofed by non-browser callers, so this is hygiene, not access control.
+- [x] Staging's **Browser** API key allows the staging site's referrers (2026-09-27).
+      `check-signin-chain.mjs` checks both referrers, and its 25 APIs, on every run. Referrers can be spoofed
+      by non-browser callers, so this is hygiene, not access control.
+- [ ] **Owner: rotate the staging Browser key.** A copy was committed in eb49c4c, which was force-pushed away
+      but is still reachable on GitHub. The zero-downtime steps are in `docs/runbooks/site.md` and the
+      2026-09-27 plan.
+      - Blast radius, checked by hash: the web app only. iOS and the deploy smoke use the separate iOS key.
 - ~~**iOS Firebase app pending the Apple Team ID**~~ **done (2026-09-25):** the iOS app is registered in
   `algominutes-staging`; its `GoogleService-Info.plist` stays git-ignored and reaches Xcode Cloud as the
   `GOOGLE_SERVICE_INFO_PLIST_B64` secret (`xcode-cloud.md`). Android upload keystore still pending (Track B).
-- Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes the prod API origin
-  (now `https://api.algominutes.com`, an unregistered domain), and the web ignores `VITE_API_BASE_URL` on
-  local/capacitor hosts in favour of it. The web isn't deployed; fix it with the web's `/v1` migration,
-  before any web deploy, so no ID token is ever sent to a domain we don't own.
+- ~~Incidental finding (A5/A8, not A4): `apps/web/src/lib/apiUrl.ts:1` hardcodes the prod API origin~~
+  **Resolved (checked 2026-09-29):** the new web app (#190, #191) deleted `apiUrl.ts`; its origins come only from
+  the build's env, so no ID token can go to a domain we don't own.
 
 See also the dedicated section at the bottom: **"A4 identifiers needed from you"** (now mostly supplied).
 
@@ -71,8 +646,22 @@ See also the dedicated section at the bottom: **"A4 identifiers needed from you"
       logs; noncurrent object versions expire after 7 days (#70); the `_Default` log bucket keeps 30 days. All are
       stated in Terraform so they can't drift past the 30-day deletion promise, and DATA-RETENTION §4 shows how
       to verify them. The retention enforcer and trial-expiry sweep are also done (#81).
-- [ ] Server-side attestation verification (DeviceCheck key / Play Integrity) so the #7 device hash is
-      trusted, not just accepted; needs a real device to verify end-to-end.
+- [x] ~~Server-side attestation verification~~ **iOS done (RELEASE.md PR 22):** the api asks Apple's
+      DeviceCheck whether the device has had a trial (bit0) and sets it when one starts; the hash seam is
+      retired. Android (Play Integrity) opens new users on the free floor until A11. A real device proves it
+      end to end (Wave 2 proof 6).
+- [ ] **DeviceCheck follow-ups (PR 22):**
+  - An iPhone that fails to make a DeviceCheck token (rare; the app omits the header) opens its new user on the
+    free floor for good, since a user's row is never changed. The app could retry the token once first.
+  - Apple is asked before the kickoff checks for a deleted account, so during an Apple outage a deleted
+    account's kickoff answers 500 rather than 401.
+  - The trial now takes the caller's platform from the client-version gate (`X-AlgoMinutes-Client`, required
+    on `/v1`), not the optional `X-Device-Platform`: a kickoff that left it out, or named a platform nobody
+    ships, used to start a trial with no check at all.
+- [ ] **Owner, for DeviceCheck (PR 22), before `trial_on_first_use` goes back on:** create an Apple key with
+      DeviceCheck enabled (Certificates, Identifiers & Profiles → Keys), add its `.p8` as a version of the
+      `devicecheck-key` secret, and set `devicecheck_key_id` and `apple_team_id` in Terraform. Without them the
+      api logs `devicecheck_not_configured` and no new iOS user gets a trial.
 
 **Engineering follow-ups (no external input):**
 - [x] **One account-deletion path:** `/v1/account/delete` (#69; Postgres first, retried by the sweeper), and
@@ -124,10 +713,9 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
       chip tappable → rename alert → call `setNoteSpeaker` → refresh the transcript (TranscriptRepository is
       idempotent-per-note, so it needs a forced reload or an optimistic in-place label update keyed on the
       new `TranscriptLine.speakerTag`). Compile + device-test all iOS edits before ship.
-- [ ] **Web rename is blocked by architecture.** The web renders the Firestore mirror preview
-      (`{speaker, time, text}`, no `speakerTag`), so it ships raw "Speaker N". To add a web chip, either
-      carry `speakerTag` through the mirror or move the web onto the API transcript read (iOS's `/api/note`),
-      then add the chip + `authedFetch('/v1/notes/:id/speakers')`.
+- [x] ~~**Web rename is blocked by architecture.**~~ **Resolved (checked 2026-09-29):** the new web app reads the
+      transcript through the api and renames speakers on the note page (`apps/web/src/app/notes/NoteDetailPage.tsx`,
+      #193). The iOS chip above is still open (`docs/plans/RELEASE.md`, PR 25).
 
 **Cannot verify without the above:**
 - [ ] **Shadow eval old-Google vs AssemblyAI on a real 2-speaker >30-min file** (harness built —
@@ -143,7 +731,11 @@ production is gated on these — none are code, all are ops/legal/infra. Evidenc
   grants with the db-job `grant-tester` handler (runbook `resume-staging-and-deploy.md` §4); no tester
   email goes into git or the logs. Tested (grant, expiry, another user, usage, paid wins, revoke, account
   deletion, the handler); four mutations checked.
-  - [ ] **Queued (audit of that PR): say where an `active` entitlement comes from.** A grant reports
+  - [x] **Done (RELEASE.md PR 26b): say where an `active` entitlement comes from.** `EntitlementResponse` now
+    carries `source` (`subscription` | `grant` | `trial` | `free`) and, for a subscription, `rail`. iOS counts a
+    `purchase` only when the entitlement becomes a subscription (so a tester with beta minutes who buys does count),
+    no `cancellation` when a grant ends, and shows Manage Subscription only for an App Store one. Settings says
+    "beta minutes" on both clients. The original note: A grant reports
     `active` like a paid subscription, so iOS `BillingService` logs a `purchase` event when a grant starts
     (and `cancellation` when it ends), and the web paywall offers only "Manage subscription", whose portal
     answers 409 (no Stripe customer). Fix: an additive `source` field on `EntitlementResponse`
@@ -177,32 +769,49 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
     measures blended COGS/min. **Ship-blocker for the free floor** — shipping a guessed number risks an
     unbounded bill (A9.3). Pro included minutes (1500) is also config, confirm post-COGS.
   - **Billing credentials (Secret Manager, per env):** Stripe secret + webhook signing key + price ids;
-    Apple App Store Server API key (`TODO(A4-apple)`) + App Store Connect products; Google Play service
+    Apple App Store Server API key (the `app-store-server-key` secret, plus `app_store_issuer_id` and
+    `app_store_key_id` in the env's Terraform; RELEASE.md PR 26a) + App Store Connect products; Google Play service
     account + RTDN Pub/Sub topic + Play Console products. Receipt validation + webhooks are coded but
     untestable here (`TODO(A11)`).
   - **App Review 3.1.3:** iOS paywall shows StoreKit pricing only (no web-pricing reference) — safe
     globally; if you later want to surface the cheaper web rail on iOS it's US-storefront-only (see DECISIONS).
+  - [ ] **Deleting an account doesn't cancel its Stripe subscription (found in RELEASE.md PR 28).** Account
+    deletion removes the `subscriptions` row, but nothing asks Stripe to cancel, so a web subscriber who deletes
+    their account keeps being charged. Harmless while Stripe is in test mode (the beta); **a ship-blocker for live
+    Stripe.** Fix (PR 28b): the deletion records the Stripe subscription, and billing cancels it with retries. The
+    Stripe e2e step (test card 4242) goes with it, since its account deletion is the cleanup. App Store
+    subscriptions can't be cancelled by us: the deletion page and the app must say to cancel in the App Store
+    (Guideline 5.1.1(v)).
+  - **StoreKitTest can't run under command-line xcodebuild here (RELEASE.md PR 27).** An `SKTestSession`
+    loads `apps/ios/StoreKit/AlgoMinutes.storekit`, but storekitd refuses its configuration
+    (`SKInternalErrorDomain 3`, "Error saving configuration file"), signed or unsigned, after a simulator reboot, on
+    Xcode 26.3. So purchase, restore, renewal and Ask to Buy have no XCTest; their proof is the sandbox purchase on a
+    device (Wave 2 proof 4). The pre-purchase check and the paywall's invite-code handoff are unit-tested. The
+    `.storekit` file still serves Debug runs from Xcode. Retry on the next Xcode, or in Xcode Cloud.
 
 ### ⚠️ Trial state-machine fragilities (you asked me to flag these)
   1. **Reinstall-restart abuse (the big one).** No-account-for-7-days + anonymous identity means a user can
      delete + reinstall to get a fresh anonymous uid and a new 7-day trial. The server keys the trial to
-     uid and `ensureTrial` is idempotent per-uid, but a *new* uid escapes it. The `trial_device_hash` column
-     is a **seam, not enforced.** Fix needs a durable device signal — iOS DeviceCheck/App Attest (1 bit per
-     device) and Android Play Integrity — or gating trial-start behind a lightweight identity. **Decision +
-     platform work required before launch.**
+     uid and `ensureTrial` is idempotent per-uid, but a *new* uid escapes it. **iOS fixed (RELEASE.md PR
+     22):** Apple's DeviceCheck bit0 marks a device that has had its trial, across reinstalls. Android waits
+     for Play Integrity (A11) and gets no trial until then.
   2. **Missed cancellation/expiry webhook → over-grant.** Entitlement is derived from `current_period_end`;
      if an EXPIRED/cancel webhook is dropped, the user stays `active` until the stored period lapses. Needs a
      periodic reconciliation job (poll Apple/Stripe/Google status) + the `expireElapsedTrials` sweep on a
-     schedule. Not built (no scheduler wired — A11/infra).
+     schedule. **Apple done (RELEASE.md PR 26a):** billing's hourly `/tasks/reconcile-apple` asks the App Store
+     Server API about subscriptions near the end of their period (every 6 h) or not checked for a week, and
+     writes Apple's answer unless a notification wrote the row meanwhile. A lost DID_RENEW now costs a
+     subscriber at most about 6 hours without Pro. Stripe and Google Play still have no reconcile.
   3. **Cross-rail double-charge race.** The client hides "buy" when already entitled and the server logs
      `cross_rail_duplicate`, but two near-simultaneous purchases (or a user ignoring "already subscribed")
      can still double-charge, and a store charge can't be auto-refunded server-side — must be surfaced to
-     support. Consider a server pre-purchase entitlement check.
-  5. **Client billing endpoint wiring (TODO(A9-infra)).** The iOS client uses provisional paths
-     (`api/verify-purchase`, `api/entitlement`) that must be reconciled with the deployed routes: verify
-     lives on **services/billing** `POST /v1/purchases/verify` (a separate service base URL, not the api),
-     entitlement is **api** `GET /v1/entitlement`, events is api `POST /v1/events`. The web client already
-     uses the correct paths. Reconcile the iOS APIClient base URLs/paths when the services deploy (A11).
+     support. Consider a server pre-purchase entitlement check. **Web side done (RELEASE.md PR 26b):** Stripe
+     checkout answers 409 `Already subscribed` (with the rail) to anyone paying on any rail, before Stripe is
+     asked. **iOS side left for PR 27:** StoreKit buys on the device, so the paywall must re-read
+     `/v1/entitlement` and not offer a purchase when `source` is `subscription`.
+  5. ~~**Client billing endpoint wiring (TODO(A9-infra)).**~~ **Resolved (checked 2026-09-29):** iOS verifies
+     purchases on billing's own host (`v1/purchases/verify`, `APIClient.swift:663`) and reads `v1/entitlement` and
+     posts `v1/events` on the api (`:672`).
   6. **Android Play Billing CLIENT is B2.** The Play *server* side (verify + RTDN webhook) is built in
      services/billing; the Android in-app Play Billing Library flow (products, purchase, restore) ships in
      Track B, calling `POST /v1/purchases/verify` with `{purchaseToken, productId}`.
@@ -222,7 +831,7 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   - [x] **Owner:** Push enabled on the App ID `com.algorythmos.algominutes` (2026-09-26).
   - [x] **Owner:** APNs auth key (`.p8`) uploaded in Firebase → Project settings → Cloud Messaging for staging,
     development and production (2026-09-26).
-  - [ ] **Owner:** the same for the prod Firebase project, when it exists (S3-PR4).
+  - [ ] **Owner:** the same for the prod Firebase project, when it exists (RELEASE.md, Apply P).
   - [x] **Done (push-end-to-end PR):** `aps-environment` is in `AlgoMinutes.entitlements` (Xcode's signing
     makes it `production` for TestFlight), guarded by `tests/ios-entitlements.test.ts`. A tapped push opens
     its note from any tab: `MainTabView` brings Home to the front on every link (`DeepLinkRouter.arrivals`),
@@ -233,11 +842,11 @@ Full rationale for each is in `docs/DECISIONS.md`. The ones a human may want to 
   (ios-m0-readiness PR):** one 500 MB cap in the api and the app (see "one upload cap" above).
 - **A6.5 needs brand sign-off:** final accent hue, logo/wordmark artwork, and typeface are `TODO(brand)`;
   the palette is a provisional, accessible v1. Full light-mode wiring across the (dark-first) UI is a follow-up.
-- **iOS broadcast extension — wire or exclude before submission (A6.6 N1).** It's bundled but no in-app UI
-  triggers it and its only permission copy is mic-only; App Review will question an unexplained
-  system-capture extension. Decide before the iOS submission build: **wire it** (RPSystemBroadcastPickerView
-  + honest capture copy + the A4 App Group) **or exclude it** from that build. Needs the A4 App Group either
-  way. Default applied: left re-homed in the repo, unwired.
+- ~~**iOS broadcast extension — wire or exclude before submission (A6.6 N1).**~~ **Wired (checked 2026-09-29):**
+  `BroadcastPickerView.swift` sits behind the consent step in `RecorderFlow.swift`, shown only while `/v1/config`
+  says `broadcastCapture` (#134, #163, #184), and both targets carry the App Group. Still before external review:
+  the microphone text must mention capturing another app's call (RELEASE.md PR 11), the review notes must explain
+  it (PR 16), and it must be proven on a device (Wave 1 check 5).
 - **A6.4 onboarding deliverables still to BUILD** (audit only so far): permission *explainer* + Settings
   deep-link on denial, and a **sample note** (missing on both platforms — the biggest named gap). Web Home
   has no first-run/empty state; iOS notes-listener failure is silent (`NotesRepository.swift:74`). See
@@ -379,7 +988,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Node 24 → 26 (base images + `engines`).** Node 26 enters LTS around late
   October 2026. Move all 8 service images together, run the boot smoke plus a staging
   deploy, and update `engines`. Never move to an odd major: Dependabot proposed
-  `node:25`, which is already EOL (#20, declined).
+  `node:25`, which is already EOL (#20, declined). Move `@types/node` to 26 in the same PR: Dependabot holds
+  its majors (it proposed 26 while production ran Node 24, #229, declined), and every workspace pins it to the
+  runtime's major (`^24`).
 - [x] **Done (web-vite-8 PR):** vite 8.3, `@vitejs/plugin-react` 6.1 and `@tailwindcss/vite` 4.3. The build
   passes (and the `web-build` CI job keeps it so). `vite.config.ts` uses `import.meta.dirname`, ready for
   vite's native config loader. Was: **Web toolchain: vite 6 → 8 plus `@vitejs/plugin-react` 6** (#30 declined; plugin-react 6
@@ -418,6 +1029,39 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     the test caught `pdf.destroy is not a function` (and `web-build` the same in `documentText.ts`): pdf.js 5
     removed `PDFDocumentProxy.destroy()`. Both now call `loadingTask.destroy()`, which works on 4 and 6
     (pdfjs-destroy PR). Then rebase #107.
+- [ ] **TypeScript 6 → 7** (#221 declined, 2026-09-28; the repo moved from 5.8/5.9 to 6.0.3, the newest
+  version the toolchain supports). TypeScript 7 is the native (Go) compiler: its package exports only a version,
+  and the parser is under `typescript/unstable/*`. Three things can't run on it yet:
+  - `typescript-eslint` accepts TypeScript `>=4.8.4 <6.1.0` ("does not support TS 7.0");
+  - `@astrojs/check` (the site's `astro check`) accepts `^5 || ^6`;
+  - our AST gates use the compiler API (`scripts/check-no-silent-catch.mjs`, `check-no-direct-firestore.mjs`,
+    `check-no-direct-pg-writes.mjs`, `tests/trace-propagation.test.ts`).
+
+  Our own code already type-checks on 7 (6.0.3 needed the same one-line `sse.ts` fix). Next step: when
+  `typescript-eslint` and `@astrojs/check` support 7, lift the Dependabot ignore. Keep the gates on the
+  stable API by adding `typescript` 6 under an npm alias for them, not by porting them to the unstable one.
+- [ ] **`google-auth-library` 9 → 11** (#231 declined, 2026-09-28). It mints the Vertex AI bearer token for
+  every Gemini, embedding and chat call:
+  - `packages/ai/src/gemini-call.cjs`: the summarizer's and the transcoder's fast path (audit it first, per
+    CLAUDE.md);
+  - `packages/ai/src/embeddings.cjs`;
+  - `services/api/src/routes/search-and-chat.cjs`;
+  - `services/db-job/src/handlers/eval-recall.js`.
+
+  **What we call:** only `new GoogleAuth({ scopes }).getClient()`, then `client.getAccessToken()`. None of
+  `client.request()`, `Transporter` or `gaxios`, which is where 10.0's breaking changes are ("`Request`
+  revamp", "Remove `Transporter`"). 11.x requires Node ≥22; we run 24.
+
+  **Checked on 11.1.0, locally:**
+  - the CommonJS `require` works;
+  - `GoogleAuth`, `getClient()`, `getAccessToken()` and `Compute` (Cloud Run's client) all exist;
+  - `getClient()` returned a client from local credentials.
+
+  **Not checkable locally:** getting a token from Cloud Run's metadata server.
+
+  **Next step:** one PR bumping `packages/ai` and every service that declares it, deployed to staging. It
+  closes with evidence: a summary, an embedding and a chat answer produced on staging (`smoke-staging.sh`,
+  plus the log lines showing a token was fetched). Then lift the Dependabot hold.
 - [ ] **Express 4 → 5** (all 7 services, #24 declined for now). It brings native
   async error handling (the `wrap()` adapters go away) but changes path syntax
   (named wildcards), `req.query`, and removes APIs. Do it as one PR per service
@@ -528,8 +1172,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [x] **Done for M1 (note-deletion-path, account-deletion-path, workers-note-gone, ios-delete-via-v1,
   deleted-note-tombstone PRs):** a note is deleted through `POST /v1/notes/delete` (iOS since #114),
   Postgres first, then the doc, then the audio, and a tombstone keeps a stale client from uploading into
-  it. Account deletion is one idempotent Postgres-first path. Open below, not on the M1 path: the web
-  client's `setDoc` merge writes (R2, the web `/v1` migration), and shared workspaces on account deletion.
+  it. Account deletion is one idempotent Postgres-first path. Open below: shared workspaces on account deletion
+  (RELEASE.md PR 40). The web's `setDoc` merge writes (R2) are gone.
   Was: **⚠️ M1: deletion doesn't work on the new backend. A deleted note stays in Postgres, stays
   searchable, and its audio stays in GCS.** (Verified 2026-09-25.)
   - **Deleting a note:** the clients delete the Firestore doc (`NotesRepository.swift deleteNote`) and rely
@@ -580,9 +1224,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           its ingest debit, and nothing can refund it afterwards (`usage_ledger.note_id` is SET NULL on
           delete). If that should be refunded, `deleteNote` would write the reversal in its own transaction
           for a note still `queued`.
-      - **R2:** the web client's `setDoc(…, { merge: true })` writes (`apps/web/src/lib/noteStatus.ts:4`,
-        `App.tsx`) can re-create a doc deleted from another device. That's fixed by the web's `/v1`
-        migration.
+      - ~~**R2:** the web client's `setDoc(…, { merge: true })` writes can re-create a doc deleted from another
+        device.~~ **Fixed by the new web app (checked 2026-09-29):** `noteStatus.ts` and `App.tsx` are gone. Its
+        only Firestore writes are in `apps/web/src/lib/notes/noteCache.ts`: `setDoc` without merge on a new id,
+        and `updateDoc`, which can't re-create a deleted doc. `check-no-direct-firestore.mjs` gates them.
       - **R3:** ~~a YouTube permanent failure mirrors `error` to Firestore only~~ **fixed
         (youtube-permanent-failure PR):** it now calls `noteTerminal.markNoteFailed`, Postgres first, so a
         retry isn't refused for 3 h. ~~Still open: `chunking` and `summarizing` are mirrored with no matching
@@ -740,8 +1385,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   subscriber). It now **fails closed with 503**. Only `APPLE_JWS_TRUST_UNVERIFIED=true` restores decode-only,
   for local dev and tests, and never on Cloud Run (`K_SERVICE`). The Google Play rail was already safe: it
   re-verifies every token server-side against the Play API.
-  - [ ] **PR-32 (before any Apple billing):** verify the x5c chain to Apple Root CA - G3, the ES256
-    signature, and the bundle id / environment. The paywall stays hidden behind its flag until then.
+  - [x] **PR-32 (2026-09-27):** `verifyAppleJws` verifies each JWS to Apple Root CA - G3 (pinned, checked against
+    Apple's published fingerprint). It checks the ES256 signature, Apple's marker extensions, validity at
+    `signedDate`, and the bundle id. Anything else is a 400. The paywall stays behind its flag; OCSP and a live App
+    Store Server API lookup remain `TODO(A11)`. Both environments are accepted (App Review buys in the sandbox against
+    the production server).
 - [x] **CodeQL backlog triaged** (only #63 remains, owned by PR-32):
   - ~~`js/polynomial-redos` in `redaction.cjs` (#22)~~ and ~~`js/incomplete-multi-character-sanitization`
     in the YouTube extractor (#24)~~: **fixed** (CodeQL closed both on 2026-09-24). Only **#63**
@@ -794,8 +1442,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
     `markError` carries the refund (`refund:enqueue_failed`, net-guarded) in its transaction. A failed
     mirror write throws out of `markQueued` after its commit and reaches `failNote` too
     (`process-intelligence.js`, the `mark_queued_failed`, `kickoff_misconfig` and `enqueue` events).
-    - [ ] Only the enqueue failure has a Postgres test (`process-kickoff.test.ts`). Tests for the mirror
-      failure and the misconfigured kickoff land with the metering PR (plan S2-PR6c).
+    - [x] ~~Only the enqueue failure has a Postgres test~~ **Done (RELEASE.md PR 3):** the mirror failure and
+      the misconfigured kickoff each refund on Postgres (`tests/integration/metering-exact.test.ts`).
   - ~~After a refund, a re-queue of the same note reuses the `${noteId}:ingest` key, so the re-run is
     free~~ **fixed (metering-per-run PR):** one debit per run. `markQueued`, under the note's lock, charges
     the note only when its net is 0 (never charged, or its last run refunded); a failure that wasn't
@@ -830,10 +1478,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           last attempt, falls back as above. The note is being deleted anyway.
         - `reverseUsageForNote` is still exported and takes no lock (only tests call it); a partial unique
           index on `reverses_id` would enforce one reversal per debit.
-    - [ ] `assertCanMeter` demands headroom for a retry that won't be charged (its earlier charge stands),
-      so a user at their limit gets a 402 on that retry.
-  - The quota check (`assertCanMeter`) runs outside the queue transaction, so two concurrent kickoffs of
-    different notes can both pass it.
+    - [x] ~~`assertCanMeter` demands headroom for a retry that won't be charged~~ **Fixed (RELEASE.md PR 3):**
+      the kickoff's early check skips a note whose charge still stands (`noteChargeStands`), and markQueued
+      checks only when it will write a new debit.
+  - [x] ~~The quota check runs outside the queue transaction, so two concurrent kickoffs of different notes can
+    both pass it~~ **Fixed (RELEASE.md PR 3):** markQueued checks the user's minutes in the transaction that
+    debits, under a per-user advisory lock, and throws `QuotaExceededError` with nothing written. The kickoff's
+    early check stays as a cheap refusal. Tested with a deterministic race (a held lock, two kickoffs: one 200,
+    one 402, one debit); mutation-checked.
 
 - [x] **Fixed (admit-new-users PR): a new user's onboarding failed before their first recording.** Only
   `/v1/uploads` and `/v1/process` created the `users` row, but a new user's first requests are onboarding.
@@ -977,8 +1629,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                 finished notes (new migration) would stop it scanning every finished note. Whether Firestore
                 answers a precondition write to a deleted doc with 9 or 5 is unconfirmed; both are handled.
                 The repaired lists share the `created_at, id` ordering item below.
-            - When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
-              spent and the note is never embedded.
+            - ~~When the fast path's or a completion's embedder enqueue throws after its claim, the claim is
+              spent and the note is never embedded~~ **fixed (RELEASE.md PR 5c; audit Q11):** the sweep's `redrive`
+              step enqueues the embedder again for a `ready` note with a transcript and no embeddings, claimed 90
+              minutes to 6 hours ago and not dead-lettered (`claimLostEmbeds`, which re-stamps the claim, so once
+              per window). Logged `lost_work_redriven` (a warning alert).
             - `/v1/notes/read` orders action items and decisions by `created_at, id`. The rows share one
               transaction's `created_at`, and `id` is a random UUID, so the order is random. iOS reads
               the summary from Firestore, so it isn't affected. Fix: store a position.
@@ -995,8 +1650,11 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               - A summarizer enqueue that threw also dropped the embedder. Both are now tried, and the
                 first failure is logged (`chunk_complete_enqueue_failed`) and rethrown.
 
-              Still lost: an enqueue that itself throws after its claim (the 3.5 h sweep fails the note).
-              A sweep that re-drives a `summarizing` note with a full transcript would cover it.
+              ~~Still lost: an enqueue that itself throws after its claim (the 3.5 h sweep fails the note)~~
+              **fixed (RELEASE.md PR 5c; audit Q9):** the sweep's `redrive` step enqueues the summarizer again for a
+              pipeline note (not a regeneration) still `summarizing`, claimed and untouched for 90 minutes, past the
+              summarize queue's own retries (`claimLostSummaries`, re-stamped, so once per window). Tested on
+              Postgres (`sweep-redrive.test.ts`); seven mutations checked.
             - ~~`persistFastPathResult` writes `ready` without a status condition~~ **fixed (same PR):** it
               commits only over an in-progress note, so a duplicate delivery gets `NOTE_MOVED_ON` (acked)
               instead of overwriting the finished note and the user's edits since.
@@ -1021,10 +1679,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
               the note's lock; the ledger through the real hooks); mutations checked.
               - [ ] **Queued (from its re-reviews):**
                 - ~~**A crash after the commit loses the refund**~~ **fixed (refund-in-failure-tx PR):** the
-                  refund commits with the failure on every path. What a crash after the commit still loses
+                  refund commits with the failure on every path. ~~What a crash after the commit still loses
                   outside the poll terminals (the kickoff's YouTube and unreadable-length failures, the
-                  spend cap, each worker's last attempt) is the dead letter. (~~and the notice~~: the
-                  notices outbox, below.)
+                  spend cap, each worker's last attempt) is the dead letter~~ **fixed (RELEASE.md PR 5a,
+                  migration 027):** `markNoteFailed` writes the dead letter in the failure's own statement
+                  (both workers' last attempts, the four transcoder terminals), so it commits with the
+                  failure. (~~and the notice~~: the notices outbox, below.)
                 - ~~**A failed regeneration refunds the whole recording**~~ **fixed
                   (regeneration-failure-keeps-charge PR):** the summarizer's last attempt refunds only a
                   pipeline summary's failure; a regeneration's (its task carries `summaryGeneration`) is
@@ -1036,7 +1696,9 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   account deletion already did), so none of them deadlock with a poll's verdict.
                 - When Postgres errors, the mirror writes the caller's message while Postgres keeps the
                   first; mirror repair compares status only, so they don't converge.
-                - A re-drive's dead letter says `chunk_already_failed`, not the original reason.
+                - ~~A re-drive's dead letter says `chunk_already_failed`, not the original reason~~ **fixed
+                  (PR 5a):** a dead letter is keyed `queue:note:run_seq:chunk`, not by its reason, so the
+                  re-drive's record of the same loss writes nothing; the first reason stands.
                 - ~~A crash between the commit and the notice loses the push~~ **fixed (notices-outbox PR,
                   migration 022):** the transaction that makes a note ready or failed writes its notice
                   (`note_notices`, one per note, run, summary generation and kind), and enqueues it after the
@@ -1047,7 +1709,12 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
                   the commit, a duplicate and a concurrent delivery, a failed send, a deleted note, a re-run,
                   a regeneration); 13 mutations checked. Found on the way and fixed with it: the fast path
                   (every recording under 10 minutes) never sent a "ready" push at all.
-                - A re-driven poll records its dead letter again (the dedupe item below).
+                - ~~A re-driven poll records its dead letter again~~ **fixed (PR 5a):** the same key, a partial
+                  unique index (`dead_letter_dedupe_key_uniq`) and `ON CONFLICT DO NOTHING`: one row per queue,
+                  note, run and chunk, whichever attempt or path records it. A note that can't be read (gone)
+                  still gets a row, never deduped. Tested on Postgres (`dead-letter-once.test.ts`: replay,
+                  another chunk, queue or run, a gone note, a foreign workspace, written with the failure, a
+                  rolled-back refund); seven mutations checked.
                 - ~~A poll from a run that was just re-queued can fail the new run~~ and ~~a second poll
                   chain can turn a `done` chunk into `error`~~ **fixed (poll-failure-locks-chunk-first
                   PR):** a poll's verdict locks the note, then its chunk; a chunk that's gone (re-queued,
@@ -1082,14 +1749,26 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
           (the alert counts it)~~ **fixed (final-attempt-hooks PR):** one statement writes both. If the
           speech job finishes before an exhausted poll's retry, that retry completes the chunk and the note can go on to `ready`, with no refund or failure
           notice sent. That's a good outcome, but the two stores briefly disagree.
-        - If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
+        - ~~If Postgres stays down through every attempt of a poll failure, the last attempt's dead letter
           carries the Postgres error and the request body, not `stt_operation_errored` / `stt_poll_exhausted`
-          and the chunk id. The user sees the generic "We could not process this recording."
+          and the chunk id~~ **fixed (PR 5a; audit Q7):** a dead letter has a `reason` column, and the last
+          attempt works it out from the task (a poll at its limit is `stt_poll_exhausted`, earlier
+          `stt_poll_failed`; a kickoff `transcode_failed`), with the chunk, whatever the attempt threw. The
+          admin view shows it (`DeadLetterEntry.reason`). The user still sees the generic "We could not
+          process this recording."
     - Inline (Deepgram) mode records no operation id, so a replay re-transcribes. Deepgram is off
-      (`STT_PROVIDER=google`).
-    - A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep.
-    - A kickoff of a note's previous run can continue into a re-queued note. Checking the kickoff's
-      `jobId` needs `markQueued` to store it.
+      (`STT_PROVIDER=google`). **Guarded (RELEASE.md PR 5b; audit Q30):** the transcoder refuses to boot with
+      `STT_PROVIDER=deepgram` (`assertProviderBootable`, `transcoder_provider_refused`) until inline mode records
+      an operation id.
+    - ~~A crash between `markChunkDone` and the summarizer claim leaves the note to the stuck-note sweep~~
+      (audit Q10): `completeChunkGate` makes the chunk's completion and the claim one transaction, and a claim
+      whose enqueue was lost is re-driven by the sweep (PR 5c), so nothing is left to the stuck-note sweep but a
+      run that's truly stuck.
+    - ~~A kickoff of a note's previous run can continue into a re-queued note~~ **fixed (PR 5b; audit Q12):**
+      `markQueued` returns the run it queued (`notes.run_seq`, which it bumps), the kickoff task carries it as
+      `runSeq`, and the transcoder acknowledges a task from a run the note has left without touching it
+      (`kickoff_superseded_by_new_run`). A task from before `runSeq` goes on as before. Tested on Postgres
+      (`kickoff-run-guard.test.ts`).
 
 ## Uploads finish without the app (plan rev 8, PR-24, 2026-09-25)
 
@@ -1155,8 +1834,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   - A failed revocation doesn't block deletion (logged `apple_token_revoke_failed`): removing the data
     comes first.
   - Accounts without Apple sign-in, including anonymous ones, are unaffected.
-- [ ] **Yours:** configure the Firebase Apple provider (Services ID, Key ID, `.p8`) in `algominutes-staging`.
-  Without it the revocation fails and is logged.
+- [x] ~~**Yours:** configure the Firebase Apple provider (Services ID, Key ID, `.p8`) in `algominutes-staging`.~~
+  **Done:** Apple sign-in is enabled on staging (§2, checked 2026-09-28 through the Identity Toolkit admin API).
 - [ ] **Verify on a real iPhone (M1):** delete an Apple-linked test account, and the app disappears from
   Settings → Apple ID → Sign in with Apple.
 
@@ -1174,11 +1853,14 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 - [ ] **Before App Store submission:** a server-side kill switch for broadcast (the top App Review risk),
   and review notes that explain the feature.
   - [x] **Server side (api-broadcast-kill-switch PR):** `GET /v1/config` answers `{ broadcastCapture }`
-    (contract `AppConfigResponse`); `BROADCAST_CAPTURE=off` on the api turns it off, anything else leaves it
-    on. To flip it, add the variable to the api's env in `infra/terraform/modules/environment/cloud-run.tf`
-    (one line, then plan and apply); it isn't wired yet, to keep the saved staging plan current.
-  - [ ] **iOS:** read `/v1/config` at launch and on foreground, and hide *Capture audio from another app*
-    when it's off (keep the last answer; hidden until the first one).
+    (contract `AppConfigResponse`). `BROADCAST_CAPTURE=off` on the api turns it off; anything else leaves it on.
+    - It's wired: `var.broadcast_capture` reaches the api's env (`cloud-run.tf`), and staging sets it `"on"`
+      (`envs/staging/main.tf`).
+    - To flip it, change that variable, then plan and apply.
+  - [x] **iOS reads it** (checked 2026-09-28): `APIClient.swift` fetches `v1/config`, `AppSwitches.swift`
+    keeps the answer, and `RecorderFlow.swift` shows *Capture audio from another app* only when
+    `broadcastCapture` is on.
+  - [x] **Web reads it too:** `RecordPage.tsx` offers call capture only when `/v1/config` says so (#206).
 - [ ] **Queued:** the extension writes `.m4a` with AVAssetWriter, so if iOS kills it (a 50 MB memory
   limit) mid-capture, the capture is lost. AVAudioFile can write ADTS, but the two sources run on
   different clocks. Measure how often it happens before redesigning.
@@ -1227,7 +1909,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   (M1 run plus the weekly 3 h e2e is about 360 of the ~660 minutes a day). Verify the trip on staging
   (runbook `gcp-provisioning.md`, spend circuit breaker).
 - [ ] **Queued:**
-  - The api doesn't refuse a kickoff at the cap: the transcoder fails and refunds it.
+  - ~~The api doesn't refuse a kickoff at the cap~~ **fixed (RELEASE.md PR 3):** the kickoff checks the cap
+    before anything is queued or charged: a 503 with the reason on the note, and the api reads the same
+    paid-work minutes as the transcoder (installed at startup). The notetaker's ingest is left to the
+    transcoder's gate, since its minutes were reserved when the bot was sent.
   - The embedder, chat and the summarizer's Gemini call aren't metered or gated. They are cents next to
     speech.
   - ~~Nothing deletes `usage_events` rows~~ **fixed (sweep-usage-events-retention PR):** the sweep's
@@ -1322,7 +2007,10 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   out of Search and Chat. It now throws, after rolling back the write: the embedder answers 5xx, the last
   attempt dead-letters (and alerts, #90), and a deleted note's foreign-key error is still acknowledged. A
   vector count that doesn't match the chunks is an error too. Tested on Postgres; mutation-checked.
-- [ ] **Xcode Cloud → TestFlight (plan PR-30), repo side done (xcode-cloud-scripts PR).**
+- [x] **Xcode Cloud → TestFlight (plan PR-30), repo side done (xcode-cloud-scripts PR).** **Owner side done
+  (2026-09-26):** the App Store Connect record, the internal group and the "Staging → Internal" workflow exist, and
+  build 1.0.0 (7) is installed from TestFlight. External testers need a second workflow, "Staging → Beta"
+  (RELEASE.md, Wave 1).
   `apps/ios/ci_scripts/ci_post_clone.sh` stamps `CI_BUILD_NUMBER`, writes the plist from the secret
   `GOOGLE_SERVICE_INFO_PLIST_B64`, and generates the project (dry-run tested, including a bad secret failing
   fast). **Yours:** the App Store Connect record, testers and agreements, connecting the repo, and creating
@@ -1360,8 +2048,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
   The superseded `reviewed-2026-09-25d.tfplan` is deleted.
 - [x] **Checked 2026-09-26:** `run.managed.requireInvokerIam` is not enforced at the organization, so
   `invoker_iam_disabled` is allowed (runbook §1).
-- [ ] **Yours:** apply that plan (the runbook's "plan is current" check first) and run the first deploy in
-  the same sitting (§3), by 2026-10-10.
+- [x] **Applied** (2026-09-26), and the first deploy passed in the same sitting (run 36217054635). Staging is
+  up (§2).
 - [ ] **Yours, after your first sign-in:** re-plan with `TF_VAR_admin_uids` (runbook §5), so the
   dead-letter view answers you.
 
@@ -1369,7 +2057,7 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
 
 - [x] `apps/site` built: pages, legal copy with the true facts (L21), `vercel.json` headers and CSP, the
       `site-build` CI job, `site-smoke`, uptime checks, and the runbook (`docs/runbooks/site.md`).
-- [ ] **Owner:** re-apply `bash scripts/github-settings.sh --apply`, so `site-build` becomes a required check.
+- [x] `site-build` is a required check on `integration`'s ruleset (checked 2026-09-28).
 - [ ] **Owner:** `terraform apply` staging: the five site uptime checks and alert, and
       `staging.algominutes.algorythmos.com` in the api's `allowed_origins` (for the Phase 2 web app).
 - [ ] **Owner:** create the Zoho aliases `support@` and `privacy@algorythmos.com`. The published pages name
@@ -1382,30 +2070,60 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       `recordTermsAcceptanceIfNeeded` posts the new acceptance without showing the documents. The pages
       promise to announce a significant change in the app or by email, and don't claim the app asks. Before
       any material change after launch, add a re-accept sheet (iOS, then web) that shows what changed.
-- [ ] **Imported audio is metered on the client's estimate.** `/v1/process` charges `ceil(durationSec/60)` from the
-      number the client sends. iOS imports send none, so they're charged 0 minutes; the web sends the length the browser
-      read. Meter on the transcoder's own measurement (ffprobe), and correct the ledger when it differs.
+- [x] ~~**Imported audio is metered on the client's estimate.**~~ **Fixed (RELEASE.md PR 3b):** once the transcoder has
+      measured the audio (ffprobe), before any paid work, `settleMeasuredLength` (packages/db) settles the run's
+      charge to the measured minutes, under the note's row lock.
+      - Longer than charged: the difference is debited (`ingest:measured`) if the user's minutes cover it.
+      - Shorter: the difference is refunded (`refund:measured`).
+      - Over the user's minutes, or longer than the plan's longest recording: the note fails with a full refund and
+        a reason (`refund:over_quota` / `refund:too_long`), with no dead letter, since it's not a pipeline fault.
+      - A notetaker's meeting is settled but never refused.
+      - A replay writes nothing, and a length already accepted isn't refused after a plan change.
+      - A run another attempt already failed (and refunded) or finished is left alone (`moved_on`).
+      - The quota check takes markQueued's per-user meter lock, and checks the run's own billing month.
+      - Each adjustment has its own key, so a second measurement (a YouTube re-download) doesn't collide.
+      - Tested on Postgres (18 cases, including deterministic races for replays and the meter lock); every
+        branch mutation-checked.
 - [ ] **Billing has no CORS middleware** (`services/billing/src/app.js`), so the web app can't call
       `/v1/billing/checkout` or `/portal` cross-origin. The web client has both calls, typed. Give billing the
-      api's allowlist (`ALLOWED_ORIGINS`) before web checkout (S3-PR10).
-- [ ] **The api ignores the web's `X-Trace-Id`.** `traceIdFrom` reads only `X-Cloud-Trace-Context`, which a
-      browser can't send cross-origin, so a web error's trace id doesn't match the server's logs. Fix: the
-      api's trace middleware prefers a well-formed `X-Trace-Id`, and exposes it back (a small api PR, queued).
+      api's allowlist (`ALLOWED_ORIGINS`) before web checkout (RELEASE.md PR 17 and PR 28).
+- [x] ~~**The api ignores the web's `X-Trace-Id`.**~~ **Fixed (#188):** the trace middleware prefers a
+      well-formed `X-Trace-Id` and sends it back (`services/api/src/middleware/trace.js`).
 - [x] `apps/web`'s stale `PrivacyPolicy.tsx` / `TermsOfService.tsx`: deleted in W1; the app links to the site.
-- [ ] **The retention shown on the web is this browser's, not the account's.** There's no read for
-      `users.retention_days`, so a limit set on iOS or in another browser shows as nothing chosen (saving still
-      works, and a shorter limit is confirmed first). Fix: return `retentionDays` from `/v1/entitlement` or
-      `/v1/config`, a contract change (three clients).
+- [ ] **Owner, for the web e2e (`web-e2e`):** create Vercel's Protection Bypass for Automation secret and add it to
+      GitHub as `VERCEL_AUTOMATION_BYPASS_SECRET` (`docs/runbooks/site.md`). The journey has been run only against a
+      local stand-in so far. The staging sign-in settings and `allowed_origins` are in place (2026-09-27), so this
+      secret is all its first real run needs.
+- [x] **WebM on the Gemini fast path: verified 2026-09-27.** Chromium and Firefox record WebM/Opus, and
+      `resolveGeminiAudioMime` (`packages/ai/src/intelligence.cjs`) labels it `audio/ogg` for the fast path
+      (`services/transcoder/src/fast-path.js`, which sends the original bytes). A synthetic WebM/Opus speech clip
+      (`say` + `ffmpeg -c:a libopus`) sent that way to Vertex in `australia-southeast1` came back word for word from
+      both `gemini-3.5-flash` and `gemini-2.5-flash`. Long recordings go through ffmpeg and Speech-to-Text, which
+      read WebM. A real browser recording on staging is still part of the web e2e.
+- [x] **A recording left in a browser stays on its disk after sign-out: fixed 2026-09-29 (RELEASE.md PR 12a).**
+      Signing out with any not uploaded says so first. **Upload first** goes to the record page, and **Delete and
+      sign out** removes them from IndexedDB. The notes list shows them too, not only `/record`
+      (`apps/web/src/app/record/unsent.test.tsx`).
+- [x] **The retention shown on the web is this browser's, not the account's: fixed 2026-09-29 (RELEASE.md PR
+      12b).** `GET /v1/account/retention` returns `{ retentionDays }` (additive, in the contract). Web Settings and
+      the iOS retention card read it when they open, so a limit set on any device shows on all of them
+      (`tests/integration/retention.test.ts`).
 - [ ] **Deleting an Apple account on the web needs a popup.** Where the browser blocks it, the user is told to
       allow pop-ups (or use the iOS app); a redirect would leave the page mid-delete. The Apple token is also
       revoked before the server delete, as on iOS: if the delete then fails, the account remains and the user
       signs in again. A delete that resumes after a redirect would close both.
+- [ ] **Owner, for web push (W8):** generate the staging Web Push certificate (Firebase → Project settings →
+      Cloud Messaging → Web Push certificates → Generate key pair) and put its **public** key in Vercel as
+      `VITE_FIREBASE_VAPID_KEY` (Preview, `integration`). Without it the web app simply has no push. If the
+      Browser key has API restrictions, allow the FCM, FCM Registration and Firebase Installations APIs.
+- [ ] **There's no push-token unregister endpoint.** Web sign-out deletes the browser's FCM token (so FCM stops
+      delivering to it at once), and the notifier prunes a token FCM reports dead, but the `push_tokens` row stays
+      until then. iOS has the same gap. A `POST /v1/push/unregister` would close it; not needed for the beta.
 
 ## Clients still on the legacy `/api/*` surface (2026-09-25)
 
-- [ ] **The web app still calls the pre-`/v1` API** (`/api/process-audio`, `api/entitlement`,
-  `api/verify-purchase`, and more). The new `services/api` serves only `/v1/*`, so the web doesn't work
-  against the deployed backend (it isn't deployed). **The iOS app moved in full** (A–E below).
+- [x] ~~**The web app still calls the pre-`/v1` API**~~ **Resolved (#190, #191):** the new web app calls only
+  `/v1`, through the typed client `apps/web/src/lib/api/client.ts`. **The iOS app moved in full** (A–E below).
   - **iOS (plan PR-17), in five PRs** (scoped 2026-09-25; every api call also lacked the required
     `X-AlgoMinutes-Client` header, so each would get a 400):
     - [x] **A, build config (ios-staging-config PR):** Debug, Staging and Release configurations, each
@@ -1453,8 +2171,8 @@ These were held back from Dependabot (`.github/dependabot.yml` `ignore`) because
       (#157).
     - ~~Recording cap~~ **done:** the api caps `/v1/uploads` at 500 MB (#97), and the app checks the same cap
       first (ios-m0-readiness PR).
-  - **Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow
-    (`POST /v1/uploads` + `/v1/process`, then Firestore status), and `lib/*` to the `/v1` paths.
+  - ~~**Web** (off the M1 path): migrate `App.tsx` / `ImportPanel` / `YouTubeImport` to the async flow~~ Done by
+    the new web app (#190–#199).
 
 ## 4. Verification gaps (could NOT verify without deps / credentials / devices)
 
@@ -1565,3 +2283,48 @@ identifier … Stop and ask. Never invent one"). Provide each and A4 can proceed
 | 11 | **Domain(s)** | web, API, CORS | ✅ Site `algominutes.algorythmos.com`; api on `run.app` (DECISIONS, 2026-09-26). |
 | 12 | **GCP billing budget + daily spend cap figures** (§4.6) | cost circuit breaker | Needed before first load test. |
 | 13 | **Stripe / App Store Connect / Play Console accounts** | billing (A9) | Enrol both small-business programmes before first sale. |
+
+## Online meetings (`docs/plans/MEETINGS.md`, 2026-09-28)
+
+The notetaker ships behind a `/v1/config` switch that defaults to off. Until the items below are done it's built
+and tested, but no bot joins a real meeting.
+
+- [ ] **Owner, M0: two Recall.ai accounts in ap-northeast-1 (Tokyo),** one for staging and one for prod.
+  - Recall has no Australian region, and a pay-as-you-go account is tied to its region.
+  - Apply for Recall's startup rate (US$0.25/h for the first 10k hours).
+  - Put each account's API key and webhook secret (`whsec_…`) into that project's Secret Manager. They are never
+    typed into a page or a file by an agent.
+- [ ] **Owner, M0: Recall's DPA and a no-training confirmation.** Required before any tester's meeting goes to
+  Recall (privacy page, APP 8).
+- [ ] **Owner, M0 lead times:**
+  - Google OAuth consent-screen verification for the Calendar scope (weeks).
+  - A Zoom Marketplace app (4–6 weeks of review).
+  - Chrome Web Store and Edge Add-ons developer accounts.
+- [ ] **Notetaker ingest (RELEASE.md PR 19), built; needs Apply B and the M0 spike:**
+  - Apply B gives the meetings service `GCS_BUCKET` and its Storage role (PR 17), and creates the
+    `meetings-purge-media` schedule. Until then, an ingest fails with "GCS_BUCKET is not set" and is retried.
+  - The spike confirms the hosts Recall's download URLs use in ap-northeast-1. The defaults are `.recall.ai`,
+    `.s3.amazonaws.com` and `.s3.ap-northeast-1.amazonaws.com`; `RECALL_MEDIA_HOSTS` replaces them.
+  - The spike also confirms what `delete_media` leaves: each recording's status becomes `deleted`, and a
+    `recording.deleted` webhook arrives. The purge worker confirms a purge on either.
+  - ~~An ingest's dead letter; deleting a note mid-meeting~~ **fixed (RELEASE.md PR 21):** every meetings task
+    out of attempts writes a Postgres dead letter, and a note or account deletion queues Recall's purge (a live
+    bot leaves) in its own transaction.
+  - Still open: a notetaker note whose mirror doc went missing isn't restored (its kickoff fails, and the note
+    ends in `error` in Postgres alone). Rare: only a client deleting the doc directly, which the rules forbid.
+  - The meetings-reconcile and purge schedules ride in Apply B with the rest of the notetaker's Terraform.
+  - The admin view's `DeadLetterEntry` (contracts `schemas/async.ts`) has no `payload`, so a meetings dead
+    letter's `kind` and `meetingBotId` show only in psql. Adding it is a contract change (three clients).
+  - A cancel that can't reach Recall in 5 attempts is dead-lettered and alerts (`cancel_bot_gave_up`); a bot
+    already recording then stays until its reservation runs out unless someone makes it leave.
+- [ ] **Owner: a written legal opinion on recording meetings** (`docs/CONSENT.md` §2.4 and §4). NSW requires
+  the consent of all parties. Until it arrives, the notetaker stays with allowlisted testers.
+- [ ] **Owner, only if the M0 spike shows guest bots are refused too often:** a dedicated paid Google Workspace
+  with SAML for a signed-in Meet bot. Its account name replaces the bot name, so call it "AlgoMinutes Notetaker".
+- [ ] **Owner: apply the staging plans** for #236 (the summarize retry window and the `gemini_transient` alert)
+  and #238 (queue dispatch capacity) once they merge. Re-plan first, and redeploy after (a saved plan resets
+  Cloud Run images). **2026-09-29:** `reviewed-7fd70b6.tfplan` is stale, because #243 and #245 changed Terraform
+  after it. Don't apply it. These changes ride in Apply A (RELEASE.md PR 6), re-planned when that PR merges.
+- [ ] **Before 2026-10-20: prove gemini-3.5-flash on a long recording.** It becomes the only Sydney model then
+  (DECISIONS 2026-09-28). Upload a meeting of 45–60 minutes on staging; the check is the summarizer's
+  `gemini_ok` with `finishReason: STOP` and chapters present, with no `gemini_output_truncated`.

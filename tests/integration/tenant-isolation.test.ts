@@ -280,7 +280,7 @@ describe('idempotent kickoff: in-flight guard', () => {
   it('a stuck in-flight note (past the stale window) can be re-queued', async () => {
     await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = $1 WHERE id = 'note-a'`, [ago(IN_FLIGHT_STALE_MS + 60_000)]);
     const { fs } = firestoreSetStub();
-    expect(await markQueued(fs, queuedInput(), quietLog)).toEqual({ queued: true, status: 'queued' });
+    expect(await markQueued(fs, queuedInput(), quietLog)).toEqual({ queued: true, status: 'queued', runSeq: expect.any(Number) });
   });
 
   it('two concurrent kickoffs of a brand-new note queue it exactly once', async () => {

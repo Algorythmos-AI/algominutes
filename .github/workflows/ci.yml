@@ -8,6 +8,9 @@ on:
   push:
     branches: [integration, main]
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
 
 permissions:
   contents: read
@@ -23,9 +26,11 @@ jobs:
           cache: npm
       - run: npm ci
       # The transcoder's duration probe is tested against the real ffmpeg (as its
-      # image runs it); without it those tests skip.
+      # image runs it); without it those tests skip. A pinned static build from the cache, not apt: apt's mirror
+      # hung this step for 20 minutes twice on 2026-10-01 and timed out on 10-26 (.github/actions/ffmpeg says how).
       - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        timeout-minutes: 12
+        uses: ./.github/actions/ffmpeg
       - name: Typecheck (shared TS libraries)
         run: npm run typecheck
       - name: Unit tests (vitest)
@@ -87,12 +92,26 @@ jobs:
         run: npm run build -w apps/site
       - name: Valid HTML (html-validate)
         run: npm run validate -w apps/site
+      # From the cache, without --with-deps' apt run (.github/actions/playwright-chromium says why).
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 12
+        uses: ./.github/actions/playwright-chromium
       - name: Built pages, links and browser checks
         run: npx vitest run --config vitest.site.config.ts
+      # Tried once more only when Chrome couldn't record a trace ("Runtime error encountered", e.g. NO_NAVSTART:
+      # a runner hiccup, 2026-10-04). A score under 95 is an assertion failure and is never retried.
       - name: Lighthouse (every category >= 95)
-        run: npx -y @lhci/cli@0.15.1 autorun --config=apps/site/lighthouserc.json
+        run: |
+          lighthouse() { npx -y @lhci/cli@0.15.1 autorun --config=apps/site/lighthouserc.json; }
+          out=$(mktemp)
+          rc=0
+          lighthouse 2>&1 | tee "$out" || rc=$?
+          if [ "$rc" -ne 0 ] && grep -q "Runtime error encountered" "$out"; then
+            echo "::warning::Lighthouse couldn't record a trace (not a score); running it once more"
+            lighthouse
+          else
+            exit "$rc"
+          fi
       # Staging's shape: the web app composed at /app (APP_ENABLED=true), under the app's CSP.
       - name: Build the site with the web app (staging's shape)
         run: node scripts/build-site.mjs
@@ -123,11 +142,25 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: npm ci
+      # Tried once more only when the emulator's jar couldn't be downloaded ("Failed to make request to": it failed
+      # the post-merge run on integration and blocked a deploy, 2026-10-05). A failing rules test is never retried.
       - name: Firestore rules (emulator)
-        run: >-
-          npx -y firebase-tools@15.31.0 --config infra/firebase/firebase.json
-          emulators:exec --only firestore --project demo-algominutes
-          "npx vitest run -c vitest.rules.config.ts"
+        run: |
+          rules() {
+            npx -y firebase-tools@15.31.0 --config infra/firebase/firebase.json \
+              emulators:exec --only firestore --project demo-algominutes \
+              "npx vitest run -c vitest.rules.config.ts"
+          }
+          out=$(mktemp)
+          rc=0
+          rules 2>&1 | tee "$out" || rc=$?
+          if [ "$rc" -ne 0 ] && grep -q "Failed to make request to" "$out"; then
+            echo "::warning::the Firestore emulator couldn't be downloaded (not a test failure); trying once more"
+            sleep 20
+            rules
+          else
+            exit "$rc"
+          fi
 
   integration:
     runs-on: ubuntu-latest

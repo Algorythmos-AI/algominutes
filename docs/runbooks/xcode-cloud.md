@@ -8,8 +8,10 @@ is two scripts in `apps/ios/ci_scripts/`.
 1. It stamps the build number from `CI_BUILD_NUMBER` (TestFlight needs a new one per upload).
 2. It writes `GoogleService-Info.plist` from the workflow's secret variable
    `GOOGLE_SERVICE_INFO_PLIST_B64` (never committed). It then checks the plist has `CLIENT_ID`,
-   `REVERSED_CLIENT_ID`, `GOOGLE_APP_ID` and `PROJECT_ID`, and is for `com.algorythmos.algominutes`. A
-   wrong or incomplete plist fails here, with its reason.
+   `REVERSED_CLIENT_ID`, `GOOGLE_APP_ID` and `PROJECT_ID`, is for `com.algorythmos.algominutes`, and
+   belongs to the backend the scheme archives against (`CI_XCODE_SCHEME`: `AlgoMinutes` → `algominutes-production`,
+   `AlgoMinutes-Staging` → `algominutes-staging`). A wrong or incomplete plist fails here, with its reason, so
+   a Release archive can never carry staging's plist.
 3. It generates the Xcode project from `apps/ios/project.yml`, with the pinned XcodeGen
    (`scripts/install-xcodegen.sh`, checksum-verified). The project isn't committed.
 4. It resolves the Swift packages, and fails if that changes the committed `Package.resolved`. Xcode
@@ -81,11 +83,11 @@ These need your Apple account, so they're yours:
 
 - **"Release → External"** on `main`:
   - scheme `AlgoMinutes`, archive configuration Release;
-  - the production plist (once `algominutes-prod` exists: BLOCKERS "Prod Firebase");
+  - the production plist (once `algominutes-production` exists: BLOCKERS "Prod Firebase");
   - distribution **TestFlight and App Store**.
 
-  Release has no API origin until prod is applied. Its "Backend origins are set" build phase fails the
-  archive until `project.yml` has the production origins (`TODO(prod)`).
+  Release talks to production (`algominutes-production`'s Cloud Run origins in `project.yml`). Its "Backend
+  origins are set" build phase fails any archive whose origins are empty.
 - **Unit tests** stay on GitHub Actions (`ios.yml`, free for a public repo). It also builds Staging
   unsigned with a placeholder plist, to check the Google Sign-In URL scheme. Xcode Cloud is only for
   archiving.

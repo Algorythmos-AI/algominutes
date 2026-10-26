@@ -48,17 +48,44 @@ function speakerLabelToTag(label) {
   return 1;
 }
 
+// A line also ends once it is long, even with no pause and no new speaker: a
+// monologue with no 1.5 s gap used to become one line of thousands of
+// characters, which the reader can't follow and search can't match well.
+// Words are never split, so a line ends at the first word past either limit.
+//
+// Never between two groups of digits, though: redaction scrubs each line on
+// its own, so a card or phone number read out in groups and cut across two
+// lines would match in neither half. The cut waits for the next word that
+// isn't a number, up to twice the limits, so a long run of numbers still ends.
+const LINE_MAX_MS = 30_000;
+const LINE_MAX_CHARS = 1000;
+const DIGITS = /^\+?[\d-]+[.,]?$/;
+
+function lastWord(text) {
+  const i = text.lastIndexOf(' ');
+  return i < 0 ? text : text.slice(i + 1);
+}
+
+function lineIsFull(current, next) {
+  const ms = current.endMs - current.startMs;
+  const chars = current.text.length;
+  if (ms >= 2 * LINE_MAX_MS || chars >= 2 * LINE_MAX_CHARS) return true;
+  if (ms < LINE_MAX_MS && chars < LINE_MAX_CHARS) return false;
+  return !(next && DIGITS.test(String(next.text || '')) && DIGITS.test(lastWord(current.text)));
+}
+
 // Group a flat word list (provider gives words, not turns) into same-speaker
 // lines. Mirrors the Google-path wordsToLines in stt.js so both paths produce
-// the same line granularity: a new line starts on a speaker change or a gap
-// > 1500ms. Words carry absolute ms already (whole-file, no chunk offset).
+// the same line granularity: a new line starts on a speaker change, a gap
+// > 1500ms, or a full line (lineIsFull). Words carry absolute ms already
+// (whole-file, no chunk offset).
 function wordsToLines(words) {
   if (!words || !words.length) return [];
   const lines = [];
   let current = null;
   for (const w of words) {
     const tag = w.speakerTag || 1;
-    if (!current || current.speakerTag !== tag || w.startMs - current.endMs > 1500) {
+    if (!current || current.speakerTag !== tag || w.startMs - current.endMs > 1500 || lineIsFull(current, w)) {
       if (current) lines.push(current);
       current = {
         speakerTag: tag,
@@ -86,4 +113,4 @@ function secToMs(sec) {
   return Number.isFinite(n) ? Math.round(n * 1000) : 0;
 }
 
-module.exports = { speakerLabelToTag, wordsToLines, secToMs };
+module.exports = { speakerLabelToTag, wordsToLines, secToMs, lineIsFull, LINE_MAX_MS, LINE_MAX_CHARS };

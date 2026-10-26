@@ -84,9 +84,12 @@ export type EntitlementState = 'trialing' | 'active' | 'expired' | 'free_floor';
 // checks the iOS mirror, ComplianceContract.swift, matches). A bump records a new
 // acceptance (terms_acceptance) on each client's next launch.
 export const TERMS_VERSION = '2026-09-26';
-export const PRIVACY_VERSION = '2026-09-26';
+export const PRIVACY_VERSION = '2026-09-29';
 
 // Default note retention when the user hasn't set one (A10 #5). See docs/DATA-RETENTION.md.
 // null = keep until the user deletes (with the soft-delete + 30-day backup window).
 export const DEFAULT_RETENTION_DAYS: number | null = null;
 export const RETENTION_OPTIONS_DAYS = [30, 90, 180, 365] as const; // user-selectable + "keep until deleted"
+
+/** The longest search or chat question, in characters (RELEASE.md rev 11, L4): the api refuses longer with a 400. */
+export const MAX_QUESTION_CHARS = 2000;

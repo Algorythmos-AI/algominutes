@@ -63,6 +63,20 @@ Also return "chapters": the recording's sections in order, from 3 for a short me
 - "title": a short heading, at most 8 words
 - "summary": one or two sentences on what was covered`;
 
+/**
+ * The chapters instruction for a recording that ends at `endClock` (a transcript timestamp, "3:59:40").
+ *
+ * Naming the end is what makes the chapters reach it. Without it, the model chaptered the first hour of a
+ * 4-hour meeting and stopped (the weekly 240-minute e2e, 2026-10-03: the last chapter began at minute 84; a
+ * probe of this prompt gave 66). With it, three probes of the same transcript ended at minutes 234, 216, 234.
+ */
+function chaptersInstruction(endClock) {
+  const end = typeof endClock === 'string' && /^[0-9:]+$/.test(endClock) ? endClock : '';
+  if (!end) return CHAPTERS_INSTRUCTION;
+  return `${CHAPTERS_INSTRUCTION}
+The chapters must cover the whole recording, which ends at ${end}: the last chapter begins in its final part.`;
+}
+
 /** A template's schema with chapters added, last, so a cut-off answer keeps the rest. */
 function withChapters(schema) {
   return {
@@ -242,6 +256,7 @@ function templateIds() {
 module.exports = {
   CHAPTERS_SCHEMA,
   CHAPTERS_INSTRUCTION,
+  chaptersInstruction,
   withChapters,
   TEMPLATES,
   DEFAULT_TEMPLATE_ID,

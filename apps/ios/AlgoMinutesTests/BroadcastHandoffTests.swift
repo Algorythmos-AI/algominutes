@@ -92,6 +92,77 @@ final class BroadcastHandoffTests: XCTestCase {
         XCTAssertEqual(again, .none)
     }
 
+    // RELEASE.md rev 11, N4: a second broadcast started before the app was opened. The extension keeps the first
+    // capture on a list; clearing its pointer used to orphan the file and lose the meeting.
+    private func copyOf(_ capture: URL, named name: String) throws -> URL {
+        let url = dir.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: capture, to: url)
+        return url
+    }
+
+    func testAnEarlierUnclaimedCaptureIsClaimedFirstAndTheLatestAfterIt() async throws {
+        let capture = try await twoTrackCapture()
+        let earlier = try copyOf(capture, named: "broadcast_earlier.m4a")
+        defaults.set([earlier.path], forKey: BroadcastHandoff.unclaimedKey)
+        defaults.set("finished", forKey: "state")
+        defaults.set(capture.path, forKey: "completedBroadcastFile")
+
+        let h = handoff()
+        XCTAssertTrue(h.hasFinishedCapture)
+        guard case .ready(let first, _) = await h.claim() else { return XCTFail("the earlier capture wasn't claimed") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: earlier.path), "the earlier capture's App Group copy is removed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.path), "the latest capture is untouched until its own claim")
+        XCTAssertTrue(h.hasFinishedCapture, "the latest capture still waits")
+        guard case .ready(let second, _) = await h.claim() else { return XCTFail("the latest capture wasn't claimed") }
+        XCTAssertNotEqual(first, second, "each capture becomes its own file, and so its own note")
+        XCTAssertFalse(h.hasFinishedCapture)
+        let again = await h.claim()
+        XCTAssertEqual(again, .none)
+    }
+
+    func testAnEarlierCaptureIsClaimedEvenWhileALaterOneIsStillBeingCaptured() async throws {
+        let earlier = try copyOf(try await twoTrackCapture(), named: "broadcast_earlier.m4a")
+        let now = Date()
+        defaults.set([earlier.path], forKey: BroadcastHandoff.unclaimedKey)
+        defaults.set("recording", forKey: "state")
+        defaults.set(true, forKey: "isBroadcasting")
+        defaults.set(now.timeIntervalSince1970, forKey: "lastHeartbeatAt")
+
+        let h = handoff(now: now)
+        XCTAssertTrue(h.hasFinishedCapture)
+        guard case .ready = await h.claim() else { return XCTFail("the earlier capture wasn't claimed") }
+        // The live capture is left alone.
+        XCTAssertEqual(defaults.string(forKey: "state"), "recording")
+        XCTAssertTrue(h.isCapturing)
+        let next = await h.claim()
+        XCTAssertEqual(next, .none)
+    }
+
+    func testDecliningDiscardsOneCaptureAtATimeOldestFirst() async throws {
+        let capture = try await twoTrackCapture()
+        let earlier = try copyOf(capture, named: "broadcast_earlier.m4a")
+        defaults.set([earlier.path], forKey: BroadcastHandoff.unclaimedKey)
+        defaults.set("finished", forKey: "state")
+        defaults.set(capture.path, forKey: "completedBroadcastFile")
+
+        let h = handoff()
+        h.discardFinished()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: earlier.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capture.path), "declining one capture doesn't throw away the next")
+        XCTAssertTrue(h.hasFinishedCapture)
+        h.discardFinished()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: capture.path))
+        XCTAssertFalse(h.hasFinishedCapture)
+    }
+
+    func testAListedCaptureWhoseFileIsGoneIsReportedNotSilentlyDropped() async {
+        defaults.set([dir.appendingPathComponent("gone.m4a").path], forKey: BroadcastHandoff.unclaimedKey)
+        let first = await handoff().claim()
+        XCTAssertEqual(first, .failed(message: "The captured audio couldn't be found."))
+        let second = await handoff().claim()
+        XCTAssertEqual(second, .none)
+    }
+
     func testAnExtensionErrorIsReportedOnce() async {
         defaults.set("error", forKey: "state")
         defaults.set("Broadcast ended without recording any audio", forKey: "errorMessage")

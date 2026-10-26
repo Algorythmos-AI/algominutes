@@ -47,6 +47,9 @@ struct HomeView: View {
     @State private var activeSheet: CaptureAction?
     @State private var recorderFlow = RecorderFlowState()
     @State private var selectedNoteId: String?
+    // The example note, until there's a real one: the same switch Files uses, so hiding it there hides it here.
+    @State private var showingSample = false
+    @AppStorage("sample_note_hidden") private var sampleHidden = false
     @State private var orphanRecording: RecordingStore.PendingRecording?
     @State private var pendingDeletion: RecordingStore.PendingRecording?
     @State private var showPendingRecordings = false
@@ -73,8 +76,11 @@ struct HomeView: View {
                         .appearFade(index: 0)
                     // A9.3 trial countdown; shows only while state == trialing.
                     TrialBanner()
+                    NotesSyncBanner()
                     if pendingCount > 0 { pendingBanner }
                     captureActions
+                    recentNotes
+                    exampleNote
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.top, Theme.Spacing.md)
@@ -93,6 +99,7 @@ struct HomeView: View {
             .navigationDestination(item: $selectedNoteId) { noteId in
                 NoteDetailView(noteId: noteId)
             }
+            .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
         }
         // Consume a deep link both when it changes and if one is already waiting
         // when Home first appears (a cold launch from a notification tap).
@@ -107,7 +114,7 @@ struct HomeView: View {
                     activeSheet = nil
                     selectedNoteId = noteId
                 }
-                .algoMinutesSheet([.medium])
+                .algoMinutesSheet([.medium, .large])
             case .importFiles:
                 ImportSheet { noteId in
                     activeSheet = nil
@@ -126,6 +133,13 @@ struct HomeView: View {
             RecordingView { noteId in
                 if let noteId { selectedNoteId = noteId }
             }
+        }
+        // Asked for from the recording bar, or by an outcome the screen has to present (MainTabView).
+        .onChange(of: env.recordingScreenRequested) { _, requested in
+            guard requested else { return }
+            env.recordingScreenRequested = false
+            activeSheet = nil
+            recorderFlow.isRecordingScreenPresented = true
         }
         .onAppear { checkForOrphan(); refreshPendingCount() }
         .sheet(isPresented: $showPendingRecordings, onDismiss: refreshPendingCount) {
@@ -239,9 +253,152 @@ struct HomeView: View {
                 .foregroundStyle(Theme.heading)
             Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
                 .font(Typography.body(13))
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
         }
         .padding(.top, Theme.Spacing.sm)
+    }
+
+    // MARK: - Recent notes (RELEASE.md rev 11, H16 / UX5)
+
+    /// How many of the latest notes Home shows; the rest are in Files.
+    static let recentLimit = 3
+
+    /// The latest notes, newest first. Home never showed any: a recording just made went out of sight until
+    /// its push arrived, unless you knew to look in Files.
+    static func recent(_ notes: [Note], limit: Int = recentLimit) -> [Note] {
+        Array(notes.sorted { $0.createdAt > $1.createdAt }.prefix(limit))
+    }
+
+    /// What a note is doing, in a few words, for Home's list. While it uploads it says how far; while it's
+    /// processed it says roughly how long is left (RELEASE.md rev 11, H16 / UX5, UX7).
+    static func recentStatus(_ note: Note, uploadPercent: Int? = nil, now: Date = Date()) -> String {
+        switch note.status {
+        case .ready: return "Ready"
+        case .error: return "Couldn’t process"
+        case .awaitingMinutes: return "Waiting for minutes"
+        default:
+            if note.status == .recording, note.notetaker != nil { return note.statusLabel }
+            if let uploadPercent { return "Uploading \(min(100, max(0, uploadPercent)))%" }
+            guard let estimate = processingEstimate(note, now: now) else { return "\(note.statusLabel)…" }
+            return "\(note.statusLabel)… \(estimate)"
+        }
+    }
+
+    /// How long a recording of `seconds` usually takes to become a note, in minutes: about 3 minutes, plus one
+    /// for every 12 of recording (an hour in about 8, four hours in about 23; RELEASE.md's bars are 10 and 25).
+    static func usualProcessingMinutes(recordingSeconds seconds: Double) -> Int {
+        3 + Int((max(0, seconds) / 60 / 12).rounded(.up))
+    }
+
+    /// "ready in about 4 min", "nearly ready", or "taking longer than usual". Nil when there's nothing to go
+    /// on: no recording length (an import, a scan) or no start time.
+    static func processingEstimate(_ note: Note, now: Date = Date()) -> String? {
+        guard let seconds = note.duration, seconds > 0, let started = note.createdAtDate else { return nil }
+        let usual = Double(usualProcessingMinutes(recordingSeconds: seconds))
+        let elapsed = now.timeIntervalSince(started) / 60
+        let left = Int((usual - elapsed).rounded(.up))
+        if left > 1 { return "ready in about \(left) min" }
+        if elapsed <= usual + 2 { return "nearly ready" }
+        return "taking longer than usual"
+    }
+
+    @ViewBuilder
+    private var recentNotes: some View {
+        let notes = Self.recent(env.notes.notes)
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("RECENT")
+                    .font(Typography.eyebrow())
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.muted)
+                VStack(spacing: 0) {
+                    ForEach(notes) { note in
+                        Button {
+                            selectedNoteId = note.id
+                        } label: {
+                            HStack(spacing: Theme.Spacing.md) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                                        .font(Typography.body(15))
+                                        .foregroundStyle(Theme.heading)
+                                        .lineLimit(1)
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        if note.status.isInProgress {
+                                            ProgressView().controlSize(.mini).tint(Theme.outline)
+                                        }
+                                        Text(Self.recentStatus(note, uploadPercent: env.uploadProgress[note.id]))
+                                            .font(Typography.body(12))
+                                            .foregroundStyle(note.status == .error ? Theme.heading : Theme.muted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: Theme.Spacing.sm)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.tertiary)
+                                    .accessibilityHidden(true)
+                            }
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(note.title.isEmpty ? "Untitled" : note.title). \(Self.recentStatus(note, uploadPercent: env.uploadProgress[note.id]))")
+                        if note.id != notes.last?.id {
+                            Divider().overlay(Theme.borderSoft).padding(.horizontal, Theme.Spacing.lg)
+                        }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
+            }
+        }
+    }
+
+    // MARK: - The example note (RELEASE.md rev 11, H16)
+
+    /// A new user's Home had three ways to make a note and nothing to show what one is: the example was a tab
+    /// away, in Files. It shows here on the same terms (SampleNote.shouldShow), so never beside a real note.
+    @ViewBuilder
+    private var exampleNote: some View {
+        if SampleNote.shouldShow(notesEmpty: env.notes.notes.isEmpty, query: "",
+                                 hasLoaded: env.notes.receivedFirstSnapshot, hidden: sampleHidden) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("EXAMPLE")
+                    .font(Typography.eyebrow())
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.muted)
+                Button {
+                    showingSample = true
+                } label: {
+                    HStack(spacing: Theme.Spacing.md) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(SampleNote.note.title)
+                                .font(Typography.body(15))
+                                .foregroundStyle(Theme.heading)
+                                .lineLimit(1)
+                            Text("See what a note looks like")
+                                .font(Typography.body(12))
+                                .foregroundStyle(Theme.muted)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: Theme.Spacing.sm)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .frame(minHeight: 56)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Example note: \(SampleNote.note.title)")
+                .accessibilityHint("Shows what a note looks like")
+            }
+        }
     }
 
     // MARK: - Capture actions (stacked feature cards)
@@ -258,6 +415,11 @@ struct HomeView: View {
         Button {
             // A9.3: on the free floor (post-trial, unpaid) metered capture is
             // gated behind the paywall; trial/active pass straight through.
+            // A recording that's carrying on behind the app: the card goes back to it, and asks nothing again.
+            if action == .recording, env.recorder.isRecording {
+                recorderFlow.isRecordingScreenPresented = true
+                return
+            }
             guard env.billing.guardMeteredAction() else { return }
             activeSheet = action
         } label: {

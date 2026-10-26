@@ -23,12 +23,18 @@ final class AuthService: NSObject {
 
     override init() {
         super.init()
+        // The signed-in user Firebase restored from the keychain, now: the listener
+        // below reports it a moment later, and a background launch to finish an
+        // upload (L10) found no workspace until then and did nothing.
+        user = Auth.auth().currentUser
         authListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
                 self?.user = user
                 if user != nil {
                     await self?.ensureWorkspaceDoc()
                 }
+                // H15: crash reports group by a hash of whoever is signed in.
+                CrashReporting.userChanged(uid: user?.uid)
                 // A7.3: the push token follows whoever is signed in.
                 await PushTokenRegistrar.shared.userChanged(uid: user?.uid)
             }
@@ -328,7 +334,9 @@ final class AuthService: NSObject {
                 ])
             }
         } catch {
-            // Non-fatal: backend also validates workspace on every call.
+            // Non-fatal: the backend validates the workspace on every call, but
+            // a Firestore refusal here is worth seeing (rules, offline, quota).
+            AppLog.error("workspace_doc_ensure_failed: \(error.localizedDescription)")
         }
     }
 

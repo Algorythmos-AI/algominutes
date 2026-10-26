@@ -11,6 +11,7 @@ function capturingLogger() {
   const calls: Array<{ obj: unknown; msg: string }> = [];
   return { calls, error: (obj: unknown, msg: string) => calls.push({ obj, msg }) };
 }
+type RequireEnv = (s: object, spec: object, o: object) => string[];
 
 const saved = { ...process.env };
 beforeEach(() => {
@@ -96,6 +97,29 @@ describe('requireEnv', () => {
     );
   });
 
+  // Config a later Terraform apply sets (RELEASE.md rev 11, H1a): a service boots without it, and says so,
+  // so an image merged before its apply never crash-loops the deploy.
+  it('soft: boots without a soft var, and returns the missing names without logging a failure', () => {
+    process.env.A = 'x';
+    const log = capturingLogger();
+    const missing = (requireEnv as unknown as RequireEnv)('svc', { required: ['A'], soft: ['S1', 'S2'] }, { logger: log, exit: false });
+    expect(missing).toEqual(['S1', 'S2']);
+    expect(log.calls).toHaveLength(0);
+  });
+
+  it('soft: a blank soft var is missing; a set one is not', () => {
+    process.env.S1 = '  ';
+    process.env.S2 = 'y';
+    const log = capturingLogger();
+    expect((requireEnv as unknown as RequireEnv)('svc', { soft: ['S1', 'S2'] }, { logger: log, exit: false })).toEqual(['S1']);
+  });
+
+  it('soft: a missing required var still fails, and the soft ones are not listed as its problems', () => {
+    const log = capturingLogger();
+    expect(() => requireEnv('svc', { required: ['A'], soft: ['S1'] } as never, { logger: log, exit: false })).toThrow(/missing required env A/);
+    expect((log.calls[0]!.obj as { problems: string[] }).problems).toEqual(['missing required env A']);
+  });
+
   it('requires a logger', () => {
     expect(() => requireEnv('svc', { required: [] }, {} as never)).toThrow(/logger is required/);
   });
@@ -114,6 +138,11 @@ describe('checkEnv', () => {
 
   it('passes a complete env, reading only the env it is given', () => {
     expect(checkEnv(spec, { A: 'x', W: 'true', H: 'h', U: 'u' })).toEqual([]);
+  });
+
+  it('holds soft vars to the same rule as required ones: Terraform and a saved plan must set them', () => {
+    expect(checkEnv({ soft: ['S'] }, {})).toEqual(['missing required env S']);
+    expect(checkEnv({ soft: ['S'] }, { S: 'x' })).toEqual([]);
   });
 
   it('reports every problem: blank, wrong exact value, no oneOf group', () => {

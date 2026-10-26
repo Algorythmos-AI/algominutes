@@ -44,6 +44,13 @@
 //                        name drops it if the first task is still live. After
 //                        NOTICE_MAX_AGE_H it's given up and logged. Notices done
 //                        with for TOMBSTONE_DAYS are pruned.
+//  11. redrive           lost pipeline work (RELEASE.md PR 5c; audit Q9–Q11): a
+//                        summary claimed REDRIVE_AFTER_MS ago whose note hasn't
+//                        moved since, and an embed claimed REDRIVE_AFTER_MS to
+//                        EMBED_REDRIVE_WITHIN_MS ago that left no embeddings, get
+//                        their task again (packages/db redrive-repo.ts: the claim
+//                        re-stamps, so once per window). Runs after stuck_notes,
+//                        so a note that's failed isn't re-driven.
 
 'use strict';
 
@@ -52,6 +59,7 @@
 const loadRepo = () => require('@algominutes/db');
 const loadNoteTerminal = () => require('@algominutes/db/note-terminal.cjs');
 const loadNotify = () => require('@algominutes/ai/notify.cjs');
+const loadCloudTasks = () => require('@algominutes/ai/cloud-tasks.cjs');
 
 const IN_FLIGHT_STALE_MS = 3 * 60 * 60 * 1000; // notes-repo IN_FLIGHT_STALE_MS (asserted equal in tests)
 const PURGE_GRACE_MS = 5 * 60 * 1000; // the api runs a new purge inline; leave it that long
@@ -62,10 +70,45 @@ const TOMBSTONE_DAYS = 30;
 const USAGE_EVENTS_DAYS = 90;
 const MIRROR_SETTLED_MS = 10 * 60 * 1000; // past any in-flight mirror write
 const MIRROR_WINDOW_MS = 30 * 60 * 1000; // two 15-minute runs see each note
-const MIRROR_REPAIR_LIMIT = 200;
+const MIRROR_REPAIR_PAGE = 200;
+// Paged through the whole window (audit Q20), within this share of the sweep's 900 s.
+const MIRROR_REPAIR_BUDGET_MS = 5 * 60 * 1000;
+// Held notes offered to the kickoff per sweep, oldest first (the rest wait for the next run).
+const HELD_RESUME_LIMIT = 100;
 const NOTICE_RETRY_AFTER_S = 5 * 60; // the writer's own enqueue goes first
 const NOTICE_MAX_AGE_H = 24; // a push about yesterday's recording helps nobody
 const LOCK_KEY = 'algominutes:sweep';
+// Past the summarize and embed queues' own retries (about an hour), so a task still retrying isn't doubled; the
+// stuck-note sweep fails a summary that's still lost at STUCK_NOTE_MS.
+const REDRIVE_AFTER_MS = 90 * 60 * 1000;
+const EMBED_REDRIVE_WITHIN_MS = 6 * 60 * 60 * 1000;
+const REDRIVE_LIMIT = 50;
+
+/**
+ * Enqueues a worker's task as its enqueuer does (the transcoder: tasks-client.js), from the job's env. Without
+ * a target configured (local runs, tests) it says 'skipped'.
+ */
+function workerEnqueuer(env, cloudTasks) {
+  const targets = {
+    summarizer: [env.SUMMARIZER_URL, env.SUMMARIZE_QUEUE || 'summarize'],
+    embedder: [env.EMBEDDER_URL, env.EMBED_QUEUE || 'embed'],
+  };
+  return async (worker, payload, { traceId, log }) => {
+    const [targetUrl, queue] = targets[worker];
+    if (!targetUrl || !env.TASKS_PROJECT || !env.JOBS_SA_EMAIL) return 'skipped';
+    await (cloudTasks || loadCloudTasks()).enqueueTask({
+      projectId: env.TASKS_PROJECT,
+      location: env.TASKS_LOCATION || 'us-central1',
+      queue,
+      targetUrl,
+      oidcServiceAccount: env.JOBS_SA_EMAIL,
+      payload,
+      traceId,
+      log,
+    });
+    return 'enqueued';
+  };
+}
 
 function firebaseDeps(env) {
   const { getApps, initializeApp } = require('firebase-admin/app');
@@ -87,16 +130,18 @@ async function openLockClient() {
 
 async function run({
   log, env, traceId, deps: injected, now = new Date(), repo = loadRepo(), noteTerminal = loadNoteTerminal(),
-  connectLockClient = null, notify = loadNotify(),
+  connectLockClient = null, notify = loadNotify(), enqueueWorker = null,
 }) {
   const deps = injected || firebaseDeps(env);
   const {
     listPendingStoragePurges, listStuckStoragePurges, runStoragePurge, listStuckNotes, failStuckNote,
-    recordDeadLetter, deleteExpiredUploadSessions, listIncompleteAccountDeletions,
+    recordDeadLetter, deleteExpiredUploadSessions, reportStrandedUploads, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
-    listUnsentNotices, abandonStaleNotices, pruneOldNotices,
+    listUnsentNotices, abandonStaleNotices, pruneOldNotices, claimLostSummaries, claimLostEmbeds,
+    resumeHeldNotes,
   } = repo;
+  const enqueue = enqueueWorker || workerEnqueuer(env || process.env);
   void noteTerminal; // kept injectable; stuck notes now fail through the repo layer
 
   // One sweep at a time: a session-level advisory lock, released when the run
@@ -124,14 +169,60 @@ async function run({
   async function sweepOnce() {
     const counts = {};
     const failures = [];
+    // How long each step took, logged with the run (sweep_done): the evidence for the 900 s budget (plan rev 12 S11).
+    const durationsMs = {};
     const step = async (name, fn) => {
+      const started = Date.now();
       try {
         counts[name] = await fn();
       } catch (err) {
         failures.push(name);
         log.error({ err, step: name }, 'sweep_step_failed');
+      } finally {
+        durationsMs[name] = Date.now() - started;
       }
     };
+
+    // The promises first (plan rev 12 S11): an account deletion must finish within an hour (SLO 6), and a
+    // queued purge is a deleted note's audio still stored. They ran ninth and second, after retention, and a slow
+    // run (mirror repair alone may take 5 of the job's 15 minutes) pushed them late or past the limit.
+    await step('account_deletions', async () => {
+      let finished = 0;
+      let incomplete = 0;
+      for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
+        // Logged under the original request's traceId, so the finish traces back to it.
+        const accountLog = log.child({ userId: d.uid, ...(d.traceId ? { traceId: d.traceId } : {}) });
+        try {
+          const r = await finishAccountDeletion(deps, d, accountLog);
+          if (r.complete) finished += 1;
+          else incomplete += 1;
+        } catch (err) {
+          // One account's failure must not skip the rest of the batch.
+          incomplete += 1;
+          accountLog.error({ err }, 'sweep_account_deletion_failed');
+        }
+      }
+      if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
+      return finished;
+    });
+
+    await step('storage_purges', async () => {
+      let done = 0;
+      // Stuck ones are listed separately, so they can never crowd out newer purges.
+      for (const p of await listPendingStoragePurges(200, MAX_PURGE_ATTEMPTS)) {
+        if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
+        if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
+      }
+      const stuck = await listStuckStoragePurges(50, MAX_PURGE_ATTEMPTS);
+      for (const p of stuck) {
+        log.error({
+          purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId,
+          ...(p.uid ? { userId: p.uid } : {}), ...(p.traceId ? { traceId: p.traceId } : {}),
+          attempts: p.attempts, lastError: p.lastError,
+        }, 'storage_purge_stuck');
+      }
+      return { done, stuck: stuck.length };
+    });
 
     await step('retention', async () => {
       let deleted = 0;
@@ -162,23 +253,6 @@ async function run({
       return deleted;
     });
 
-    await step('storage_purges', async () => {
-      let done = 0;
-      // Stuck ones are listed separately, so they can never crowd out newer purges.
-      for (const p of await listPendingStoragePurges(200, MAX_PURGE_ATTEMPTS)) {
-        if (now.getTime() - p.createdAt.getTime() < PURGE_GRACE_MS) continue;
-        if (await runStoragePurge({ bucket: deps.bucket, firestore: deps.firestore }, p, log)) done += 1;
-      }
-      const stuck = await listStuckStoragePurges(50, MAX_PURGE_ATTEMPTS);
-      for (const p of stuck) {
-        log.error({
-          purgeId: p.id, noteId: p.noteId, workspaceId: p.workspaceId,
-          ...(p.uid ? { userId: p.uid } : {}), ...(p.traceId ? { traceId: p.traceId } : {}),
-          attempts: p.attempts, lastError: p.lastError,
-        }, 'storage_purge_stuck');
-      }
-      return { done, stuck: stuck.length };
-    });
 
     await step('stuck_notes', async () => {
       const stuck = await listStuckNotes({ olderThanMs: STUCK_NOTE_MS, limit: 100 });
@@ -217,38 +291,92 @@ async function run({
           workspaceId: n.workspaceId,
           payload: { reason: 'stuck_in_flight', status: n.status, regeneration: Boolean(r.regeneration), updatedAt: n.updatedAt.toISOString() },
           error: 'stuck_in_flight',
+          reason: 'stuck_in_flight',
           attempts: null,
           traceId,
-        }).catch((err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'));
+        }).then(
+          // Once per lost run (migration 027): a duplicate is said, not counted.
+          (d) => d && d.duplicate && noteLog.info({ ...fields, deadLetterId: d.id }, 'dead_letter_already_recorded'),
+          (err) => log.error({ err, ...fields }, 'sweep_dead_letter_failed'),
+        );
       }
       return failed;
+    });
+
+    // Lost pipeline work: claimed, then its task again, under the note's user.
+    await step('redrive', async () => {
+      const summaries = await claimLostSummaries({ olderThanMs: REDRIVE_AFTER_MS, limit: REDRIVE_LIMIT });
+      const embeds = await claimLostEmbeds({ olderThanMs: REDRIVE_AFTER_MS, withinMs: EMBED_REDRIVE_WITHIN_MS, limit: REDRIVE_LIMIT });
+      let failedEnqueues = 0;
+      for (const [worker, runs] of [['summarizer', summaries], ['embedder', embeds]]) {
+        for (const r of runs) {
+          const fields = { noteId: r.noteId, workspaceId: r.workspaceId, userId: r.uid, runSeq: r.runSeq, worker };
+          try {
+            const outcome = await enqueue(worker, { noteId: r.noteId, workspaceId: r.workspaceId, uid: r.uid }, { traceId, log });
+            // A warning: work was lost, and this is its recovery.
+            log.warn(fields, outcome === 'skipped' ? 'redrive_skipped_no_config' : 'lost_work_redriven');
+          } catch (err) {
+            // Still claimed: the next window tries it again.
+            failedEnqueues += 1;
+            log.error({ err, ...fields }, 'redrive_enqueue_failed');
+          }
+        }
+      }
+      if (failedEnqueues) throw new Error(`${failedEnqueues} re-drive enqueue(s) failed`);
+      return { summaries: summaries.length, embeds: embeds.length };
     });
 
     // A finished note whose doc missed its mirror write (packages/db
     // mirror-repair.ts): checked twice while 10-40 minutes old, repaired only
     // if Postgres says finished and the doc hasn't moved since it was read.
     await step('mirror_repair', async () => {
-      const notes = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: MIRROR_REPAIR_LIMIT });
-      // Oldest first, so at the limit the newest of this window wait for the
-      // next run, and some may age out unchecked.
-      if (notes.length === MIRROR_REPAIR_LIMIT) log.warn({ limit: MIRROR_REPAIR_LIMIT }, 'mirror_repair_limit_reached');
+      // Every note in the window, a page at a time by the (updated_at, id)
+      // watermark (audit Q20). Only the time budget stops it early, and says so:
+      // the rest are the next run's (each note is in two runs' windows).
+      const started = Date.now();
+      // Seams for tests; production uses the constants.
+      const budgetMs = deps.mirrorRepairBudgetMs ?? MIRROR_REPAIR_BUDGET_MS;
+      const pageSize = deps.mirrorRepairPage ?? MIRROR_REPAIR_PAGE;
       let repaired = 0;
       let failedRepairs = 0;
-      for (const n of notes) {
-        const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
-        try {
-          const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS });
-          if (outcome === 'repaired') {
-            repaired += 1;
-            log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+      let checked = 0;
+      let after = null;
+      do {
+        const page = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: pageSize, after });
+        const notes = page.notes;
+        after = page.next;
+        checked += notes.length;
+        for (const n of notes) {
+          const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
+          try {
+            const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
+            if (outcome === 'repaired') {
+              repaired += 1;
+              log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+            }
+          } catch (err) {
+            failedRepairs += 1;
+            log.error({ err, ...fields }, 'mirror_repair_failed');
           }
-        } catch (err) {
-          failedRepairs += 1;
-          log.error({ err, ...fields }, 'mirror_repair_failed');
         }
-      }
+        // Checked after a page, so a run always finishes at least one: the newest notes (plan rev 12 S7). Where
+        // it stopped, so what was left can be measured: what's left is the oldest, which the last run checked.
+        if (after && Date.now() - started > budgetMs) {
+          log.warn({ checked, budgetMs, reachedUpdatedAt: after.updatedAt }, 'mirror_repair_budget_reached');
+          break;
+        }
+      } while (after);
       if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
       return repaired;
+    });
+
+    // A note held for minutes (RELEASE.md rev 11, H6) is queued once its author has them: an invite redeemed, a
+    // grant, a purchase or a new month all show up as headroom (packages/db held-notes.ts). Oldest first per user;
+    // charged its measured length. Within a sweep interval of the minutes arriving.
+    await step('resume_held_notes', async () => {
+      const r = await resumeHeldNotes({ firestore: deps.firestore, log, traceId, limit: HELD_RESUME_LIMIT, env: env || process.env });
+      if (r.held === HELD_RESUME_LIMIT) log.warn({ limit: HELD_RESUME_LIMIT }, 'held_resume_limit_reached');
+      return r;
     });
 
     await step('notices', async () => {
@@ -275,27 +403,19 @@ async function run({
       return { enqueued, abandoned: abandoned.length, pruned };
     });
 
+    // An upload no note followed within 30 minutes (rev 11, L2): the app died between the upload and the
+    // kickoff, and its audio sits in Cloud Storage with nothing to run it. Reported once each, for the alert and
+    // for support; the app re-sends the kickoff when it next runs (H3).
+    await step('stranded_uploads', async () => {
+      const stranded = await reportStrandedUploads({ now });
+      for (const u of stranded) {
+        log.warn({ uid: u.uid, userId: u.uid, workspaceId: u.workspaceId, noteId: u.noteId, storagePath: u.storagePath, completedAt: u.completedAt }, 'upload_never_processed');
+      }
+      return { reported: stranded.length };
+    });
+
     await step('upload_sessions', () => deleteExpiredUploadSessions(now));
 
-    await step('account_deletions', async () => {
-      let finished = 0;
-      let incomplete = 0;
-      for (const d of await listIncompleteAccountDeletions({ olderThanMs: ACCOUNT_DELETION_GRACE_MS, limit: 50 })) {
-        // Logged under the original request's traceId, so the finish traces back to it.
-        const accountLog = log.child({ userId: d.uid, ...(d.traceId ? { traceId: d.traceId } : {}) });
-        try {
-          const r = await finishAccountDeletion(deps, d, accountLog);
-          if (r.complete) finished += 1;
-          else incomplete += 1;
-        } catch (err) {
-          // One account's failure must not skip the rest of the batch.
-          incomplete += 1;
-          accountLog.error({ err }, 'sweep_account_deletion_failed');
-        }
-      }
-      if (incomplete) throw new Error(`${incomplete} account deletion(s) still incomplete`);
-      return finished;
-    });
 
     await step('tombstones', () => pruneCompletedAccountDeletions({ olderThanDays: TOMBSTONE_DAYS }));
     await step('note_tombstones', () => pruneDeletedNotes({ olderThanDays: TOMBSTONE_DAYS }));
@@ -303,10 +423,10 @@ async function run({
     await step('trials', () => expireElapsedTrials());
     await step('usage_events', () => pruneUsageEvents({ olderThanDays: USAGE_EVENTS_DAYS }));
 
-    log.info({ counts, failures }, 'sweep_done');
+    log.info({ counts, failures, durationsMs }, 'sweep_done');
     if (failures.length) throw new Error(`sweep: ${failures.join(', ')} failed`);
     return counts;
   }
 }
 
-module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS, NOTICE_RETRY_AFTER_S, NOTICE_MAX_AGE_H };
+module.exports = { run, STUCK_NOTE_MS, MAX_PURGE_ATTEMPTS, PURGE_GRACE_MS, IN_FLIGHT_STALE_MS, NOTICE_RETRY_AFTER_S, NOTICE_MAX_AGE_H, REDRIVE_AFTER_MS, EMBED_REDRIVE_WITHIN_MS };

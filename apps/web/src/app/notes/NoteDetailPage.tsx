@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { NoteReadResponse, TranscriptLine } from '@algominutes/contracts';
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
-import { displayTitle, formatClock, formatDate, formatDuration, statusOf } from '../../lib/notes/format';
+import { displayTitle, formatClock, formatDate, formatDuration, notetakerAction, statusOf } from '../../lib/notes/format';
 import { workspaceIdFor } from '../../lib/notes/workspace';
+import { failureMessage, kickoffFailure } from '../../lib/uploads/kickoff';
 import { isSlow } from '../../lib/noteWatchdog';
 import { useApi } from '../ApiContext';
 import { useAuth } from '../auth/AuthContext';
@@ -23,9 +24,27 @@ export function NoteDetailPage() {
   return <NoteDetail key={noteId} noteId={noteId} />;
 }
 
+/** Whether the server offers share links (/v1/config shareLinks, RELEASE.md PR 29): off until it says so. */
+function useShareLinksOn(): boolean {
+  const { api } = useApi();
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.appConfig().then(
+      (c) => live && setOn(c.shareLinks === true),
+      (err: unknown) => reportCrash('note.appConfig', err),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api]);
+  return on;
+}
+
 function NoteDetail({ noteId }: { noteId: string }) {
   const { user } = useAuth();
   const { api } = useApi();
+  const shareLinks = useShareLinksOn();
   const { state, visible, hide, unhide } = useNotes();
   const notice = useNotice();
   const navigate = useNavigate();
@@ -41,10 +60,14 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const firestoreOnly = live?.type === 'scan_text';
 
   const [load, setLoad] = useState<Load>({ status: 'loading' });
+  // Try again on a failed note (rev 11, UX6): idle, sending, sent, or refused with the server's reason.
+  const [retry, setRetry] = useState<{ kind: 'idle' | 'sending' | 'sent' } | { kind: 'refused'; message: string }>({ kind: 'idle' });
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmNotetaker, setConfirmNotetaker] = useState(false);
+  const [notetakerBusy, setNotetakerBusy] = useState(false);
   // Bumped after an edit: the page re-reads the note, keeping what it shows until the answer arrives.
   const [version, setVersion] = useState(0);
   const [renaming, setRenaming] = useState<{ tag: number; name: string } | null>(null);
@@ -66,6 +89,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
         setCursor(data.transcript.nextCursor);
       })
       .catch((err: unknown) => {
+        // silent-catch-ok: a cancelled read's answer is dropped; not_found is the gone state, and anything else is shown
         if (cancelled) return;
         if (err instanceof ApiError && err.kind === 'not_found') setLoad({ status: 'gone' });
         else setLoad({ status: 'error', message: err instanceof ApiError ? err.message : "This note couldn't be loaded." });
@@ -99,7 +123,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
       await api.deleteNote({ noteId, workspaceId });
       notice.show('Note deleted.');
     } catch (err) {
-      // Already gone (a retry, or deleted elsewhere) is what was asked for.
+      // silent-catch-ok: already gone (a retry, or deleted elsewhere) is what was asked for.
       if (err instanceof ApiError && err.kind === 'not_found') {
         notice.show('Note deleted.');
         return;
@@ -107,6 +131,21 @@ function NoteDetail({ noteId }: { noteId: string }) {
       unhide(noteId);
       notice.show(err instanceof ApiError ? `The note wasn't deleted. ${err.message}` : "The note wasn't deleted. Try again.");
       reportCrash('notes.delete', err);
+    }
+  };
+
+  // Cancel a notetaker before it records, or stop one that is: it leaves, and what it recorded is kept.
+  const endNotetaker = async (botId: string, action: 'cancel' | 'stop') => {
+    setConfirmNotetaker(false);
+    setNotetakerBusy(true);
+    try {
+      await api.cancelMeetingBot(botId);
+      notice.show(action === 'stop' ? 'The notetaker is leaving. What it recorded is on its way.' : 'The notetaker is cancelled.');
+    } catch (err) {
+      notice.show(err instanceof ApiError ? `The notetaker wasn't stopped. ${err.message}` : "The notetaker wasn't stopped. Try again.");
+      if (!(err instanceof ApiError)) reportCrash('notes.cancelNotetaker', err);
+    } finally {
+      setNotetakerBusy(false);
     }
   };
 
@@ -137,7 +176,26 @@ function NoteDetail({ noteId }: { noteId: string }) {
     );
   }
 
-  const s = statusOf(live.status);
+  const s = statusOf(live.status, live.notetaker);
+  // Only a note whose audio is ours can run again; a notetaker's meeting is re-run from its own page.
+  const canRetry = s.kind === 'failed' && !live.notetaker && (Boolean(live.storagePath) || (live.type === 'youtube' && Boolean(live.sourceUrl)));
+  const tryAgain = async () => {
+    if (!user || retry.kind === 'sending') return;
+    setRetry({ kind: 'sending' });
+    try {
+      await api.process({
+        noteId: live.id, workspaceId, type: live.type,
+        ...(live.storagePath ? { storagePath: live.storagePath } : {}),
+        ...(live.sourceUrl ? { sourceUrl: live.sourceUrl } : {}),
+        ...(live.mimeType ? { mimeType: live.mimeType } : {}),
+        ...(live.duration ? { durationSec: live.duration } : {}),
+      });
+      setRetry({ kind: 'sent' });
+    } catch (err) {
+      setRetry({ kind: 'refused', message: failureMessage(kickoffFailure(err, "It couldn't start again. Try again in a minute.")) });
+    }
+  };
+  const botAction = live.status === 'recording' && live.notetaker ? notetakerAction(live.notetaker.status) : null;
   const meta = [formatDate(live.createdAt), formatDuration(live.duration)].filter(Boolean).join(' · ');
   const data = load.status === 'ready' ? load.data : null;
   // Read from the doc when the api has no copy: a scanned note, or an older note that never reached Postgres.
@@ -166,7 +224,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
         </div>
         {ready && data && (
           <div className="mt-2">
-            <NoteTools noteId={noteId} workspaceId={workspaceId} title={displayTitle(data.note.title ?? live.title)} summary={data.summary} reload={() => setVersion((v) => v + 1)} />
+            <NoteTools noteId={noteId} workspaceId={workspaceId} title={displayTitle(data.note.title ?? live.title)} summary={data.summary} reload={() => setVersion((v) => v + 1)} shareLinks={shareLinks} />
           </div>
         )}
         {audio.src && (
@@ -178,16 +236,41 @@ function NoteDetail({ noteId }: { noteId: string }) {
       </header>
 
       {s.kind === 'working' && (
-        <p role="status" className="rounded-2xl border border-border bg-card p-4 text-body">
-          {isSlow(live, now)
-            ? 'This is taking longer than usual. It will finish on its own, or show an error if it can’t.'
-            : `${s.label}${live.progress && live.progress.total > 1 ? ` (${live.progress.done} of ${live.progress.total} parts)` : ''}… You can leave this page; it updates on its own.`}
-        </p>
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <p role="status" className="text-body">
+            {isSlow(live, now)
+              ? 'This is taking longer than usual. It will finish on its own, or show an error if it can’t.'
+              : `${s.label}${live.progress && live.progress.total > 1 ? ` (${live.progress.done} of ${live.progress.total} parts)` : ''}… You can leave this page; it updates on its own.`}
+          </p>
+          {botAction && live.notetaker && (
+            <button type="button" className="mt-3 rounded-lg border border-border px-3 py-2 text-heading" disabled={notetakerBusy} onClick={() => setConfirmNotetaker(true)}>
+              {botAction === 'stop' ? 'Stop the notetaker' : 'Cancel the notetaker'}
+            </button>
+          )}
+        </div>
+      )}
+      {s.kind === 'held' && (
+        <div role="status" className="rounded-2xl border border-warning/40 bg-warning/10 p-4 text-body">
+          <p>This recording is longer than the minutes you have left this month. It’s saved, and nothing was charged.</p>
+          <p className="mt-2">It’s processed on its own once you have minutes: add an invite code in <Link to="/settings">Settings</Link>, or it runs when your minutes renew next month.</p>
+        </div>
       )}
       {s.kind === 'failed' && (
-        <p role="alert" className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-body">
-          {live.errorMessage || 'This recording couldn’t be processed.'} It didn’t use any of your minutes.
-        </p>
+        <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4">
+          <p role="alert" className="text-body">
+            {live.errorMessage || 'This recording couldn’t be processed.'} It didn’t use any of your minutes.
+          </p>
+          {canRetry && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-heading" disabled={retry.kind === 'sending' || retry.kind === 'sent'} onClick={() => void tryAgain()}>
+                Try again
+              </button>
+              {retry.kind === 'sending' && <span role="status" className="text-muted">Starting…</span>}
+              {retry.kind === 'sent' && <span role="status" className="text-muted">Trying again. This page updates on its own.</span>}
+              {retry.kind === 'refused' && <span role="alert" className="text-body">{retry.message}</span>}
+            </div>
+          )}
+        </div>
       )}
 
       {ready && !fromDoc && load.status === 'loading' && <p role="status" className="text-muted">Loading the summary…</p>}
@@ -203,14 +286,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
           {data.summary.actionItems.length > 0 && (
             <section aria-labelledby="ai-title">
               <h2 id="ai-title" className="mb-2 text-xl font-bold text-heading">Action items</h2>
-              <ul className="list-disc pl-6 text-body">
-                {data.summary.actionItems.map((a) => (
-                  <li key={String(a.id)}>
-                    {a.text}
-                    {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
-                  </li>
-                ))}
-              </ul>
+              <ActionItems noteId={noteId} workspaceId={workspaceId} items={data.summary.actionItems} reload={() => setVersion((v) => v + 1)} />
             </section>
           )}
           {data.summary.keyDecisions.length > 0 && (
@@ -291,6 +367,22 @@ function NoteDetail({ noteId }: { noteId: string }) {
               <button type="button" className="px-4 py-2 text-muted" onClick={() => setRenaming(null)}>Cancel</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {confirmNotetaker && botAction && live.notetaker && (
+        <Modal title={botAction === 'stop' ? 'Stop the notetaker?' : 'Cancel the notetaker?'} onClose={() => setConfirmNotetaker(false)} initialFocus="[data-keep]">
+          <p className="mb-4 text-body">
+            {botAction === 'stop'
+              ? 'It leaves the meeting now. What it has recorded so far becomes this note.'
+              : 'It won’t join the meeting, and nothing is recorded or charged.'}
+          </p>
+          <div className="flex flex-col gap-2">
+            <button type="button" className="rounded-xl bg-danger px-4 py-3 font-semibold text-white" onClick={() => void endNotetaker(live.notetaker!.botId, botAction)}>
+              {botAction === 'stop' ? 'Stop it' : 'Cancel it'}
+            </button>
+            <button type="button" data-keep className="py-2 text-muted" onClick={() => setConfirmNotetaker(false)}>Keep it</button>
+          </div>
         </Modal>
       )}
 
@@ -444,4 +536,72 @@ function useAudio(noteId: string, workspaceId: string) {
   }, [fetchUrl]);
 
   return [ref, { src, autoPlay, busy, error, start, seek, onError }] as const;
+}
+
+type ActionItemRow = NonNullable<NoteReadResponse['summary']>['actionItems'][number];
+
+/**
+ * A note's action items, each with a tick that is kept on the server (POST /v1/notes/action-items/status). The
+ * tick shows at once and is put back if the save fails. An item's id changes when the summary is edited, so a
+ * tick the server no longer knows (404) reads the note again instead of saying it failed.
+ */
+function ActionItems({ noteId, workspaceId, items, reload }: { noteId: string; workspaceId: string; items: ActionItemRow[]; reload: () => void }) {
+  const { api } = useApi();
+  // Ticks made here and not yet read back from the server, by item id.
+  const [local, setLocal] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = async (id: string, done: boolean) => {
+    setError(null);
+    setSaving(id);
+    setLocal((m) => ({ ...m, [id]: done }));
+    try {
+      await api.setActionItemDone({ noteId, workspaceId, itemId: id, done });
+    } catch (err) {
+      // silent-catch-ok: a 404 reads the note again; any other failure is shown, and reported unless it's the api's own answer
+      setLocal((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+      if (err instanceof ApiError && err.kind === 'not_found') {
+        reload();
+      } else {
+        setError('That tick couldn’t be saved. Try again.');
+        if (!(err instanceof ApiError)) reportCrash('notes.action-item', err);
+      }
+    } finally {
+      setSaving(null);
+    }
+  };
+  return (
+    <>
+      <ul className="space-y-1 text-body">
+        {items.map((a) => {
+          // Only an item the server can address (its ids are UUIDs) gets a tick.
+          const id = typeof a.id === 'string' ? a.id : null;
+          const done = id != null && (local[id] ?? a.status === 'done');
+          return (
+            <li key={String(a.id)}>
+              {id == null ? (
+                <span className="ml-6 list-item list-disc">
+                  {a.text}
+                  {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
+                </span>
+              ) : (
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input type="checkbox" className="mt-1.5 h-4 w-4 shrink-0" checked={done} disabled={saving === id} onChange={(e) => void toggle(id, e.target.checked)} />
+                  <span className={done ? 'text-muted line-through' : undefined}>
+                    {a.text}
+                    {a.assigneeName && <span className="text-muted"> ({a.assigneeName})</span>}
+                  </span>
+                </label>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {error && <p role="alert" className="mt-2 text-body">{error}</p>}
+    </>
+  );
 }

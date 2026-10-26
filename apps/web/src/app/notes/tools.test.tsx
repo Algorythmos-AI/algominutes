@@ -27,7 +27,7 @@ const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
 
 beforeEach(() => {
   calls.length = 0;
-  handlers = { '/v1/notes/read': () => json(READ) };
+  handlers = { '/v1/notes/read': () => json(READ), '/v1/config': () => json({ broadcastCapture: true }) };
 });
 afterEach(() => {
   cleanup();
@@ -123,5 +123,83 @@ describe('note tools', () => {
     fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Sam:' })).toHaveLength(2));
     expect(calls.find((c) => c.path === '/v1/notes/n1/speakers')?.body).toEqual({ workspaceId: WS, speakerTag: 1, name: 'Sam' });
+  });
+});
+
+// RELEASE.md PR 29: share links, offered only while the server says so.
+describe('share a link', () => {
+  const SHARE = { shareId: 7, token: 'tok_abc', url: 'https://beta.example.test/app/s/tok_abc', scope: 'both', expiresAt: '2026-10-07T00:00:00.000Z' };
+
+  it('is not offered while the server has share links off', async () => {
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, fetchImpl, fakeFeed([NOTE]).feed);
+    await screen.findByRole('button', { name: 'Rename' });
+    await waitFor(() => expect(calls.some((c) => c.path === '/v1/config')).toBe(true));
+    expect(screen.queryByRole('button', { name: 'Share a link' })).toBeNull();
+  });
+
+  it('says first who can read it, then makes the link, copies it, and stops sharing', async () => {
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/create'] = () => json(SHARE);
+    handlers['/v1/shares/revoke'] = () => json({ ok: true, revoked: true });
+    const write = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    const dlg = await open('Share a link');
+    expect(within(dlg).getByText(/Anyone with the link can read this note/)).toBeTruthy();
+    expect(calls.some((c) => c.path === '/v1/shares/create')).toBe(false); // nothing made until asked
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create link' }));
+    await waitFor(() => expect((within(dlg).getByLabelText('The link') as HTMLInputElement).value).toBe(SHARE.url));
+    expect(calls.find((c) => c.path === '/v1/shares/create')?.body).toEqual({ noteId: 'n1', workspaceId: WS, scope: 'both' });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Copy link' }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(SHARE.url));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Stop sharing' }));
+    await waitFor(() => expect(calls.find((c) => c.path === '/v1/shares/revoke')?.body).toEqual({ noteId: 'n1', workspaceId: WS, shareId: 7 }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  // RELEASE.md rev 11, H20: a link can be seen and stopped later, not only in the minute it was made.
+  it('lists the links already made, says which still open, and stops one from the list', async () => {
+    const item = (shareId: number, over: object = {}) => ({ shareId, scope: 'both', createdAt: '2026-10-01T02:00:00.000Z', expiresAt: '2026-10-08T02:00:00.000Z', revokedAt: null, lastReadAt: null, readCount: 0, live: true, ...over });
+    let shares = [item(9, { readCount: 3 }), item(8, { live: false, revokedAt: '2026-10-02T00:00:00.000Z', readCount: 1 }), item(7, { live: false })];
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/list'] = () => json({ shares });
+    handlers['/v1/shares/revoke'] = () => {
+      shares = [item(9, { live: false, revokedAt: '2026-10-03T00:00:00.000Z', readCount: 3 }), ...shares.slice(1)];
+      return json({ ok: true, revoked: true });
+    };
+    const dlg = await open('Share a link');
+    const list = await within(dlg).findByRole('region', { name: 'Links you’ve made' });
+    expect(calls.find((c) => c.path === '/v1/shares/list')?.body).toEqual({ noteId: 'n1', workspaceId: WS });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toMatch(/opens until .*read 3 times/);
+    expect(rows[1].textContent).toMatch(/stopped .*read once/);
+    expect(rows[2].textContent).toMatch(/expired/);
+    // Only a link that still opens can be stopped; no token or address is shown for any of them.
+    expect(within(list).getAllByRole('button')).toHaveLength(1);
+    expect(list.textContent).not.toMatch(/https?:/);
+    fireEvent.click(within(rows[0]).getByRole('button', { name: /Stop sharing/ }));
+    await waitFor(() => expect(calls.find((c) => c.path === '/v1/shares/revoke')?.body).toEqual({ noteId: 'n1', workspaceId: WS, shareId: 9 }));
+    await waitFor(() => expect(within(list).queryByRole('button')).toBeNull());
+    expect(screen.getByRole('dialog')).toBeTruthy(); // the dialog stays: there may be more to stop
+  });
+
+  it('a list that can’t be read says so quietly, and a link can still be made', async () => {
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/list'] = () => json({ error: 'boom' }, 500);
+    handlers['/v1/shares/create'] = () => json(SHARE);
+    const dlg = await open('Share a link');
+    expect(await within(dlg).findByText(/couldn’t be loaded/)).toBeTruthy();
+    expect(within(dlg).queryByRole('alert')).toBeNull();
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create link' }));
+    await waitFor(() => expect((within(dlg).getByLabelText('The link') as HTMLInputElement).value).toBe(SHARE.url));
+  });
+
+  it('a refused link says so, and makes nothing', async () => {
+    handlers['/v1/config'] = () => json({ broadcastCapture: true, shareLinks: true });
+    handlers['/v1/shares/create'] = () => json({ error: 'Note not found' }, 404);
+    const dlg = await open('Share a link');
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create link' }));
+    expect(await within(dlg).findByRole('alert')).toBeTruthy();
+    expect(within(dlg).queryByLabelText('The link')).toBeNull();
   });
 });

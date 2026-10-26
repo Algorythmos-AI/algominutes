@@ -44,6 +44,19 @@ describe('search', () => {
     expect(link.textContent).toMatch(/1:15.*the budget is fine/);
   });
 
+  // RELEASE.md rev 11, L4 (H9b): the api refuses a question over 2,000 characters; the box stops there first.
+  it('holds a question to 2,000 characters, and sends no more', async () => {
+    let sent = '';
+    const f = route({ '/v1/search': (b) => { sent = String(b.query); return new Response(JSON.stringify({ hits: [] }), { status: 200 }); } });
+    openSearch(f);
+    const box = (await screen.findByLabelText('Search your notes')) as HTMLInputElement;
+    expect(box.maxLength).toBe(2000);
+    fireEvent.change(box, { target: { value: 'q'.repeat(2500) } });
+    expect(box.value).toHaveLength(2000);
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(sent).toHaveLength(2000));
+  });
+
   it('says when nothing was found, and when search fails', async () => {
     let fail = false;
     const f = route({ '/v1/search': () => (fail ? new Response('{"error":"internal"}', { status: 500 }) : new Response(JSON.stringify({ hits: [] }), { status: 200 })) });
@@ -96,6 +109,23 @@ describe('ask your notes', () => {
     second.close();
     expect((await screen.findByRole('alert')).textContent).toMatch(/cut short/);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  // On 10-11, 10-18 and 10-20 Cloud Run cut the api's chat stream before it sent `done` or `error` (plan rev 12
+  // S14, fixed in the api). The client already reads a stream that just ends as `stream_ended` (client.ts), so
+  // the page says the answer was cut short; this pins that, so a cut stream can never pass as an answer.
+  it('a stream that ends without done or error was cut short, and offers Try again', async () => {
+    const s = sse();
+    const f = route({ '/v1/chat': () => s.response() });
+    openSearch(f);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ask your notes' }));
+    fireEvent.change(screen.getByLabelText('Ask a question about your notes'), { target: { value: 'q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    s.send(`event: citations\ndata: ${JSON.stringify({ hits: [hit('n1', 5000, 'launch Monday')] })}\n\n`);
+    s.close();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/cut short/);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText('Answer ready.')).toBeNull();
   });
 
   it('splits [n] citations out of the text', () => {

@@ -25,24 +25,30 @@ try {
 ## What to check
 
 ```bash
+# The CI gate itself: syntax-aware, checks every path out of every catch. Run it first.
+node scripts/check-no-silent-catch.mjs
+
+# One --include per extension: grep matches --include globs with fnmatch, which has
+# no {a,b} alternation, so --include='*.{ts,js}' matches no file at all.
+
 # Empty .catch handlers
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "\.catch\(\s*\(\s*\)\s*=>\s*\{?\s*\}?\s*\)" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "\.catch\(\s*\(\s*\)\s*=>\s*\{?\s*\}?\s*\)" .
 
 # .catch with parameter but empty body
-grep -rn --include='*.{ts,js,cjs,mjs}' \
-  -E "\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*\{\s*\}\s*\)" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*\{\s*\}\s*\)" .
 
 # try/catch with empty or comment-only catch block
-grep -rn -A 3 --include='*.{ts,js,cjs,mjs}' \
-  -E "catch\s*\(\s*_?\s*\)" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn -A 3 --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "catch\s*\(\s*_?\s*\)" .
 
-grep -rn -A 3 --include='*.{ts,js,cjs,mjs}' \
-  -E "catch\s*\(\s*\w+\s*\)\s*\{" \
-  --exclude-dir={node_modules,dist,.git,tests}
+grep -rn -A 3 --include='*.ts' --include='*.js' --include='*.cjs' --include='*.mjs' \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git --exclude-dir=tests \
+  -E "catch\s*\(\s*\w+\s*\)\s*\{" .
 ```
 
 The first two greps catch the obvious cases. The two `try/catch` greps need manual inspection of the next 2-3 lines:
@@ -120,7 +126,7 @@ intentional documented swallows: <count>
 
 ## Coordination with the CI script
 
-The repo has `scripts/check-no-silent-catch.sh` which only catches `\.catch\(\(\)\s*=>\s*\{\}\)`. You catch a wider set. After your pass, the CI script should still pass — you're a superset, not a replacement.
+`scripts/check-no-silent-catch.sh` runs `scripts/check-no-silent-catch.mjs`, which parses every file and fails any catch with a path out of it (a `return`, falling off the end) that neither throws, logs (`log.*`/`logger.*`/`req.log.*`), nor lets the caught error escape in a returned or passed value, unless a `// silent-catch-ok: <reason>` marker explains it. A bare property read or `instanceof` test on the error in a condition does not count as handling it. Your greps and review are stricter in places (you flag a silent rethrow; the gate allows it), so after your pass the gate should still pass.
 
 If you find a pattern you think the CI script should also catch, mention it in your report under a `CI ENHANCEMENT SUGGESTED:` block. Don't modify the script yourself.
 

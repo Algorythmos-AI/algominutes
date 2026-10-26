@@ -5,7 +5,9 @@ import SwiftUI
 /// Options are `ComplianceContract.retentionOptionsDays` plus "Keep until I
 /// delete" (the default, sent to the server as null). The chosen value is
 /// persisted locally for display and POSTed to `/v1/account/retention`; the
-/// server is the source of truth for enforcement (see docs/DATA-RETENTION.md).
+/// server is the source of truth for enforcement (see docs/DATA-RETENTION.md),
+/// and the card reads the account's value when it appears (RELEASE.md PR 12b),
+/// so a limit set on another device shows here.
 struct RetentionSettingsCard: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -30,55 +32,74 @@ struct RetentionSettingsCard: View {
 
     var body: some View {
         AlgoMinutesCard {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Data retention")
-                            .font(Typography.body(15))
-                            .foregroundStyle(Theme.body)
-                        Text("Automatically delete notes after this long.")
-                            .font(Typography.body(12))
-                            .foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Menu {
-                        ForEach(options, id: \.label) { option in
-                            Button {
-                                select(option.days)
-                            } label: {
-                                if option.days == selectedDays {
-                                    Label(option.label, systemImage: "checkmark")
-                                } else {
-                                    Text(option.label)
-                                }
+            cardBody
+        }
+        .task { await loadAccountRetention() }
+    }
+
+    /// Stored as an Int: `0` for "keep until I delete".
+    static func stored(_ days: Int?) -> Int { days ?? 0 }
+
+    private func loadAccountRetention() async {
+        do {
+            let account = try await env.api.retention()
+            // A change being saved right now wins over what the account said a moment ago.
+            guard !isSaving else { return }
+            storedDays = Self.stored(account.retentionDays)
+        } catch {
+            AppLog.error("retention_fetch_failed: \(error.localizedDescription)")
+        }
+    }
+
+    private var cardBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Data retention")
+                        .font(Typography.body(15))
+                        .foregroundStyle(Theme.body)
+                    Text("Automatically delete notes after this long.")
+                        .font(Typography.body(12))
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Menu {
+                    ForEach(options, id: \.label) { option in
+                        Button {
+                            select(option.days)
+                        } label: {
+                            if option.days == selectedDays {
+                                Label(option.label, systemImage: "checkmark")
+                            } else {
+                                Text(option.label)
                             }
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            if isSaving { ProgressView().controlSize(.small) }
-                            Text(selectedLabel)
-                                .font(Typography.label(14))
-                                .foregroundStyle(Theme.heading)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.tertiary)
-                        }
                     }
-                    .disabled(isSaving)
+                } label: {
+                    HStack(spacing: 4) {
+                        if isSaving { ProgressView().controlSize(.small) }
+                        Text(selectedLabel)
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.heading)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.tertiary)
+                    }
                 }
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(Typography.body(12))
-                        .foregroundStyle(Theme.heading)
-                }
+                .disabled(isSaving)
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(Typography.body(12))
+                    .foregroundStyle(Theme.heading)
             }
         }
     }
 
     private func select(_ days: Int?) {
         let previous = storedDays
-        storedDays = days ?? 0
+        storedDays = Self.stored(days)
         errorMessage = nil
         isSaving = true
         Task {

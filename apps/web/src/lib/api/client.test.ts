@@ -53,7 +53,9 @@ const settle = <T,>(p: Promise<T>) => p.then((v) => ({ ok: true as const, v }), 
 const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unknown>; method: string; url: string; body?: unknown; auth?: boolean }> = [
   { name: 'entitlement', run: (c) => c.entitlement(), method: 'GET', url: `${ORIGINS.api}/v1/entitlement` },
   { name: 'appConfig', run: (c) => c.appConfig(), method: 'GET', url: `${ORIGINS.api}/v1/config` },
+  { name: 'redeemInvite', run: (c) => c.redeemInvite({ code: 'BETA-7K2QX-M9D4R-TW8HN' }), method: 'POST', url: `${ORIGINS.api}/v1/beta/redeem`, body: { code: 'BETA-7K2QX-M9D4R-TW8HN' } }, // gitleaks:allow
   { name: 'acceptTerms', run: (c) => c.acceptTerms({ termsVersion: 't', privacyVersion: 'p' }), method: 'POST', url: `${ORIGINS.api}/v1/account/accept-terms`, body: { termsVersion: 't', privacyVersion: 'p' } },
+  { name: 'retention', run: (c) => c.retention(), method: 'GET', url: `${ORIGINS.api}/v1/account/retention` },
   { name: 'setRetention', run: (c) => c.setRetention({ retentionDays: 30 }), method: 'POST', url: `${ORIGINS.api}/v1/account/retention`, body: { retentionDays: 30 } },
   { name: 'deleteAccount', run: (c) => c.deleteAccount(), method: 'POST', url: `${ORIGINS.api}/v1/account/delete`, body: {} },
   { name: 'support', run: (c) => c.support({ kind: 'contact', message: 'hi' }), method: 'POST', url: `${ORIGINS.api}/v1/support`, body: { kind: 'contact', message: 'hi' } },
@@ -63,10 +65,17 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'readNotePage', run: (c) => c.readNotePage({ noteId: 'n1', workspaceId: 'w1', cursor: 'c2' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/read`, body: { noteId: 'n1', workspaceId: 'w1', cursor: 'c2' } },
   { name: 'updateNote', run: (c) => c.updateNote({ noteId: 'n1', workspaceId: 'w1', title: 'T' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/update`, body: { noteId: 'n1', workspaceId: 'w1', title: 'T' } },
   { name: 'deleteNote', run: (c) => c.deleteNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/delete`, body: { noteId: 'n1', workspaceId: 'w1' } },
+  { name: 'deadLetters', run: (c) => c.deadLetters(), method: 'GET', url: `${ORIGINS.api}/v1/admin/dead-letters` },
+  { name: 'deadLetters', run: (c) => c.deadLetters({ includeResolved: true }), method: 'GET', url: `${ORIGINS.api}/v1/admin/dead-letters?includeResolved=true` },
+  { name: 'resolveDeadLetter', run: (c) => c.resolveDeadLetter(7), method: 'POST', url: `${ORIGINS.api}/v1/admin/dead-letters/7/resolve`, body: {} },
+  { name: 'createTextNote', run: (c) => c.createTextNote({ noteId: 'n1', workspaceId: 'w1', text: 'Receipt', source: 'pdf' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/text`, body: { noteId: 'n1', workspaceId: 'w1', text: 'Receipt', source: 'pdf' } },
   { name: 'noteAudioUrl', run: (c) => c.noteAudioUrl({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/audio-url`, body: { noteId: 'n1', workspaceId: 'w1' } },
+  { name: 'createMeetingBot', run: (c) => c.createMeetingBot({ meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' }), method: 'POST', url: `${ORIGINS.api}/v1/meetings/bots`, body: { meetingUrl: 'https://meet.google.com/abc-defg-hij', requestId: 'req-12345678' } },
+  { name: 'cancelMeetingBot', run: (c) => c.cancelMeetingBot('b/1'), method: 'POST', url: `${ORIGINS.api}/v1/meetings/bots/b%2F1/cancel`, body: {} },
   { name: 'setSpeakers', run: (c) => c.setSpeakers('n/1', { workspaceId: 'w1', speakers: [] }), method: 'POST', url: `${ORIGINS.api}/v1/notes/n%2F1/speakers`, body: { workspaceId: 'w1', speakers: [] } },
   { name: 'regenerateSummary', run: (c) => c.regenerateSummary({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/notes/regenerate-summary`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'noteFeedback', run: (c) => c.noteFeedback({ noteId: 'n1', workspaceId: 'w1', rating: 4 }), method: 'POST', url: `${ORIGINS.api}/v1/notes/feedback`, body: { noteId: 'n1', workspaceId: 'w1', rating: 4 } },
+  { name: 'setActionItemDone', run: (c) => c.setActionItemDone({ noteId: 'n1', workspaceId: 'w1', itemId: '11111111-1111-4111-8111-111111111111', done: true }), method: 'POST', url: `${ORIGINS.api}/v1/notes/action-items/status`, body: { noteId: 'n1', workspaceId: 'w1', itemId: '11111111-1111-4111-8111-111111111111', done: true } },
   { name: 'exportNote', run: (c) => c.exportNote({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/export`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'createUpload', run: (c) => c.createUpload({ noteId: 'n1', workspaceId: 'w1', fileName: 'a.webm', contentType: 'audio/webm', totalBytes: 10 }), method: 'POST', url: `${ORIGINS.api}/v1/uploads`, body: { noteId: 'n1', workspaceId: 'w1', fileName: 'a.webm', contentType: 'audio/webm', totalBytes: 10 } },
   { name: 'uploadStatus', run: (c) => c.uploadStatus('u 1'), method: 'GET', url: `${ORIGINS.api}/v1/uploads/u%201` },
@@ -76,6 +85,7 @@ const CALLS: Array<{ name: keyof ApiClient; run: (c: ApiClient) => Promise<unkno
   { name: 'chat', run: async (c) => { for await (const _ of c.chat({ query: 'q' })) void _; }, method: 'POST', url: `${ORIGINS.api}/v1/chat`, body: { query: 'q' } },
   { name: 'createShare', run: (c) => c.createShare({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/create`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'revokeShare', run: (c) => c.revokeShare({ noteId: 'n1', workspaceId: 'w1', shareId: 's1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/revoke`, body: { noteId: 'n1', workspaceId: 'w1', shareId: 's1' } },
+  { name: 'listShares', run: (c) => c.listShares({ noteId: 'n1', workspaceId: 'w1' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/list`, body: { noteId: 'n1', workspaceId: 'w1' } },
   { name: 'readShare', run: (c) => c.readShare({ token: 'tok' }), method: 'POST', url: `${ORIGINS.api}/v1/shares/read`, body: { token: 'tok' }, auth: false },
   { name: 'checkout', run: (c) => c.checkout({ productId: 'pro_monthly', period: 'monthly' }), method: 'POST', url: `${ORIGINS.billing}/v1/billing/checkout`, body: { productId: 'pro_monthly', period: 'monthly' } },
   { name: 'portal', run: (c) => c.portal(), method: 'POST', url: `${ORIGINS.billing}/v1/billing/portal`, body: {} },
@@ -99,13 +109,13 @@ describe('every call sends the right request', () => {
     expect(s.headers['Content-Type']).toBe(body === undefined ? undefined : 'application/json');
   });
 
-  it('covers every operation in the published api contract (bar health and admin)', () => {
+  it('covers every operation in the published api contract (bar health)', () => {
     const operations = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
       .flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ':p')}`))
-      .filter((op) => !/\/v1\/(health|admin)/.test(op) && op !== 'DELETE /v1/account/delete')
+      .filter((op) => !/\/v1\/health/.test(op) && op !== 'DELETE /v1/account/delete')
       .sort();
-    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage')
-      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1')}`)
+    const covered = CALLS.filter((c) => c.url.startsWith(ORIGINS.api) && c.name !== 'readNotePage' && !(c.name === 'deadLetters' && c.url.includes('?')))
+      .map((c) => `${c.method} ${new URL(c.url).pathname.replace(/\/v1\/admin\/dead-letters\/[^/]+\/resolve$/, '/v1/admin/dead-letters/:p/resolve').replace(/\/v1\/notes\/[^/]+\/speakers/, '/v1/notes/:p/speakers').replace(/\/v1\/uploads\/[^/]+(\/complete)?$/, '/v1/uploads/:p$1').replace(/\/v1\/meetings\/bots\/[^/]+\/cancel$/, '/v1/meetings/bots/:p/cancel')}`)
       .sort();
     expect(covered).toEqual(operations);
   });

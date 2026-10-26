@@ -98,7 +98,7 @@ prod). Required before this service can transact (each is a `TODO(A11)` in code)
 | `STRIPE_WEBHOOK_SECRET` | `/webhooks/stripe` signature |
 | `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_ANNUAL` | checkout line items |
 | `BILLING_SUCCESS_URL`, `BILLING_CANCEL_URL`, `BILLING_PORTAL_RETURN_URL` | Stripe redirects |
-| `APPLE_PRODUCT_PRO_MONTHLY`, `APPLE_PRODUCT_PRO_ANNUAL` | Apple SKU → plan mapping |
+| `APPLE_PRODUCT_PRO_MONTHLY`, `APPLE_PRODUCT_PRO_ANNUAL` | Apple SKU → plan mapping (default: `com.algorythmos.algominutes.pro.monthly` / `.annual`, the App Store Connect products) |
 | `GOOGLE_PRODUCT_PRO_MONTHLY`, `GOOGLE_PRODUCT_PRO_ANNUAL`, `PLAY_PACKAGE_NAME` | Play SKU / package |
 | `GOOGLE_CLOUD_PROJECT` | firebase-admin ADC |
 
@@ -108,12 +108,25 @@ prod). Required before this service can transact (each is a `TODO(A11)` in code)
   Stripe (`getStripe` / `constructStripeEvent` / checkout / portal / subscription
   retrieve), Apple (`verifyAndDecodeJws`), Google (`verifyPlaySubscription` +
   Play Console SA linkage), and all store product / price ids + redirect URLs.
-- **`TODO(A4-apple)`** — full StoreKit 2 / ASSN V2 JWS verification: parse the
-  `x5c` chain, verify the ES256 signature, and validate the chain up to
-  **Apple Root CA - G3** before trusting a decoded payload. Requires the iOS
-  Firebase app + Apple root certs (not available in this environment). Today
-  `src/lib/apple.js` **decodes** the JWS; it does not yet cryptographically
-  verify it.
+- **Apple JWS verification (done, PR-32):** `src/lib/apple.js verifyAppleJws` checks every StoreKit 2
+  transaction and App Store Server Notification offline, as Apple's App Store Server Library does:
+  - ES256 only;
+  - the `x5c` chain up to **Apple Root CA - G3**, pinned in `src/lib/certs/AppleRootCA-G3.cer` (Apple’s DER file) and checked against
+    Apple's published SHA-256 fingerprint at load (a missing or changed file fails closed, 503);
+  - Apple's marker extensions on the leaf and intermediate;
+  - validity at `signedDate`;
+  - the leaf's signature.
+
+  The bundle id must be `com.algorythmos.algominutes`. Anything else is a 400, and grants nothing. Revocation (OCSP)
+  isn't checked.
+- **Apple reconcile (RELEASE.md PR 26a):** `POST /tasks/reconcile-apple`, hourly from Cloud Scheduler with an
+  OIDC token issued to run-jobs (`@algominutes/ai/task-auth.cjs`, shared with meetings). It asks the App Store
+  Server API (`src/lib/app-store-server.js`: production, then the sandbox) about each subscription due a check
+  (`listAppleSubscriptionsDue`), verifies Apple's answer like a notification, and writes it with
+  `recordAppleCheck`, which refuses if a notification or purchase wrote the row after it was read. Sandbox
+  purchases entitle everywhere (docs/DECISIONS.md, "Real IAP in sandbox"), and every purchase and notification
+  line logs its `environment`. Until `APPLE_ISSUER_ID`, `APPLE_KEY_ID` and the `app-store-server-key` secret
+  are set, the task checks nothing and logs `apple_reconcile_not_configured`.
 
 ## Operating cost (BUILD-PLAN §3.3)
 

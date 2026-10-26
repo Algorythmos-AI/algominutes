@@ -56,3 +56,23 @@ describe('probeDuration failures', () => {
     }
   });
 });
+
+describe('runChild timeout', () => {
+  // A hung ffmpeg must not hold the transcoder until Cloud Run's request timeout.
+  it('kills a process that runs past its budget, as a retryable infrastructure fault', async () => {
+    const started = Date.now();
+    const err = await ffmpeg.runChild('sleep', ['30'], { timeoutMs: 200 }).catch((e: Error) => e);
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(err).toMatchObject({ timedOut: true, signal: 'SIGKILL' });
+    expect(String(err.message)).toMatch(/timed out after 200ms/);
+    expect(ffmpeg.isInfraFault(err)).toBe(true);
+  });
+
+  it('leaves a process that finishes in time alone', async () => {
+    await expect(ffmpeg.runChild('true', [], { timeoutMs: 5000 })).resolves.toMatchObject({ stdout: '' });
+  });
+
+  it('gives a probe a short budget', () => {
+    expect(ffmpeg.PROBE_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
+  });
+});

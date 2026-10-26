@@ -22,12 +22,16 @@
 const { GoogleAuth } = require('google-auth-library');
 
 const { redactPII } = require('@algominutes/ai/redaction.cjs');
+const { vertexRefusal } = require('@algominutes/ai/vertex-refusal.cjs');
 const { isValidId } = require('@algominutes/ai/intelligence.cjs');
 const models = require('@algominutes/ai/models.cjs');
 // pool / withQueryTimeout / postgresEnabled live in @algominutes/db pg-query.cjs
 // so note-read and the other read-path handlers share one pool and one timeout
 // discipline. Moved verbatim; behaviour unchanged.
-const { withQueryTimeout, postgresEnabled } = require('@algominutes/ai/pg-query.cjs');
+const { withQueryTimeout, postgresEnabled, pool: readPool } = require('@algominutes/ai/pg-query.cjs');
+const spendGuard = require('@algominutes/ai/spend-guard.cjs');
+const { recordPaidWork } = require('@algominutes/db/pipeline-repo.cjs');
+const { CHAT_EVENT } = require('@algominutes/db/spend-repo.cjs');
 
 // Vertex AI client. Single auth instance (caches tokens across calls).
 // search-and-chat used to call generativelanguage.googleapis.com (the
@@ -78,6 +82,7 @@ const PER_LIST_LIMIT = 25;
 // Model ids: packages/ai/src/models.cjs (lifecycle + Sydney availability).
 const EMBED_MODEL = models.EMBED_MODEL;
 const CHAT_MODEL = models.CHAT_MODEL;
+const { thinkingConfigFor } = models;
 
 // Vertex AI embedding endpoint can hang on cold-start of the publisher
 // model. Without a client-side timeout the unbounded fetch blocks past
@@ -112,8 +117,8 @@ async function embedQuery(_apiKey, text, log, { fetchImpl = fetch, authHeader = 
       signal: controller.signal,
     });
     if (!resp.ok) {
-      const errText = await responseTextHead(resp);
-      throw new Error(`vertex_embed_failed: ${resp.status} ${errText}`);
+      // The status and its enum only: a 400 can quote the query back (Q29).
+      throw vertexRefusal('vertex_embed_failed:', resp.status, await responseTextHead(resp));
     }
     const data = await resp.json();
     const values = data && data.predictions && data.predictions[0] && data.predictions[0].embeddings && data.predictions[0].embeddings.values;
@@ -160,6 +165,21 @@ async function memberWorkspaces(uid, log) {
 /// into a 404 rather than an empty result set.
 // `embed` is the query-embedding call (a seam for tests; production uses the
 // Vertex one above).
+// How long chat waits before asking a busy model again, and what counts as busy.
+const CHAT_BUSY_WAITS_MS = [1000, 3000];
+const CHAT_BUSY_STATUSES = new Set([429, 503]);
+// Plan rev 12 S14. How long an attempt may go before its first text, and how long the whole answer may take.
+// /v1/chat closed at exactly 61 s on 2026-10-11, 10-18 and 10-20 (the api's 60 s Cloud Run request timeout):
+// Vertex accepted the stream and sent nothing, and nothing bounded the wait. A green night's answer starts in
+// 2-3 s, so 15 s is far past normal; 45 s leaves the retrieval before it, and the error frame, inside the 60.
+const CHAT_FIRST_TEXT_MS = 15_000;
+const CHAT_STREAM_BUDGET_MS = 45_000;
+
+/** The chat model first, then the rest of the pipeline's ladder that hasn't retired. */
+function chatModels(now = new Date()) {
+  return [CHAT_MODEL, ...models.activeLadder(now).filter((m) => m !== CHAT_MODEL)];
+}
+
 async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQuery }) {
   const workspaces = await memberWorkspaces(uid, log);
   if (workspaces.length === 0) return [];
@@ -193,6 +213,8 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
               WHERE e.workspace_id = ANY($2)
                 AND e.model = $4
                 AND n.deleted_at IS NULL
+                -- A failed run's note: its rows may be from an earlier run (rev 11 N7).
+                AND n.status <> 'error'
                 ${noteId ? 'AND e.note_id = $5' : ''}
               ORDER BY e.embedding <=> $1::vector
               LIMIT $3`,
@@ -212,20 +234,26 @@ async function hybridSearch({ uid, query, k, apiKey, log, noteId, embed = embedQ
   // Push the workspace filter into a subquery so the gin_trgm_ops index
   // on transcript_lines.text can run against a pre-filtered note set
   // instead of doing a similarity scan and filtering after the join.
+  //
+  // Two matches, both served by that index. \`%\` compares the query with the
+  // whole line, which finds a line typed nearly in full. \`<%\` looks for the
+  // query inside the line (word_similarity), which is what finds a word: one
+  // word against a sentence scores about 0.1 on \`%\` and never passed its 0.3.
   const kwRes = await withQueryTimeout({
     timeoutMs: 12000,
     text: `SELECT t.note_id, n.title, t.text AS chunk_text, t.start_ms, t.end_ms,
-                  similarity(t.text, $1) AS sim
+                  GREATEST(similarity(t.text, $1), word_similarity($1, t.text)) AS sim
              FROM transcript_lines t
              JOIN notes n ON n.id = t.note_id
             WHERE t.note_id IN (
                     SELECT id FROM notes
                      WHERE workspace_id = ANY($2)
                        AND deleted_at IS NULL
+                       AND status <> 'error'
                   )
-              AND t.text % $1
+              AND (t.text % $1 OR $1 <% t.text)
               ${noteId ? 'AND t.note_id = $4' : ''}
-            ORDER BY similarity(t.text, $1) DESC
+            ORDER BY sim DESC, t.note_id, t.start_ms
             LIMIT $3`,
     values: noteId
       ? [query, workspaces, PER_LIST_LIMIT, noteId]
@@ -292,6 +320,22 @@ function noteLog(log, noteId) {
   return noteId && isValidId(noteId) && log && typeof log.child === 'function' ? log.child({ noteId }) : log;
 }
 
+// RELEASE.md rev 11, L4 (H9a): a question is at most this long. Nothing bounded it but the 1 MB body limit, so one
+// request could send a 250k-token prompt to the embedder and to Gemini.
+const MAX_QUESTION_CHARS = 2000;
+// A chat answer is a few paragraphs: bounded, with the model's thinking capped inside it.
+// The cap's field is the chat model's own (models.cjs thinkingConfigFor): gemini-3.x takes thinkingLevel, and some of
+// its Sydney backends refuse thinkingBudget, which failed chat answers at random (2026-10-01).
+const CHAT_MAX_OUTPUT_TOKENS = 2048;
+
+/** The Vertex request for a chat answer. */
+function chatRequestBody(prompt, model = CHAT_MODEL) {
+  return {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS, thinkingConfig: thinkingConfigFor(model, { budget: 1024 }) },
+  };
+}
+
 async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
   if (!postgresEnabled()) {
     return { status: 503, body: { error: 'Search is unavailable until Postgres is provisioned.' } };
@@ -300,6 +344,10 @@ async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
   const log = noteLog(requestLog, noteId);
   const rawQuery = String(body && body.query || '').trim();
   if (!rawQuery) return { status: 400, body: { error: 'query is required' } };
+  if (rawQuery.length > MAX_QUESTION_CHARS) {
+    log.warn({ uid, queryLen: rawQuery.length }, 'search_query_too_long');
+    return { status: 400, body: { error: 'Keep your search under 2,000 characters.' } };
+  }
   // CLAUDE.md §2: redact user input BEFORE it reaches the embedder (and
   // before logging). Prevents a user accidentally pasting an SSN or
   // Medicare number into the search box from poisoning the vector index
@@ -336,8 +384,59 @@ async function handleSearch({ uid, body, apiKey, log: requestLog, embed }) {
 // a single-note conversation whose retrieval returned nothing would otherwise
 // silently fall back to the all-meetings phrasing and invite the model to
 // reason across notes it was never given.
-function buildChatPrompt(question, hits, scoped = false) {
+// How much of a note's own summary the chat prompt carries (RELEASE.md rev 11, LM10): a bound, as the question's is.
+const OVERVIEW_MAX_CHARS = 6000;
+const OVERVIEW_MAX_CHAPTERS = 40;
+
+/**
+ * The note's summary and chapters, for a chat about that one note (LM10). Retrieval finds the 15 excerpts
+ * nearest the question, which answers "what did Priya say about pricing" and not "what was this meeting
+ * about" or "what came after the budget part" on a 3-hour note. Membership-filtered, as every query that
+ * returns user data is. Null when there is no summary (or no access): the prompt is then as before.
+ */
+async function noteOverview({ uid, noteId, log }) {
+  const r = await withQueryTimeout({
+    timeoutMs: 3000,
+    text: `SELECT s.gist, s.long_summary, s.chapters
+             FROM summaries s
+             JOIN notes n ON n.id = s.note_id
+             JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.uid = $2
+            WHERE s.note_id = $1 AND n.deleted_at IS NULL AND n.status <> 'error'`,
+    values: [noteId, uid],
+    log,
+    op: 'note_overview',
+  });
+  const row = r.rows[0];
+  if (!row) return null;
+  const chapters = (Array.isArray(row.chapters) ? row.chapters : [])
+    .filter((c) => c && typeof c.title === 'string' && Number.isFinite(Number(c.startMs)))
+    .slice(0, OVERVIEW_MAX_CHAPTERS)
+    .map((c) => ({ startMs: Number(c.startMs), title: c.title, summary: typeof c.summary === 'string' ? c.summary : '' }));
+  const summary = [row.gist, row.long_summary].filter((t) => typeof t === 'string' && t.trim()).join('\n\n');
+  if (!summary && chapters.length === 0) return null;
+  return { summary, chapters };
+}
+
+/** The overview as prompt text, scrubbed like the excerpts are, and bounded. */
+function overviewBlock(overview, totalCounts) {
+  if (!overview) return '';
+  const scrub = (text) => {
+    const { text: out, counts } = redactPII(text || '');
+    for (const [k, v] of Object.entries(counts)) totalCounts[k] = (totalCounts[k] || 0) + v;
+    return out;
+  };
+  const lines = [];
+  if (overview.summary) lines.push(`Summary: ${scrub(overview.summary)}`);
+  if (overview.chapters.length) {
+    lines.push('Chapters, in order:');
+    for (const c of overview.chapters) lines.push(`- (t=${c.startMs}ms) ${scrub(c.title)}${c.summary ? `: ${scrub(c.summary)}` : ''}`);
+  }
+  return lines.join('\n').slice(0, OVERVIEW_MAX_CHARS);
+}
+
+function buildChatPrompt(question, hits, scoped = false, overview = null) {
   const totalCounts = {};
+  const about = scoped ? overviewBlock(overview, totalCounts) : '';
   const blocks = hits
     .map((h, i) => {
       const { text: redactedChunk, counts } = redactPII(h.chunkText || '');
@@ -355,8 +454,12 @@ function buildChatPrompt(question, hits, scoped = false) {
   const lead = scoped
     ? "You are a meeting intelligence assistant. The user is asking about ONE specific meeting. Answer using ONLY the numbered context blocks below, which are all excerpts from that meeting."
     : "You are a meeting intelligence assistant. Answer the user's question using ONLY the numbered context blocks below.";
-  const prompt = `${lead} Cite sources inline using bracketed numbers like [1] [3]. If the context doesn't answer the question, say so directly — do not invent details.
-
+  // The overview answers what the meeting was about and how it went; only the numbered excerpts are cited.
+  const overviewPart = about
+    ? `\nOverview of the whole meeting (for orientation: do not cite it with a number, and prefer the excerpts for details):\n${about}\n`
+    : '';
+  const prompt = `${lead}${about ? ' An overview of the whole meeting comes first.' : ''} Cite sources inline using bracketed numbers like [1] [3]. If the context doesn't answer the question, say so directly — do not invent details.
+${overviewPart}
 Context:
 ${blocks || '(no relevant excerpts found)'}
 
@@ -420,7 +523,13 @@ function createSseLineFeeder(onLine) {
  * the stream. The handler is invoked with (…, res) so it can write the
  * stream directly through the Express response.
  */
-async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
+// What a capped day says in place of an answer (the kickoff's own cap message is about processing).
+const CHAT_CAP_MESSAGE = "We've reached today's limit for answers. Please try again tomorrow.";
+
+async function handleChatStream({ uid, body, apiKey, log: requestLog, res, deps = {} }) {
+  const assertUnderDailyCap = deps.assertUnderDailyCap || spendGuard.assertUnderDailyCap;
+  const recordChat = deps.recordChat || ((entry) => recordPaidWork(readPool(), entry));
+  const fetchImpl = deps.fetchImpl || fetch;
   if (!postgresEnabled()) {
     res.status(503).json({ error: 'Chat is unavailable until Postgres is provisioned.' });
     return;
@@ -432,6 +541,11 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   }
   const noteId = body && body.noteId ? String(body.noteId) : undefined;
   const log = noteLog(requestLog, noteId);
+  if (rawQuestion.length > MAX_QUESTION_CHARS) {
+    log.warn({ uid, queryLen: rawQuestion.length }, 'chat_question_too_long');
+    res.status(400).json({ error: 'Keep your question under 2,000 characters.' });
+    return;
+  }
   // CLAUDE.md §2: redact user-supplied question before embedder, before
   // Gemini prompt construction, before logs. The chat retrieval path
   // already redacts retrieved chunks (buildChatPrompt below); PR-A4
@@ -440,9 +554,19 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
   if (Object.keys(questionCounts).length) {
     log.info({ uid, questionRedactionCounts: questionCounts }, 'chat_question_redacted');
   }
+  // The daily spend cap stops chat as it stops the pipeline (RELEASE.md rev 11, H9), before the embedding and the
+  // model are paid for. It fails open on a broken meter, as it does there.
+  try {
+    await assertUnderDailyCap({ log });
+  } catch (err) {
+    if (!err || err.code !== 'SPEND_CAP_EXCEEDED') throw err;
+    log.warn({ uid, spent: err.spent, cap: err.cap }, 'chat_spend_cap_refused');
+    res.status(503).json({ error: CHAT_CAP_MESSAGE });
+    return;
+  }
   let hits = [];
   try {
-    hits = await hybridSearch({ uid, query: question, k: 15, apiKey, log, noteId });
+    hits = await hybridSearch({ uid, query: question, k: 15, apiKey, log, noteId, embed: deps.embed });
   } catch (err) {
     // Retrieval failure is deliberately non-fatal — the model answers with
     // no context rather than the request dying. That is NOT true of an
@@ -457,7 +581,17 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
     res.status(404).json({ error: 'Note not found' });
     return;
   }
-  const { prompt, redactionCounts } = buildChatPrompt(question, hits, Boolean(noteId));
+  // A chat about one note also sees that note's summary and chapters (LM10). Best-effort, as retrieval is: an
+  // overview that can't be read leaves the prompt as it was.
+  let overview = null;
+  if (noteId) {
+    try {
+      overview = await (deps.noteOverview || noteOverview)({ uid, noteId, log });
+    } catch (err) {
+      log.error({ err }, 'chat_overview_failed');
+    }
+  }
+  const { prompt, redactionCounts } = buildChatPrompt(question, hits, Boolean(noteId), overview);
   if (Object.keys(redactionCounts).length) {
     log.info({ uid, hitCount: hits.length, redactionCounts }, 'chat_chunks_redacted');
   }
@@ -500,25 +634,28 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
     // Vertex AI streaming generate. The :streamGenerateContent endpoint
     // with ?alt=sse returns SSE chunks of `data: { candidates: [...] }`,
     // which we parse and forward as our own `data: { text }` events.
-    const project = await getProjectId();
+    const project = deps.project || await getProjectId();
     const location = process.env.AIPLATFORM_LOCATION || 'us-central1';
-    const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`;
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: await vertexAuthHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      }),
-    });
-    if (!upstream.ok || !upstream.body) {
-      const errText = upstream.body ? await responseTextHead(upstream) : '';
-      throw new Error(`vertex_stream_failed: ${upstream.status} ${errText.slice(0, 200)}`);
-    }
+    const urlFor = (model) => `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:streamGenerateContent?alt=sse`;
+    // Counted as it's asked, as the pipeline's paid work is (best-effort: a failed write is logged, never fatal).
+    // Only a well-formed note id rides on the row and its failure log, as on every log line here (noteLog).
+    await recordChat({ uid, noteId: noteId && isValidId(noteId) ? noteId : undefined, event: CHAT_EVENT, model: CHAT_MODEL, audioSeconds: null, log });
+    // A busy model (429 RESOURCE_EXHAUSTED, 503) is asked again, twice, before anything has streamed: it
+    // failed the whole answer on the first refusal (staging, 2026-10-06, twice in a day). The pipeline's
+    // calls have their ladder (gemini-call.cjs); this stream is not one of its callers. Counted once above.
+    //
+    // Asking the same model again was not enough: on 2026-10-06 (13:58 UTC) it answered 429 three times in
+    // 25 seconds. Each further try goes to the next model of the pipeline's ladder while there is one
+    // (models.cjs: until gemini-2.5-flash retires), then round again.
+    const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const ladder = deps.chatModels || chatModels();
+    const firstTextMs = deps.firstTextMs || CHAT_FIRST_TEXT_MS;
+    const deadline = Date.now() + (deps.streamBudgetMs || CHAT_STREAM_BUDGET_MS);
+    // Busy refusals and stalls share the same few tries (one ask, then CHAT_BUSY_WAITS_MS.length more).
+    const maxAttempts = CHAT_BUSY_WAITS_MS.length + 1;
 
-    const decoder = new TextDecoder();
     let emittedText = false;
-
-    const feeder = createSseLineFeeder((rawLine) => {
+    const onLine = (rawLine) => {
       const parsed = parseSseDataLine(rawLine);
       if (parsed.type === 'parse_error') {
         log.warn({ uid, errorName: parsed.errorName, payloadChars: parsed.payloadChars }, 'chat_stream_parse_failed');
@@ -528,12 +665,68 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
         res.write(`data: ${JSON.stringify({ text: parsed.text })}\n\n`);
         emittedText = true;
       }
-    });
+    };
 
-    for await (const chunk of upstream.body) {
-      feeder.feed(decoder.decode(chunk, { stream: true }));
+    for (let attempt = 0; ; attempt += 1) {
+      const model = ladder[attempt % ladder.length];
+      // Each attempt reads with its own decoder and line buffer: a stalled attempt can leave half an SSE line
+      // behind, and the next attempt's first line must not be joined onto it.
+      const decoder = new TextDecoder();
+      const feeder = createSseLineFeeder(onLine);
+      // Each attempt is aborted if no text has come by the first-text limit (a stall: ask again), or when the
+      // whole answer's budget runs out (then the chat says it failed, inside Cloud Run's request timeout).
+      const controller = new AbortController();
+      let stalled = false;
+      const stallTimer = setTimeout(() => { stalled = true; controller.abort(new Error('chat_first_text_timeout')); },
+        Math.max(1, Math.min(firstTextMs, deadline - Date.now())));
+      const budgetTimer = setTimeout(() => controller.abort(new Error('chat_stream_budget')), Math.max(1, deadline - Date.now()));
+      try {
+        const upstream = await fetchImpl(urlFor(model), {
+          method: 'POST',
+          headers: { Authorization: await (deps.authHeader || vertexAuthHeader)(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(chatRequestBody(prompt, model)),
+          signal: controller.signal,
+        });
+        if (CHAT_BUSY_STATUSES.has(upstream.status) && attempt + 1 < maxAttempts) {
+          log.warn({ userId: uid, status: upstream.status, attempt: attempt + 1, model }, 'chat_model_busy_retrying');
+          // Let the refused response go before asking again.
+          if (upstream.body && typeof upstream.body.cancel === 'function') {
+            await upstream.body.cancel().catch((err) => log.warn({ err, userId: uid }, 'chat_busy_body_cancel_failed'));
+          }
+          clearTimeout(stallTimer);
+          clearTimeout(budgetTimer);
+          await sleep(CHAT_BUSY_WAITS_MS[attempt]);
+          continue;
+        }
+        if (!upstream.ok || !upstream.body) {
+          // The status and its enum only: a 400 can quote the prompt back, and it holds the retrieved transcript (Q29).
+          const errText = upstream.body ? await responseTextHead(upstream) : '';
+          throw vertexRefusal('vertex_stream_failed:', upstream.status, errText);
+        }
+        for await (const chunk of upstream.body) {
+          feeder.feed(decoder.decode(chunk, { stream: true }));
+          // The answer has started: from here only the whole budget bounds it.
+          if (emittedText) clearTimeout(stallTimer);
+        }
+        feeder.flush(); // trailing line with no terminating newline
+        if (attempt > 0) log.info({ userId: uid, model, attempt: attempt + 1 }, 'chat_answered_after_busy');
+        break;
+      } catch (err) {
+        // Nothing of this answer has been sent yet, and there's a try and time left: ask again (the next model,
+        // while the ladder has one), at once. A stall is its own wait.
+        if (stalled && !emittedText && attempt + 1 < maxAttempts && Date.now() < deadline) {
+          log.warn({ userId: uid, model, attempt: attempt + 1, firstTextMs }, 'chat_stream_stalled');
+          continue;
+        }
+        if (controller.signal.aborted) {
+          log.warn({ userId: uid, model, attempt: attempt + 1, stalled, emittedText }, 'chat_stream_gave_up');
+        }
+        throw err;
+      } finally {
+        clearTimeout(stallTimer);
+        clearTimeout(budgetTimer);
+      }
     }
-    feeder.flush(); // trailing line with no terminating newline
 
     // Diagnostic: retrieval succeeded (citations sent) but the model stream
     // yielded no text. If this fires after the CRLF fix, the cause is upstream
@@ -543,11 +736,11 @@ async function handleChatStream({ uid, body, apiKey, log: requestLog, res }) {
     }
     res.write(`event: done\ndata: {}\n\n`);
   } catch (err) {
-    log.error({ err }, 'chat_stream_failed');
+    log.error({ err, userId: uid }, 'chat_stream_failed');
     res.write(`event: error\ndata: ${JSON.stringify({ error: 'stream_failed' })}\n\n`);
   } finally {
     res.end();
   }
 }
 
-module.exports = { handleSearch, handleChatStream, hybridSearch, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };
+module.exports = { chatModels, noteOverview, CHAT_CAP_MESSAGE, handleSearch, handleChatStream, hybridSearch, chatRequestBody, MAX_QUESTION_CHARS, embedQuery, buildChatPrompt, redactHits, parseSseDataLine, createSseLineFeeder };

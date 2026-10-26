@@ -41,7 +41,7 @@ beforeEach(async () => {
   await seedWorkspace('ws', 'u');
   await seedNote('n1', 'ws', 'u');
   await pool.query(`UPDATE notes SET status = 'chunking' WHERE id = 'n1'`);
-  geminiCall.callGeminiWithLadder = async () => ({
+  geminiCall.callGeminiWithLadder = async (req: any) => (lastRequest = req, {
     model: 'gemini-3.5-flash',
     rawText: JSON.stringify({ transcript: [{ speaker: 'A', text: 'hello', time: '00:05' }], gist: 'g', actionItems: ['a'], keyDecisions: [] }),
   });
@@ -51,6 +51,27 @@ afterAll(async () => {
   await transcoderDb.pool().end();
   await pool.end();
   await getPool().end();
+});
+
+let lastRequest: any;
+
+// RELEASE.md rev 11, LM4: the fast path asks one call for a 10-minute transcript and its summary, inside 16,384
+// tokens shared with the model's thinking. Its thinking is capped as the summarizer's is (both rungs take it).
+describe('fast path: the Gemini request', () => {
+  it("asks the ladder to cap thinking, and leaves each rung's field to it", async () => {
+    await (await run(async () => {})).done;
+    expect(lastRequest.thinking).toEqual({ budget: 2048 });
+    expect(lastRequest.generationConfig.thinkingConfig).toBeUndefined();
+    expect(lastRequest.generationConfig.maxOutputTokens).toBe(16384);
+  });
+
+  // Plan rev 12 S3: a hung attempt on a short clip is cut at a cap from the clip's length (62 s here: one full
+  // minute, 60 s + 9 s), not left to spend the whole 240 s budget.
+  it('caps one attempt by the clip length, inside the budget', async () => {
+    await (await run(async () => {})).done;
+    expect(lastRequest.attemptTimeoutMs).toBe(69_000);
+    expect(lastRequest.attemptTimeoutMs).toBeLessThan(lastRequest.deadlineMs);
+  });
 });
 
 describe("fast path: an earlier run's chapters", () => {

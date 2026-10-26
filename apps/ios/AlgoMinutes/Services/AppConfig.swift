@@ -9,23 +9,23 @@ enum AppConfig {
     static let billingBaseURLKey = "AlgoMinutesBillingBaseURL"
     static let updateURLKey = "AlgoMinutesUpdateURL"
     static let paywallEnabledKey = "AlgoMinutesPaywallEnabled"
+    static let inviteCodesEnabledKey = "AlgoMinutesInviteCodesEnabled"
 
-    /// PAYWALL_ENABLED per configuration. Off in Staging and Release until the
-    /// App Store products exist and purchases are verified (PR-32): a paywall
-    /// offering products that can't be bought is a dead end. Missing or not
-    /// "YES" means off.
+    /// PAYWALL_ENABLED per configuration: on in Debug, Staging (Apple's sandbox) and the App Store build. Missing
+    /// or not "YES" means off.
     static let paywallEnabled = paywallEnabled(info: Bundle.main.infoDictionary)
 
     static func paywallEnabled(info: [String: Any]?) -> Bool {
         flag(paywallEnabledKey, info: info)
     }
 
-    static let shareLinksEnabledKey = "AlgoMinutesShareLinksEnabled"
+    /// INVITE_CODES_ENABLED per configuration: the beta's invite codes (Debug and Staging). Off in the App Store
+    /// build (plan rev 12, Stage 3, I2), which shows nothing of the beta. Missing or not "YES" means off.
+    static let inviteCodesEnabled = inviteCodesEnabled(info: Bundle.main.infoDictionary)
 
-    /// SHARE_LINKS_ENABLED: whether the share sheet offers a public link. A link
-    /// opens on the public site, which has no viewer yet, so it's off in every
-    /// configuration until it does. Missing or not "YES" means off.
-    static let shareLinksEnabled = flag(shareLinksEnabledKey, info: Bundle.main.infoDictionary)
+    static func inviteCodesEnabled(info: [String: Any]?) -> Bool {
+        flag(inviteCodesEnabledKey, info: info)
+    }
 
     /// A build-setting flag carried in Info.plist: on only when exactly "YES".
     static func flag(_ key: String, info: [String: Any]?) -> Bool {

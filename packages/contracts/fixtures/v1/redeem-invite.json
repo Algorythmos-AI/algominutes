@@ -1,0 +1,4 @@
+{
+  "with_notetaker": { "entitlement": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 600, "usedMinutes": 0, "remainingMinutes": 600, "overQuota": false, "source": "grant", "rail": null }, "grantEndsAt": "2026-10-30T00:00:00.000Z", "notetaker": true },
+  "until_revoked": { "entitlement": { "state": "active", "plan": "pro", "billingPeriod": "2026-09", "includedMinutes": 1500, "usedMinutes": 0, "remainingMinutes": 1500, "overQuota": false, "source": "grant" }, "grantEndsAt": null, "notetaker": false }
+}

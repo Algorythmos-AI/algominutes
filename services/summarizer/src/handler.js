@@ -7,6 +7,7 @@ const { Pool } = require('pg');
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }
@@ -19,11 +20,22 @@ const summaryOutput = loadShared('summary-output.cjs');
 // Past this, a recording has sections worth navigating: the summary gets
 // chapters. (The transcoder's fast path, which writes its own summary, covers
 // everything shorter.)
+// Summary generation limits (RELEASE.md rev 11, LM4): both ladder rungs accept these (spike S1).
+const MAX_OUTPUT_TOKENS = 16384;
+const MAX_OUTPUT_TOKENS_WITH_CHAPTERS = 65536;
+const THINKING_BUDGET = 2048;
+// The ladder's time: the base budget, plus 2 ms a transcript character (a 4-hour meeting is about 220k), up to
+// 600 s, inside the service's 900 s timeout.
+const SUMMARY_DEADLINE_MAX_MS = 600_000;
+function summaryDeadlineMs(transcriptChars, baseMs) {
+  return Math.min(SUMMARY_DEADLINE_MAX_MS, baseMs + transcriptChars * 2);
+}
 const CHAPTERS_MIN_MS = 10 * 60 * 1000;
 // The final write goes through the repo layer (CLAUDE.md §1): this service
 // runs under tsx, so it imports @algominutes/db's TypeScript directly.
 const { markSummaryReady } = require('@algominutes/db');
 const terminalHooks = require('./terminal-hooks');
+const { timeToSummary } = require('./slo');
 
 let _pool = null;
 function pool() {
@@ -35,7 +47,11 @@ function pool() {
 }
 
 let _firestoreReady = false;
-function firestore() {
+// A caller's own Firestore (deps.firestore: the tests' fake), else the app's. The integration test of the
+// "No speech was found" failure used the real one, which with no credentials in CI waited on the network: once
+// 21 s, past the test's 20 s (2026-10-01).
+function firestore(deps) {
+  if (deps && deps.firestore) return deps.firestore;
   if (!_firestoreReady) {
     if (!getApps().length) initializeApp();
     _firestoreReady = true;
@@ -63,15 +79,16 @@ function fmtTime(ms) {
  * record the failure must not mask the original error. The one exception is
  * `retryOnPgError` (see note-terminal).
  */
-async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null }) {
+async function markNoteFailed({ noteId, workspaceId, message, log, retryOnPgError = false, refund = null, traceId = null, deadLetter = null, deps = null }) {
   return sharedNoteTerminal.markNoteFailed({
     pool: pool(),
-    firestore: firestore(),
+    firestore: firestore(deps),
     noteId, workspaceId, message, log,
     event: 'summarizer_mark_failed',
     retryOnPgError,
     refund,
     traceId,
+    deadLetter,
   });
 }
 
@@ -95,7 +112,9 @@ async function handle(payload, deps) {
     // (deleted mid-pipeline) or not in this workspace is acknowledged, not
     // retried, and nothing is spent on it.
     const noteRes = await client.query(
-      `SELECT summary_generation, summary_template, author_uid FROM notes
+      `SELECT summary_generation, summary_template, author_uid, queued_at, status,
+              COALESCE(duration_sec_probed, duration_sec) AS recording_sec
+         FROM notes
         WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
       [noteId, workspaceId],
     );
@@ -106,6 +125,15 @@ async function handle(payload, deps) {
     }
     // Every later line carries the note's owner and workspace (CLAUDE.md §1).
     log = log.child({ userId: noteRow.author_uid, workspaceId });
+
+    // A task delivered again after its summary went in (Cloud Tasks delivers at least once). A run that is
+    // wanted always finds the note at 'summarizing': the pipeline's hand-off and a regenerate's claim both set
+    // it. Running again on a 'ready' note paid for a second summary, replaced the first, and gave the action
+    // items new ids, which now would also untick them.
+    if (noteRow.status === 'ready') {
+      log.info({ noteId, summaryGeneration: noteRow.summary_generation }, 'summarizer_replay_note_already_ready');
+      return;
+    }
 
     const { rows } = await client.query(
       `SELECT speaker_tag AS "speakerTag", speaker_name AS "speakerName",
@@ -131,6 +159,7 @@ async function handle(payload, deps) {
       noteId, workspaceId, message: 'No speech was found in this recording.', log, retryOnPgError: true,
       refund: regeneration ? null : terminalHooks.summaryRefund(noteId),
       traceId,
+      deps,
     });
     return;
   }
@@ -182,7 +211,8 @@ async function handle(payload, deps) {
   const lastMs = lines[lines.length - 1].endMs || lines[lines.length - 1].startMs || 0;
   const wantChapters = lastMs >= CHAPTERS_MIN_MS;
   const parts = [
-    { text: chosen.promptBody + (wantChapters ? sharedTemplates.CHAPTERS_INSTRUCTION : '') },
+    // The instruction names where the recording ends, so the chapters reach it (summary-templates.cjs).
+    { text: chosen.promptBody + (wantChapters ? sharedTemplates.chaptersInstruction(fmtTime(lastMs)) : '') },
     { text: `\n\nTranscript:\n${transcriptStr}\n` },
   ];
 
@@ -191,14 +221,21 @@ async function handle(payload, deps) {
   // transcript back. The new prompt drops the echo; responseSchema
   // pins the shape so a degraded model can't sneak through; the
   // bumped budget gives genuinely long bullet/decision lists room.
+  //
+  // RELEASE.md rev 11, LM4. gemini-3.5-flash's thinking tokens count toward maxOutputTokens, and were uncapped:
+  // on a long meeting they ate the room the chapters (written last) needed. Thinking is capped, a meeting with
+  // chapters gets the model's whole output cap, and the ladder gets time in proportion to the transcript (the
+  // service's own timeout is 900 s). The cap's field differs by model family, and each refuses the other's: the
+  // ladder picks it per rung (models.cjs thinkingConfigFor; `thinking` below).
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts,
-    deadlineMs: sharedIntelligence.RETRY_DEADLINE_MS,
+    deadlineMs: summaryDeadlineMs(transcriptStr.length, sharedIntelligence.RETRY_DEADLINE_MS),
     log,
+    thinking: { budget: THINKING_BUDGET },
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: wantChapters ? sharedTemplates.withChapters(chosen.responseSchema) : chosen.responseSchema,
-      maxOutputTokens: 16384,
+      maxOutputTokens: wantChapters ? MAX_OUTPUT_TOKENS_WITH_CHAPTERS : MAX_OUTPUT_TOKENS,
     },
   });
   if (!rawText) throw error || new Error('gemini_empty');
@@ -234,7 +271,7 @@ async function handle(payload, deps) {
   // transaction), then the Firestore mirror: notes-repo markSummaryReady.
   // The generation read above is re-checked at the write, because the guard
   // before Gemini can't see a regenerate claimed during the call.
-  const result = await markSummaryReady(firestore(), {
+  const result = await markSummaryReady(firestore(deps), {
     noteId,
     workspaceId,
     summary: { gist: parsed.gist, actionItems: parsed.actionItems, keyDecisions: parsed.keyDecisions, chapters: safeChapters },
@@ -257,7 +294,14 @@ async function handle(payload, deps) {
   // A7.3: the note is `ready`, and markSummaryReady wrote its "ready" notice in
   // the same transaction and enqueued it (note-notices.cjs): once per summary,
   // so a replay of this task tells nobody twice.
-  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null }, 'summarizer_complete');
+  const timing = timeToSummary({
+    queuedAt: noteRow.queued_at,
+    recordingSec: noteRow.recording_sec,
+    regeneration: summaryGeneration !== undefined && summaryGeneration !== null,
+  });
+  log.info({ noteId, model, lines: lines.length, noticeId: result.notice ? result.notice.id : null, ...timing.fields }, 'summarizer_complete');
+  // SLO 4 (docs/SLO.md): the alert counts these (alerting.tf, time_to_summary_slo_missed).
+  if (timing.missed) log.warn({ noteId, ...timing.fields }, 'time_to_summary_slo_missed');
 }
 
-module.exports = { handle, markNoteFailed, pool };
+module.exports = { handle, markNoteFailed, pool, timeToSummary };

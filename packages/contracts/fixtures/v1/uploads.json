@@ -1,0 +1,19 @@
+{
+  "session": {
+    "uploadId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+    "sessionUri": "https://storage.googleapis.com/upload/storage/v1/b/example-recordings/o?uploadType=resumable&upload_id=EXAMPLE",
+    "storagePath": "recordings/workspace_u1/n1.m4a",
+    "chunkSize": 8388608,
+    "expiresAt": "2026-10-07T00:00:00.000Z"
+  },
+  "status": {
+    "uploadId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+    "receivedBytes": 8388608,
+    "complete": false
+  },
+  "complete": {
+    "uploadId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+    "storagePath": "recordings/workspace_u1/n1.m4a",
+    "complete": true
+  }
+}

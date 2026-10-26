@@ -33,16 +33,16 @@ export function nextPeriodStart(billingPeriod: string): Date | null {
   return new Date(Date.UTC(Number(m[1]), Number(m[2]), 1));
 }
 
-/** The quota message without a paywall (nothing is sold in the beta): when the minutes come back, or where to ask. */
+/** The quota message without a paywall (nothing is sold in the beta): minutes come from an invite code, or this month's come back. */
 export function quotaMessage(e: EntitlementResponse | null): string {
   if (!e || e.includedMinutes == null || e.includedMinutes <= 0) {
-    return "Processing isn't included on your account right now. You can reach us at support@algorythmos.com.";
+    return 'Recording minutes come with an invite code. Enter yours in Settings, then try again.';
   }
   const minutes = Math.round(e.includedMinutes).toLocaleString('en-AU');
   const reset = nextPeriodStart(e.billingPeriod);
-  if (!reset) return `You've used this month's ${minutes} included minutes. They reset at the start of next month.`;
+  if (!reset) return `You've used this month's ${minutes} included minutes. They reset at the start of next month, or a new invite code adds more (Settings).`;
   const day = new Intl.DateTimeFormat('en-AU', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(reset);
-  return `You've used this month's ${minutes} included minutes. They reset on ${day}.`;
+  return `You've used this month's ${minutes} included minutes. They reset on ${day}, or a new invite code adds more (Settings).`;
 }
 
 export function failureMessage(f: KickoffFailure): string {

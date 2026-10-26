@@ -7,7 +7,7 @@
  * State → included minutes:
  *   trialing   → Pro-level minutes (full features, bounded — trialIncludedMinutes)
  *   active     → the paid plan's minutes (monthlyIncludedMinutes)
- *   free_floor → FREE_FLOOR_MINUTES (config, UNSET → fails safe to 0)
+ *   free_floor → FREE_FLOOR_MINUTES (per environment, configuredFreeFloorMinutes; UNSET → fails safe to 0)
  *
  * A live manual grant (entitlement_grants, internal testers) counts as `active`
  * on the granted plan, unless a real paid subscription is already active.
@@ -17,10 +17,11 @@ import {
   EntitlementState,
   monthlyIncludedMinutes,
   trialIncludedMinutes,
-  freeFloorMinutes,
+  type EntitlementSource,
+  type SubscriptionRail,
 } from '@algominutes/contracts';
 import { usedMinutes, currentBillingPeriod } from './usage-repo.js';
-import { getSubscription, deriveState } from './subscriptions-repo.js';
+import { getSubscription, deriveState, trialOnFirstUse } from './subscriptions-repo.js';
 import { getActiveGrant } from './entitlement-grants-repo.js';
 
 export interface Entitlement {
@@ -33,32 +34,65 @@ export interface Entitlement {
   remainingMinutes: number; // Infinity when includedMinutes is null
   overQuota: boolean;
   trialEndsAt: string | null; // ISO; set only while trialing (reverse trial end)
+  /** Where it comes from: a grant reports `active` like a subscription (EntitlementResponse.source). */
+  source: EntitlementSource;
+  /** The store a subscription is billed on; null for anything else. */
+  rail: SubscriptionRail | null;
 }
 
-export async function resolveEntitlement(uid: string): Promise<Entitlement> {
+const RAILS: readonly string[] = ['apple_storekit', 'stripe', 'google_play'];
+
+/**
+ * The free floor's minutes, per environment (FREE_FLOOR_MINUTES; plan rev 12, Stage 3: 120 in prod for 1.0, so
+ * a reviewer and every new user can record before buying). Unset on staging, where an invite code is how a guest
+ * gets minutes. Anything but a whole number from 0 to 1,000 is 0: a typo fails safe, never an unbounded bill.
+ */
+export function configuredFreeFloorMinutes(env: Record<string, string | undefined> = process.env): number {
+  const v = String(env.FREE_FLOOR_MINUTES ?? '').trim();
+  if (!/^\d{1,4}$/.test(v)) return 0;
+  const n = Number(v);
+  return n <= 1000 ? n : 0;
+}
+
+/**
+ * `db` is the pool by default. markQueued passes its transaction's client, so
+ * the quota it checks is the one it debits against (under its per-user lock).
+ */
+export async function resolveEntitlement(
+  uid: string,
+  opts: { db?: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } } = {},
+): Promise<Entitlement> {
   const period = currentBillingPeriod();
-  const sub = await getSubscription(uid);
-  const derived = deriveState(sub);
-  const grant = derived === 'active' ? null : await getActiveGrant(uid);
+  const sub = await getSubscription(uid, opts.db);
+  // A user with no row yet starts the trial at first use, unless it's switched off.
+  const derived = sub || trialOnFirstUse() ? deriveState(sub) : 'free_floor';
+  const grant = derived === 'active' ? null : await getActiveGrant(uid, new Date(), opts.db);
   const state: EntitlementState = grant ? 'active' : derived;
 
   let plan: PlanId;
   let included: number | null;
+  let source: EntitlementSource;
+  let rail: SubscriptionRail | null = null;
   if (grant) {
     plan = grant.plan;
     included = grant.includedMinutes ?? monthlyIncludedMinutes(grant.plan);
+    source = 'grant';
   } else if (state === 'active') {
     plan = ((sub?.plan as PlanId) || 'pro');
     included = monthlyIncludedMinutes(plan);
+    source = 'subscription';
+    rail = sub?.source && RAILS.includes(sub.source) ? (sub.source as SubscriptionRail) : null;
   } else if (state === 'trialing') {
     plan = 'pro'; // full features during the reverse trial
     included = trialIncludedMinutes();
+    source = 'trial';
   } else {
     plan = 'free';
-    included = freeFloorMinutes(); // UNSET config → 0 (fail safe)
+    included = configuredFreeFloorMinutes(); // UNSET config → 0 (fail safe)
+    source = 'free';
   }
 
-  const used = await usedMinutes(uid, period);
+  const used = await usedMinutes(uid, period, opts.db);
   const remaining = included == null ? Infinity : Math.max(0, included - used);
   return {
     uid,
@@ -70,6 +104,8 @@ export async function resolveEntitlement(uid: string): Promise<Entitlement> {
     remainingMinutes: remaining,
     overQuota: included != null && used >= included,
     trialEndsAt: state === 'trialing' && sub?.trial_end ? new Date(sub.trial_end).toISOString() : null,
+    source,
+    rail,
   };
 }
 
@@ -90,8 +126,8 @@ export class QuotaExceededError extends Error {
  * Assert a user may consume `requestedMinutes`. Call BEFORE queuing transcode
  * (A9.2 — never pay Google for STT on over-quota work). Throws QuotaExceededError
  * if it would exceed the current entitlement. Note: on the free floor with an
- * UNSET FREE_FLOOR_MINUTES this is 0, so ALL metered work is blocked until the
- * number is set post-COGS (A9-pricing) — deliberate fail-safe, not a bug.
+ * UNSET FREE_FLOOR_MINUTES this is 0, so ALL metered work is blocked where the
+ * environment doesn't set it (staging's beta) — deliberate fail-safe, not a bug.
  */
 export async function assertCanMeter(uid: string, requestedMinutes: number): Promise<Entitlement> {
   const ent = await resolveEntitlement(uid);

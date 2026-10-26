@@ -17,8 +17,8 @@ processed. The first part is for testers; the rest is for whoever runs the beta.
 - You start as a **guest**: no sign-up. A guest's notes belong to that guest account only. To keep
   them, use **Settings → Create account** (Apple or Google): your notes move with you. Signing out as
   a guest deletes them, and the app says so first.
-- **Minutes are switched on by hand.** Before your first recording, open **Settings**, tap **User ID** to
-  copy it, and send it to whoever invited you. Until then a recording is refused for lack of minutes.
+- **Enter your invite code:** **Settings → Enter an invite code**, then the code whoever invited you sent
+  (`BETA-…`). It adds your recording minutes; if you record before entering it, the app asks for it.
 - The app asks for the microphone when you first record, and for notifications right after, so it can
   tell you when a note is ready.
 
@@ -32,12 +32,13 @@ what to try and what changed. Beyond that, the flows that matter most:
 - the note: summary, action items, transcript, and chapters on a long recording;
 - search across your notes, and chat with one note;
 - deleting a note, and deleting your account (Settings);
-- capturing another app's call: **Capture another app** when you start a recording, or in Control
-  Center long-press Screen Recording and choose AlgoMinutes. The app asks you to confirm everyone
+- capturing another app's call: **Record a call (Zoom, Teams, Meet)** when you start a recording, or in
+  Control Center long-press Screen Recording and choose AlgoMinutes. The app asks you to confirm everyone
   agreed before the capture becomes a note.
 
-This is a test environment and it can be reset. **Record only people who agreed, and nothing
-confidential.**
+Your notes are kept for the whole beta, and backed up (staging keeps data like production:
+docs/DECISIONS.md, 2026-09-29). The public release starts fresh: testers are told before then, with
+time to export. **Record only people who agreed, and nothing confidential.**
 
 ### Send feedback
 
@@ -52,7 +53,8 @@ confidential.**
 
 1. **App Store Connect → Users and Access:** invite them (internal testers must be team members; up to
    100). Then **TestFlight → Internal Testing →** your group → add them.
-2. When they send their User ID, grant minutes (`resume-staging-and-deploy.md` §4):
+2. Send them an invite code (`testflight-external.md`, "Invite codes"). Or, when they send their User ID,
+   grant minutes by hand (`resume-staging-and-deploy.md` §4):
 
    ```bash
    gcloud run jobs execute db-job --region australia-southeast1 --project algominutes-staging \
@@ -104,6 +106,6 @@ Every P0/P1 fix ships with a regression test.
 
 Kept here, and in What to Test when a tester would trip on one:
 
-- No purchases: the paywall is off in these builds, and minutes come from grants.
+- No purchases: the paywall is off in these builds, and minutes come from invite codes (or a grant).
 - Share links are off until a viewer is hosted. Exporting and sharing a file work.
 - iPhone only.

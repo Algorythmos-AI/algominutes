@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { setRetentionDays, recordTermsAcceptance, createSupportRequest, trackEvent } from '@algominutes/db';
+import { setRetentionDays, getRetentionDays, recordTermsAcceptance, createSupportRequest, trackEvent } from '@algominutes/db';
 import { SetRetentionRequest, AcceptTermsRequest, SupportRequest } from '@algominutes/contracts/schemas';
 
 // Bodies are validated with the published contract schemas (packages/contracts),
@@ -12,6 +12,9 @@ function recordEvent(req, event, props) {
     .catch((err) => req.log.warn({ err, event }, 'analytics_write_failed'));
 }
 
+/** A note id's shape (as the note routes' contracts require). */
+const NOTE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
 // A10 #5 — user-set note retention.
 export async function setRetentionRoute(req, res) {
   const parsed = SetRetentionRequest.safeParse(req.body ?? {});
@@ -19,6 +22,13 @@ export async function setRetentionRoute(req, res) {
   await setRetentionDays(req.uid, parsed.data.retentionDays);
   await recordEvent(req, 'retention_set', { days: parsed.data.retentionDays ?? 'keep' });
   return res.status(200).json({ ok: true });
+}
+
+// The account's retention, so every device shows the choice made on any of them (RELEASE.md PR 12b).
+// Only the caller's own row: the uid comes from the verified token.
+export async function getRetentionRoute(req, res) {
+  const retentionDays = await getRetentionDays(req.uid);
+  return res.status(200).json({ retentionDays });
 }
 
 // A10 #3 — timestamped, versioned Terms + Privacy acceptance at signup.
@@ -51,5 +61,10 @@ export async function supportRoute(req, res) {
     platform,
   });
   await recordEvent(req, 'support_requested', { kind, ...(platform ? { platform } : {}) });
+  // The alert that tells the owner someone asked for help (alerting.tf, RELEASE.md PR 15b). The id finds the
+  // request; the message stays in Postgres, never in a log line. The note id is the client's, unchecked by the
+  // contract: logged only when it has an id's shape, so no free text rides in with it.
+  const loggedNoteId = typeof noteId === 'string' && NOTE_ID.test(noteId) ? noteId : null;
+  req.log.info({ supportId: created.id, kind, platform: platform ?? null, noteId: loggedNoteId }, 'support_request_created');
   return res.status(201).json({ ok: true, id: created.id });
 }

@@ -31,13 +31,20 @@ export const ProcessCachedResponse = z
   .object({ success: z.literal(true), noteId: z.string(), cached: z.literal(true) })
   .openapi('ProcessCachedResponse');
 
-/** A duplicate kickoff of a note already being processed: nothing was changed. */
+/**
+ * A duplicate kickoff of a note already being processed: nothing was changed.
+ * With `held` (RELEASE.md rev 11, H6c): an uploaded recording over the minutes
+ * left, held for them ('awaiting_minutes', uncharged) and processed once minutes
+ * arrive. `status` is null then, so a client that predates `held` still reads it
+ * as accepted.
+ */
 export const ProcessInFlightResponse = z
   .object({
     success: z.literal(true),
     noteId: z.string(),
     status: z.enum(['queued', 'chunking', 'transcribing', 'summarizing']).nullable(),
     inFlight: z.literal(true),
+    held: z.literal(true).optional(),
   })
   .openapi('ProcessInFlightResponse');
 
@@ -63,6 +70,23 @@ export const NoteFeedbackRequest = z
 export const NoteFeedbackResponse = z
   .object({ ok: z.literal(true), noteId: z.string(), rating: z.number().int() })
   .openapi('NoteFeedbackResponse');
+
+// ── POST /v1/notes/action-items/status (action-item.js) ─────────────────────
+/** Tick (`done: true`) or untick one of a note's action items. `itemId` is the item's id from the note read. */
+export const ActionItemStatusRequest = z
+  .object({
+    noteId: z.string(),
+    workspaceId: z.string(),
+    itemId: z.string().uuid(),
+    done: z.boolean(),
+  })
+  .openapi('ActionItemStatusRequest');
+
+/** The item's status after the change: `done` or `open`. A manual edit of the summary keeps an unchanged item's
+ * tick; a rewrite by the model starts every item open. */
+export const ActionItemStatusResponse = z
+  .object({ ok: z.literal(true), noteId: z.string(), itemId: z.string(), status: z.enum(['open', 'done']) })
+  .openapi('ActionItemStatusResponse');
 
 // ── POST /v1/notes/regenerate-summary (regenerate-summary.js) ────────────────
 export const RegenerateSummaryRequest = z
@@ -121,4 +145,6 @@ export const ResolveDeadLetterResponse = z
 
 export type ProcessRequest = z.infer<typeof ProcessRequest>;
 export type NoteFeedbackRequest = z.infer<typeof NoteFeedbackRequest>;
+export type ActionItemStatusRequest = z.infer<typeof ActionItemStatusRequest>;
+export type ActionItemStatusResponse = z.infer<typeof ActionItemStatusResponse>;
 export type RegenerateSummaryRequest = z.infer<typeof RegenerateSummaryRequest>;

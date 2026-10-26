@@ -28,25 +28,52 @@
 
 import type { Firestore } from 'firebase-admin/firestore';
 import redaction from '@algominutes/ai/redaction.cjs';
+import loggerModule from '@algominutes/ai/logger.cjs';
 import { getPool } from './db';
+import { refusedUpdateOutcome } from './firestore-outcome';
+
+type Log = { error: (o: unknown, m?: string) => void };
+const defaultLog = (loggerModule as { logger: Log }).logger;
 
 const { redactLines } = redaction as {
   redactLines: (texts: string[]) => { texts: string[]; counts: Record<string, number> };
 };
 
-export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' }
+// 'awaiting_minutes' (held for minutes, RELEASE.md rev 11 H6) settles like a finish: the note can sit there for
+// weeks, so a mirror write it missed is repaired rather than showing "processing" until it resumes.
+export interface FinishedNote { noteId: string; workspaceId: string; status: 'ready' | 'error' | 'awaiting_minutes' }
 
-/** Notes that finished between `settledMs + windowMs` and `settledMs` ago, oldest first. */
-export async function listRecentlyFinishedNotes(input: { settledMs: number; windowMs: number; limit: number }): Promise<FinishedNote[]> {
+/** Where a page of finished notes ended: the next page starts after it. */
+export interface FinishedNotesCursor { updatedAt: string; noteId: string }
+
+/**
+ * Notes that finished between `settledMs + windowMs` and `settledMs` ago, newest first, a page at a time
+ * (audit Q20): pass the previous page's `next` as `after`; `next` is null on the last page. Paged by the
+ * (updated_at, id) watermark on the finished-notes index (migration 039), so every note in the window is
+ * seen however many there are. `updated_at` goes out as text, at full microsecond precision, so the
+ * watermark never skips a row that shares a millisecond.
+ *
+ * Newest first (plan rev 12 S7): a run cut off by its time budget has checked the notes no run has seen yet. Each
+ * note is in two 15-minute runs' windows; oldest-first spent the budget on the half the last run had checked, so
+ * under load the newest were cut every run and could age out unchecked. The index is read backwards.
+ */
+export async function listRecentlyFinishedNotes(input: {
+  settledMs: number; windowMs: number; limit: number; after?: FinishedNotesCursor | null;
+}): Promise<{ notes: FinishedNote[]; next: FinishedNotesCursor | null }> {
   const { rows } = await getPool().query(
-    `SELECT id AS "noteId", workspace_id AS "workspaceId", status FROM notes
-      WHERE status IN ('ready', 'error') AND deleted_at IS NULL
+    `SELECT id AS "noteId", workspace_id AS "workspaceId", status, updated_at::text AS "updatedAt" FROM notes
+      WHERE status IN ('ready', 'error', 'awaiting_minutes') AND deleted_at IS NULL
         AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND updated_at > NOW() - (($1::bigint + $2::bigint) * INTERVAL '1 millisecond')
-      ORDER BY updated_at LIMIT $3`,
-    [input.settledMs, input.windowMs, input.limit],
+        AND ($4::timestamptz IS NULL OR (updated_at, id) < ($4::timestamptz, $5::text))
+      ORDER BY updated_at DESC, id DESC LIMIT $3`,
+    [input.settledMs, input.windowMs, input.limit, input.after?.updatedAt ?? null, input.after?.noteId ?? ''],
   );
-  return rows;
+  const last = rows[rows.length - 1];
+  return {
+    notes: rows.map(({ noteId, workspaceId, status }) => ({ noteId, workspaceId, status })),
+    next: rows.length === input.limit && last ? { updatedAt: last.updatedAt, noteId: last.noteId } : null,
+  };
 }
 
 function clock(ms: number | null): string {
@@ -68,7 +95,7 @@ type Postgres = {
  * One snapshot of the note. Its content is read only if `docStatus` disagrees
  * with a 'ready' note: most candidates are in step, and cost one query.
  */
-async function readPostgres(noteId: string, workspaceId: string, docStatus: unknown): Promise<Postgres | null> {
+async function readPostgres(noteId: string, workspaceId: string, docStatus: unknown, log: Log): Promise<Postgres | null> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -82,8 +109,8 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
     if (note.status === 'ready' && docStatus !== 'ready') {
       const [summary, items, decisions, lines] = [
         await client.query('SELECT gist, topics, chapters FROM summaries WHERE note_id = $1', [noteId]),
-        await client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
-        await client.query('SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY created_at, id', [noteId]),
+        await client.query('SELECT text FROM action_items WHERE note_id = $1 ORDER BY position NULLS LAST, created_at, id', [noteId]),
+        await client.query('SELECT text FROM key_decisions WHERE note_id = $1 ORDER BY position NULLS LAST, created_at, id', [noteId]),
         await client.query(
           `SELECT speaker_tag, chunk_id, start_ms, text FROM transcript_lines
             WHERE note_id = $1 ORDER BY start_ms, id LIMIT 201`,
@@ -94,9 +121,9 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
       const s = summary.rows[0];
       if (s) {
         // summaries.topics holds the generated action items in order; an edit
-        // rewrites only the rows. Rows are read by created_at, then id, as the
-        // export and share views read them. One writer's rows share created_at,
-        // so among them that's the id's order, not the model's (BLOCKERS).
+        // rewrites only the rows. Rows are read by their position (migration
+        // 038, audit Q22), as the note, export and share views read them, and
+        // rows from before it by created_at, then id.
         const topics = Array.isArray(s.topics) && s.topics.every((t: unknown) => typeof t === 'string') ? s.topics : null;
         out.summary = {
           gist: s.gist || '',
@@ -123,8 +150,9 @@ async function readPostgres(noteId: string, workspaceId: string, docStatus: unkn
     await client.query('COMMIT');
     return out;
   } catch (err: any) {
-    // The sweep logs the thrown error; a failed rollback rides along on it.
-    await client.query('ROLLBACK').catch((rollbackErr) => { if (err && typeof err === 'object') err.rollbackError = rollbackErr; });
+    // The sweep logs the thrown error; a failed rollback is logged here.
+    await client.query('ROLLBACK')
+      .catch((rollbackErr) => log.error({ err: rollbackErr, noteId, workspaceId }, 'mirror_repair_rollback_failed'));
     throw err;
   } finally {
     client.release();
@@ -136,7 +164,7 @@ export type RepairOutcome = 'in_step' | 'repaired' | 'moved' | 'gone' | 'not_fin
 export async function repairNoteMirror(
   firestore: Firestore,
   input: { noteId: string; workspaceId: string },
-  opts: { settledMs?: number; now?: number } = {},
+  opts: { settledMs?: number; now?: number; log?: Log } = {},
 ): Promise<RepairOutcome> {
   const settledMs = opts.settledMs ?? 10 * 60 * 1000;
   const ref = firestore.doc(`workspaces/${input.workspaceId}/notes/${input.noteId}`);
@@ -145,13 +173,18 @@ export async function repairNoteMirror(
   // A client's Retry writes the doc before Postgres; give it time to land.
   if (snap.updateTime && (opts.now ?? Date.now()) - snap.updateTime.toMillis() < settledMs) return 'doc_recent';
   const doc = snap.data() || {};
-  const pg = await readPostgres(input.noteId, input.workspaceId, doc.status);
+  const pg = await readPostgres(input.noteId, input.workspaceId, doc.status, opts.log ?? defaultLog);
   if (!pg) return 'gone';
-  if (pg.status !== 'ready' && pg.status !== 'error') return 'not_finished';
-  if (doc.status === pg.status) return 'in_step';
+  if (pg.status !== 'ready' && pg.status !== 'error' && pg.status !== 'awaiting_minutes') return 'not_finished';
+  // A failed note's message too (audit Q21): a mirror written when Postgres's own write failed carries the
+  // caller's message, and a later failure's message never reached the doc. Only when Postgres has one: an
+  // older row without it never blanks the doc's.
+  const messageBehind = pg.status === 'error' && pg.errorMessage != null && (doc.errorMessage ?? null) !== pg.errorMessage;
+  if (doc.status === pg.status && !messageBehind) return 'in_step';
 
   const patch: Record<string, unknown> = { status: pg.status, updatedAt: new Date().toISOString() };
   if (pg.status === 'error') patch.errorMessage = pg.errorMessage;
+  if (pg.status === 'awaiting_minutes') patch.errorMessage = null;
   if (pg.summary) {
     patch['summary.gist'] = pg.summary.gist;
     patch['summary.actionItems'] = pg.summary.actionItems;
@@ -164,11 +197,11 @@ export async function repairNoteMirror(
   }
   try {
     await ref.update(patch, { lastUpdateTime: snap.updateTime });
-  } catch (err: any) {
-    // FAILED_PRECONDITION: a writer mirrored since the read; it is newer.
-    if (err && (err.code === 9 || /FAILED_PRECONDITION/.test(String(err.message)))) return 'moved';
-    // NOT_FOUND: the note was deleted since the read.
-    if (err && (err.code === 5 || /\bNOT_FOUND\b/.test(String(err.message)))) return 'gone';
+  } catch (err: unknown) {
+    // silent-catch-ok: a newer mirror write or a deleted note is the outcome 'moved' or 'gone', not a failure
+    // (firestore-outcome.ts, pinned against the emulator); anything else is thrown.
+    const refused = refusedUpdateOutcome(err);
+    if (refused) return refused;
     throw err;
   }
   return 'repaired';

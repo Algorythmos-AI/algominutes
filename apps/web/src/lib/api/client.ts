@@ -21,6 +21,7 @@ import {
   CompleteUploadResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  DeadLettersResponse,
   DeleteAccountResponse,
   DeleteNoteRequest,
   DeleteNoteResponse,
@@ -28,6 +29,8 @@ import {
   ExportNoteRequest,
   NoteAudioUrlRequest,
   NoteAudioUrlResponse,
+  ActionItemStatusRequest,
+  ActionItemStatusResponse,
   NoteFeedbackRequest,
   NoteFeedbackResponse,
   NoteReadPageResponse,
@@ -42,6 +45,8 @@ import {
   RegenerateSummaryRequest,
   RegenerateSummaryResponse,
   RegisterPushTokenRequest,
+  ResolveDeadLetterResponse,
+  RetentionResponse,
   SearchRequest,
   SearchResponse,
   SetNoteSpeakersRequest,
@@ -51,14 +56,23 @@ import {
   ShareCreateResponse,
   SharedNoteRequest,
   SharedNoteResponse,
+  ShareListRequest,
+  ShareListResponse,
   ShareRevokeRequest,
   ShareRevokeResponse,
+  TextNoteCreateRequest,
+  TextNoteResponse,
   SupportCreatedResponse,
   SupportRequest,
   TrackEventRequest,
   UpdateNoteRequest,
   UpdateNoteResponse,
   UploadSessionStatus,
+  CreateMeetingBotRequest,
+  MeetingBotResponse,
+  CancelMeetingBotResponse,
+  RedeemInviteRequest,
+  RedeemInviteResponse,
 } from '@algominutes/contracts';
 import { CLIENT_HEADER_VALUE, type ApiOrigins } from './config';
 import { ApiError, errorFor } from './errors';
@@ -182,8 +196,11 @@ export function createApiClient(opts: ApiClientOptions) {
   return {
     // Account, plan and app settings
     entitlement: () => get('/v1/entitlement', EntitlementResponse),
+    // A beta invite code: time-limited Pro minutes (docs/plans/RELEASE.md PR 2).
+    redeemInvite: (body: RedeemInviteRequest) => post('/v1/beta/redeem', body, RedeemInviteResponse),
     appConfig: () => get('/v1/config', AppConfigResponse),
     acceptTerms: (body: AcceptTermsRequest) => post('/v1/account/accept-terms', body, OkResponse),
+    retention: () => get('/v1/account/retention', RetentionResponse),
     setRetention: (body: SetRetentionRequest) => post('/v1/account/retention', body, OkResponse),
     deleteAccount: () => post('/v1/account/delete', {}, DeleteAccountResponse, { timeoutMs: 120_000 }),
     support: (body: SupportRequest) => post('/v1/support', body, SupportCreatedResponse),
@@ -197,11 +214,14 @@ export function createApiClient(opts: ApiClientOptions) {
     readNotePage: (body: NoteReadRequest & { cursor: string }) => post('/v1/notes/read', body, NoteReadPageResponse),
     updateNote: (body: UpdateNoteRequest) => post('/v1/notes/update', body, UpdateNoteResponse),
     deleteNote: (body: DeleteNoteRequest) => post('/v1/notes/delete', body, DeleteNoteResponse),
+    // A text note (a scan, a PDF, an imported file) from text extracted on the device (plan rev 12 R12.8).
+    createTextNote: (body: TextNoteCreateRequest) => post('/v1/notes/text', body, TextNoteResponse),
     noteAudioUrl: (body: NoteAudioUrlRequest) => post('/v1/notes/audio-url', body, NoteAudioUrlResponse),
     setSpeakers: (noteId: string, body: SetNoteSpeakersRequest) =>
       post(`/v1/notes/${encodeURIComponent(noteId)}/speakers`, body, SetNoteSpeakersResponse),
     regenerateSummary: (body: RegenerateSummaryRequest) => post('/v1/notes/regenerate-summary', body, RegenerateSummaryResponse),
     noteFeedback: (body: NoteFeedbackRequest) => post('/v1/notes/feedback', body, NoteFeedbackResponse),
+    setActionItemDone: (body: ActionItemStatusRequest) => post('/v1/notes/action-items/status', body, ActionItemStatusResponse),
     /** The exported document (DOCX) and the file name the server gave it. */
     exportNote: async (body: ExportNoteRequest): Promise<{ blob: Blob; fileName: string | null }> => {
       const { res } = await send({ method: 'POST', path: '/v1/export', body, timeoutMs: 60_000 }, '*/*');
@@ -209,6 +229,22 @@ export function createApiClient(opts: ApiClientOptions) {
       const name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1] ?? /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? null;
       return { blob: await res.blob(), fileName: name ? safeDecode(name) : null };
     },
+
+    // Online meetings (the notetaker). 503 feature_disabled while GET /v1/config
+    // notetaker.bot is off, which surfaces as an ApiError like any other 5xx.
+    createMeetingBot: (body: CreateMeetingBotRequest) => post('/v1/meetings/bots', body, MeetingBotResponse),
+    cancelMeetingBot: (botId: string) =>
+      post(`/v1/meetings/bots/${encodeURIComponent(botId)}/cancel`, {}, CancelMeetingBotResponse),
+
+    // Operators only (the api's ADMIN_UIDS; anyone else gets 403): dead letters, SLO 5.
+    deadLetters: (opts: { includeResolved?: boolean; limit?: number } = {}) => {
+      const q = new URLSearchParams();
+      if (opts.includeResolved) q.set('includeResolved', 'true');
+      if (opts.limit) q.set('limit', String(opts.limit));
+      const qs = q.toString();
+      return get(`/v1/admin/dead-letters${qs ? `?${qs}` : ''}`, DeadLettersResponse);
+    },
+    resolveDeadLetter: (id: number) => post(`/v1/admin/dead-letters/${encodeURIComponent(String(id))}/resolve`, {}, ResolveDeadLetterResponse),
 
     // Recording and import
     createUpload: (body: CreateUploadSessionRequest) => post('/v1/uploads', body, CreateUploadSessionResponse),
@@ -243,7 +279,7 @@ export function createApiClient(opts: ApiClientOptions) {
         }
       } catch (err) {
         if (err instanceof ApiError) throw err; // our own verdict on a frame (invalid_response)
-        // The caller's Stop ends the stream quietly; our timeout or a dropped connection says so.
+        // silent-catch-ok: the caller's Stop ends the stream quietly; our timeout or a dropped connection says so.
         if (signal?.aborted) return;
         yield { type: 'error', error: transportError(err, traceId).kind === 'timeout' ? 'timeout' : 'stream_ended' };
         return;
@@ -256,6 +292,7 @@ export function createApiClient(opts: ApiClientOptions) {
     // Sharing (off in the apps for now: SHARE_LINKS_ENABLED)
     createShare: (body: ShareCreateRequest) => post('/v1/shares/create', body, ShareCreateResponse),
     revokeShare: (body: ShareRevokeRequest) => post('/v1/shares/revoke', body, ShareRevokeResponse),
+    listShares: (body: ShareListRequest) => post('/v1/shares/list', body, ShareListResponse),
     readShare: (body: SharedNoteRequest) => post('/v1/shares/read', body, SharedNoteResponse, { auth: false }),
 
     // Billing (the billing service's own origin; not on sale in the beta)

@@ -1,0 +1,468 @@
+#!/usr/bin/env node
+// The pipeline end to end on staging (RELEASE.md PR 14; rev 9's S2-PR2). One real
+// recording through every service, sent as the clients send it, and checked in
+// both stores:
+//   1. an anonymous Firebase sign-up, and the e2e invite code redeemed (staging's
+//      trial is off, so a new user has no minutes without one);
+//   2. an N-minute recording (tests/fixtures/e2e-speech.ogg, looped by ffmpeg)
+//      uploaded as the apps upload: POST /v1/uploads, the resumable session in
+//      chunks, then /complete;
+//   3. the note's Firestore doc written with the user's own token, as the apps
+//      write it (the rules admit exactly those keys), then POST /v1/process;
+//   4. the note ready within READY_MS (Firestore, polled with the user's token),
+//      and how long it took (SLO-4);
+//   5. Postgres agrees (POST /v1/notes/read): ready, a summary, a transcript; a
+//      recording of 15 minutes or more has chapters;
+//   6. with the project's logs readable (LOG_PROJECT): the run's one traceId is in
+//      the api's, the transcoder's, the summarizer's and the embedder's logs, and
+//      no dead letter was recorded for the note;
+//   7. the account is deleted, whatever failed before, so no test user is left.
+// With E2E_DELETE_MID (the 2-minute run), a second copy is uploaded as its own note, kicked off and deleted at
+// once, while the pipeline has it: its doc must never come back as the workers reach it, Postgres must not have
+// it, and nothing is dead-lettered for it.
+//
+// Env: API_URL (the api's run.app URL), FIREBASE_API_KEY, FIREBASE_PROJECT_ID,
+//   E2E_INVITE_CODE, MINUTES (default 2), READY_MS (default 10 minutes plus 20 s per
+//   recorded minute), LOG_PROJECT (optional: without it the log checks say they
+//   were skipped). Needs ffmpeg, and gcloud for the log checks.
+// Exit 1 on any failure. The ID token, the invite code and the upload's session URI
+// never reach the output.
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const IDENTITY = 'https://identitytoolkit.googleapis.com/v1';
+const FIRESTORE = 'https://firestore.googleapis.com/v1';
+export const FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/e2e-speech.ogg');
+/** The services a recording passes through, each of which must log the run's traceId. */
+export const TRACED_SERVICES = ['api', 'transcoder', 'summarizer', 'embedder'];
+// Ten minutes or less goes through the transcoder's fast path (services/transcoder/src/route.js,
+// FAST_PATH_MAX_SEC), which writes the summary itself: the summarizer never sees the note.
+export const FAST_PATH_MAX_MINUTES = 10;
+export const tracedServices = (minutes) =>
+  (minutes <= FAST_PATH_MAX_MINUTES ? TRACED_SERVICES.filter((s) => s !== 'summarizer') : TRACED_SERVICES);
+/** A recording this long or longer is summarised with chapters. */
+export const CHAPTERS_FROM_MINUTES = 15;
+
+// RELEASE.md rev 11, LM3 (H12): long meetings, proven. From an hour, a meeting must come back with at least 8
+// chapters, the last past three quarters of the way through (chapters come last in the summary, so they're what
+// a cut-off answer loses), no salvaged summary, and inside the time bar (rev 11, R11.3).
+export const LONG_FROM_MINUTES = 60;
+export const LONG_MIN_CHAPTERS = 8;
+/** Seconds from the kickoff to ready, at most: 1 h in 10 min, 2 h in 15, up to 4 h in 25. */
+export const readyTargetSec = (minutes) => (minutes <= 60 ? 600 : minutes <= 120 ? 900 : 1500);
+
+/** What each length is uploaded as: the formats the apps make (Chrome WebM Opus, the iPhone's ADTS AAC). */
+export const FORMATS = {
+  ogg: { ext: 'ogg', mime: 'audio/ogg', codec: ['-c:a', 'libopus', '-b:a', '24k'] },
+  webm: { ext: 'webm', mime: 'audio/webm', codec: ['-c:a', 'libopus', '-b:a', '32k', '-f', 'webm'] },
+  adts: { ext: 'aac', mime: 'audio/aac', codec: ['-c:a', 'aac', '-b:a', '64k', '-f', 'adts'] },
+};
+export const formatFor = (minutes) => ({ 2: 'ogg', 15: 'adts', 60: 'webm', 120: 'adts', 180: 'webm', 240: 'adts' })[minutes] ?? 'ogg';
+
+// A meeting's worth of talk that never repeats, moving through distinct topics, so the summarizer has real
+// chapters to find. Deterministic, so a failure can be rerun.
+const TOPICS = [
+  ['the quarterly budget', 'spending', 'forecast', 'invoices', 'the finance team'],
+  ['hiring for the support team', 'candidates', 'interviews', 'offers', 'onboarding'],
+  ['the product roadmap', 'features', 'priorities', 'the release', 'customer feedback'],
+  ['the office move', 'the new lease', 'furniture', 'the moving date', 'parking'],
+  ['the security review', 'passwords', 'access', 'the audit', 'backups'],
+  ['the marketing campaign', 'the launch video', 'social posts', 'the newsletter', 'the budget for ads'],
+  ['customer complaints', 'refunds', 'response times', 'the help desk', 'the survey'],
+  ['the supplier contract', 'pricing', 'delivery dates', 'penalties', 'the renewal'],
+  ['training for managers', 'workshops', 'coaching', 'the schedule', 'feedback'],
+  ['the website redesign', 'the home page', 'navigation', 'accessibility', 'testing'],
+  ['the charity event', 'volunteers', 'the venue', 'sponsors', 'the raffle'],
+  ['the annual report', 'the board', 'the highlights', 'the design', 'the deadline'],
+];
+const VERBS = ['review', 'agree on', 'finish', 'check', 'confirm', 'share', 'plan', 'update', 'discuss', 'approve'];
+const PEOPLE = ['Alex', 'Priya', 'Sam', 'Jordan', 'Mei', 'Tom', 'Aisha', 'Lucas'];
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+/** About `minutes` of spoken meeting (at ~150 words a minute), in topics that each last a stretch. */
+export function meetingScript(minutes) {
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 48271) % 2147483647; return seed % n; };
+  const words = minutes * 150;
+  const topicCount = Math.max(1, Math.min(TOPICS.length * 4, Math.round(minutes / 6)));
+  const perTopic = Math.ceil(words / topicCount);
+  const out = [];
+  let n = 0;
+  for (let t = 0; t < topicCount; t++) {
+    const [topic, ...parts] = TOPICS[t % TOPICS.length];
+    const round = Math.floor(t / TOPICS.length) + 1;
+    out.push(`Next item, part ${round}: ${topic}.`);
+    let said = 0;
+    while (said < perTopic) {
+      const s = `${PEOPLE[rnd(PEOPLE.length)]} will ${VERBS[rnd(VERBS.length)]} ${parts[rnd(parts.length)]} for ${topic} by ${DAYS[rnd(DAYS.length)]}, item ${++n}.`;
+      out.push(s);
+      said += s.split(' ').length;
+    }
+  }
+  return out.join(' ');
+}
+
+const hasEspeak = (run) => {
+  try {
+    run('espeak-ng', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    // silent-catch-ok: no espeak-ng means the looped fixture is used, and makeRecording says so
+    return false;
+  }
+};
+
+
+/** A GCS resumable-upload session URL, or null: https on storage.googleapis.com only. */
+export function gcsUploadUrl(raw) {
+  let u;
+  try {
+    u = new URL(String(raw));
+  } catch {
+    // silent-catch-ok: not a URL is simply not an upload session; the caller fails the check
+    return null;
+  }
+  return u.protocol === 'https:' && u.hostname === 'storage.googleapis.com' && !u.username && !u.password && (!u.port || u.port === '443') ? u.href : null;
+}
+
+export function e2eConfig(env = process.env) {
+  const need = (k) => {
+    const v = (env[k] || '').trim();
+    if (!v) throw new Error(`e2e-pipeline: ${k} is not set`);
+    return v;
+  };
+  const minutes = Number(env.MINUTES || 2);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) throw new Error('e2e-pipeline: MINUTES is a whole number of minutes, 1 to 240');
+  const ready = Number(env.READY_MS);
+  return {
+    apiUrl: need('API_URL').replace(/\/+$/, ''),
+    apiKey: need('FIREBASE_API_KEY'),
+    projectId: need('FIREBASE_PROJECT_ID'),
+    inviteCode: need('E2E_INVITE_CODE'),
+    minutes,
+    readyMs: Number.isFinite(ready) && ready > 0 ? ready : 10 * 60_000 + minutes * 20_000,
+    logProject: (env.LOG_PROJECT || '').trim(),
+    // Held first (plan rev 12 step 1.8): upload with no minutes, expect the kickoff held, then redeem.
+    holdFirst: env.E2E_HOLD_FIRST === 'true',
+    // A note deleted mid-pipeline (plan rev 12 step 1.8): a second note, deleted straight after its kickoff.
+    deleteMid: env.E2E_DELETE_MID === 'true',
+  };
+}
+
+/**
+ * `minutes` of recording in `format`. With espeak-ng (CI installs it), real, non-repeating speech
+ * (meetingScript), padded or cut to the length; without it, the short fixture looped, which is enough for the
+ * pipeline's plumbing but not for chapters.
+ */
+export function makeRecording(minutes, fixture = FIXTURE, run = execFileSync, format = 'ogg', { speech = hasEspeak(run), write = (s) => process.stdout.write(s) } = {}) {
+  const f = FORMATS[format];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-pipeline-'));
+  const out = path.join(dir, `e2e-${minutes}min.${f.ext}`);
+  let input = ['-stream_loop', '-1', '-i', fixture];
+  if (speech) {
+    const text = path.join(dir, 'meeting.txt');
+    const wav = path.join(dir, 'meeting.wav');
+    fs.writeFileSync(text, meetingScript(minutes));
+    run('espeak-ng', ['-s', '150', '-f', text, '-w', wav]);
+    input = ['-i', wav, '-af', 'apad'];
+  } else {
+    write(`note: no espeak-ng, so the ${minutes}-minute recording is the fixture looped (no real chapters)\n`);
+  }
+  run('ffmpeg', ['-loglevel', 'error', '-y', ...input, '-t', String(minutes * 60), '-ac', '1', ...f.codec, out]);
+  return out;
+}
+
+/** Cloud Logging entries matching `filter` (gcloud, as the job's account). */
+export function gcloudLogs(project, filter, run = execFileSync) {
+  const outText = run('gcloud', ['logging', 'read', filter, `--project=${project}`, '--format=json', '--freshness=1d', '--limit=1000'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return JSON.parse(outText || '[]');
+}
+
+async function readJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // silent-catch-ok: a body that isn't JSON (an HTML error page) is kept as text for the report
+    return { raw: text.slice(0, 200) };
+  }
+}
+
+const str = (v) => ({ stringValue: v });
+const firestoreString = (doc, key) => doc?.fields?.[key]?.stringValue;
+
+export async function runPipelineE2E({
+  apiUrl,
+  apiKey,
+  projectId,
+  inviteCode,
+  minutes,
+  readyMs,
+  logProject = '',
+  recording,
+  format = 'ogg',
+  readLogs = (filter) => gcloudLogs(logProject, filter),
+  fetch = globalThis.fetch,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  now = () => Date.now(),
+  pollMs = 15_000,
+  logWaitMs = 60_000,
+  write = (s) => process.stdout.write(s),
+  traceId = `e2e-${randomBytes(12).toString('hex')}`,
+  // Held first: the recording is uploaded before the invite code is redeemed, so it must be held, then released.
+  holdFirst = false,
+  // A second note, deleted straight after its kickoff; its doc is watched for this long as the workers reach it.
+  deleteMid = false,
+  deleteWatchMs = 3 * 60_000,
+}) {
+  const results = [];
+  // The note deleted mid-pipeline, when there is one (its dead letters are checked with the logs).
+  let goneId = null;
+  // Seconds from kickoff to ready, when it got there (scripts/load-staging.mjs reads it).
+  let tookSec = null;
+  const check = (name, ok, detail) => {
+    results.push({ name, ok: Boolean(ok) });
+    write(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}\n`);
+    return Boolean(ok);
+  };
+  const skip = (name, why) => write(`skip ${name} (${why})\n`);
+  const identity = (method, body) =>
+    fetch(`${IDENTITY}/accounts:${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+      body: JSON.stringify(body),
+    });
+
+  const signUp = await identity('signUp', { returnSecureToken: true });
+  const account = await readJson(signUp);
+  if (!check('anonymous sign-up', signUp.status === 200 && account.idToken && account.localId, `HTTP ${signUp.status}`)) {
+    return { ok: false, results, tookSec };
+  }
+  const { idToken, localId: uid } = account;
+  const workspaceId = `workspace_${uid}`;
+  const noteId = `e2e${randomBytes(12).toString('hex')}`;
+  write(`test user ${uid}, note ${noteId}, traceId ${traceId}, ${minutes} min\n`);
+  write(`logs: gcloud logging read 'jsonPayload.traceId="${traceId}"' --freshness=1d\n`);
+
+  const api = async (method, p, body) => {
+    const res = await fetch(`${apiUrl}/v1${p}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'X-AlgoMinutes-Client': 'e2e/1.0.0',
+        'X-Trace-Id': traceId,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, body: await readJson(res) };
+  };
+  const noteDoc = `${FIRESTORE}/projects/${projectId}/databases/(default)/documents/workspaces/${workspaceId}/notes`;
+  const firestore = async (method, url, body) => {
+    const res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${idToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, body: await readJson(res) };
+  };
+
+  try {
+    const redeem = async () => {
+      const redeemed = await api('POST', '/beta/redeem', { code: inviteCode });
+      const left = redeemed.body?.entitlement?.remainingMinutes;
+      return check('the e2e invite code gives minutes', redeemed.status === 200 && left >= minutes, `HTTP ${redeemed.status}${left === undefined ? '' : `, ${left} min`}`);
+    };
+    // Staging's guests start with no minutes. Normally the code is redeemed first; held first, after the kickoff.
+    if (!holdFirst && !(await redeem())) return { ok: false, results };
+
+    const bytes = fs.readFileSync(recording);
+    const { ext, mime } = FORMATS[format];
+    const created = await api('POST', '/uploads', { noteId, workspaceId, fileName: `recording.${ext}`, contentType: mime, totalBytes: bytes.length });
+    const session = created.body;
+    if (!check('POST /v1/uploads', created.status === 200 && session.sessionUri && session.storagePath === `recordings/${workspaceId}/${noteId}.${ext}`, `HTTP ${created.status}`)) return { ok: false, results };
+    // The fixture's bytes go only to Cloud Storage's own upload host, over HTTPS: never wherever a response says.
+    const sessionUrl = gcsUploadUrl(session.sessionUri);
+    if (!check('upload session is Cloud Storage', sessionUrl != null, 'the session URI is not an https://storage.googleapis.com URL')) return { ok: false, results };
+
+    // The resumable session, a chunk at a time, resuming from what the api says GCS holds after a failure.
+    const chunk = Math.max(256 * 1024, Math.floor((session.chunkSize || 8 * 1024 * 1024) / (256 * 1024)) * 256 * 1024);
+    let sent = 0;
+    let failures = 0;
+    let finished = false;
+    // An upload cut off mid-way resumes from what the api says GCS holds (RELEASE.md rev 11, §4.6): after the
+    // first chunk of a multi-chunk file, the probe must say exactly what was sent.
+    let probed = bytes.length <= chunk;
+    while (!finished && failures <= 3) {
+      const end = Math.min(sent + chunk, bytes.length);
+      const res = await fetch(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes ${sent}-${end - 1}/${bytes.length}` }, body: bytes.subarray(sent, end) });
+      if (res.status === 200 || res.status === 201) finished = true;
+      else if (res.status === 308) {
+        sent = end;
+        if (!probed) {
+          probed = true;
+          const probe = await api('GET', `/uploads/${session.uploadId}`);
+          check('a cut-off upload resumes from what GCS holds (the status probe)', probe.body?.receivedBytes === end, `probe says ${probe.body?.receivedBytes}`);
+          sent = probe.body?.receivedBytes ?? end;
+        }
+      }
+      else {
+        failures += 1;
+        sent = (await api('GET', `/uploads/${session.uploadId}`)).body?.receivedBytes ?? sent;
+      }
+    }
+    const done = finished ? await api('POST', `/uploads/${session.uploadId}/complete`) : { status: 0, body: {} };
+    if (!check(`the ${Math.round(bytes.length / 1024)} KiB recording uploads, and /complete`, done.status === 200 && done.body.complete === true, finished ? `HTTP ${done.status}` : 'GCS kept refusing')) return { ok: false, results };
+
+    // The note's doc, with exactly the keys the rules admit, as the apps write it.
+    const noteFields = (title, storagePath) => {
+      const stamp = new Date(now()).toISOString();
+      return {
+        fields: {
+          title: str(title),
+          status: str('processing'),
+          type: str('recording'),
+          mimeType: str(mime),
+          storagePath: str(storagePath),
+          duration: { integerValue: String(minutes * 60) },
+          workspaceId: str(workspaceId),
+          authorId: str(uid),
+          createdAt: str(stamp),
+          updatedAt: str(stamp),
+        },
+      };
+    };
+    const doc = await firestore('POST', `${noteDoc}?documentId=${noteId}`, noteFields(`E2E ${minutes} min`, session.storagePath));
+    if (!check("the note's doc, written as the apps write it", doc.status === 200, `HTTP ${doc.status}`)) return { ok: false, results };
+
+    const started = now();
+    const kickoffBody = { noteId, workspaceId, type: 'recording', storagePath: session.storagePath, mimeType: mime, durationSec: minutes * 60 };
+    const kickoff = await api('POST', '/process', kickoffBody);
+    if (holdFirst) {
+      // H6c: an uploaded recording over the minutes left is held, never refused, and answered as accepted (202).
+      if (!check('with no minutes, the uploaded recording is held', kickoff.status === 202 && kickoff.body?.held === true, `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // H6b: redeeming a code resumes the user's held notes at once; nothing else asks for it.
+      if (!(await redeem())) return { ok: false, results };
+    } else {
+      // A fresh note is queued with 200 (process-intelligence.js); 202 means another run already has it in flight.
+      if (!check('POST /v1/process', kickoff.status === 200 && kickoff.body.status === 'queued', `HTTP ${kickoff.status}${kickoff.body?.error ? `, ${kickoff.body.error}` : ''}`)) return { ok: false, results };
+      // A client's retry (a timeout, a second tap) is a replayed kickoff: answered in flight, never run twice (§4.6).
+      const replay = await api('POST', '/process', kickoffBody);
+      check('a replayed kickoff is answered in flight, not queued again', replay.status === 202 && replay.body?.inFlight === true, `HTTP ${replay.status}${replay.body?.status ? `, ${replay.body.status}` : ''}`);
+    }
+
+    let status = 'processing';
+    let error = '';
+    while (!['ready', 'error'].includes(status) && now() - started < readyMs) {
+      await sleep(pollMs);
+      const got = await firestore('GET', `${noteDoc}/${noteId}`);
+      if (got.status === 200) {
+        status = firestoreString(got.body, 'status') ?? status;
+        error = firestoreString(got.body, 'errorMessage') ?? '';
+      }
+    }
+    const took = Math.round((now() - started) / 1000);
+    if (!check(`ready within ${Math.round(readyMs / 60_000)} min (Firestore)`, status === 'ready', status === 'error' ? `failed: ${error}` : `${status} after ${took} s`)) return { ok: false, results };
+    write(`     time to summary: ${took} s for ${minutes} min recorded (${format})\n`);
+    if (minutes >= LONG_FROM_MINUTES) check(`ready within the bar (${readyTargetSec(minutes) / 60} min for ${minutes} min)`, took <= readyTargetSec(minutes), `${took} s`);
+    tookSec = took;
+
+    const read = await api('POST', '/notes/read', { noteId, workspaceId });
+    const pg = read.body;
+    const chaptersWanted = minutes >= CHAPTERS_FROM_MINUTES;
+    check(
+      'Postgres agrees: ready, a summary and a transcript',
+      read.status === 200 && pg.note?.status === 'ready' && pg.summary?.gist?.length > 0 && pg.transcript?.lines?.length > 0,
+      `HTTP ${read.status}, ${pg.note?.status}, ${pg.transcript?.lines?.length ?? 0} lines`,
+    );
+    if (chaptersWanted) check(`a ${minutes}-minute recording has chapters`, (pg.summary?.chapters?.length ?? 0) >= 2, `${pg.summary?.chapters?.length ?? 0} chapters`);
+
+    // Try again on a finished note (plan rev 12 step 1.8): answered ready, and nothing runs. On 2026-10-01 a
+    // finished 52-minute note was run again by a second kickoff (#311), paying speech-to-text twice.
+    const lines = pg.transcript?.lines?.length ?? 0;
+    const again = await api('POST', '/process', kickoffBody);
+    check('Try again on a finished note answers ready, and runs nothing', again.status === 200 && again.body?.cached === true, `HTTP ${again.status}${again.body?.status ? `, ${again.body.status}` : ''}`);
+    const reread = await api('POST', '/notes/read', { noteId, workspaceId });
+    check('the transcript is the same after Try again', reread.status === 200 && (reread.body?.transcript?.lines?.length ?? -1) === lines, `${reread.body?.transcript?.lines?.length ?? 0} lines, was ${lines}`);
+    if (minutes >= LONG_FROM_MINUTES) {
+      const chapters = pg.summary?.chapters ?? [];
+      const lastStart = Math.max(0, ...chapters.map((c) => Number(c.startMs) || 0));
+      check(`at least ${LONG_MIN_CHAPTERS} chapters`, chapters.length >= LONG_MIN_CHAPTERS, `${chapters.length}`);
+      check('the chapters reach the last quarter of the meeting', lastStart >= 0.75 * minutes * 60_000, `last starts at ${Math.round(lastStart / 60_000)} min of ${minutes}`);
+    }
+
+    // A note deleted while the pipeline has it (plan rev 12 step 1.8): a second copy, uploaded in one piece, kicked
+    // off and deleted at once. Its tasks are still queued or running: the workers must find it gone and bring
+    // nothing back. A missing doc reads as refused (403: the rules read its authorId), so any 200 is it back.
+    if (deleteMid) {
+      goneId = `e2e${randomBytes(12).toString('hex')}`;
+      const made = await api('POST', '/uploads', { noteId: goneId, workspaceId, fileName: `recording.${ext}`, contentType: mime, totalBytes: bytes.length });
+      const url = made.status === 200 ? gcsUploadUrl(made.body.sessionUri) : null;
+      const put = url ? await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${bytes.length - 1}/${bytes.length}` }, body: bytes }) : null;
+      const complete = put && (put.status === 200 || put.status === 201) ? await api('POST', `/uploads/${made.body.uploadId}/complete`) : { status: 0, body: {} };
+      const goneDoc = complete.body?.complete === true
+        ? await firestore('POST', `${noteDoc}?documentId=${goneId}`, noteFields('E2E deleted mid-pipeline', made.body.storagePath))
+        : { status: 0 };
+      const kicked = goneDoc.status === 200
+        ? await api('POST', '/process', { noteId: goneId, workspaceId, type: 'recording', storagePath: made.body.storagePath, mimeType: mime, durationSec: minutes * 60 })
+        : { status: 0, body: {} };
+      if (check('a second note is uploaded and kicked off, to delete mid-pipeline', kicked.status === 200 && kicked.body?.status === 'queued', `HTTP ${made.status}/${put?.status ?? 0}/${complete.status}/${goneDoc.status}/${kicked.status}`)) {
+        const del = await api('POST', '/notes/delete', { noteId: goneId, workspaceId });
+        check('the note deleted mid-pipeline answers deleted', del.status === 200 && del.body?.deleted === true, `HTTP ${del.status}`);
+        let back = 0;
+        const until = now() + deleteWatchMs;
+        while (now() < until) {
+          await sleep(pollMs);
+          if ((await firestore('GET', `${noteDoc}/${goneId}`)).status === 200) back += 1;
+        }
+        check("nothing brings the deleted note's doc back as the workers reach it", back === 0, back ? `its doc was there ${back} times` : '');
+        const gone = await api('POST', '/notes/read', { noteId: goneId, workspaceId });
+        check('the deleted note is gone from Postgres too', gone.status === 404, `HTTP ${gone.status}`);
+      }
+    }
+
+    if (!logProject) {
+      skip('the traceId in every service, and no dead letters', 'LOG_PROJECT not set');
+    } else {
+      // Log entries arrive a little after the lines are written.
+      let services = new Set();
+      const expected = tracedServices(minutes);
+      for (let i = 0; i < 3 && !expected.every((s) => services.has(s)); i++) {
+        await sleep(logWaitMs);
+        services = new Set(readLogs(`jsonPayload.traceId="${traceId}"`).map((e) => e.resource?.labels?.service_name).filter(Boolean));
+      }
+      const missing = expected.filter((s) => !services.has(s));
+      check('one traceId, followed through every service', missing.length === 0, missing.length ? `not in: ${missing.join(', ')}` : [...services].sort().join(', '));
+      const dead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${noteId}"`);
+      check('no dead letter for the note', dead.length === 0, dead.length ? `${dead.length} recorded` : '');
+      if (goneId) {
+        const goneDead = readLogs(`jsonPayload.msg="dead_letter_recorded" AND jsonPayload.noteId="${goneId}"`);
+        check('no dead letter for the note deleted mid-pipeline', goneDead.length === 0, goneDead.length ? `${goneDead.length} recorded` : '');
+      }
+      const enqueuedRuns = readLogs(`jsonPayload.msg="kickoff_enqueued" AND jsonPayload.noteId="${noteId}"`);
+      check('the note was run once: the replay and the Try again enqueued nothing', enqueuedRuns.length === 1, `${enqueuedRuns.length} kickoffs enqueued`);
+      if (minutes >= CHAPTERS_FROM_MINUTES) {
+        const salvaged = readLogs(`jsonPayload.msg="summary_salvaged_partial" AND jsonPayload.noteId="${noteId}"`);
+        check('the summary came back whole, not salvaged', salvaged.length === 0, salvaged.length ? 'summary_salvaged_partial' : '');
+      }
+    }
+  } catch (err) {
+    check('the run went to the end', false, String(err?.message ?? err).slice(0, 200));
+  } finally {
+    const deleted = await api('POST', '/account/delete').catch((err) => ({ status: 0, body: { raw: String(err?.message ?? err) } }));
+    check('the test account is deleted', deleted.status === 200, `HTTP ${deleted.status}`);
+  }
+  return { ok: results.every((r) => r.ok), results, tookSec };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  const config = e2eConfig();
+  const format = formatFor(config.minutes);
+  const recording = makeRecording(config.minutes, FIXTURE, execFileSync, format);
+  const { ok } = await runPipelineE2E({ ...config, recording, format });
+  process.exit(ok ? 0 : 1);
+}

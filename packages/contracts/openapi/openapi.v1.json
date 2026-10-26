@@ -83,7 +83,8 @@
           "transcribing",
           "summarizing",
           "ready",
-          "error"
+          "error",
+          "awaiting_minutes"
         ]
       },
       "NoteType": {
@@ -277,6 +278,12 @@
           },
           "lastProgressAt": {
             "type": "string"
+          },
+          "sourceKind": {
+            "$ref": "#/components/schemas/NoteSourceKind"
+          },
+          "notetaker": {
+            "$ref": "#/components/schemas/NoteNotetaker"
           }
         },
         "required": [
@@ -289,6 +296,56 @@
           "createdAt",
           "updatedAt"
         ]
+      },
+      "NoteSourceKind": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "device | upload | bot | extension | cloud_import. Clients must accept values they do not know.",
+        "example": "bot"
+      },
+      "NoteNotetaker": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          },
+          "failureReason": {
+            "$ref": "#/components/schemas/NotetakerFailureReason"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/MeetingPlatform"
+          }
+        },
+        "required": [
+          "botId",
+          "status",
+          "platform"
+        ]
+      },
+      "NotetakerStatus": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "scheduled | joining | waiting_room | in_call | recording | processing | done | failed | cancelled. Clients must accept values they do not know (show them as \"in progress\").",
+        "example": "recording"
+      },
+      "NotetakerFailureReason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 40,
+        "description": "not_admitted | permission_denied | bot_blocked | meeting_not_found | busy | quota_exhausted | too_long | cancelled | error. Clients must accept values they do not know.",
+        "example": "not_admitted"
+      },
+      "MeetingPlatform": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "google_meet | zoom | teams | webex | other. Clients must accept values they do not know.",
+        "example": "google_meet"
       },
       "TranscriptLine": {
         "type": "object",
@@ -741,7 +798,8 @@
         "properties": {
           "query": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 2000
           },
           "k": {
             "type": "integer",
@@ -814,7 +872,8 @@
         "properties": {
           "query": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 2000
           },
           "noteId": {
             "type": "string"
@@ -1011,6 +1070,103 @@
           "revoked"
         ]
       },
+      "ShareListRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId"
+        ]
+      },
+      "ShareListItem": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExportScope"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoDateTime"
+          },
+          "expiresAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "revokedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "lastReadAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "readCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "live": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shareId",
+          "scope",
+          "createdAt",
+          "expiresAt",
+          "revokedAt",
+          "lastReadAt",
+          "readCount",
+          "live"
+        ]
+      },
+      "ShareListResponse": {
+        "type": "object",
+        "properties": {
+          "shares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShareListItem"
+            }
+          }
+        },
+        "required": [
+          "shares"
+        ]
+      },
       "SharedNoteRequest": {
         "type": "object",
         "properties": {
@@ -1189,6 +1345,64 @@
           "ok",
           "noteId",
           "pgWritten"
+        ]
+      },
+      "TextNoteSource": {
+        "type": "string",
+        "enum": [
+          "scanned_image",
+          "pdf",
+          "imported"
+        ]
+      },
+      "TextNoteCreateRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 300000
+          },
+          "source": {
+            "$ref": "#/components/schemas/TextNoteSource"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId",
+          "text",
+          "source"
+        ]
+      },
+      "TextNoteResponse": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          }
+        },
+        "required": [
+          "noteId",
+          "status"
         ]
       },
       "NoteSpeaker": {
@@ -1482,6 +1696,12 @@
             "enum": [
               true
             ]
+          },
+          "held": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
           }
         },
         "required": [
@@ -1548,6 +1768,12 @@
           "trialEndsAt": {
             "type": "string",
             "nullable": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/EntitlementSource"
+          },
+          "rail": {
+            "$ref": "#/components/schemas/SubscriptionRail"
           }
         },
         "required": [
@@ -1567,6 +1793,25 @@
           "active",
           "expired",
           "free_floor"
+        ]
+      },
+      "EntitlementSource": {
+        "type": "string",
+        "enum": [
+          "subscription",
+          "grant",
+          "trial",
+          "free"
+        ]
+      },
+      "SubscriptionRail": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "apple_storekit",
+          "stripe",
+          "google_play",
+          null
         ]
       },
       "ProcessRequest": {
@@ -1603,6 +1848,60 @@
           "noteId",
           "workspaceId",
           "type"
+        ]
+      },
+      "ActionItemStatusResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "noteId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "noteId",
+          "itemId",
+          "status"
+        ]
+      },
+      "ActionItemStatusRequest": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "noteId",
+          "workspaceId",
+          "itemId",
+          "done"
         ]
       },
       "NoteFeedbackResponse": {
@@ -1817,8 +2116,7 @@
           "noteId",
           "workspaceId",
           "fileName",
-          "contentType",
-          "totalBytes"
+          "contentType"
         ]
       },
       "UploadSessionStatus": {
@@ -1863,15 +2161,185 @@
           "complete"
         ]
       },
+      "RedeemInviteResponse": {
+        "type": "object",
+        "properties": {
+          "entitlement": {
+            "$ref": "#/components/schemas/EntitlementResponse"
+          },
+          "grantEndsAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IsoDateTime"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "notetaker": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entitlement",
+          "grantEndsAt",
+          "notetaker"
+        ]
+      },
+      "RedeemInviteError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "invite_invalid",
+              "invite_expired",
+              "invite_used_up"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "RedeemInviteRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "example": "BETA-7K2QX-M9D4R-TW8HN"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
       "AppConfigResponse": {
         "type": "object",
         "properties": {
           "broadcastCapture": {
             "type": "boolean"
+          },
+          "notetaker": {
+            "$ref": "#/components/schemas/NotetakerSwitches"
+          },
+          "shareLinks": {
+            "type": "boolean"
           }
         },
         "required": [
           "broadcastCapture"
+        ]
+      },
+      "NotetakerSwitches": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "boolean"
+          },
+          "calendar": {
+            "type": "boolean"
+          },
+          "zoomImport": {
+            "type": "boolean"
+          },
+          "extension": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bot",
+          "calendar",
+          "zoomImport",
+          "extension"
+        ]
+      },
+      "MeetingBotResponse": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "noteId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          }
+        },
+        "required": [
+          "botId",
+          "noteId",
+          "status"
+        ]
+      },
+      "FeatureDisabledError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "feature_disabled"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ],
+        "example": {
+          "error": "The notetaker isn't available yet.",
+          "code": "feature_disabled"
+        }
+      },
+      "CreateMeetingBotRequest": {
+        "type": "object",
+        "properties": {
+          "meetingUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "meetingUrl",
+          "requestId"
+        ],
+        "example": {
+          "meetingUrl": "https://meet.google.com/abc-defg-hij",
+          "title": "Weekly sync",
+          "requestId": "6f1c2d3e-4b5a-6978-8a9b-0c1d2e3f4a5b"
+        }
+      },
+      "CancelMeetingBotResponse": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotetakerStatus"
+          }
+        },
+        "required": [
+          "botId",
+          "status"
         ]
       },
       "OkResponse": {
@@ -1956,6 +2424,20 @@
           "ios",
           "android",
           "web"
+        ]
+      },
+      "RetentionResponse": {
+        "type": "object",
+        "properties": {
+          "retentionDays": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "exclusiveMinimum": true
+          }
+        },
+        "required": [
+          "retentionDays"
         ]
       },
       "SetRetentionRequest": {
@@ -2122,6 +2604,10 @@
             "nullable": true
           },
           "traceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
             "type": "string",
             "nullable": true
           },
@@ -2619,6 +3105,125 @@
           },
           "500": {
             "description": "Delete failed; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes/text": {
+      "post": {
+        "summary": "Save a text note (a scanned image, a PDF, an imported file) from text extracted on the device: Postgres, then the Firestore mirror; ready at once. A retry with the same noteId is the same note.",
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextNoteCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The note is saved and ready (or already was); its embedding is queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextNoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, noteId or workspaceId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token, or the account was deleted (error: account_deleted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the caller's workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "That note id was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The note id is another kind of note, or another account's (error: text_note_conflict).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The text is longer than the contract allows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Saving failed; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres is unavailable; safe to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3146,6 +3751,85 @@
         }
       }
     },
+    "/v1/shares/list": {
+      "post": {
+        "summary": "The caller's links for a note, to see and revoke (never the token).",
+        "tags": [
+          "share"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareListRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The links, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres not provisioned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shares/read": {
       "post": {
         "summary": "PUBLIC read of a shared note. No bearer token — the link token is the credential.",
@@ -3423,7 +4107,7 @@
             }
           },
           "413": {
-            "description": "Recording over the size limit.",
+            "description": "Recording over the size limit, or longer than the plan allows for one note.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3453,7 +4137,106 @@
             }
           },
           "503": {
-            "description": "Service is being upgraded.",
+            "description": "Service is being upgraded, or today's processing limit is reached (nothing was charged).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes/action-items/status": {
+      "post": {
+        "tags": [
+          "notes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Tick or untick one of a note’s action items. Idempotent. The tick is read back on the note read (ActionItem.status).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionItemStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The item’s status after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionItemStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields, or an item id that isn’t one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace mismatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item on a note you can reach.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Could not save it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable until Postgres is provisioned.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3998,6 +4781,105 @@
         }
       }
     },
+    "/v1/beta/redeem": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Redeem a beta invite code for time-limited Pro minutes (and the notetaker, when the invite includes it). Redeeming the same code again returns the same answer and uses nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemInviteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Redeemed (or already redeemed by this user).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid code (unknown or revoked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token, or the account was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Every use of this code is taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The code has expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemInviteError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts; try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/config": {
       "get": {
         "tags": [
@@ -4031,6 +4913,183 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/bots": {
+      "post": {
+        "tags": [
+          "meetings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "Send the notetaker to a meeting now. The same requestId returns the same bot (idempotent).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMeetingBotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The notetaker is on its way; its note is created in the recording state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingBotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported meeting link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "No notetaker minutes left.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many notetakers at once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The notetaker is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureDisabledError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/bots/{botId}/cancel": {
+      "post": {
+        "tags": [
+          "meetings"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "required": true,
+            "name": "botId",
+            "in": "path"
+          }
+        ],
+        "summary": "Cancel a notetaker, or make it leave the meeting. Idempotent.",
+        "responses": {
+          "200": {
+            "description": "Cancelled, or already finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelMeetingBotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such notetaker (or not yours).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client too old — please update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The notetaker is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureDisabledError"
                 }
               }
             }
@@ -4157,6 +5216,44 @@
       }
     },
     "/v1/account/retention": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "summary": "The account's note retention (days), or null to keep until deleted: the same on every device.",
+        "responses": {
+          "200": {
+            "description": "The retention last set on any device.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "account"

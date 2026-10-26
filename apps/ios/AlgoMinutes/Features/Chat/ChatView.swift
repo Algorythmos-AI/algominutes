@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit  // UIPasteboard for Copy
 
 /// RAG chat with SSE streaming + inline [n] citation chips — parity with
 /// `ChatTab.tsx`.
@@ -23,8 +24,32 @@ struct ChatView: View {
                             if viewModel.messages.isEmpty {
                                 EmptyStateView(
                                     icon: "bubble.left.and.text.bubble.right",
-                                    message: "I can answer questions across every meeting in your workspace and cite the moments I'm pulling from. Try \"What did we agree to ship next quarter?\""
+                                    message: "I can answer questions across every meeting in your workspace and cite the moments I'm pulling from."
                                 )
+                                // Three questions to start from (RELEASE.md rev 11, UX9): a blank box with
+                                // one example in a sentence left most people not knowing what to ask.
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(Self.starterQuestions, id: \.self) { question in
+                                        Button {
+                                            viewModel.draft = question
+                                            viewModel.send()
+                                        } label: {
+                                            Text(question)
+                                                .font(Typography.body(15))
+                                                .foregroundStyle(Theme.heading)
+                                                .multilineTextAlignment(.leading)
+                                                .padding(.horizontal, 14)
+                                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 14)
+                                                        .fill(Theme.surfaceElevated)
+                                                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.borderSoft))
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(viewModel.isStreaming)
+                                    }
+                                }
                             }
                             ForEach(viewModel.messages) { message in
                                 messageView(message)
@@ -51,6 +76,31 @@ struct ChatView: View {
             .onAppear { viewModel.attach(api: env.api) }
             .onDisappear { viewModel.cancelStreaming() }
         }
+    }
+
+    // MARK: - Starters and usable answers (RELEASE.md rev 11, UX9)
+
+    static let starterQuestions = [
+        "What did we decide in my last meeting?",
+        "What are my action items this week?",
+        "Draft a follow-up email for my last meeting.",
+    ]
+
+    /// The answer as text to copy or share: the words without the [n] citation marks (which point at this
+    /// screen's source list and mean nothing in an email). Nil while it's still arriving, when it failed, or
+    /// when there's nothing to take.
+    static func usableAnswer(_ content: String, failed: Bool, streaming: Bool) -> String? {
+        guard !failed, !streaming else { return nil }
+        let words = ChatViewModel.segments(for: content).compactMap { segment -> String? in
+            if case .text(let text) = segment { return text }
+            return nil
+        }.joined()
+        let tidy = words
+            .replacingOccurrences(of: " +([.,;:!?])", with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: " +\n", with: "\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return tidy.isEmpty ? nil : tidy
     }
 
     // MARK: - Message rendering
@@ -83,6 +133,39 @@ struct ChatView: View {
                 if let citations = message.citations, !citations.isEmpty {
                     sourcesList(citations)
                 }
+                // An answer you can take somewhere (UX9): copy it, or hand it to Mail, Messages or Notes.
+                if let answer = Self.usableAnswer(message.content, failed: message.failedQuery != nil,
+                                                  streaming: viewModel.isStreaming && message.id == viewModel.messages.last?.id) {
+                    HStack(spacing: 18) {
+                        Button {
+                            UIPasteboard.general.string = answer
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                                .font(Typography.label(13))
+                                .foregroundStyle(Theme.muted)
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Copy answer")
+                        ShareLink(item: answer) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .font(Typography.label(13))
+                                .foregroundStyle(Theme.muted)
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityLabel("Share answer")
+                    }
+                }
+                if message.failedQuery != nil, !viewModel.isStreaming {
+                    Button {
+                        viewModel.retry(messageId: message.id)
+                    } label: {
+                        Label("Try again", systemImage: "arrow.clockwise")
+                            .font(Typography.label(14))
+                            .foregroundStyle(Theme.body)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -103,7 +186,8 @@ struct ChatView: View {
             case .citation(let index):
                 var chip = AttributedString("[\(index)]")
                 chip.foregroundColor = Theme.heading
-                chip.font = .system(size: 14, weight: .bold)
+                // Scales with Dynamic Type, like the text around it.
+                chip.font = Typography.label(14)
                 if let citation = citation(at: index, in: message) {
                     chip.link = URL(string: "algominutes://note/\(citation.noteId)")
                 }
@@ -133,7 +217,7 @@ struct ChatView: View {
             Text("SOURCES")
                 .font(Typography.label(10))
                 .kerning(1.2)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.muted)
             ForEach(Array(citations.enumerated()), id: \.offset) { index, citation in
                 Button {
                     selectedNoteId = citation.noteId
@@ -167,7 +251,7 @@ struct ChatView: View {
         HStack(spacing: 10) {
             TextField("Ask about your meetings…", text: Binding(
                 get: { viewModel.draft },
-                set: { viewModel.draft = $0 }
+                set: { viewModel.draft = QuestionLimit.cap($0) }
             ), axis: .vertical)
                 .font(Typography.body(15))
                 .foregroundStyle(Theme.body)
@@ -225,13 +309,26 @@ final class ChatViewModel {
 
     func send() {
         let query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isStreaming, let api else { return }
+        guard !query.isEmpty, !isStreaming, api != nil else { return }
         draft = ""
 
         messages.append(ChatMessage(role: .user, content: query))
-        var assistant = ChatMessage(role: .assistant, content: "")
-        messages.append(assistant)
-        let assistantIndex = messages.count - 1
+        messages.append(ChatMessage(role: .assistant, content: ""))
+        ask(query, into: messages.count - 1)
+    }
+
+    /// Ask a failed answer's question again, in the same place: no second
+    /// question bubble (RELEASE.md PR 10c).
+    func retry(messageId: String) {
+        guard !isStreaming, let index = messages.firstIndex(where: { $0.id == messageId }),
+              let query = messages[index].failedQuery else { return }
+        messages[index] = ChatMessage(id: messageId, role: .assistant, content: "")
+        ask(query, into: index)
+    }
+
+    private func ask(_ query: String, into assistantIndex: Int) {
+        guard let api else { return }
+        var assistant = messages[assistantIndex]
         isStreaming = true
 
         streamTask = Task { [weak self] in
@@ -243,8 +340,11 @@ final class ChatViewModel {
                         assistant.citations = hits
                     case .textDelta(let text):
                         assistant.content += text
-                    case .serverError(let error):
-                        assistant.content += "\n\n_Error: \(error)_"
+                    case .serverError:
+                        // A sentence, never the server's code (UX7); the same words as the web's "cut short".
+                        let sentence = APIError.streamEnded.errorDescription ?? "The answer was cut short. Try again."
+                        assistant.content += assistant.content.isEmpty ? sentence : "\n\n\(sentence)"
+                        assistant.failedQuery = query
                     case .done:
                         break
                     }
@@ -257,6 +357,7 @@ final class ChatViewModel {
                 assistant.content += assistant.content.isEmpty
                     ? "Error: \(message)"
                     : "\n\nError: \(message)"
+                assistant.failedQuery = query
                 self.messages[assistantIndex] = assistant
             }
             self.isStreaming = false
@@ -296,5 +397,15 @@ final class ChatViewModel {
             segments.append(.text(String(remaining)))
         }
         return segments
+    }
+}
+
+/// The longest question the api takes (RELEASE.md rev 11, L4; the contract's MAX_QUESTION_CHARS). A longer one
+/// is answered with a 400, so the field stops there instead.
+enum QuestionLimit {
+    static let maxCharacters = 2000
+
+    static func cap(_ text: String) -> String {
+        text.count > maxCharacters ? String(text.prefix(maxCharacters)) : text
     }
 }

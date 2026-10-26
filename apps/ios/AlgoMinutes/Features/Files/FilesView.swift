@@ -10,6 +10,10 @@ struct FilesView: View {
     @State private var query = ""
     @State private var filter: SourceFilter = .all
     @State private var selectedNoteId: String?
+    /// The moment a tapped search result matched, for the note it opens (nil for a note opened from the list).
+    @State private var selectedMomentMs: Double?
+    /// A note the user asked to delete, until they confirm (H13/UX4: every delete asks).
+    @State private var pendingDelete: Note?
     @State private var showChat = false
     // Owned here (not by ChatView) so the conversation survives sheet dismissal.
     @State private var chatModel = ChatViewModel()
@@ -18,6 +22,42 @@ struct FilesView: View {
     @State private var transcriptHits: [SearchHit] = []
     @State private var isSearching = false
     @State private var searchError: String?
+    /// The query the transcript hits on screen belong to. Until it matches what's typed, nothing has been
+    /// searched for it yet, and the list must not say "no match" (RELEASE.md rev 11, UX8).
+    @State private var searchedQuery: String?
+
+    /// Transcripts are searched as you type, once you pause: not on every keystroke (each search is a paid
+    /// embedding, and counts towards the hourly search budget).
+    static let searchDebounce: Duration = .milliseconds(600)
+    static let searchMinCharacters = 3
+
+    /// The query to search transcripts for, or nil when it's too short to be worth a search.
+    static func searchable(_ query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= searchMinCharacters ? trimmed : nil
+    }
+
+    /// What the empty list says, or nil while it shouldn't say anything yet: a search is running, or the
+    /// transcripts haven't been searched for what's typed (it used to say "No files match" in that gap,
+    /// before it had looked).
+    static func emptyMessage(query: String, isSearching: Bool, searchedQuery: String?) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Nothing here yet — capture or import your first meeting from Home." }
+        if isSearching { return nil }
+        // Too short to search transcripts: the titles are all there is to match.
+        guard let wanted = searchable(trimmed) else { return "No files match that search." }
+        return searchedQuery == wanted ? "No files or transcripts match that search." : nil
+    }
+
+    // The example note, until there's a real one (SampleNote; RELEASE.md PR 10b).
+    @State private var showingSample = false
+    @State private var sendingNotetaker = false
+    @AppStorage("sample_note_hidden") private var sampleHidden = false
+    private var showsSample: Bool {
+        SampleNote.shouldShow(notesEmpty: env.notes.notes.isEmpty, query: query,
+                              hasLoaded: env.notes.receivedFirstSnapshot, hidden: sampleHidden,
+                              filterMatches: filter.matches(SampleNote.note))
+    }
 
     enum SourceFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -60,13 +100,29 @@ struct FilesView: View {
             .background(AlgoMinutesBackground())
             .navigationTitle("Files")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                // Only while the server has the notetaker on for this user (/v1/config notetaker.bot).
+                if env.switches.notetakerBot {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            sendingNotetaker = true
+                        } label: {
+                            Label("Send the notetaker", systemImage: "person.crop.circle.badge.plus")
+                        }
+                    }
+                }
+            }
+            .navigationDestination(isPresented: $showingSample) { SampleNoteView() }
             .navigationDestination(item: $selectedNoteId) { noteId in
-                NoteDetailView(noteId: noteId)
+                NoteDetailView(noteId: noteId, openAtMs: selectedMomentMs)
             }
         }
         .sheet(isPresented: $showChat) {
             ChatView(viewModel: chatModel)
                 .algoMinutesSheet()
+        }
+        .sheet(isPresented: $sendingNotetaker) {
+            SendNotetakerSheet { noteId in selectedNoteId = noteId }
         }
     }
 
@@ -82,9 +138,16 @@ struct FilesView: View {
                 .submitLabel(.search)
                 .onSubmit { Task { await runTranscriptSearch() } }
                 .onChange(of: query) { _, newValue in
-                    // Title filtering is live; transcript hits only refresh on
-                    // submit, and clear once the query is gone.
-                    if newValue.isEmpty { transcriptHits = []; searchError = nil }
+                    // Title filtering is live. Transcript hits follow a pause in typing (below), and clear
+                    // once the query is gone.
+                    if newValue.isEmpty { transcriptHits = []; searchError = nil; searchedQuery = nil }
+                }
+                // Search the transcripts once the typing pauses; a new keystroke cancels the wait.
+                .task(id: query) {
+                    guard let wanted = Self.searchable(query), wanted != searchedQuery else { return }
+                    try? await Task.sleep(for: Self.searchDebounce)
+                    guard !Task.isCancelled else { return }
+                    await runTranscriptSearch()
                 }
             if !query.isEmpty {
                 Button {
@@ -162,27 +225,67 @@ struct FilesView: View {
 
     private var notesList: some View {
         List {
+            NotesSyncBanner()
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             if let error = searchError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Typography.body(13))
-                    .foregroundStyle(Theme.heading)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                HStack {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.body(13))
+                        .foregroundStyle(Theme.heading)
+                    Spacer()
+                    // The query is still in the field: search it again.
+                    Button("Try again") { Task { await runTranscriptSearch() } }
+                        .font(Typography.label(14))
+                        .foregroundStyle(Theme.body)
+                        .buttonStyle(.borderless)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
 
-            if filteredNotes.isEmpty && transcriptHits.isEmpty && !isSearching {
+            if filteredNotes.isEmpty && transcriptHits.isEmpty,
+               let message = Self.emptyMessage(query: query, isSearching: isSearching, searchedQuery: searchedQuery) {
                 EmptyStateView(
                     icon: query.isEmpty ? "folder" : "magnifyingglass",
-                    message: query.isEmpty
-                        ? "Nothing here yet — capture or import your first meeting from Home."
-                        : "No files match that search."
+                    message: message
                 )
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
+            if showsSample {
+                Button {
+                    showingSample = true
+                } label: {
+                    fileCard(SampleNote.note)
+                        .overlay(alignment: .topTrailing) {
+                            Text("EXAMPLE")
+                                .font(Typography.eyebrow())
+                                .tracking(1.2)
+                                .foregroundStyle(Theme.onInverse)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Theme.inverse))
+                                .padding(Theme.Spacing.md)
+                        }
+                }
+                .buttonStyle(CardButtonStyle())
+                .accessibilityLabel("Example note: \(SampleNote.note.title)")
+                .listRowInsets(EdgeInsets(
+                    top: 6, leading: Theme.Spacing.xl, bottom: 6, trailing: Theme.Spacing.xl
+                ))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button("Hide") { sampleHidden = true }
+                        .tint(Theme.surfaceElevated)
+                }
+            }
+
             ForEach(filteredNotes) { note in
                 Button {
+                    selectedMomentMs = nil
                     selectedNoteId = note.id
                 } label: {
                     fileCard(note)
@@ -193,14 +296,10 @@ struct FilesView: View {
                 ))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .contextMenu { NoteContextMenu(note: note, selectedNoteId: $selectedNoteId) }
+                .contextMenu { NoteContextMenu(note: note, selectedNoteId: $selectedNoteId, pendingDelete: $pendingDelete) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
-                        let id = note.id
-                        Task {
-                            do { try await env.deleteNote(id: id) }
-                            catch { env.alertMessage = "Couldn't delete this note. Please try again." }
-                        }
+                        pendingDelete = note
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
@@ -228,6 +327,7 @@ struct FilesView: View {
                 Section {
                     ForEach(transcriptHits) { hit in
                         Button {
+                            selectedMomentMs = hit.startMs
                             selectedNoteId = hit.noteId
                         } label: {
                             transcriptHitCard(hit)
@@ -251,6 +351,29 @@ struct FilesView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await env.notes.refresh() }
+        // A swipe or a long press no longer deletes on its own: a note and its
+        // recording can't be brought back, so it asks, naming what goes (H13/UX4).
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { note in
+            Button("Delete", role: .destructive) {
+                let id = note.id
+                pendingDelete = nil
+                Task {
+                    do { try await env.deleteNote(id: id) }
+                    catch { env.alertMessage = "Couldn't delete this note. Please try again." }
+                }
+            }
+            Button("Keep it", role: .cancel) { pendingDelete = nil }
+        } message: { note in
+            Text("“\(note.title)” and its recording are deleted for good.")
+        }
     }
 
     // MARK: - Cards
@@ -295,7 +418,12 @@ struct FilesView: View {
                     .lineLimit(2)
             }
         case .error:
-            Label(note.errorMessage ?? "Processing failed", systemImage: "exclamationmark.triangle.fill")
+            Label(note.errorMessage ?? "Couldn’t process", systemImage: "exclamationmark.triangle.fill")
+                .font(Typography.body(12))
+                .foregroundStyle(Theme.heading)
+                .lineLimit(1)
+        case .awaitingMinutes:
+            Label(note.status.label, systemImage: "hourglass")
                 .font(Typography.body(12))
                 .foregroundStyle(Theme.heading)
                 .lineLimit(1)
@@ -304,10 +432,18 @@ struct FilesView: View {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(Theme.outline)
-                Capsule()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: 140, height: 6)
-                    .shimmer()
+                if note.status == .recording, note.notetaker != nil {
+                    // A notetaker in a meeting says what it's doing.
+                    Text(note.statusLabel)
+                        .font(Typography.body(12))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                } else {
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(width: 140, height: 6)
+                        .shimmer()
+                }
             }
         }
     }
@@ -367,9 +503,15 @@ struct FilesView: View {
         searchError = nil
         defer { isSearching = false }
         do {
-            transcriptHits = try await env.api.search(query: trimmed, k: 12)
+            let hits = try await env.api.search(query: QuestionLimit.cap(trimmed), k: 12)
+            // The typing moved on while this was in flight: its answer isn't for what's on screen.
+            guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            transcriptHits = hits
+            searchedQuery = trimmed
         } catch {
+            guard !Task.isCancelled else { return }
             transcriptHits = []
+            searchedQuery = trimmed
             searchError = (error as? APIError)?.errorDescription ?? "Search failed"
         }
     }

@@ -80,6 +80,25 @@ final class TranscriptRepository {
         }
     }
 
+    /// How many lines the Firestore mirror carries at most: a note showing this many may have more.
+    nonisolated static let mirrorCap = 200
+
+    /// Whether an export has to wait for the whole transcript (RELEASE.md rev 11, H17 / LM7). A PDF or text
+    /// file made while only the mirror was on screen held the first 200 lines of a long meeting, and nothing
+    /// said so. A summary-only export has no transcript in it, and a shorter mirror is already all of it.
+    nonisolated static func exportNeedsFull(scope: ExportScope, mirroredCount: Int) -> Bool {
+        scope != .summary && mirroredCount >= mirrorCap
+    }
+
+    /// The whole transcript, fetched if it hasn't been, or nil if it can't be: the caller then says so
+    /// rather than exporting part of a meeting as if it were all of it.
+    func whole(noteId: String, workspaceId: String) async -> [TranscriptLine]? {
+        loadFull(noteId: noteId, workspaceId: workspaceId) // a no-op while it's loading or loaded
+        await task?.value
+        guard self.noteId == noteId, case .loaded = state else { return nil }
+        return lines
+    }
+
     /// Which lines the transcript pane should render.
     func displayLines(mirrored: [TranscriptLine]?, for noteId: String) -> [TranscriptLine] {
         Self.preferred(full: lines, fullNoteId: self.noteId, mirrored: mirrored, noteId: noteId)
@@ -96,6 +115,8 @@ final class TranscriptRepository {
     ///   - the full set must be *longer*, because a short note's mirror
     ///     already is the whole transcript and swapping it for an identical
     ///     fetch would rebuild the list — losing scroll position — for nothing.
+    ///     Unless it carries speakers the mirror can't (speaker tags, which the
+    ///     mirror has no field for): those are what make a speaker renamable.
     /// `nonisolated` because it touches no state — it is a decision over its
     /// arguments, and isolating it would force callers onto the main actor for
     /// no reason.
@@ -105,9 +126,24 @@ final class TranscriptRepository {
         mirrored: [TranscriptLine]?,
         noteId: String
     ) -> [TranscriptLine] {
-        guard fullNoteId == noteId, full.count > (mirrored?.count ?? 0) else {
+        guard fullNoteId == noteId, !full.isEmpty,
+              full.count > (mirrored?.count ?? 0) || full.contains(where: { $0.speakerTag != nil })
+        else {
             return mirrored ?? []
         }
         return full
+    }
+
+    /// A speaker renamed (`APIClient.setNoteSpeaker`): every line of theirs
+    /// takes the new name at once, as the next read would give it. An empty
+    /// name is "Speaker N" again (the server clears the mapping).
+    func renameSpeaker(tag: Int, to name: String, noteId: String) {
+        guard self.noteId == noteId else { return }
+        let label = name.isEmpty ? "Speaker \(tag)" : name
+        lines = lines.map { line in
+            var l = line
+            if l.speakerTag == tag { l.speaker = label }
+            return l
+        }
     }
 }

@@ -38,7 +38,7 @@ variable "db_edition" {
   default = "ENTERPRISE"
 }
 # Not committed (public repo). Derive at plan time:
-#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-prod \
+#   export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-production \
 #     --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 variable "billing_account" {
   type = string
@@ -65,6 +65,14 @@ variable "admin_uids" {
 variable "broadcast_capture" {
   type    = string
   default = "on"
+}
+
+# The online-meeting notetaker's surfaces (GET /v1/config). Off unless named;
+# for testers in notetaker_testers only. To switch the bot on for them: plan
+# with TF_VAR_notetaker_surfaces=bot and apply.
+variable "notetaker_surfaces" {
+  type    = string
+  default = ""
 }
 
 provider "google" {
@@ -128,7 +136,28 @@ module "environment" {
   allowed_origins   = "https://algominutes.algorythmos.com"
   admin_uids        = var.admin_uids
   broadcast_capture = var.broadcast_capture
-  monthly_budget    = 300
+
+  # No reverse trial until Apple DeviceCheck is set up here (devicecheck_key_id, apple_team_id and the
+  # devicecheck-key secret; RELEASE.md PR 22): without it every new iOS user would open on the free floor,
+  # with devicecheck_not_configured on each first kickoff. Turned on with them.
+  trial_on_first_use = "off"
+  notetaker_surfaces = var.notetaker_surfaces
+
+  # Every new account's minutes before buying (plan rev 12, Stage 3; owner decision 1), so App Review and every
+  # new user can record and see a summary first. At A$0.03 a minute, at most A$3.60 an account a month; the
+  # daily spend cap bounds the total.
+  free_floor_minutes = 120
+
+  # One warm api and billing instance (plan rev 12, Stage 2, O5): a sign-in, a kickoff or a purchase never waits
+  # on a cold start. Billed at Cloud Run's idle rate, roughly A$40 a month for the two (to confirm after Apply P).
+  min_instances = { api = 1, billing = 1 }
+
+  # The launch's cost guards (plan rev 12, Stage 2). The api refuses a kickoff, and the transcoder halts queued
+  # paid work, once a day's paid work reaches A$60 (about 2,000 minutes at A$0.03), rather than spend-guard's
+  # A$200 prod default. Revisit from the measured cost per minute after launch.
+  daily_spend_cap_aud = 60
+  # Alerts only (budget.tf): a month past A$500.
+  monthly_budget = 500
 }
 
 # Re-export module outputs at the root for convenience.

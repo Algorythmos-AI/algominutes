@@ -19,8 +19,9 @@ const { isValidId } = intelligenceModule;
 const shareLinks = shareLinksModule;
 const { pool, postgresEnabled } = pgQueryModule;
 
-// Where a share link points: the public site (PUBLIC_SITE_URL).
-const { publicSiteUrl } = siteUrlModule;
+// Where a share link opens: the web app's viewer (/app/s/<token>) on SHARE_VIEWER_ORIGIN, else the public
+// site (RELEASE.md PR 29).
+const { shareViewerOrigin } = siteUrlModule;
 
 // ── shareCreate ────────────────────────────────────────────────────────
 // The raw token is returned HERE AND NOWHERE ELSE. Only sha256(token) is
@@ -75,7 +76,7 @@ export async function shareCreateRoute(req, res) {
     return res.status(200).json({
       shareId: created.id,
       token: raw,
-      url: `${publicSiteUrl()}/s/${raw}`,
+      url: `${shareViewerOrigin()}/app/s/${raw}`,
       scope: opts.scope,
       expiresAt: created.expiresAt,
     });
@@ -109,6 +110,36 @@ export async function shareRevokeRoute(req, res) {
     // Failing the second click would push people toward deleting the note.
     log.info({ shareId, changed }, 'share_revoked');
     return res.status(200).json({ ok: true, revoked: changed });
+  } finally {
+    client.release();
+  }
+}
+
+// ── shareList ──────────────────────────────────────────────────────────
+// RELEASE.md rev 11, H20: the caller's links for one of their notes, so they can see what they've shared and
+// revoke it. Never the token: only its hash is stored.
+export async function shareListRoute(req, res) {
+  const baseLog = req.log;
+  const uid = req.uid;
+
+  const { noteId, workspaceId } = req.body || {};
+  if (!isValidId(noteId) || !isValidId(workspaceId)) {
+    return res.status(400).json({ error: 'Missing or invalid required fields' });
+  }
+  if (workspaceId !== `workspace_${uid}`) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const log = baseLog.child({ uid, userId: uid, noteId, workspaceId });
+  if (!postgresEnabled()) {
+    return res.status(503).json({ error: 'Sharing is unavailable until Postgres is provisioned.' });
+  }
+
+  const client = await pool().connect();
+  try {
+    const shares = await shareLinks.listSharesWithinTx(client, { noteId, uid, workspaceId });
+    log.info({ count: shares.length, live: shares.filter((s) => s.live).length }, 'shares_listed');
+    return res.status(200).json({ shares });
   } finally {
     client.release();
   }

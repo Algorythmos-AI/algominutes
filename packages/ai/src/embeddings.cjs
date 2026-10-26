@@ -13,6 +13,7 @@
 // the embedder still sees redacted content.
 
 const _redaction = require('./redaction.cjs');
+const { vertexRefusal } = require('./vertex-refusal.cjs');
 
 const TARGET_CHARS = 2000;
 const OVERLAP_CHARS = 200;
@@ -26,6 +27,36 @@ function timeStrToMs(t) {
   if (parts.length === 3) return ((parts[0] * 60 + parts[1]) * 60 + parts[2]) * 1000;
   if (parts.length === 2) return (parts[0] * 60 + parts[1]) * 1000;
   return parts[0] * 1000;
+}
+
+// A line longer than this is cut at spaces before chunking, so no chunk passes
+// TARGET_CHARS (the overlap plus one piece fits). Lines are capped at 1,000
+// characters when written (the transcoder's lineIsFull), but a note from
+// before that, or a whole-file provider's odd output, can hold one line of
+// thousands: it became one oversized chunk, and a batch with it in can fail.
+const PIECE_CHARS = TARGET_CHARS - OVERLAP_CHARS - 1;
+
+// Cut text into pieces of at most `max` characters at spaces (a word with no
+// space in `max` characters is cut where it is), each with its share of the
+// line's time.
+function splitLongText(text, startMs, endMs, max) {
+  if (text.length <= max) return [{ text, startMs, endMs }];
+  const pieces = [];
+  let rest = text;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(' ', max);
+    if (cut <= 0) cut = max;
+    pieces.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^ +/, '');
+  }
+  if (rest) pieces.push(rest);
+  const span = Math.max(0, endMs - startMs);
+  let at = 0;
+  return pieces.map((piece) => {
+    const from = startMs + Math.round((span * at) / text.length);
+    at += piece.length;
+    return { text: piece, startMs: from, endMs: startMs + Math.round((span * Math.min(at, text.length)) / text.length) };
+  });
 }
 
 function chunkTranscript(lines, log) {
@@ -61,12 +92,17 @@ function chunkTranscript(lines, log) {
     const startMs = typeof line.startMs === 'number' ? line.startMs : timeStrToMs(line.time);
     const endMs = typeof line.endMs === 'number' ? line.endMs : startMs;
     const speakerLabel = line.speaker || (line.speakerTag != null ? `Speaker ${line.speakerTag}` : '');
-    const formatted = speakerLabel ? `${speakerLabel}: ${text}` : text;
-    if (bufferStart === null) bufferStart = startMs;
-    if (buffer.length + formatted.length + 1 > TARGET_CHARS) flush();
-    if (bufferStart === null) bufferStart = startMs;
-    buffer += (buffer ? '\n' : '') + formatted;
-    bufferEnd = endMs;
+    const prefix = speakerLabel ? `${speakerLabel}: ` : '';
+    const pieces = splitLongText(text, startMs, endMs, Math.max(100, PIECE_CHARS - prefix.length));
+    if (pieces.length > 1 && log) log.info({ lineChars: text.length, pieces: pieces.length }, 'embed_line_split');
+    for (const piece of pieces) {
+      const formatted = prefix + piece.text;
+      if (bufferStart === null) bufferStart = piece.startMs;
+      if (buffer.length + formatted.length + 1 > TARGET_CHARS) flush();
+      if (bufferStart === null) bufferStart = piece.startMs;
+      buffer += (buffer ? '\n' : '') + formatted;
+      bufferEnd = piece.endMs;
+    }
   }
   flush();
   return out;
@@ -91,6 +127,9 @@ const EMBED_BATCH = 20;
 // blip used to fail the whole note's embedding, and the task's retry redid it
 // all from the first chunk.
 const EMBED_MAX_ATTEMPTS = 4;
+// Each batch request is aborted after this long and retried like a dropped
+// connection, so a hung call can't hold the embedder until its request timeout.
+const EMBED_TIMEOUT_MS = 60_000;
 
 async function adcToken() {
   const { GoogleAuth } = require('google-auth-library');
@@ -105,6 +144,7 @@ const retryable = (status) => status === 429 || status >= 500;
 async function embedChunks({
   chunks, log, project, location,
   fetchImpl = globalThis.fetch, getToken = adcToken, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  timeoutMs = EMBED_TIMEOUT_MS,
 }) {
   const loc = location || process.env.AIPLATFORM_LOCATION || 'us-central1';
   const { token, projectId } = await getToken();
@@ -132,6 +172,7 @@ async function embedChunks({
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body,
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (err) {
         if (attempt >= EMBED_MAX_ATTEMPTS) throw err;
@@ -149,8 +190,10 @@ async function embedChunks({
         await sleep(1000 * 2 ** (attempt - 1));
         continue;
       }
-      log.error({ status: resp.status, body: errText.slice(0, 300) }, 'vertex_embed_http_error');
-      throw new Error(`vertex_embed_failed: ${resp.status}`);
+      // Never the body's text: a 400 can quote the batch back, and the batch is transcript chunks (Q29).
+      const refused = vertexRefusal('vertex_embed_failed:', resp.status, errText);
+      log.error({ status: resp.status, err: refused }, 'vertex_embed_http_error');
+      throw refused;
     }
     const predictions = data && data.predictions;
     if (!Array.isArray(predictions) || predictions.length !== batch.length) {
@@ -172,6 +215,7 @@ async function embedChunks({
 module.exports = {
   EMBED_BATCH,
   EMBED_MAX_ATTEMPTS,
+  EMBED_TIMEOUT_MS,
   TARGET_CHARS,
   OVERLAP_CHARS,
   EMBED_MODEL,

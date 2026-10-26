@@ -11,7 +11,8 @@
     "embedder":   { "max_instances": 2, "pools": 2, "pool_max": 2 },
     "billing":    { "max_instances": 2, "pools": 1, "pool_max": 2 },
     "notifier":   { "max_instances": 2, "pools": 1, "pool_max": 2 },
-    "extractor":  { "max_instances": 4, "pools": 0, "pool_max": 0 }
+    "extractor":  { "max_instances": 4, "pools": 0, "pool_max": 0 },
+    "meetings":   { "max_instances": 2, "pools": 1, "pool_max": 2 }
   },
   "jobs": {
     "db-job":   { "connections": 1, "pool_max": 1 },

@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { buildApp as buildApiApp } from '../services/api/src/app.js';
 // @ts-expect-error: plain ESM module, no type declarations
 import { buildApp as buildBillingApp } from '../services/billing/src/app.js';
+// @ts-expect-error: plain ESM module, no type declarations
+import { buildApp as buildMeetingsApp } from '../services/meetings/src/app.js';
 
 // CLAUDE.md: CSP stays enabled in production. The two JSON services send the
 // strictest policy (nothing may load, run or frame a response), which also
@@ -23,6 +25,7 @@ async function headersOf(app: { listen: (p: number) => any }, path: string) {
 describe.each([
   ['api', () => buildApiApp(), '/v1/health'],
   ['billing', () => buildBillingApp(), '/health'],
+  ['meetings', () => buildMeetingsApp({ env: {}, readSecret: async () => null }), '/health'],
 ])('%s security headers', (_name, build, path) => {
   it("sends a strict CSP (default-src 'none', no framing) and helmet's other protections", async () => {
     const h = await headersOf(build(), path);

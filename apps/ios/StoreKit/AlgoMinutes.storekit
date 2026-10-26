@@ -1,0 +1,67 @@
+{
+  "identifier": "5D1C7B7E",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_developerTeamID": "NY9MS8GSBK",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_AU",
+    "_storefront": "AUS",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [
+    {
+      "id": "21000001",
+      "localizations": [],
+      "name": "AlgoMinutes Pro",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "14.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6816333601",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "1,500 minutes a month",
+              "displayName": "Pro Monthly",
+              "locale": "en_AU"
+            }
+          ],
+          "productID": "com.algorythmos.algominutes.pro.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Pro Monthly",
+          "subscriptionGroupID": "21000001",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "149.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6816333602",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "1,500 minutes a month, billed yearly",
+              "displayName": "Pro Annual",
+              "locale": "en_AU"
+            }
+          ],
+          "productID": "com.algorythmos.algominutes.pro.annual",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Pro Annual",
+          "subscriptionGroupID": "21000001",
+          "type": "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

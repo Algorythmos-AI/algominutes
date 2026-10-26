@@ -6,7 +6,7 @@
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#0B0B10",
-  "theme_color": "#120C33",
+  "theme_color": "#07051A",
   "icons": [
     {
       "src": "icon-48.png",
@@ -36,7 +36,7 @@
       "src": "icon-192.png",
       "type": "image/png",
       "sizes": "192x192",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "icon-256.png",
@@ -48,7 +48,19 @@
       "src": "icon-512.png",
       "type": "image/png",
       "sizes": "512x512",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
     }
   ]
 }

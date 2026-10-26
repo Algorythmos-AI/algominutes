@@ -17,13 +17,18 @@
 const pipelineRepo = require('@algominutes/db/pipeline-repo.cjs');
 
 let _repoWarned = false;
-function requireRepo(basename) {
+function requireRepo(basename, misses = []) {
   const specs = [`@algominutes/db/${basename}.ts`, `@algominutes/db/${basename}`];
   for (const spec of specs) {
     try {
       return require(spec);
     } catch (err) {
-      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) continue;
+      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) {
+        // Kept for repoFn's warning: a spec that resolves but whose own import
+        // fails looks the same here, and only the message tells them apart.
+        misses.push(err);
+        continue;
+      }
       throw err;
     }
   }
@@ -31,11 +36,12 @@ function requireRepo(basename) {
 }
 
 function repoFn(basename, fnName, log) {
-  const mod = requireRepo(basename);
+  const misses = [];
+  const mod = requireRepo(basename, misses);
   if (mod && typeof mod[fnName] === 'function') return mod[fnName];
   if (!_repoWarned) {
     _repoWarned = true;
-    log.warn({ basename, fnName }, 'db_repo_unavailable_skipping');
+    log.warn({ basename, fnName, misses: misses.map((e) => String(e.message)) }, 'db_repo_unavailable_skipping');
   }
   return null;
 }
@@ -56,7 +62,9 @@ async function recordDeadLetterSafe(input, log) {
   if (!fn) return;
   try {
     const r = await fn(input);
-    log.info({ deadLetterId: r && r.id, queue: input.queue, noteId: input.noteId }, 'dead_letter_recorded');
+    // Once per lost piece of work (migration 027): the alert counts dead_letter_recorded.
+    if (r && r.duplicate) log.info({ deadLetterId: r.id, queue: input.queue, noteId: input.noteId }, 'dead_letter_already_recorded');
+    else log.info({ deadLetterId: r && r.id, queue: input.queue, noteId: input.noteId, reason: input.reason ?? null }, 'dead_letter_recorded');
   } catch (err) {
     log.error({ err, queue: input.queue, noteId: input.noteId }, 'dead_letter_record_failed');
   }
@@ -66,7 +74,7 @@ async function recordDeadLetterSafe(input, log) {
  * FINAL-ATTEMPT FAILURE: the dead letter. The refund and the "failed" notice
  * are markNoteFailed's, written with the failure. `payload` is metadata only.
  */
-async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false }) {
+async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err, attempts, traceId, payload, log, deadLetterOnly = false, reason = 'summarize_failed' }) {
   if (!noteId) return;
   const resolved = await resolveNoteUid({ pool, noteId, workspaceId, uid, log });
   await recordDeadLetterSafe({
@@ -77,6 +85,7 @@ async function onSummarizeTerminalFailure({ pool, noteId, workspaceId, uid, err,
     error: err && err.message ? err.message : (err ? String(err) : null),
     attempts: attempts != null ? attempts : null,
     traceId: traceId || null,
+    reason,
   }, log);
   // Work lost on a note that isn't failed (ready anyway, or Postgres couldn't
   // say): the dead letter is the only record of it.

@@ -1,21 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { AppConfigResponse } from '@algominutes/contracts/schemas';
-import { appConfig } from '../services/api/src/routes/app-config.js';
+import { AppConfigResponse, FeatureDisabledError } from '@algominutes/contracts/schemas';
+import { appConfig, notetakerSwitches, notetakerFor, NOTETAKER_BUILT, shareLinksOn } from '../services/api/src/routes/app-config.js';
+// @ts-expect-error: plain CJS module, no type declarations
+import siteUrl from '../packages/ai/src/site-url.cjs';
+import { createMeetingBotRoute, cancelMeetingBotRoute } from '../services/api/src/routes/meetings.js';
 
 // GET /v1/config: broadcast capture's kill switch. BROADCAST_CAPTURE=off
 // hides the entry point; anything else, or unset, leaves it on. The body is
 // the AppConfigResponse contract.
 describe('app config', () => {
-  it('broadcast capture is on unless the env says off', () => {
-    expect(appConfig({})).toEqual({ broadcastCapture: true });
-    expect(appConfig({ BROADCAST_CAPTURE: 'on' })).toEqual({ broadcastCapture: true });
-    expect(appConfig({ BROADCAST_CAPTURE: 'off' })).toEqual({ broadcastCapture: false });
-    expect(appConfig({ BROADCAST_CAPTURE: ' OFF ' })).toEqual({ broadcastCapture: false });
+  it('broadcast capture is on unless the env says off', async () => {
+    expect((await appConfig({})).broadcastCapture).toBe(true);
+    expect((await appConfig({ BROADCAST_CAPTURE: 'on' })).broadcastCapture).toBe(true);
+    expect((await appConfig({ BROADCAST_CAPTURE: 'off' })).broadcastCapture).toBe(false);
+    expect((await appConfig({ BROADCAST_CAPTURE: ' OFF ' })).broadcastCapture).toBe(false);
   });
 
-  it('matches the AppConfigResponse contract', () => {
-    for (const env of [{}, { BROADCAST_CAPTURE: 'off' }]) {
-      expect(AppConfigResponse.parse(appConfig(env))).toEqual(appConfig(env));
+  // RELEASE.md PR 29: a share link is public, so the apps show it only once the server says so.
+  it('share links are off unless the env says on', async () => {
+    expect((await appConfig({})).shareLinks).toBe(false);
+    expect((await appConfig({ SHARE_LINKS: 'on' })).shareLinks).toBe(true);
+    expect(shareLinksOn({ SHARE_LINKS: ' TRUE ' })).toBe(true);
+    for (const v of ['off', 'yes please', '0', '']) expect(shareLinksOn({ SHARE_LINKS: v }), v).toBe(false);
+  });
+
+  it("a share link opens on the viewer's origin, only an https one, else the public site", () => {
+    const { shareViewerOrigin } = siteUrl;
+    expect(shareViewerOrigin({})).toBe('https://algominutes.algorythmos.com');
+    expect(shareViewerOrigin({ PUBLIC_SITE_URL: 'https://site.example.test' })).toBe('https://site.example.test');
+    expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: ' https://beta.example.test/ ' })).toBe('https://beta.example.test');
+    expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: 'http://localhost:5173' })).toBe('http://localhost:5173');
+    for (const bad of ['http://beta.example.test', 'https://beta.example.test/app', 'https://u@beta.example.test', 'https://beta.example.test/?x=1', 'beta.example.test', 'javascript:alert(1)']) {
+      expect(shareViewerOrigin({ SHARE_VIEWER_ORIGIN: bad, PUBLIC_SITE_URL: 'https://site.example.test' }), bad).toBe('https://site.example.test');
+    }
+  });
+
+  it('matches the AppConfigResponse contract', async () => {
+    for (const env of [{}, { BROADCAST_CAPTURE: 'off' }, { NOTETAKER: 'bot,calendar' }, { SHARE_LINKS: 'on' }]) {
+      const body = await appConfig(env, 'alice', { isTester: async () => true });
+      expect(AppConfigResponse.parse(body)).toEqual(body);
     }
   });
 
@@ -29,4 +52,65 @@ describe('app config', () => {
     expect(guards(config).length).toBe(2);
     expect(guards(config)).toEqual(guards(route('/entitlement')));
   });
+
+  // The online-meeting notetaker (docs/plans/MEETINGS.md): off by default, and
+  // never reported on for a surface that isn't built yet.
+  const OFF = { bot: false, calendar: false, zoomImport: false, extension: false };
+  const testers = (...uids: string[]) => async (uid: string) => uids.includes(uid);
+
+  it('every notetaker surface is off by default, and nothing is looked up while it is', async () => {
+    let asked = 0;
+    const isTester = async () => { asked += 1; return true; };
+    expect((await appConfig({}, 'alice', { isTester })).notetaker).toEqual(OFF);
+    expect(asked).toBe(0);
+  });
+
+  it('the env alone cannot switch on a surface that is not built, nor for someone not allowlisted', async () => {
+    expect([...NOTETAKER_BUILT]).toEqual(['bot']);
+    const all = { NOTETAKER: 'bot,calendar,zoomImport,extension' };
+    // No uid, or a caller who isn't a notetaker tester: nothing.
+    expect((await appConfig(all, null, { isTester: testers('alice') })).notetaker).toEqual(OFF);
+    expect((await appConfig(all, 'bob', { isTester: testers('alice') })).notetaker).toEqual(OFF);
+    // An allowlisted tester: only what's built (the bot), never an unbuilt surface.
+    expect((await appConfig(all, 'alice', { isTester: testers('alice', 'carol') })).notetaker).toEqual({ ...OFF, bot: true });
+  });
+
+  it('allowlisted but switched off is off; a failed lookup is off, and logged', async () => {
+    expect(await notetakerFor('alice', {}, { isTester: testers('alice') })).toEqual(OFF);
+    const errors: string[] = [];
+    const log = { error: (_o: unknown, m: string) => errors.push(m) };
+    expect(await notetakerFor('alice', { NOTETAKER: 'bot' }, { isTester: async () => { throw new Error('pg down'); }, log })).toEqual(OFF);
+    expect(errors).toEqual(['notetaker_tester_lookup_failed']);
+  });
+
+  it('a built surface is on only when NOTETAKER names it', () => {
+    const built = new Set(['bot', 'calendar']);
+    expect(notetakerSwitches({ NOTETAKER: ' bot , extension ' }, built)).toEqual({ bot: true, calendar: false, zoomImport: false, extension: false });
+    expect(notetakerSwitches({}, built)).toEqual({ bot: false, calendar: false, zoomImport: false, extension: false });
+  });
+
+  it('the notetaker routes answer 503 feature_disabled (the FeatureDisabledError contract) while it is off', async () => {
+    for (const route of [createMeetingBotRoute, cancelMeetingBotRoute]) {
+      const logged: string[] = [];
+      let status = 0;
+      let body: unknown;
+      const res: any = { status: (s: number) => ((status = s), res), json: (b: unknown) => ((body = b), res) };
+      await route({ uid: 'alice', log: { info: (_o: unknown, m: string) => logged.push(m) } } as any, res);
+      expect(status).toBe(503);
+      expect(FeatureDisabledError.parse(body)).toEqual(body);
+      expect(logged).toEqual(['notetaker_disabled']);
+    }
+  });
+
+  it('mounts the notetaker routes behind the same auth and rate limit as /config', async () => {
+    const { buildRouter } = await import('../services/api/src/routes/index.js');
+    const stack = buildRouter().stack;
+    const route = (p: string) => stack.find((l: any) => l.route && l.route.path === p)?.route;
+    const guards = (r: any) => r.stack.slice(0, -1).map((s: any) => s.handle);
+    for (const p of ['/meetings/bots', '/meetings/bots/:botId/cancel']) {
+      expect(route(p)?.methods.post, p).toBe(true);
+      expect(guards(route(p)), p).toEqual(guards(route('/config')));
+    }
+  });
 });
+

@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react';
-import { SUMMARY_TEMPLATES, type NoteReadResponse } from '@algominutes/contracts';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { SUMMARY_TEMPLATES, type NoteReadResponse, type ShareCreateResponse, type ShareListResponse } from '@algominutes/contracts';
+import { formatDate } from '../../lib/notes/format';
 import { ApiError } from '../../lib/api/errors';
 import { reportCrash } from '../../lib/crashReport';
 import { useApi } from '../ApiContext';
@@ -7,7 +8,7 @@ import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 
 type Summary = NonNullable<NoteReadResponse['summary']>;
-type Tool = null | 'rename' | 'edit' | 'regenerate' | 'feedback' | 'export';
+type Tool = null | 'rename' | 'edit' | 'regenerate' | 'feedback' | 'export' | 'share';
 
 interface Props {
   noteId: string;
@@ -16,12 +17,14 @@ interface Props {
   summary: Summary | null;
   /** Re-read the note after a change the page must show. */
   reload: () => void;
+  /** Whether the server offers share links (/v1/config.shareLinks, RELEASE.md PR 29). */
+  shareLinks?: boolean;
 }
 
 const lines = (text: string) => text.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /** The note's tools, as on iOS's note screen: rename, edit the summary, regenerate, feedback and export. */
-export function NoteTools({ noteId, workspaceId, title, summary, reload }: Props) {
+export function NoteTools({ noteId, workspaceId, title, summary, reload, shareLinks = false }: Props) {
   const { api } = useApi();
   const notice = useNotice();
   const [tool, setTool] = useState<Tool>(null);
@@ -53,8 +56,11 @@ export function NoteTools({ noteId, workspaceId, title, summary, reload }: Props
         {summary && <button type="button" className={btn} onClick={() => open('edit')}>Edit summary</button>}
         <button type="button" className={btn} onClick={() => open('regenerate')}>Regenerate summary</button>
         <button type="button" className={btn} onClick={() => open('export')}>Export</button>
+        {shareLinks && <button type="button" className={btn} onClick={() => open('share')}>Share a link</button>}
         <button type="button" className={btn} onClick={() => open('feedback')}>Rate this note</button>
       </div>
+
+      {tool === 'share' && <ShareDialog noteId={noteId} workspaceId={workspaceId} onClose={() => setTool(null)} />}
 
       {tool === 'rename' && (
         <RenameDialog
@@ -152,6 +158,135 @@ export function NoteTools({ noteId, workspaceId, title, summary, reload }: Props
       )}
     </>
   );
+}
+
+/**
+ * A share link (RELEASE.md PR 29), as iOS offers it: stated first that anyone with the link can read the
+ * note without signing in, then made, copied, or stopped. The link is shown once, as the server returns it:
+ * it's never stored here.
+ *
+ * Below it, the links already made for this note (rev 11, H20): when each was made, whether it still opens, how
+ * often it was read, and Stop sharing on the ones that do. A link can't be shown again (only its hash is kept).
+ */
+function ShareDialog({ noteId, workspaceId, onClose }: { noteId: string; workspaceId: string; onClose: () => void }) {
+  const { api } = useApi();
+  const notice = useNotice();
+  const [share, setShare] = useState<ShareCreateResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // null: not read yet. 'failed': the list couldn't be read (the dialog still makes and stops a link).
+  const [links, setLinks] = useState<ShareLinks | 'failed' | null>(null);
+  const fetchLinks = useCallback(() => api.listShares({ noteId, workspaceId }).then((r) => r.shares), [api, noteId, workspaceId]);
+  const linksFailed = (err: unknown) => {
+    setLinks('failed');
+    if (!(err instanceof ApiError)) reportCrash('notes.share.list', err);
+  };
+  useEffect(() => {
+    let cancelled = false;
+    fetchLinks().then(
+      (l) => !cancelled && setLinks(l),
+      (err: unknown) => {
+        if (!cancelled) linksFailed(err);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchLinks]);
+  const loadLinks = () => fetchLinks().then(setLinks, linksFailed);
+  const act = async (fn: () => Promise<void>, kind: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'That didn’t work. Try again.');
+      if (!(err instanceof ApiError)) reportCrash(`notes.share.${kind}`, err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const create = () =>
+    act(async () => {
+      setShare(await api.createShare({ noteId, workspaceId, scope: 'both' }));
+      await loadLinks();
+    }, 'create');
+  const stopListed = (shareId: string | number) =>
+    act(async () => {
+      await api.revokeShare({ noteId, workspaceId, shareId });
+      if (share && String(share.shareId) === String(shareId)) setShare(null);
+      notice.show('Sharing stopped. The link no longer opens.');
+      await loadLinks();
+    }, 'revoke');
+  const stop = (s: ShareCreateResponse) =>
+    act(async () => {
+      await api.revokeShare({ noteId, workspaceId, shareId: s.shareId });
+      setShare(null);
+      notice.show('Sharing stopped. The link no longer opens.');
+      onClose();
+    }, 'revoke');
+  const copy = (url: string) =>
+    act(async () => {
+      await navigator.clipboard.writeText(url);
+      notice.show('Link copied.');
+    }, 'copy');
+
+  return (
+    <Dialog title="Share a link" onCancel={onClose}>
+      <p className="text-body">
+        Anyone with the link can read this note’s summary and transcript without signing in. It expires in 7 days, and
+        you can stop sharing at any time. The audio is never shared.
+      </p>
+      {share ? (
+        <>
+          <label className="mt-3 block text-body">
+            The link
+            <input className={field} readOnly value={share.url} onFocus={(e) => e.currentTarget.select()} />
+          </label>
+          {error && <p role="alert" className="mt-3 text-danger">{error}</p>}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" disabled={busy} className="rounded-xl bg-accent px-4 py-2 font-semibold text-white disabled:opacity-60" onClick={() => void copy(share.url)}>Copy link</button>
+            <button type="button" disabled={busy} className="rounded-xl border border-danger/60 px-4 py-2 font-semibold text-danger disabled:opacity-60" onClick={() => void stop(share)}>Stop sharing</button>
+            <button type="button" className="px-4 py-2 text-muted" onClick={onClose}>Done</button>
+          </div>
+        </>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); void create(); }}>
+          <Footer busy={busy} error={error} label="Create link" onCancel={onClose} />
+        </form>
+      )}
+      {links === 'failed' && <p role="status" className="mt-4 text-muted">The links you’ve made couldn’t be loaded.</p>}
+      {Array.isArray(links) && links.length > 0 && (
+        <section aria-label="Links you’ve made" className="mt-5 border-t border-border pt-4">
+          <h3 className="font-semibold">Links you’ve made</h3>
+          <ul className="mt-2 space-y-2">
+            {links.map((l) => (
+              <li key={String(l.shareId)} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-body">
+                  Made {formatDate(l.createdAt) ?? 'earlier'} · {linkState(l)} · {l.readCount === 1 ? 'read once' : `read ${l.readCount} times`}
+                </span>
+                {l.live && (
+                  <button type="button" disabled={busy} className="rounded-lg border border-danger/60 px-3 py-1 text-danger disabled:opacity-60" onClick={() => void stopListed(l.shareId)}>
+                    Stop sharing<span className="sr-only"> the link made {formatDate(l.createdAt) ?? 'earlier'}</span>
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </Dialog>
+  );
+}
+
+type ShareLinks = ShareListResponse['shares'];
+
+/** Whether a listed link still opens, in words. */
+function linkState(l: ShareLinks[number]): string {
+  if (l.revokedAt) return 'stopped';
+  if (!l.live) return 'expired';
+  const until = formatDate(l.expiresAt);
+  return until ? `opens until ${until}` : 'still opens';
 }
 
 /** Saves a blob as a file, through a temporary object URL. */

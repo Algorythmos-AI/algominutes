@@ -27,6 +27,7 @@ function toEntry(row) {
     error: row.error ?? null,
     attempts: row.attempts ?? null,
     traceId: row.trace_id ?? null,
+    reason: row.reason ?? null,
     createdAt: iso(row.created_at),
     resolvedAt: iso(row.resolved_at),
   };

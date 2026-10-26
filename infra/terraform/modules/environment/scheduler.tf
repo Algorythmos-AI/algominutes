@@ -34,6 +34,24 @@ resource "google_project_iam_member" "auth_user_deleter" {
   member  = "serviceAccount:${google_service_account.runtime[each.value].email}"
 }
 
+# Only the permission the session check needs (packages/ai session-check.cjs): read an Auth user, to see
+# whether it is disabled or its sessions were revoked. The api and billing verify tokens; neither could ask.
+resource "google_project_iam_custom_role" "auth_user_reader" {
+  project     = var.project_id
+  role_id     = "algominutesAuthUserReader"
+  title       = "AlgoMinutes: read Firebase Auth users"
+  description = "Session check only: firebaseauth.users.get."
+  permissions = ["firebaseauth.users.get"]
+}
+
+resource "google_project_iam_member" "auth_user_reader" {
+  for_each = toset(["run-api", "run-billing"])
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.auth_user_reader.id
+  member  = "serviceAccount:${google_service_account.runtime[each.value].email}"
+}
+
 resource "google_storage_bucket_iam_member" "sweep_recordings" {
   bucket = google_storage_bucket.buckets["recordings"].name
   role   = "roles/storage.objectAdmin"
@@ -66,7 +84,7 @@ resource "google_cloud_run_v2_job" "db_sweep" {
           limits = { cpu = "1", memory = "512Mi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env, {
+          for_each = merge(local.common_env, local.free_floor_env, local.db_env, {
             JOB_NAME       = "sweep"
             STORAGE_BUCKET = local.region_bucket["recordings"]
             PG_POOL_MAX    = tostring(var.connection_budget.jobs["db-sweep"].pool_max)
@@ -148,4 +166,151 @@ resource "google_cloud_scheduler_job" "sweep" {
   }
 
   depends_on = [google_project_service.apis, google_cloud_run_v2_job_iam_member.scheduler_runs_sweep]
+}
+
+# ---------------------------------------------------------------------------
+# The notetaker's purge worker (services/meetings/src/tasks/ingest.js
+# purge_media): every 30 minutes, asks Recall again to delete its copy of each
+# recording not yet confirmed deleted, and logs recall_purge_exhausted for each
+# that ran out of attempts (alerting.tf). The purge rows are the queue: ingest,
+# a failed bot and (PR 21) a deleted note each add one.
+#
+# Called as Cloud Tasks call it (lib/task-auth.js): an OIDC token issued to
+# run-jobs, for exactly this URL. No retries: the next tick is the retry. With
+# nothing pending it reads one table and never calls Recall.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "meetings_purge_media" {
+  project          = var.project_id
+  region           = var.region
+  name             = "meetings-purge-media"
+  description      = "Retries deleting Recall's copies of notetaker recordings until each is confirmed (meetings /tasks/purge_media)."
+  schedule         = "*/30 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["meetings"]}/tasks/purge_media"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "purge_media" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["meetings"]}/tasks/purge_media"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# ---------------------------------------------------------------------------
+# The notetaker's reconcile (services/meetings/src/tasks/reconcile.js): every
+# 15 minutes it picks up work whose own task was lost: webhooks never
+# processed, bots never sent, recordings whose ingest never ran, and bots
+# silent for hours. Called as purge_media is. A run with failures answers 500,
+# which Cloud Scheduler records; the next run tries again.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "meetings_reconcile" {
+  project          = var.project_id
+  region           = var.region
+  name             = "meetings-reconcile"
+  description      = "Re-drives notetaker work whose task was lost (meetings /tasks/reconcile)."
+  schedule         = "*/15 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["meetings"]}/tasks/reconcile"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "reconcile" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["meetings"]}/tasks/reconcile"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# ---------------------------------------------------------------------------
+# Billing's Apple reconcile (services/billing/src/tasks/reconcile-apple.js):
+# every hour it asks Apple (App Store Server API) about the App Store
+# subscriptions near the end of their period, or not checked for a week, so a
+# notification that never arrived can't leave an entitlement wrong.
+#
+# Called as Cloud Tasks call a task (@algominutes/ai/task-auth.cjs): an OIDC
+# token issued to run-jobs, for exactly this URL. No retries: the next tick is
+# the retry. Until the owner adds the key it checks nothing.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "billing_reconcile_apple" {
+  project          = var.project_id
+  region           = var.region
+  name             = "billing-reconcile-apple"
+  description      = "Checks App Store subscriptions with Apple, for notifications that never arrived (billing /tasks/reconcile-apple)."
+  schedule         = "17 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "90s" # billing answers within its 60 s request timeout
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["billing"]}/tasks/reconcile-apple"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "reconcile-apple" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["billing"]}/tasks/reconcile-apple"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# ---------------------------------------------------------------------------
+# Billing's Stripe cancellations (services/billing/src/tasks/cancel-stripe.js):
+# every 15 minutes it cancels, with Stripe, the subscriptions of deleted
+# accounts (RELEASE.md PR 28b), which would otherwise go on charging. Called as
+# reconcile-apple is. With nothing waiting it reads one table and never calls
+# Stripe.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "billing_cancel_stripe" {
+  project          = var.project_id
+  region           = var.region
+  name             = "billing-cancel-stripe"
+  description      = "Cancels deleted accounts' Stripe subscriptions (billing /tasks/cancel-stripe)."
+  schedule         = "*/15 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "90s" # billing answers within its 60 s request timeout
+
+  retry_config {
+    retry_count = 0 # the next tick is the retry
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${local.service_url["billing"]}/tasks/cancel-stripe"
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ kind = "cancel-stripe" }))
+
+    oidc_token {
+      service_account_email = google_service_account.runtime["run-jobs"].email
+      audience              = "${local.service_url["billing"]}/tasks/cancel-stripe"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
 }

@@ -9,6 +9,15 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Bounds on a download (RELEASE.md rev 11, H2): the transcoder's /tmp is memory, so an unbounded one (a
+// 10-hour video, a live stream that never ends) could take the instance down. The longest a note can be
+// (any plan's cap, plus the settle's minute of slack), the api's upload size limit, and a wall clock.
+const MAX_VIDEO_SECONDS = 4 * 60 * 60 + 60;
+const MAX_FILESIZE = '500M';
+const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
+// yt-dlp's stderr is kept for the error, its last part only: a chatty run can't grow it without bound.
+const STDERR_KEEP = 16 * 1024;
+
 const ALLOWED_HOSTS = new Set([
   'youtube.com',
   'www.youtube.com',
@@ -73,7 +82,7 @@ function classifyYtDlpError(stderr) {
   return err;
 }
 
-function fetchAudio({ url, outDir, log }) {
+function fetchAudio({ url, outDir, log, timeoutMs = Number(process.env.YOUTUBE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS }) {
   const validation = validateYoutubeUrl(url);
   if (!validation.ok) {
     return Promise.reject(new Error(`youtube_validation_failed: ${validation.reason}`));
@@ -94,6 +103,8 @@ function fetchAudio({ url, outDir, log }) {
       '--audio-quality', '0',
       '-o', outputTemplate,
       '--print', 'after_move:filepath',
+      '--max-filesize', MAX_FILESIZE,
+      '--match-filter', `duration <= ${MAX_VIDEO_SECONDS} & !is_live`,
     ];
     if (cookiesFile) args.push('--cookies', cookiesFile);
     if (extractorArgs) args.push('--extractor-args', extractorArgs);
@@ -101,30 +112,58 @@ function fetchAudio({ url, outDir, log }) {
     if (remoteComponents) args.push('--remote-components', remoteComponents);
     args.push(validation.url);
 
-    const child = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own process group, so the clock kills yt-dlp and the ffmpeg it runs: killing yt-dlp alone left its
+    // child holding the output pipes, and the download ran on.
+    const child = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (b) => { stdout += b.toString(); });
-    child.stderr.on('data', (b) => { stderr += b.toString(); });
-    child.on('error', (err) => reject(err));
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch (err) {
+        if (log) log.warn({ err }, 'youtube_kill_failed');
+      }
+      const err = new Error(`yt-dlp timed out after ${timeoutMs} ms`);
+      err.code = 'YOUTUBE_TIMEOUT';
+      err.isPermanent = true;
+      err.publicMessage = 'YouTube took too long to send this video. Please try again later or upload the audio file directly.';
+      settle(reject, err);
+    }, timeoutMs);
+    child.stdout.on('data', (b) => { stdout = (stdout + b.toString()).slice(-STDERR_KEEP); });
+    child.stderr.on('data', (b) => { stderr = (stderr + b.toString()).slice(-STDERR_KEEP); });
+    child.on('error', (err) => settle(reject, err));
     child.on('close', (code) => {
+      if (settled) return;
       if (code !== 0) {
         const err = classifyYtDlpError(`yt-dlp exited ${code}: ${stderr}`);
-        return reject(err);
+        return settle(reject, err);
       }
       const filepath = stdout.split('\n').map((s) => s.trim()).filter(Boolean).pop();
       if (!filepath) {
+        // With the filters above, a clean exit with nothing downloaded is almost always one of them: yt-dlp
+        // skips the video quietly (--print implies --quiet).
         const err = new Error('yt-dlp succeeded but reported no output path');
+        err.code = 'YOUTUBE_SKIPPED';
         err.isPermanent = true;
-        return reject(err);
+        err.publicMessage = 'This video couldn\'t be downloaded: it may be longer than 4 hours, larger than 500 MB, or a live stream. Please upload the audio file directly.';
+        return settle(reject, err);
       }
       if (log) log.info({ filepath }, 'youtube_fetch_ok');
-      resolve(filepath);
+      settle(resolve, filepath);
     });
   });
 }
 
 module.exports = {
+  MAX_VIDEO_SECONDS,
+  MAX_FILESIZE,
   validateYoutubeUrl,
   fetchAudio,
   resolveCookiesFile,

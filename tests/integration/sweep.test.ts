@@ -43,16 +43,18 @@ function fakes({ storageFails = false } = {}) {
 }
 
 const errors: Array<{ o: any; m: string }> = [];
+const warns: Array<{ o: any; m: string }> = [];
 const log = {
-  info: () => {}, warn: () => {},
+  info: () => {}, warn: (o: any, m: string) => void warns.push({ o, m }),
   error: (o: any, m: string) => void errors.push({ o, m }),
   child() { return log; },
 };
-const runSweep = (deps: unknown) => sweep.run({ log, env: {}, traceId: 't-sweep', deps, repo, noteTerminal });
+const runSweep = (deps: unknown, now?: Date) => sweep.run({ log, env: {}, traceId: 't-sweep', deps, repo, noteTerminal, ...(now ? { now } : {}) });
 
 beforeEach(async () => {
   await resetDb();
   errors.length = 0;
+  warns.length = 0;
   await seedUser('alice');
   await seedWorkspace('ws-a', 'alice');
 });
@@ -62,9 +64,37 @@ afterAll(async () => {
 });
 
 describe('sweep', () => {
+  // RELEASE.md rev 11, L2 (H2d).
+  it('reports an upload no note followed within 30 minutes, once, with what finds it', async () => {
+    const id = await repo.createUploadSession({
+      uid: 'alice', workspaceId: 'ws-a', noteId: 'lost', storagePath: 'recordings/ws-a/lost.aac',
+      sessionUri: 'https://storage.googleapis.com/upload/x?upload_id=lost', totalBytes: 10, expiresAt: new Date(Date.now() + 7 * 86_400_000),
+    }, quietLog);
+    await repo.markUploadCompleted({ id, uid: 'alice' });
+    await runSweep(fakes().deps, new Date(Date.now() + 31 * 60_000));
+    const reported = warns.filter((w) => w.m === 'upload_never_processed');
+    expect(reported.map((w) => w.o)).toEqual([expect.objectContaining({ uid: 'alice', userId: 'alice', workspaceId: 'ws-a', noteId: 'lost' })]);
+    warns.length = 0;
+    await runSweep(fakes().deps, new Date(Date.now() + 61 * 60_000));
+    expect(warns.filter((w) => w.m === 'upload_never_processed')).toEqual([]);
+  });
+
   it('uses the same in-flight stale window as the kickoff (IN_FLIGHT_STALE_MS)', () => {
     expect(sweep.IN_FLIGHT_STALE_MS).toBe(repo.IN_FLIGHT_STALE_MS);
     expect(sweep.STUCK_NOTE_MS).toBeGreaterThan(repo.IN_FLIGHT_STALE_MS);
+  });
+
+  // RELEASE.md rev 11, H6b: the sweep offers held notes to the kickoff (held-notes.test.ts covers the resume).
+  it('offers a note held for minutes to the kickoff, and leaves it held while the minutes still fall short', async () => {
+    const f = fakes();
+    await repo.grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 10 });
+    await seedNote('held', 'ws-a', 'alice');
+    await pool.query(`UPDATE notes SET status = 'awaiting_minutes', source_type = 'recording', storage_path = 'recordings/ws-a/held.m4a',
+                             duration_sec_probed = 1200 WHERE id = 'held'`);
+    const counts = await runSweep(f.deps);
+    expect(counts.resume_held_notes).toEqual({ held: 1, resumed: 0, waiting: 1, leftHeld: 0 });
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'held'`)).rows[0].status).toBe('awaiting_minutes');
+    expect(errors).toEqual([]);
   });
 
   it('retries pending purges past their grace; leaves fresh ones; flags stuck ones without running them', async () => {
@@ -214,6 +244,24 @@ describe('sweep', () => {
     );
     expect((await runSweep(f.deps)).usage_events).toBe(1);
     expect(Number((await pool.query(`SELECT count(*) AS n FROM usage_events`)).rows[0].n)).toBe(1);
+  });
+
+  // Plan rev 12 S11: the sweep has 900 s, and its steps ran in the order they were written. Account deletion (SLO 6:
+  // gone within an hour) came ninth, after up to five minutes of mirror repair, so a slow run pushed it late or
+  // past the job's limit. The promises run first; housekeeping last. Each step's time is logged with the run.
+  it('runs the promises first, and says how long each step took', async () => {
+    const f = fakes();
+    const infos: Array<{ o: any; m: string }> = [];
+    const spy = { ...log, info: (o: any, m: string) => void infos.push({ o, m }), child() { return spy; } };
+    const counts = await sweep.run({ log: spy, env: {}, traceId: 't', deps: f.deps, repo, noteTerminal });
+    const order = Object.keys(counts);
+    expect(order.slice(0, 3)).toEqual(['account_deletions', 'storage_purges', 'retention']);
+    expect(order.indexOf('account_deletions')).toBeLessThan(order.indexOf('mirror_repair'));
+    expect(order.indexOf('mirror_repair')).toBeGreaterThan(order.indexOf('redrive'));
+    expect(order.slice(-2)).toEqual(['trials', 'usage_events']);
+    const done = infos.find((i) => i.m === 'sweep_done');
+    expect(Object.keys(done!.o.durationsMs)).toEqual(order);
+    for (const ms of Object.values(done!.o.durationsMs)) expect(ms).toBeGreaterThanOrEqual(0);
   });
 
   it('a failing step is logged, the others still run, and the job fails visibly', async () => {

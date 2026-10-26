@@ -22,7 +22,10 @@ describe('security headers', () => {
       expect(h['X-Frame-Options']).toBe('DENY');
       expect(h['Referrer-Policy']).toMatch(/^(strict-origin-when-cross-origin|no-referrer)$/);
       expect(h['Permissions-Policy']).toMatch(/camera=\(\)/);
-      expect(h['Permissions-Policy']).toMatch(/microphone=\(\)/);
+      // Only the app records; the public pages can't ask for the microphone.
+      expect(h['Permissions-Policy']).toMatch(p.startsWith('/app') ? /microphone=\(self\)/ : /microphone=\(\)/);
+      // Sharing another tab's call, likewise the app's alone.
+      expect(h['Permissions-Policy']).toMatch(p.startsWith('/app') ? /display-capture=\(self\)/ : /display-capture=\(\)/);
       expect(h['Permissions-Policy']).toMatch(/geolocation=\(\)/);
     },
   );
@@ -159,9 +162,14 @@ describe('the site in Terraform', () => {
     expect(fs.readFileSync('infra/terraform/modules/environment/variables.tf', 'utf8')).toMatch(/variable "site_uptime_host"\s*\{[^}]*default\s*=\s*""/);
   });
 
-  it("staging's api allows the site and the staging web app; prod's allows only the site", () => {
+  it("staging's api allows the site, the staging web app and the beta's; prod's allows only the site", () => {
     const origins = (e: string) => /^\s*allowed_origins\s*=\s*"([^"]+)"/m.exec(env(e))![1].split(',');
-    expect(origins('staging')).toEqual(['https://algominutes.algorythmos.com', 'https://staging.algominutes.algorythmos.com']);
+    expect(origins('staging')).toEqual([
+      'https://algominutes.algorythmos.com',
+      'https://staging.algominutes.algorythmos.com',
+      // The external beta's web app (RELEASE.md PR 6 and PR 7), public to testers.
+      'https://beta.algominutes.algorythmos.com',
+    ]);
     expect(origins('prod')).toEqual(['https://algominutes.algorythmos.com']);
   });
 });
@@ -181,6 +189,18 @@ describe('the Firebase auth proxy', () => {
     expect(resolve(config, dist, '/__/firebase/init.json', undefined, STAGING)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/firebase/init.json' });
   });
 
+  it("proxies the beta host's /__/auth and /__/firebase to staging's Firebase too (RELEASE.md PR 7)", () => {
+    const BETA = 'beta.algominutes.algorythmos.com';
+    expect(resolve(config, dist, '/__/auth/handler', undefined, BETA)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/auth/handler' });
+    expect(resolve(config, dist, '/__/firebase/init.json', undefined, BETA)).toEqual({ external: 'https://algominutes-staging.firebaseapp.com/__/firebase/init.json' });
+  });
+
+  it('keeps the whole beta host out of search, and only that host', () => {
+    const BETA = 'beta.algominutes.algorythmos.com';
+    for (const p of ['/', '/privacy', '/app', '/app/notes/1']) expect(headersFor(config, p, BETA)['X-Robots-Tag'], p).toMatch(/noindex/);
+    for (const host of ['algominutes.algorythmos.com', STAGING, '']) expect(headersFor(config, '/privacy', host)['X-Robots-Tag'], host).toBeUndefined();
+  });
+
   it('proxies nothing on the public host (the app is off there until the prod launch)', () => {
     expect(resolve(config, dist, '/__/auth/handler', undefined, 'algominutes.algorythmos.com').status).toBe(404);
   });
@@ -190,6 +210,16 @@ describe('the Firebase auth proxy', () => {
       const h = headersFor(config, p);
       for (const key of ['Content-Security-Policy', 'X-Frame-Options', 'Cross-Origin-Opener-Policy', 'Permissions-Policy']) expect(h[key], `${p} ${key}`).toBeUndefined();
     }
+  });
+
+  it("the app's share viewer leaks its token nowhere: no Referer, no cache, no index", () => {
+    for (const p of ['/app/s/tok', '/app/s']) {
+      const h = headersFor(config, p);
+      expect(h['Referrer-Policy'], p).toBe('no-referrer');
+      expect(h['Cache-Control'], p).toBe('no-store');
+      expect(h['X-Robots-Tag'], p).toMatch(/noindex/);
+    }
+    expect(headersFor(config, '/app/settings')['Referrer-Policy']).not.toBe('no-referrer');
   });
 
   it('the app lets its sign-in popups talk back; the public pages stay same-origin', () => {
@@ -204,6 +234,36 @@ describe('the Firebase auth proxy', () => {
     expect(policy).toMatch(/script-src 'self' https:\/\/apis\.google\.com;/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/identitytoolkit\.googleapis\.com/);
     expect(policy).toMatch(/connect-src [^;]*https:\/\/securetoken\.googleapis\.com/);
-    expect(policy).toMatch(/frame-src 'self';/);
+    // Google's sign-in script (apis.google.com, allowed in script-src) also pings its own origin (/js/gen_204).
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/apis\.google\.com/);
+    // Itself, and staging's Firebase auth domain (staging signs in there: docs/runbooks/site.md). Nothing else.
+    expect(policy).toMatch(/frame-src 'self' https:\/\/algominutes-staging\.firebaseapp\.com;/);
+  });
+
+  it("the app's CSP allows web push: FCM's token registration and Firebase Installations", () => {
+    const policy = csp('/app');
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/fcmregistrations\.googleapis\.com/);
+    expect(policy).toMatch(/connect-src [^;]*https:\/\/firebaseinstallations\.googleapis\.com/);
+    // The service worker is under /app, so it gets the app's policy (its fetches are held to it), not the public one.
+    expect(csp('/app/sw.js')).toBe(policy);
+  });
+});
+
+describe('the app shape: the service worker is served as itself', () => {
+  let dist: string;
+  beforeAll(() => {
+    dist = fs.mkdtempSync(path.join(os.tmpdir(), 'site-app-'));
+    for (const f of ['index.html', '404.html', 'app/index.html', 'app/sw.js']) {
+      fs.mkdirSync(path.dirname(path.join(dist, f)), { recursive: true });
+      fs.writeFileSync(path.join(dist, f), f);
+    }
+  });
+  afterAll(() => fs.rmSync(dist, { recursive: true, force: true }));
+
+  it('/app/sw.js is the worker, not the app page a rewrite would give (a worker must be JavaScript)', () => {
+    const sw = resolve(config, dist, '/app/sw.js');
+    expect(sw.status).toBe(200);
+    expect(path.relative(dist, sw.file)).toBe('app/sw.js');
+    expect(path.relative(dist, resolve(config, dist, '/app/notes/abc').file)).toBe('app/index.html');
   });
 });

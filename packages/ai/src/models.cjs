@@ -17,6 +17,12 @@
 // Sydney. A model that is not listed for Sydney must not be added here without
 // an owner decision to relax residency.
 //
+// Checked on staging 2026-09-28 with a free countTokens call to the Sydney
+// endpoint (scripts/probe-vertex-models.mjs). Of 16 Gemini ids, only
+// gemini-3.5-flash and gemini-2.5-flash are served there: every 3.x pro,
+// 3.1/3.6/3.7/3.8-flash, 2.5-pro and all flash-lite are not. Re-run the probe
+// when the tripwire fires.
+//
 // Dates: `retires` is an ANNOUNCED retirement date (after it, calls 404).
 // `supportedUntilAtLeast` is Google's "YYYY-MM-DD or later" floor: not a
 // retirement, but the date by which to re-check the tables.
@@ -50,6 +56,17 @@ const MODELS = Object.freeze({
 // before it is overloaded (429/503) or unavailable (404). gemini-2.5-flash stays
 // as the fallback until its retirement date, then drops out automatically.
 const LADDER = Object.freeze(['gemini-3.5-flash', 'gemini-2.5-flash']);
+
+// From gemini-2.5-flash's retirement, no second Sydney model exists (above), so
+// the ladder runs on one rung. The owner chose to keep every call in Sydney and
+// ride out an overload with a longer summarize queue window instead of falling
+// back to another region (DECISIONS 2026-09-28). The tripwire requires either a
+// live second rung or this recorded decision, so losing the fallback is never
+// silent.
+const SINGLE_RUNG_DECISION = Object.freeze({
+  from: '2026-10-20',
+  decision: 'DECISIONS.md: "After gemini-2.5-flash retires, summaries run on one Sydney model" (2026-09-28)',
+});
 const CHAT_MODEL = 'gemini-3.5-flash';
 const EMBED_MODEL = 'text-embedding-004';
 
@@ -71,4 +88,18 @@ function activeLadder(now = new Date()) {
   return ladder;
 }
 
-module.exports = { REGION, MODELS, LADDER, CHAT_MODEL, EMBED_MODEL, isRetired, activeLadder };
+/**
+ * How a model's thinking is capped (it counts toward maxOutputTokens, so an uncapped model can spend the room a
+ * summary's chapters need). The two families take different fields, and each refuses the other's:
+ *   - gemini-3.x: `thinkingLevel`. `thinkingBudget` is refused by some of its Sydney backends and accepted by
+ *     others ("Thinking budget is not supported for this model", 7 of 12 identical calls, 2026-10-01), which
+ *     failed over half of all first attempts for a day (#302).
+ *   - gemini-2.5: `thinkingBudget`. It refuses `thinkingLevel` with a 400.
+ * Probed 2026-10-01, 14 calls each, with the fast path's schema: 3.5 + thinkingLevel LOW 14/14, 2.5 +
+ * thinkingBudget 14/14.
+ */
+function thinkingConfigFor(model, { budget = 2048, level = 'LOW' } = {}) {
+  return /^gemini-3/.test(String(model)) ? { thinkingLevel: level } : { thinkingBudget: budget };
+}
+
+module.exports = { REGION, MODELS, LADDER, SINGLE_RUNG_DECISION, CHAT_MODEL, EMBED_MODEL, isRetired, activeLadder, thinkingConfigFor };

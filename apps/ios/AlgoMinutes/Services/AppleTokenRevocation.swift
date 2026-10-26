@@ -80,3 +80,29 @@ extension AppleTokenRevocation: ASAuthorizationControllerDelegate, ASAuthorizati
         }
     }
 }
+
+/// What account deletion does after asking Apple to revoke the account's tokens (plan rev 12 S6).
+///
+/// A failed revocation used to be logged and the deletion went ahead, so Apple's tokens stayed valid with no second
+/// chance. Stopping outright would be worse: if the Firebase project's Apple provider were misconfigured, no one
+/// signed in with Apple could ever delete their account (App Review 5.1.1(v)). So a failure asks: Try again (a fresh
+/// Apple prompt; only that yields a new authorization code), or Delete anyway.
+enum AppleRevocationStep: Equatable {
+    /// Revoked, or nothing to revoke: delete the account.
+    case delete
+    /// The person dismissed Apple's prompt: don't delete.
+    case stop
+    /// The revocation failed: let the person choose.
+    case askTryAgainOrDeleteAnyway
+
+    static func after(_ result: Result<AppleTokenRevocation.Outcome, Error>) -> AppleRevocationStep {
+        switch result {
+        case .success(.revoked), .success(.notLinked): return .delete
+        case .success(.cancelled): return .stop
+        case .failure: return .askTryAgainOrDeleteAnyway
+        }
+    }
+
+    static let cancelledMessage = "Deleting an account that uses Sign in with Apple needs Apple's confirmation. Please try again."
+    static let failedMessage = "Apple couldn't confirm unlinking your account just now. Try again, or Delete anyway: your data is deleted either way, and you can remove AlgoMinutes later in Settings, your name, Sign in with Apple."
+}

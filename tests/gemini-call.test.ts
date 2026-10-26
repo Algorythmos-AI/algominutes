@@ -60,6 +60,25 @@ describe('callGeminiWithLadder', () => {
     expect(calls).toEqual(['model-a', 'model-a']);
   });
 
+  // Plan rev 12 S2: a quota refusal is the case for asking Google for more quota or provisioned throughput; an
+  // outage (503) is not. Both stay gemini_transient (and retried); a 429 also logs gemini_rate_limited.
+  it('a quota refusal (429 / RESOURCE_EXHAUSTED) is logged as rate-limited too; a 503 is not', async () => {
+    const { log, events } = logSpy();
+    const { impl } = fakeFetch({
+      'model-a': [
+        { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' },
+        { status: 503, text: '{"error":{"status":"UNAVAILABLE"}}' },
+        ok('{"gist":"x"}'),
+      ],
+    });
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    expect(out).toMatchObject({ rawText: '{"gist":"x"}', error: null });
+    expect(events.filter((e) => e.msg === 'gemini_transient')).toHaveLength(2);
+    const limited = events.filter((e) => e.msg === 'gemini_rate_limited');
+    expect(limited).toHaveLength(1);
+    expect(limited[0]!.obj).toMatchObject({ model: 'model-a', attempt: 1 });
+  });
+
   it('stops on a non-transient request error (400): another model will not fix a bad request', async () => {
     const { impl, calls } = fakeFetch({ 'model-a': [{ status: 400, text: 'INVALID_ARGUMENT' }], 'model-b': [ok('{}')] });
     const { log } = logSpy();
@@ -68,12 +87,68 @@ describe('callGeminiWithLadder', () => {
     expect(calls).toEqual(['model-a']);
   });
 
+  it("never keeps a refusal's body text, which can quote the transcript back: only the status and its enum", async () => {
+    const quoted = JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', message: "Invalid value at 'contents[0].parts[0].text': Priya's card 4111 1111 1111 1111" } });
+    const { impl } = fakeFetch({ 'model-a': [{ status: 400, text: quoted }] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    expect(out.error?.message).toBe('Vertex Gemini 400 INVALID_ARGUMENT');
+    const logged = JSON.stringify(events.map((e) => ({ ...e, obj: { ...e.obj, err: e.obj?.err && { message: e.obj.err.message, stack: e.obj.err.stack } } })));
+    expect(logged).not.toMatch(/Priya|4111|contents\[0\]/);
+    // A body that isn't Vertex's JSON (a proxy's page) adds nothing but what its status means.
+    const page = fakeFetch({ 'model-a': [{ status: 400, text: '<html>Priya</html>' }] });
+    expect((await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: page.impl, log }))).error?.message).toBe('Vertex Gemini 400 INVALID_ARGUMENT');
+  });
+
+  it("a 500 or 503 whose body isn't readable JSON is still retried, as before (by what its status means)", async () => {
+    for (const reply of [{ status: 500, text: '<html>500 Internal Server Error</html>' }, { status: 500, text: JSON.stringify([{ error: { status: 'INTERNAL', message: 'x' } }]) }, { status: 503, text: '' }]) {
+      const { impl, calls } = fakeFetch({ 'model-a': [reply, ok('{"a":1}')] });
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log }));
+      expect(out.model).toBe('model-a');
+      expect(calls).toEqual(['model-a', 'model-a']);
+    }
+  });
+
+  it("a 2xx body that isn't JSON fails without quoting it", async () => {
+    const impl = async () => ({ ok: true, status: 200, json: async () => JSON.parse('<html>Priya'), text: async () => '' });
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log }));
+    expect(out.error?.message).toBe('Vertex Gemini 200 unparseable body');
+  });
+
+  it('still retries what is transient by its status enum: a 500 INTERNAL, a 504 DEADLINE_EXCEEDED', async () => {
+    for (const [status, enumName] of [[500, 'INTERNAL'], [504, 'DEADLINE_EXCEEDED']] as const) {
+      const body = JSON.stringify({ error: { code: status, status: enumName, message: 'transcript text here' } });
+      const { impl, calls } = fakeFetch({ 'model-a': [{ status, text: body }, ok('{"a":1}')] });
+      const { log } = logSpy();
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+      expect(out.model).toBe('model-a');
+      expect(calls).toEqual(['model-a', 'model-a']);
+    }
+  });
+
   it('reports finishReason and flags truncated structured output', async () => {
     const { impl } = fakeFetch({ 'model-a': [ok('{"gist":"cut', 'MAX_TOKENS')] });
     const { log, events } = logSpy();
     const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
     expect(out.finishReason).toBe('MAX_TOKENS');
     expect(events.some((e) => e.level === 'warn' && e.msg === 'gemini_output_truncated')).toBe(true);
+  });
+
+  // RELEASE.md rev 11, LM4: what a truncation cost, to tell thinking that ate the budget from a long answer.
+  it('logs the tokens each answer used: prompt, output and thinking', async () => {
+    const reply: Reply = {
+      status: 200,
+      body: {
+        candidates: [{ content: { parts: [{ text: '{"gist":"cut' }] }, finishReason: 'MAX_TOKENS' }],
+        usageMetadata: { promptTokenCount: 52000, candidatesTokenCount: 14300, thoughtsTokenCount: 2048 },
+      },
+    };
+    const { impl } = fakeFetch({ 'model-a': [reply] });
+    const { log, events } = logSpy();
+    await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log }));
+    const tokens = { promptTokens: 52000, outputTokens: 14300, thoughtsTokens: 2048 };
+    expect(events.find((e) => e.msg === 'gemini_output_truncated')?.obj).toMatchObject(tokens);
+    expect(events.find((e) => e.msg === 'gemini_ok')?.obj).toMatchObject(tokens);
   });
 
   it('by default uses the registry ladder, minus retired models', async () => {
@@ -96,5 +171,152 @@ describe('callGeminiWithLadder', () => {
       log,
     }));
     expect(urls[0]).toMatch(/^https:\/\/australia-southeast1-aiplatform\.googleapis\.com\/v1\/projects\/p\/locations\/australia-southeast1\//);
+  });
+
+  it('aborts a call that hangs past the budget, instead of holding the worker until Cloud Run times out', async () => {
+    const { log, events } = logSpy();
+    let signalSeen: AbortSignal | undefined;
+    // Never answers; only the abort signal can end it.
+    const hang = (_url: string, init: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+      signalSeen = init.signal;
+      init.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const started = Date.now();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a', 'model-b'], fetchImpl: hang, log, deadlineMs: 150 }));
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(signalSeen).toBeDefined();
+    expect(out).toMatchObject({ rawText: null, model: null });
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    // It gives up rather than moving on to the next rung with no budget left.
+    expect(events.find((e) => e.msg === 'gemini_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1 });
+  });
+
+  // Plan rev 12 S3 (BLOCKERS 2026-10-06): the model hung for the whole 240 s budget on a ten-second recording,
+  // and the task's retry answered in 3 s. With a per-attempt cap, a hung attempt is cut and asked again while
+  // the budget lasts, instead of spending all of it on one call.
+  it('cuts a hung attempt at its own cap and asks again, within the budget', async () => {
+    const { log, events } = logSpy();
+    let calls = 0;
+    const hangThenAnswer = (_url: string, init: { signal?: AbortSignal }) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ok('{"gist":"x"}').body, text: async () => '' });
+    };
+    const started = Date.now();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: hangThenAnswer, log, deadlineMs: 5_000, attemptTimeoutMs: 100 }));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(out).toMatchObject({ rawText: '{"gist":"x"}', model: 'model-a', error: null });
+    expect(calls).toBe(2);
+    expect(events.find((e) => e.msg === 'gemini_attempt_timeout')?.obj).toMatchObject({ model: 'model-a', attempt: 1, attemptTimeoutMs: 100 });
+    expect(events.find((e) => e.msg === 'gemini_ok')?.obj).toMatchObject({ attempt: 2 });
+  });
+
+  it('every attempt hung: it moves to the next rung, and stops with TIME_BUDGET once the budget is gone', async () => {
+    const { log, events } = logSpy();
+    const seen: string[] = [];
+    const hang = (url: string, init: { signal?: AbortSignal }) => {
+      seen.push(/models\/([^:]+):generateContent/.exec(url)![1]!);
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a', 'model-b'], fetchImpl: hang, log, deadlineMs: 1_000, attemptTimeoutMs: 150 }));
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    // Three cut attempts on model-a, then model-b, until the budget ends.
+    expect(seen.slice(0, 4)).toEqual(['model-a', 'model-a', 'model-a', 'model-b']);
+    expect(events.filter((e) => e.msg === 'gemini_attempt_timeout').length).toBeGreaterThanOrEqual(3);
+    expect(events.some((e) => e.msg === 'gemini_model_exhausted' && e.obj.model === 'model-a')).toBe(true);
+  });
+
+  it('with no per-attempt cap, an attempt may use the whole budget, as before (the summarizer)', async () => {
+    const { log, events } = logSpy();
+    let calls = 0;
+    const hang = (_url: string, init: { signal?: AbortSignal }) => {
+      calls += 1;
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    };
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: hang, log, deadlineMs: 200 }));
+    expect(String(out.error)).toMatch(/TIME_BUDGET/);
+    expect(calls).toBe(1);
+    expect(events.some((e) => e.msg === 'gemini_attempt_timeout')).toBe(false);
+  });
+});
+
+describe('attemptTimeoutForAudioMs: how long one call may take on audio of a given length', () => {
+  const { attemptTimeoutForAudioMs, RETRY_DEADLINE_MS } = require('../packages/ai/src/intelligence.cjs');
+
+  it('grows with the audio, from a floor to a ceiling inside the ladder budget', () => {
+    expect(attemptTimeoutForAudioMs(10)).toBe(60_000);
+    expect(attemptTimeoutForAudioMs(5 * 60)).toBe(105_000);
+    expect(attemptTimeoutForAudioMs(10 * 60)).toBe(150_000);
+    expect(attemptTimeoutForAudioMs(60 * 60)).toBe(150_000);
+    // Always room for a second attempt inside the budget.
+    expect(attemptTimeoutForAudioMs(60 * 60)).toBeLessThan(RETRY_DEADLINE_MS);
+  });
+
+  it('an unknown length gets no cap (undefined): the whole budget, as before', () => {
+    for (const d of [undefined, null, NaN, 0, -5]) expect(attemptTimeoutForAudioMs(d)).toBeUndefined();
+  });
+});
+
+// 2026-10-01: thinkingBudget was sent to every rung. Some of gemini-3.5-flash's Sydney backends refuse it ("Thinking
+// budget is not supported for this model", 7 of 12 identical calls), so over half of all first attempts failed.
+describe("the thinking cap is each rung's own field", () => {
+  const { thinkingConfigFor } = require('../packages/ai/src/models.cjs');
+  function recording(replies: Record<string, Reply[]>) {
+    const bodies: Array<{ model: string; generationConfig: any }> = [];
+    const f = fakeFetch(replies);
+    const impl = async (url: string, init: { body: string }) => {
+      bodies.push({ model: /models\/([^:]+):generateContent/.exec(url)![1]!, generationConfig: JSON.parse(init.body).generationConfig });
+      return f.impl(url);
+    };
+    return { impl, bodies };
+  }
+
+  it('gemini-3.x gets thinkingLevel, gemini-2.5 gets thinkingBudget, and neither gets the other', () => {
+    expect(thinkingConfigFor('gemini-3.5-flash', { budget: 2048 })).toEqual({ thinkingLevel: 'LOW' });
+    expect(thinkingConfigFor('gemini-2.5-flash', { budget: 2048 })).toEqual({ thinkingBudget: 2048 });
+    expect(thinkingConfigFor('gemini-3.5-flash', { budget: 1024, level: 'MEDIUM' })).toEqual({ thinkingLevel: 'MEDIUM' });
+  });
+
+  it('each rung of the ladder is asked with its own field, and the rest of the config is kept', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 404 }], 'gemini-2.5-flash': [ok('{"a":1}')] });
+    const { log } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash', 'gemini-2.5-flash'], thinking: { budget: 2048 }, generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 16384 } }));
+    expect(out.model).toBe('gemini-2.5-flash');
+    expect(r.bodies.map((b) => [b.model, b.generationConfig.thinkingConfig])).toEqual([
+      ['gemini-3.5-flash', { thinkingLevel: 'LOW' }],
+      ['gemini-2.5-flash', { thinkingBudget: 2048 }],
+    ]);
+    expect(r.bodies[0].generationConfig.maxOutputTokens).toBe(16384);
+  });
+
+  it('a 400 with a cap sent is asked again without it, on the same rung, and answers', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 400, text: JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'Thinking level is not supported for this model.' } }) }, ok('{"a":1}')] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], thinking: { budget: 2048 }, generationConfig: { maxOutputTokens: 100 } }));
+    expect(out.rawText).toBe('{"a":1}');
+    expect(r.bodies.map((b) => b.generationConfig.thinkingConfig)).toEqual([{ thinkingLevel: 'LOW' }, undefined]);
+    expect(events.filter((e) => e.msg === 'gemini_thinking_cap_refused')).toHaveLength(1);
+    expect(events.some((e) => e.msg === 'gemini_non_retryable')).toBe(false);
+  });
+
+  it('a 400 that persists without the cap is still a refusal, after one extra call', async () => {
+    const bad = { status: 400, text: JSON.stringify({ error: { status: 'INVALID_ARGUMENT' } }) };
+    const r = recording({ 'gemini-3.5-flash': [bad, bad] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], thinking: { budget: 2048 } }));
+    expect(out.rawText).toBeNull();
+    expect(r.bodies).toHaveLength(2);
+    expect(events.some((e) => e.msg === 'gemini_non_retryable')).toBe(true);
+  });
+
+  it('with no cap asked for, nothing is added and a 400 is refused at once', async () => {
+    const r = recording({ 'gemini-3.5-flash': [{ status: 400, text: '' }] });
+    const { log } = logSpy();
+    const out = await callGeminiWithLadder(base({ log, fetchImpl: r.impl, modelLadder: ['gemini-3.5-flash'], generationConfig: { maxOutputTokens: 5 } }));
+    expect(out.rawText).toBeNull();
+    expect(r.bodies).toHaveLength(1);
+    expect(r.bodies[0].generationConfig).toEqual({ maxOutputTokens: 5 });
   });
 });

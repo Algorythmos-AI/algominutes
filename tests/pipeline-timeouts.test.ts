@@ -11,7 +11,9 @@ import { IN_FLIGHT_STALE_MS } from '@algominutes/db';
 describe('pipeline timeouts', () => {
   it('the in-flight stale window outlasts the transcoder STT poll budget', () => {
     const src = readFileSync(resolve(__dirname, '../services/transcoder/src/handler.js'), 'utf-8');
-    const polls = Number(/const MAX_STT_POLLS = (\d+);/.exec(src)?.[1]);
+    const limit = readFileSync(resolve(__dirname, '../services/transcoder/src/stt-polls.js'), 'utf-8');
+    const polls = Number(/const MAX_STT_POLLS = (\d+);/.exec(limit)?.[1]);
+    expect(src).toContain("const { MAX_STT_POLLS } = require('./stt-polls');");
     const pollDelaySec = 60; // tasks.enqueue({ kind: STT_POLL, ... }, 60, pollTaskId(...))
     expect(src).toMatch(/kind: STT_POLL[\s\S]{0,200}?\},\s*60,\s*pollTaskId\(/);
     // Every poll enqueue waits 60 s (none sooner, which would shrink the budget).

@@ -28,14 +28,17 @@ function audioContentType(localPath, mimeType) {
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }
 }
 const noteTerminal = loadShared('note-terminal.cjs');
+const { alignWords } = loadShared('speaker-align.cjs');
 // The refund markNoteFailed writes in the failure's transaction.
 const { transcodeRefund } = require('./terminal-hooks');
 const { NoteGoneError, isNoteGone } = require('./note-gone');
+const { MAX_STT_POLLS } = require('./stt-polls');
 
 const KICKOFF = 'kickoff';
 const STT_POLL = 'stt-poll';
@@ -114,13 +117,23 @@ async function handleKickoff(payload, deps) {
   // and the mirror only ever shows a status Postgres holds.
   const pre = await db.pool().connect();
   let status;
+  let run = null;
+  let superseded = false;
   try {
-    status = await db.noteStatus(pre, { noteId, workspaceId });
-    if (KICKOFF_RESUMABLE.has(status)) {
+    run = await db.noteRun(pre, { noteId, workspaceId });
+    status = run ? run.status : null;
+    // A kickoff task from a run the note has since left (re-queued after IN_FLIGHT_STALE_MS; audit Q12): the
+    // new run's own task does its work. A task from before runSeq was carried has none, and goes on as before.
+    superseded = run != null && payload.runSeq != null && Number(payload.runSeq) !== run.runSeq;
+    if (!superseded && KICKOFF_RESUMABLE.has(status)) {
       await db.upsertNoteStatus(pre, { noteId, workspaceId, status: 'chunking', onlyIfStatus: ONLY_IF_IN_PROGRESS });
     }
   } finally { pre.release(); }
   if (status == null) throw new NoteGoneError('postgres');
+  if (superseded) {
+    log.info({ noteId, workspaceId, taskRunSeq: Number(payload.runSeq), runSeq: run.runSeq }, 'kickoff_superseded_by_new_run');
+    return;
+  }
   if (!KICKOFF_RESUMABLE.has(status)) {
     log.info({ noteId, workspaceId, status }, 'kickoff_replay_after_progress');
     return;
@@ -141,6 +154,11 @@ async function handleKickoff(payload, deps) {
           // Postgres first, then the mirror (note-terminal). A Firestore-only
           // error mirror left Postgres at 'queued', so the idempotent kickoff
           // saw the note as still in flight and refused a retry for 3 h.
+          const tail = {
+            pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+            payload: { kind: 'kickoff', reason: 'youtube_permanent_failure', type, noteId, workspaceId, sourceUrl },
+            log,
+          };
           const outcome = await noteTerminal.markNoteFailed({
             refund: transcodeRefund(noteId),
             traceId: deps.traceId,
@@ -152,14 +170,11 @@ async function handleKickoff(payload, deps) {
             log,
             event: 'youtube_permanent_failure',
             retryOnPgError: true,
+            deadLetter: deadLetterFrom(tail),
           });
           // A7.4 tail for a permanent (non-retryable) terminal failure.
           // Best-effort; never throws.
-          await terminalTail(terminalHooks, outcome, {
-            pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
-            payload: { kind: 'kickoff', type, noteId, workspaceId, sourceUrl },
-            log,
-          });
+          await terminalTail(terminalHooks, outcome, tail);
           return; // Stop retries
         }
         throw err;
@@ -180,6 +195,11 @@ async function handleKickoff(payload, deps) {
       // Permanent: the same bytes won't have a length on a retry, and guessing
       // one would send a long recording down the single-call fast path.
       log.error({ err, noteId, workspaceId }, 'duration_unreadable');
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
+        payload: { kind: 'kickoff', reason: 'duration_unreadable', type, noteId, workspaceId, storagePath },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
@@ -191,19 +211,70 @@ async function handleKickoff(payload, deps) {
         log,
         event: 'duration_unreadable',
         retryOnPgError: true,
+        deadLetter: deadLetterFrom(tail),
       });
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err, attempts: null, traceId,
-        payload: { kind: 'kickoff', type, noteId, workspaceId, storagePath },
+      await terminalTail(terminalHooks, outcome, tail);
+      return;
+    }
+    // The charge follows the measured length, before any paid work: the kickoff
+    // charged what the client claimed (an import may claim nothing). A replay
+    // finds it already settled. Longer than the plan allows: the note fails,
+    // with a full refund. Longer than the minutes left: it's held, uncharged,
+    // until minutes arrive (RELEASE.md rev 11, H6); the audio stays.
+    const settled = await deps.meter.settleMeasuredLength({ noteId, workspaceId, measuredSec: durationSec, log });
+    if (settled.kind === 'not_found') throw new NoteGoneError('postgres');
+    if (settled.kind === 'moved_on') {
+      // Another attempt failed or finished the run meanwhile: acknowledged by
+      // handle(), with nothing written, like the status write's own check.
+      throw Object.assign(new Error(`note_moved_on:${noteId}`), { code: 'NOTE_MOVED_ON' });
+    }
+    if (settled.kind === 'over_quota') {
+      // Throws on a Postgres error, so the task retries and settles again.
+      await noteTerminal.holdNoteForMinutes({
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        neededMinutes: settled.neededMinutes,
+        measuredSec: durationSec,
         log,
+        traceId: deps.traceId,
       });
       return;
     }
-    const decision = route.routeForDuration(durationSec);
-    log.info({ noteId, durationSec, decision }, 'transcoder_routed');
+    if (settled.kind === 'too_long') {
+      const message = `This recording is longer than ${settled.maxSec / 3600} hours, the longest a note can be.`;
+      log.warn({ noteId, workspaceId, durationSec, reason: settled.kind }, 'measured_length_refused');
+      // The user's recording, not a pipeline fault: no dead letter. markNoteFailed
+      // writes the refund and the "failed" notice in the failure's transaction.
+      await noteTerminal.markNoteFailed({
+        refund: transcodeRefund(noteId, `refund:${settled.kind}`),
+        traceId: deps.traceId,
+        pool: db.pool(),
+        firestore: mirror.db(),
+        noteId,
+        workspaceId,
+        message,
+        log,
+        event: 'measured_length_refused',
+        retryOnPgError: true,
+        refusal: true,
+      });
+      return;
+    }
+    if (settled.deltaMinutes !== 0) {
+      log.info({ noteId, workspaceId, durationSec, chargedMinutes: settled.chargedMinutes, deltaMinutes: settled.deltaMinutes }, 'charge_settled_to_measured');
+    }
 
+    // A notetaker's note takes the chunked path whatever its length: its speaker
+    // names come from aligning each word with the meeting's timeline, and the
+    // fast path has no word timings (docs/plans/MEETINGS.md, RELEASE.md PR 20).
+    const byDuration = route.routeForDuration(durationSec);
     const client = await db.pool().connect();
+    let decision = byDuration;
     try {
+      if (byDuration === 'fast' && (await db.noteSourceKind(client, { noteId, workspaceId })) === 'bot') decision = 'chunked';
+      log.info({ noteId, workspaceId, durationSec, decision, ...(decision !== byDuration ? { forcedBy: 'notetaker' } : {}) }, 'transcoder_routed');
       await db.upsertNoteStatus(client, {
         noteId,
         workspaceId,
@@ -314,30 +385,71 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       continue;
     }
 
-    const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
-    await ffmpeg.extractChunk({
-      inputPath: inputLocal,
-      startSec: slice.startSec,
-      endSec: slice.endSec,
-      outputPath: localChunk,
-    });
-    const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
-    fs.rmSync(localChunk, { force: true });
+    // One attempt starts a chunk's paid job (rev 11 L6): a second delivery of this kickoff, arriving while the
+    // first is still at work, must not start (and pay for) another. It's retried until the first has saved the
+    // operation, and then only polls; a claim left by an attempt that died goes stale and is taken over.
+    const cc = await db.pool().connect();
+    let claim;
+    try { claim = await db.claimChunkStt(cc, { chunkId }); }
+    finally { cc.release(); }
+    if (!claim) {
+      log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_start_in_progress');
+      throw Object.assign(new Error(`chunk ${slice.idx} is being started by another attempt`), { code: 'CHUNK_START_IN_PROGRESS' });
+    }
 
-    const operationName = await stt.startLongRunning({
-      recognizer: env.STT_RECOGNIZER || null,
-      gcsUri,
-      languageCodes: (env.LANGUAGE_CODES || 'en-US').split(',').map((s) => s.trim()).filter(Boolean),
-      log,
-    });
+    let operationName;
+    try {
+      const localChunk = path.join(tmpDir, `chunk-${slice.idx}.flac`);
+      await ffmpeg.extractChunk({
+        inputPath: inputLocal,
+        startSec: slice.startSec,
+        endSec: slice.endSec,
+        outputPath: localChunk,
+      });
+      const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
+      fs.rmSync(localChunk, { force: true });
+
+      // Preparing the chunk can outlast the claim, and another attempt may have taken it over: start the paid
+      // job only while the claim is still this attempt's.
+      const rn = await db.pool().connect();
+      try { claim = await db.renewChunkStt(rn, { chunkId, claim }); }
+      finally { rn.release(); }
+      if (!claim) {
+        log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_claim_lost');
+        throw Object.assign(new Error(`chunk ${slice.idx} was taken over by another attempt`), { code: 'CHUNK_START_IN_PROGRESS', claimLost: true });
+      }
+
+      operationName = await stt.startLongRunning({
+        recognizer: env.STT_RECOGNIZER || null,
+        gcsUri,
+        languageCodes: (env.LANGUAGE_CODES || 'en-US').split(',').map((s) => s.trim()).filter(Boolean),
+        log,
+      });
+    } catch (err) {
+      // Nothing started: give the claim back, so the retry needn't wait for it to go stale. A lost claim is
+      // another attempt's now, and is left alone.
+      if (err && err.claimLost) throw err;
+      const rc = await db.pool().connect();
+      try { await db.releaseChunkStt(rc, { chunkId, claim }); }
+      catch (releaseErr) { log.error({ err: releaseErr, noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_claim_release_failed'); }
+      finally { rc.release(); }
+      throw err;
+    }
     // Recorded as soon as the job exists, before its op id is saved: a crash in
     // between restarts (and pays for) the chunk again, and records it again; a
     // crash after the save re-polls it and records nothing more.
     await recordPaidWork('stt_call', slice.endSec - slice.startSec, 'google-stt');
 
     const c2 = await db.pool().connect();
-    try { await db.setChunkOperation(c2, { chunkId, operationName }); }
+    let saved;
+    try { saved = await db.setChunkOperation(c2, { chunkId, operationName, claim }); }
     finally { c2.release(); }
+    if (!saved) {
+      // Another attempt saved its operation first, or took the claim over while this start ran: its job is the one
+      // tracked and polled, and this one's runs unpolled. Paid twice, so loud.
+      log.error({ noteId, workspaceId, chunkIdx: slice.idx, operationName }, 'chunk_operation_already_saved');
+      continue;
+    }
 
     await tasks.enqueue({
       kind: STT_POLL,
@@ -357,17 +469,27 @@ async function terminalTail(terminalHooks, outcome, hookArgs) {
   if (!terminalHooks) return;
   // Gone, or a verdict whose run is over (superseded: exists is false too).
   if (!outcome.marked && !outcome.exists) return;
+  // Written with the failure (RELEASE.md PR 5a), or already there: nothing more to record.
+  if (outcome.deadLetterId != null || outcome.deadLetterDuplicate) return;
   await terminalHooks.onTranscodeTerminalFailure({ ...hookArgs, deadLetterOnly: !outcome.marked });
+}
+
+/** The dead letter a terminal failure writes with itself (note-terminal `deadLetter`), from its tail's arguments. */
+function deadLetterFrom({ err, attempts, payload }) {
+  return {
+    queue: 'transcode',
+    payload,
+    error: err && err.message ? err.message : (err ? String(err) : null),
+    attempts: attempts != null ? attempts : null,
+    reason: payload.reason,
+    chunkId: payload.chunkId || null,
+  };
 }
 
 function payloadJobId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// A 2-hour chunk transcribes well inside an hour; 120 polls at 60s is a wide
-// margin over that, and a bound the queue's own --max-attempts cannot provide
-// because each poll mints a NEW task rather than retrying the old one.
-const MAX_STT_POLLS = 120;
 
 async function handleSttPoll(payload, deps) {
   const { chunkId, noteId, workspaceId, jobId, poll = 0 } = payload;
@@ -396,20 +518,21 @@ async function handleSttPoll(payload, deps) {
   // Nothing is polled or revived.
   if (chunkRow.status === 'error') {
     log.info({ chunkId, noteId, workspaceId }, 'stt_poll_chunk_failed');
+    // Keyed like the first failure's dead letter, so it writes one only if the first never did (a crash).
+    const tail = {
+      pool: db.pool(), noteId, workspaceId, err: new Error('chunk_already_failed'), attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'chunk_already_failed', chunkId, noteId, workspaceId },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for part of this recording.',
       log, event: 'stt_poll_chunk_failed', retryOnPgError: true, chunkId, onlyIfStatus: ['error'],
+      deadLetter: deadLetterFrom(tail),
     });
-    if (outcome.marked) {
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('chunk_already_failed'), attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'chunk_already_failed', chunkId, noteId, workspaceId },
-        log,
-      });
-    }
+    if (outcome.marked) await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
@@ -439,6 +562,15 @@ async function handleSttPoll(payload, deps) {
       // `chunkId`): if Postgres misses it this throws and the task retries with
       // neither written, so the retry decides again. The tail (terminalTail)
       // tells the author only if this is what failed the note.
+      // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
+      // never sees a final attempt here — DLQ/refund/notify must be driven from
+      // this terminal decision, not from the index.js final-attempt branch.
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
@@ -450,16 +582,9 @@ async function handleSttPoll(payload, deps) {
         event: 'stt_poll_exhausted',
         retryOnPgError: true,
         chunkId,
+        deadLetter: deadLetterFrom(tail),
       });
-      // A7.4 tail: this loop re-enqueues rather than retries, so Cloud Tasks
-      // never sees a final attempt here — DLQ/refund/notify must be driven from
-      // this terminal decision, not from the index.js final-attempt branch.
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll },
-        log,
-      });
+      await terminalTail(terminalHooks, outcome, tail);
       return;
     }
     // jobId is carried through so the whole poll chain stays attributable in
@@ -475,6 +600,14 @@ async function handleSttPoll(payload, deps) {
   if (op.error) {
     log.error({ chunkId, opErr: op.error }, 'stt_operation_errored');
     // One statement for the chunk and the note, as for stt_poll_exhausted above.
+    // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
+    const tail = {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
@@ -486,15 +619,9 @@ async function handleSttPoll(payload, deps) {
       event: 'stt_operation_errored',
       retryOnPgError: true,
       chunkId,
+      deadLetter: deadLetterFrom(tail),
     });
-    // A7.4 tail — same rationale as stt_poll_exhausted: terminal, decided here.
-    await terminalTail(terminalHooks, outcome, {
-      pool: db.pool(), noteId, workspaceId,
-      err: new Error(`stt_operation_errored: ${op.error && op.error.message ? op.error.message : 'unknown'}`),
-      attempts: poll, traceId,
-      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId },
-      log,
-    });
+    await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
@@ -556,8 +683,31 @@ async function handleSttPoll(payload, deps) {
     } finally { c3.release(); }
   }
 
+  kept = await withMeetingSpeakers({ items: kept, noteId, workspaceId, chunkIdx: chunkRow.idx, deps });
   const lines = stt.wordsToLines(kept);
   await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+}
+
+// A notetaker's meeting says who spoke when (meeting_speaker_segments, saved at
+// ingest): each word, or a whole-file provider's line, goes to the speaker whose
+// turn it falls in (speaker-align.cjs), in place of the engine's own guess. Tags
+// are the meeting's (1..N, named in note_speakers); speech in no one's turn is 0,
+// "Speaker" with no name, never a guess. Every other note has no timeline and
+// keeps its diarisation. Alignment is pure, so a replayed poll writes the same.
+async function withMeetingSpeakers({ items, noteId, workspaceId, chunkIdx, deps }) {
+  const { db, log } = deps;
+  const c = await db.pool().connect();
+  let segments;
+  try {
+    segments = await db.speakerSegments(c, { noteId, workspaceId });
+  } finally { c.release(); }
+  if (!segments.length) return items;
+  const aligned = alignWords(items, segments);
+  log.info(
+    { noteId, workspaceId, chunkIdx, items: aligned.length, unknown: aligned.filter((w) => !w.speakerTag).length, segments: segments.length },
+    'speakers_aligned',
+  );
+  return aligned;
 }
 
 // Shared completion tail for BOTH the Google per-chunk path and the whole-file
@@ -716,7 +866,8 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
       contentType: audioContentType(inputLocal, mimeType),
       log: plog,
     });
-    await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines, deps });
+    const named = await withMeetingSpeakers({ items: lines, noteId, workspaceId, chunkIdx: 0, deps });
+    await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: named, deps });
     return;
   }
 
@@ -729,8 +880,14 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   const operationName = sttProvider.encodeOperationId(provider.name, jobId);
 
   const c2 = await db.pool().connect();
-  try { await db.setChunkOperation(c2, { chunkId, operationName }); }
+  let saved;
+  try { saved = await db.setChunkOperation(c2, { chunkId, operationName }); }
   finally { c2.release(); }
+  if (!saved) {
+    // Another attempt saved its job first and polls it; this one runs unpolled. Paid twice, so loud.
+    plog.error({ operationName }, 'chunk_operation_already_saved');
+    return;
+  }
 
   await tasks.enqueue({
     kind: STT_POLL,
@@ -764,19 +921,21 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
     if (poll >= MAX_STT_POLLS) {
       plog.error({ polls: poll }, 'stt_poll_exhausted');
       // One statement for the chunk and the note, as in handleSttPoll.
+      const tail = {
+        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
+        attempts: poll, traceId,
+        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
+        log,
+      };
       const outcome = await noteTerminal.markNoteFailed({
         refund: transcodeRefund(noteId),
         traceId: deps.traceId,
         pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
         message: 'Transcription took too long and was stopped.',
         log, event: 'stt_poll_exhausted', retryOnPgError: true, chunkId,
+        deadLetter: deadLetterFrom(tail),
       });
-      await terminalTail(terminalHooks, outcome, {
-        pool: db.pool(), noteId, workspaceId, err: new Error('stt_poll_exhausted'),
-        attempts: poll, traceId,
-        payload: { kind: 'stt-poll', reason: 'stt_poll_exhausted', chunkId, noteId, workspaceId, polls: poll, provider: provider.name },
-        log,
-      });
+      await terminalTail(terminalHooks, outcome, tail);
       return;
     }
     await tasks.enqueue(
@@ -790,24 +949,27 @@ async function handleWholeFilePoll({ decoded, chunkRow, payload, deps }) {
   if (op.error) {
     plog.error({ opErr: { message: op.error.message } }, 'stt_operation_errored');
     // One statement for the chunk and the note, as in handleSttPoll.
+    const tail = {
+      pool: db.pool(), noteId, workspaceId,
+      err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
+      attempts: poll, traceId,
+      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
+      log,
+    };
     const outcome = await noteTerminal.markNoteFailed({
       refund: transcodeRefund(noteId),
       traceId: deps.traceId,
       pool: db.pool(), firestore: mirror.db(), noteId, workspaceId,
       message: 'Transcription failed for this recording.',
       log, event: 'stt_operation_errored', retryOnPgError: true, chunkId,
+      deadLetter: deadLetterFrom(tail),
     });
-    await terminalTail(terminalHooks, outcome, {
-      pool: db.pool(), noteId, workspaceId,
-      err: new Error(`stt_operation_errored: ${op.error.message || 'unknown'}`),
-      attempts: poll, traceId,
-      payload: { kind: 'stt-poll', reason: 'stt_operation_errored', chunkId, noteId, workspaceId, provider: provider.name },
-      log,
-    });
+    await terminalTail(terminalHooks, outcome, tail);
     return;
   }
 
-  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: op.lines, deps });
+  const named = await withMeetingSpeakers({ items: op.lines, noteId, workspaceId, chunkIdx: 0, deps });
+  await completeChunkAndAdvance({ noteId, workspaceId, chunkId, lines: named, deps });
 
   // The transcript is safe in Postgres; ask the vendor to drop its copy now
   // rather than waiting out its retention TTL. Best-effort — never throws.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { RETENTION_OPTIONS_DAYS, type EntitlementResponse } from '@algominutes/contracts';
 import pkg from '../../../package.json';
@@ -10,9 +10,14 @@ import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../Modal';
 import { useNotice } from '../Notice';
 import { SITE_URL } from '../site';
+import { usePush } from '../push/PushContext';
+import { InviteCodeForm } from '../billing/InviteCodeForm';
+import { resetDate } from '../../lib/billing/minutes';
+import { ProOffer } from '../billing/ProOffer';
 
 const retentionKey = (uid: string) => `retention_days.${uid}`;
 
+// This browser's copy of the account's retention: what the card shows until the account's own arrives.
 function readRetention(uid: string): number | null | undefined {
   try {
     const v = localStorage.getItem(retentionKey(uid));
@@ -20,6 +25,14 @@ function readRetention(uid: string): number | null | undefined {
   } catch (err) {
     reportCrash('settings.readRetention', err);
     return undefined;
+  }
+}
+
+function writeRetention(uid: string, days: number | null) {
+  try {
+    localStorage.setItem(retentionKey(uid), days == null ? 'keep' : String(days));
+  } catch (err) {
+    reportCrash('settings.saveRetention', err);
   }
 }
 
@@ -34,6 +47,20 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Settings, as on iOS: account, plan, data retention, help, about, and deleting the account. */
+// RELEASE.md rev 11, H18: the month's minutes at a glance, with the day they renew, from the server's one figure.
+function MinutesBar({ used, included, period }: { used: number; included: number; period: string }) {
+  const fraction = Math.min(1, Math.max(0, used / included));
+  const renews = resetDate(period);
+  return (
+    <div className="mt-2">
+      <div role="meter" aria-label="Minutes used this month" aria-valuemin={0} aria-valuemax={Math.round(included)} aria-valuenow={Math.round(Math.min(used, included))} className="h-2 w-full overflow-hidden rounded-full bg-border">
+        <div className={`h-full ${fraction >= 1 ? 'bg-danger' : fraction >= 0.8 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${Math.round(fraction * 100)}%` }} />
+      </div>
+      {renews && <p className="mt-1 text-sm text-muted">{Math.max(0, Math.round(included - used))} left. Your minutes renew on {renews}.</p>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   if (!user) return null;
@@ -43,6 +70,7 @@ export function SettingsPage() {
       <AccountCard />
       <PlanCard />
       <RetentionCard uid={user.uid} />
+      <NotificationsCard />
       <SupportCard />
       <Card title="About">
         <p className="text-body">AlgoMinutes for the web, version {pkg.version}.</p>
@@ -54,6 +82,24 @@ export function SettingsPage() {
       </Card>
       <DeleteAccountCard />
     </div>
+  );
+}
+
+function NotificationsCard() {
+  const { state, enable } = usePush();
+  if (state === 'off' || state === 'loading') return null;
+  return (
+    <Card title="Notifications">
+      {state === 'granted' && <p className="text-body">On. This browser is told when a note is ready, or if one fails.</p>}
+      {state === 'denied' && <p className="text-body">Blocked for this site. To turn them on, allow notifications in your browser’s site settings, then reload.</p>}
+      {state === 'unsupported' && <p className="text-body">This browser can’t show notifications from AlgoMinutes.</p>}
+      {state === 'default' && (
+        <>
+          <p className="text-body">Get told in this browser when a note is ready, or if one fails.</p>
+          <button type="button" className="mt-3 rounded-xl bg-accent px-4 py-2 font-semibold text-white" onClick={() => void enable()}>Turn on notifications</button>
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -102,6 +148,8 @@ function PlanCard() {
     };
   }, [api]);
   const plan = ent ? { free: 'Free', pro: 'Pro', team: 'Team' }[ent.plan] : null;
+  // Where it comes from (RELEASE.md PR 26b): a grant's minutes say so, so they're never taken for a purchase.
+  const from = ent?.source === 'grant' ? ' (beta minutes)' : ent?.state === 'trialing' ? ' (trial)' : '';
   return (
     <Card title="Plan">
       {!ent && !failed && <p role="status" className="text-muted">Loading…</p>}
@@ -109,11 +157,22 @@ function PlanCard() {
       {ent && (
         <>
           <p className="text-body">
-            {plan} plan{ent.state === 'trialing' ? ' (trial)' : ''}.{' '}
+            {plan} plan{from}.{' '}
             {ent.includedMinutes == null ? 'Unmetered.' : `${Math.round(ent.usedMinutes)} of ${Math.round(ent.includedMinutes)} minutes used this month.`}
           </p>
-          {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month.</p>}
+          {ent.includedMinutes != null && ent.includedMinutes > 0 && <MinutesBar used={ent.usedMinutes} included={ent.includedMinutes} period={ent.billingPeriod} />}
+          {ent.source === 'subscription' && ent.rail === 'apple_storekit' && (
+            <p className="mt-2 text-body">Billed through the App Store. Manage it on your iPhone: Settings, your name, then Subscriptions.</p>
+          )}
+          <ProOffer ent={ent} />
+          {ent.overQuota && <p className="mt-2 text-body">You’ve used this month’s minutes. They reset at the start of next month, or an invite code adds more.</p>}
         </>
+      )}
+      {/* Beta testers' minutes come from the code in their invitation (RELEASE.md PR 9). */}
+      {!failed && (
+        <div className="mt-4 border-t border-border pt-4">
+          <InviteCodeForm onRedeemed={(r) => setEnt(r.entitlement)} />
+        </div>
       )}
     </Card>
   );
@@ -134,17 +193,34 @@ function RetentionCard({ uid }: { uid: string }) {
   const [choice, setChoice] = useState<number | null | undefined>(saved);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Set once a choice is made here: the account's value, arriving later, doesn't overwrite it.
+  const picked = useRef(false);
+
+  // The account's own choice, made on any device (RELEASE.md PR 12b). Before, a limit set on iOS or in
+  // another browser showed here as nothing chosen.
+  useEffect(() => {
+    let cancelled = false;
+    api.retention().then(
+      (r) => {
+        if (cancelled) return;
+        setSaved(r.retentionDays);
+        if (!picked.current) setChoice(r.retentionDays);
+        writeRetention(uid, r.retentionDays);
+      },
+      (err: unknown) => reportCrash('settings.retention', err),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, uid]);
+
   const save = async (days: number | null) => {
     setConfirming(false);
     setBusy(true);
     try {
       await api.setRetention({ retentionDays: days });
       setSaved(days);
-      try {
-        localStorage.setItem(retentionKey(uid), days == null ? 'keep' : String(days));
-      } catch (err) {
-        reportCrash('settings.saveRetention', err);
-      }
+      writeRetention(uid, days);
       notice.show(days == null ? 'Notes are kept until you delete them.' : `Notes are deleted after ${days} days.`);
     } catch (err) {
       notice.show(err instanceof ApiError ? `That wasn’t saved. ${err.message}` : 'That wasn’t saved. Try again.');
@@ -169,7 +245,7 @@ function RetentionCard({ uid }: { uid: string }) {
           <div className="flex flex-col gap-2">
             {options.map((o) => (
               <label key={String(o.days)} className="flex gap-2 text-body">
-                <input type="radio" name="retention" checked={choice === o.days} onChange={() => setChoice(o.days)} />
+                <input type="radio" name="retention" checked={choice === o.days} onChange={() => { picked.current = true; setChoice(o.days); }} />
                 {o.label}
               </label>
             ))}
@@ -207,6 +283,7 @@ function SupportCard() {
       setMessage('');
       setState('sent');
     } catch (err) {
+      // silent-catch-ok: an ApiError is a typed answer (the server's, or no connection) shown as failed; anything else is reported
       setState('failed');
       if (!(err instanceof ApiError)) reportCrash('settings.support', err);
     }
@@ -273,6 +350,8 @@ function DeleteAccountCard() {
         <Modal title="Delete your account?" onClose={() => !busy && setOpen(false)} initialFocus="input">
           <form onSubmit={(e) => { e.preventDefault(); if (typed === 'DELETE') void remove(); }}>
             <p className="text-body">This permanently deletes your account, every recording, transcript and summary, and your search index.{apple ? ' You’ll confirm with Apple first.' : ''}</p>
+            {/* RELEASE.md PR 28b; App Review 5.1.1(v): an App Store subscription outlives the account unless cancelled there. */}
+            <p className="mt-2 text-body">A subscription bought in the App Store isn’t cancelled with your account: cancel it on your iPhone in Settings, your name, then Subscriptions. One bought on the web is cancelled for you.</p>
             <label className="mt-3 block text-body">
               Type DELETE to confirm:
               <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" className="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-heading" />

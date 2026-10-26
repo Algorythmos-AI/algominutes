@@ -39,15 +39,25 @@ describe('markKickoffRejected', () => {
     expect(docs.get(DOC)).toEqual({ status: s });
   });
 
-  it('marks a note stuck in flight past the stale window, and a failed or finished one', async () => {
+  it('leaves a note stuck in flight past the stale window for the sweep, which fails and refunds it', async () => {
+    // Its run was charged. Marking it `error` here (with no refund) would take it
+    // out of listStuckNotes and strand the charge (RELEASE.md PR 3 audit).
     await seedNote('n1', 'ws-a', 'alice');
     await pool.query(`UPDATE notes SET status = 'transcribing', updated_at = NOW() - INTERVAL '4 hours' WHERE id = 'n1'`);
-    expect(await markKickoffRejected(fs, input, quietLog)).toEqual({ marked: true });
-    expect(await status()).toBe('error');
+    docs.set(DOC, { status: 'transcribing' });
+    expect(await markKickoffRejected(fs, input, quietLog)).toEqual({ marked: false });
+    expect(await status()).toBe('transcribing');
+    expect(docs.get(DOC)).toEqual({ status: 'transcribing' });
+  });
+
+  it('marks a failed or finished note', async () => {
+    await seedNote('n1', 'ws-a', 'alice');
+    for (const from of ['error', 'ready']) {
+      await pool.query(`UPDATE notes SET status = $1 WHERE id = 'n1'`, [from]);
+      expect(await markKickoffRejected(fs, input, quietLog)).toEqual({ marked: true });
+      expect(await status()).toBe('error');
+    }
     expect(docs.get(DOC)).toMatchObject({ status: 'error', errorMessage: 'too many' });
-    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'n1'`);
-    expect(await markKickoffRejected(fs, input, quietLog)).toEqual({ marked: true });
-    expect(await status()).toBe('error');
   });
 
   it('a note with no Postgres row yet gets the mirror only', async () => {

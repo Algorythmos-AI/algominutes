@@ -605,12 +605,25 @@ a plain-English "where does my audio go" screen.
   for live partials with the chunked pipeline still authoritative — materially more cost per minute and
   a second integration; (C) live transcription as a paid-tier feature, giving the paywall something
   concrete to sell. Cost all three against measured per-minute pricing and recommend
-- **Calendar integration** — pre-fill meeting title and attendees; ADR 0002 Tier 1 already depends on
-  Calendar OAuth. Not now, but make sure the note schema has somewhere to put it
-- Transcript translation · ADR 0002 Tier 1 Meet transcript import · Tier 2 browser extension
-- **Deliberately out of scope:** call recording (no iOS API; every implementation is a conference-bridge
-  merge with telephony cost and a poor first run), Apple Watch, Mac, server-side meeting bot, flashcards
-  and quizzes, contact manager. Recorded so these are choices, not oversights
+- **Online meetings (in scope since 2026-09-28; `docs/plans/MEETINGS.md`, DECISIONS "Online meetings are
+  captured by a Recall.ai notetaker bot first").** The stages:
+  - M1: a Recall.ai notetaker bot for Google Meet;
+  - M2: calendar auto-join, which covers the calendar integration above (title, attendees, `meeting_at`);
+  - M3: a Chrome/Edge extension (ADR 0002 Tier 2);
+  - M4: Zoom and Teams bots, and Zoom cloud-recording import;
+  - M5: a Mac app capturing system audio.
+
+  The Meet transcript import (ADR 0002 Tier 1) and Teams import come later, when asked for.
+- Transcript translation
+- **Deliberately out of scope:**
+  - call recording (there's no iOS API; every implementation is a conference-bridge merge with telephony cost and
+    a poor first run);
+  - Apple Watch;
+  - flashcards and quizzes;
+  - a contact manager.
+
+  Recorded so these are choices, not oversights. The Mac and a server-side meeting bot were on this list until
+  2026-09-28.
 
 ---
 

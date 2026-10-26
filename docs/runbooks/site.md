@@ -56,10 +56,22 @@ branch** only (so PR previews keep the placeholder and never build the app):
 | `VITE_FIREBASE_PROJECT_ID` | `algominutes-staging` |
 | `VITE_FIREBASE_APP_ID` | `1:627101926311:web:3b656d832081e12b19ac82` ("AlgoMinutes Web") |
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `627101926311` |
-| `VITE_FIREBASE_AUTH_DOMAIN` | `staging.algominutes.algorythmos.com` (where `/__/auth` is proxied) |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `algominutes-staging.firebaseapp.com` (staging only; see **Sign-in on staging** below) |
 | `VITE_FIREBASE_API_KEY` | **owner:** the "AlgoMinutes Web" app's key (Firebase → Project settings → Your apps) |
+| `VITE_FIREBASE_VAPID_KEY` | **owner, optional:** Firebase → Project settings → Cloud Messaging → Web Push certificates → Generate key pair, then the **public** key. Without it the build has no push: no prompt, no Settings section |
 
 Production gets none of these until the launch (plan Phase 3), so it keeps the "coming soon" page.
+
+**Sign-in on staging runs on Firebase's own domain.** Staging is behind Vercel Authentication. Apple returns its
+sign-in result as a cross-site POST (`form_post`) to the auth handler, and a cross-site POST carries no
+`SameSite=Lax` cookie, so Vercel redirected it to its login and the credential was lost (`auth/invalid-credential-or-provider-id`;
+a cookie-less POST to the staging `/__/auth/handler` gets a 302 to vercel.com/sso-api). So staging's
+`VITE_FIREBASE_AUTH_DOMAIN` is `algominutes-staging.firebaseapp.com`. For that:
+- `/app`'s CSP `frame-src` allows it (`scripts/build-site.mjs` refuses a build where it doesn't);
+- the Browser key's website list has `https://algominutes-staging.firebaseapp.com/*` (and `…web.app/*`);
+- Apple's Services ID and Google's OAuth client list its `/__/auth/handler`.
+
+Production has no Vercel Authentication, so it signs in on its own origin, as below.
 
 **Sign-in on the site's own origin.** `/__/auth/*` and `/__/firebase/*` on `staging.algominutes.algorythmos.com`
 are proxied to `algominutes-staging.firebaseapp.com`, so the Firebase popup and iframe are same-origin. Those
@@ -78,7 +90,114 @@ paths keep Firebase's own headers: no site CSP, no `X-Frame-Options`, no COOP. `
    `https://staging.algominutes.algorythmos.com/__/auth/handler`.
 4. Google Cloud → Credentials → the **Browser key**: set its website restrictions to
    `https://staging.algominutes.algorythmos.com/*` and `https://algominutes.algorythmos.com/*` (it allows
-   `algominutes.com`, which we don't own, today).
+   `algominutes.com`, which we don't own, today). If the key also has **API restrictions**, web push needs
+   **Firebase Cloud Messaging API**, **FCM Registration API** and **Firebase Installations API** on the list
+   (all three are enabled on the project).
+
+**Web push.** The app's service worker is `/app/sw.js` (scope `/app/`), built by `apps/web/vite.sw.config.ts` and
+checked for by `scripts/build-site.mjs`. It caches nothing. It shows the notifier's notifications itself: when one of
+the app's own windows is in view it sends that window a notice instead (public-site pages don't count, unlike in
+Firebase's worker). A tap asks the app's window in front to open `notes/<id>` through its router (so a recording
+page's "You're recording" guard applies), or opens a new window at the worker's scope, so staging opens staging
+whatever deep link the notifier sent (iOS's `algominutes://note/<id>`). The browser is only asked after a click, on a
+card shown once the user has a note, or from Settings; sign-out deletes the browser's FCM token first. To check: turn
+notifications on, upload a short file, switch to another tab, and wait for "ready"; tapping it opens the note.
+
+## The beta web app (beta.algominutes.algorythmos.com, for external testers)
+
+Staging's `/app` is behind Vercel Authentication, so testers outside the Vercel team can't open it
+(docs/plans/RELEASE.md, PR 7). The beta is a **second Vercel project** on the same repo:
+- its **Production** branch is `integration`, at `beta.algominutes.algorythmos.com`, on staging's Firebase and api;
+- a project's production domain isn't behind Standard Protection, so testers get in, and PR previews stay protected;
+- it signs in on its own host through the `/__/auth` proxy in `vercel.json`, as prod will;
+- the whole host is `noindex` (`vercel.json`), because it serves the site pages too.
+
+**Owner, once:**
+1. **Vercel → Add New → Project:**
+   - Import `Algorythmos-AI/algominutes` as `algominutes-beta`, with Root Directory `apps/site` (framework and
+     commands come from `vercel.json`).
+   - Settings → Git → Production Branch: `integration`.
+   - Settings → Git → Ignored Build Step:
+     `if [ "$VERCEL_GIT_COMMIT_REF" = "integration" ]; then exit 1; else exit 0; fi`, so it builds only
+     `integration`, never a PR branch.
+2. **Environment Variables, Production:** the same values as staging's table above, except
+   `VITE_FIREBASE_AUTH_DOMAIN` = `beta.algominutes.algorythmos.com`. `scripts/build-site.mjs` refuses the build if
+   the `/__/auth` rewrite for that host is missing.
+3. **Domains:** add `beta.algominutes.algorythmos.com`. In Cloudflare (zone `algorythmos.com`), add the CNAME Vercel
+   shows, DNS only.
+4. **Sign-in:**
+   - Firebase (`algominutes-staging`) → Authentication → Settings → Authorized domains: add
+     `beta.algominutes.algorythmos.com`.
+   - Apple Developer → the Services ID `com.algorythmos.algominutes.signin` → Return URLs: add
+     `https://beta.algominutes.algorythmos.com/__/auth/handler`.
+   - Google Cloud (`algominutes-staging`) → Credentials → the Web OAuth client: add the origin
+     `https://beta.algominutes.algorythmos.com` and the redirect `https://beta.algominutes.algorythmos.com/__/auth/handler`.
+   - The Browser key's website restrictions: add `https://beta.algominutes.algorythmos.com/*`.
+5. **Check** (read-only, with admin access): `node scripts/check-signin-chain.mjs --env beta`. It checks the key's
+   referrers, the authorized domain, the auth handler and iframe on the beta host, and that Apple's cross-site POST
+   reaches the handler. Then sign in with Apple and Google at `https://beta.algominutes.algorythmos.com/app`.
+
+The api already allows the beta origin: `allowed_origins` in `infra/terraform/envs/staging/main.tf` (Apply A).
+
+## Sign-in troubleshooting (staging and production)
+
+Sign-in crosses five systems, and a missing setting in any of them can fail silently. So the web app traces every
+attempt, and anyone can run a self-test from their own browser.
+
+**1. Ask for the sign-in check.** `https://<site>/app/diagnostics` is public, and it's linked from the sign-in error
+("Run a sign-in check"). From that browser it checks:
+- the page's CSP (`script-src`, `connect-src`, and `frame-src` when sign-in runs on another domain);
+- that the Browser API key accepts the site, and that the site and auth domain are Firebase authorized domains
+  (one real request);
+- that the sign-in handler answers (our `/__/auth` proxy, or Firebase's domain in a frame);
+- the api's CORS;
+- whether popups are allowed;
+- the last attempt's trace.
+
+Every failing check names its fix. **Copy report** gives one paste with the API key masked and no personal details.
+
+**2. Read the traces in the api's logs.** Every failed or unfinished attempt is reported through `/v1/client-error`:
+
+| Log event (`jsonPayload.msg`) | `kind` | Severity | Means |
+|---|---|---|---|
+| `web_client_crash` | `auth.signIn` | ERROR | Firebase refused the attempt; the message holds its code and the trace |
+| `web_client_diagnostic` | `auth.signInCancelled` | WARNING | the window closed without a result: by hand, or a blocked relay |
+| `web_client_diagnostic` | `csp.violation` | WARNING | the page's CSP refused an origin (`<directive> <origin>`, never a full URL) |
+
+A trace (the message's JSON) holds:
+- `id` (the attempt), `p` (provider), `f` (sign-in or guest link);
+- `d` (auth domain), `h` (page host);
+- `o` (outcome), `c` (Firebase's code);
+- `s` (timed steps, in ms);
+- `csp` (violations during the attempt).
+
+```bash
+gcloud logging read 'resource.labels.service_name="api" AND jsonPayload.kind:"auth." AND timestamp>="2026-09-27T00:00:00Z"' --project algominutes-staging --account algorythmos.france@gmail.com --limit 20 --format="value(timestamp,jsonPayload.kind,jsonPayload.message)"
+```
+
+```bash
+gcloud logging read 'resource.labels.service_name="api" AND jsonPayload.kind="csp.violation"' --project algominutes-staging --account algorythmos.france@gmail.com --limit 20 --format="value(timestamp,jsonPayload.message,jsonPayload.url)"
+```
+
+`kind` is set by the (anonymous) client, so a caller could label a crash as a diagnostic. It's still logged, with its
+`traceId`, just at WARNING. Don't build a security decision on it.
+
+**3. The chain, and what each failure means:**
+
+| Link | Check | Symptom when it breaks | Fix |
+|---|---|---|---|
+| Page CSP | the sign-in check; `csp.violation` | "Framing … violates frame-src", "Refused to connect" | add the origin to `/app`'s CSP (`apps/site/vercel.json`); `scripts/build-site.mjs` refuses an auth domain the CSP can't frame |
+| Browser API key | the sign-in check ("key") | 403 `API_KEY_HTTP_REFERRER_BLOCKED` | add `https://<site>/*` (and `https://<authDomain>/*`) to the key's website restrictions |
+| Firebase authorized domains | the sign-in check ("domain") | `auth/unauthorized-domain`, "This site isn't authorised for sign-in" | Firebase → Authentication → Settings → Authorized domains |
+| Apple Services ID | Apple's page shows `invalid_request` / `invalid_client` | the Apple window errors | add the domain and `https://<authDomain>/__/auth/handler` return URL |
+| Apple code exchange | `auth.signIn` with `auth/invalid-credential…` | "Apple sign-in didn't complete" | the Apple provider's key (YMZ3K33U6D, team NY9MS8GSBK) and its `.p8` in Firebase |
+| Google OAuth client | Google's page shows `redirect_uri_mismatch` | the Google window errors | add the origin and `…/__/auth/handler` redirect URI |
+| Relay back to the page | `auth.signInCancelled` right after the user approved | the window closes, nothing happens | frame-src, or third-party storage for the auth domain; staging signs in on Firebase's domain (see above) |
+| api CORS | the sign-in check ("api") | signed in, then every call fails | `allowed_origins` (Terraform), then apply, then redeploy the services |
+
+**4. Staging only:** it's behind Vercel Authentication, so incognito, or anyone outside the Vercel team, gets
+Vercel's login; that's by design. After a header change, use a freshly loaded tab: a tab loaded earlier keeps the old
+policy.
 
 ## DNS (Cloudflare, zone `algorythmos.com`)
 
@@ -91,6 +210,42 @@ Two records, both **DNS only** (grey cloud), like the zone's other Vercel record
 
 Check: `dig +short algominutes.algorythmos.com CNAME` and `curl -sI https://algominutes.algorythmos.com/privacy`.
 
+## The web app, end to end (`web-e2e`)
+
+`scripts/e2e-web.mjs` walks one guest's life on staging in headless Chromium:
+- sign in as a guest;
+- import `tests/fixtures/e2e-speech.ogg` (ten seconds of synthetic speech), and it gets a summary;
+- search, then ask a question;
+- record in the browser, with a fake microphone playing the same speech;
+- delete the account.
+
+The deletion runs even after a failed step. Any console or page error fails the run, including a CSP refusal.
+`.github/workflows/web-e2e.yml` runs it nightly, on demand, and once integration's head is fully deployed. Its gate
+job (`scripts/e2e-web-gate.mjs`) wakes when deploy-staging finishes or Vercel deploys, and runs the journey only if:
+- Vercel's deployment of integration's head succeeded;
+- no deploy-staging run is queued or running;
+- head's own deploy-staging run, if it has one, succeeded; if head changed no backend path, integration's last
+  finished deploy-staging run succeeded.
+
+The last deploy to finish starts the run. If both finish within about a minute of each other, it can run twice
+in a row, which is harmless: one extra guest, created and deleted. The gate's log line says why it ran or skipped. Vercel reports each branch,
+PR previews included, as a "Preview" deployment keyed by commit, so a deployment whose commit isn't integration's
+head is skipped. The journey has a 20-minute budget (`E2E_BUDGET_MS`), and the account deletion always runs after
+it. Each FAIL line says why its wait gave up.
+
+**Owner, once:** Vercel → algominutes-site → Settings → Deployment Protection → **Protection Bypass for
+Automation** → create a secret, then add it to GitHub as the Actions secret `VERCEL_AUTOMATION_BYPASS_SECRET`.
+Until then, the job warns and stops. The staging sign-in settings and the api's `allowed_origins` are already in
+place (2026-09-27).
+
+To run it by hand:
+
+```bash
+VERCEL_BYPASS=… node scripts/e2e-web.mjs
+```
+
+It needs Playwright's Chromium (`npx playwright install chromium`) and ffmpeg.
+
 ## Check a deploy
 
 ```bash
@@ -102,6 +257,23 @@ also checks the 404, the `.html` and `http://` redirects, and that `security.txt
 For staging, export the project's automation bypass secret as `VERCEL_AUTOMATION_BYPASS_SECRET` first.
 Add the same secret to the repository's Actions secrets to smoke preview deploys too; without it they're
 skipped.
+
+**The sign-in chain, with admin access** (read-only; gcloud signed in as `algorythmos.france@gmail.com`):
+
+```bash
+node scripts/check-signin-chain.mjs --env staging
+```
+
+It checks, printing each failing link with its fix and exiting 1:
+- the Browser key's referrers and APIs;
+- Firebase's authorized domains;
+- the Apple provider (Services ID, team, key, private key) and the Google provider;
+- the api's CORS;
+- the auth handler and iframe;
+- when sign-in runs on the site itself, that a cross-site POST (Apple's reply) isn't swallowed by the host's login
+  protection.
+
+Nothing secret is printed. Add a `prod` entry to its `ENVS` at the launch.
 
 ## Roll back
 

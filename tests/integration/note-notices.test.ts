@@ -116,7 +116,8 @@ describe('a "failed" notice is written with the failure, once', () => {
 
   it('the summarizer\'s "No speech was found" tells the author', async () => {
     await pool.query(`UPDATE notes SET status = 'summarizing' WHERE id = 'n1'`);
-    const deps = { log, traceId: 'trace-5', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {} };
+    // A fake Firestore: the real one, with no credentials in CI, waited on the network (once past 20 s).
+    const deps = { log, traceId: 'trace-5', sharedIntelligence: {}, sharedTemplates: {}, sharedRedaction: {}, geminiCall: {}, firestore: fsOk };
     await summarizer.handle({ noteId: 'n1', workspaceId: 'ws' }, deps);
     expect(await noticeKinds('n1')).toEqual(['note_failed']);
     expect(enqueued.map((e) => [e.payload.type, e.traceId])).toEqual([['note_failed', 'trace-5']]);
@@ -293,6 +294,9 @@ describe('the notifier sends each notice once', () => {
     const n = notifier();
     expect((await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice' })).status).toBe(200);
     expect(n.sends).toHaveLength(1);
-    expect((await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice', noticeId: '1; DROP' })).status).toBe(400);
+    // Refused: acknowledged (2xx, so Cloud Tasks stops retrying it) and nothing sent.
+    expect(await n.deliver({ type: 'note_ready', noteId: 'n1', workspaceId: 'ws', uid: 'alice', noticeId: '1; DROP' }))
+      .toEqual({ status: 200, json: { ok: false, error: 'bad_payload' } });
+    expect(n.sends).toHaveLength(1);
   });
 });

@@ -11,6 +11,7 @@ const { isNoteGone } = require('./note-gone');
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }
@@ -40,6 +41,12 @@ async function run({ noteId, workspaceId, type, mimeType, inputLocal, durationSe
   // truncates mid-JSON and parseGeminiJson throws. PR-C closure.
   const { rawText, model, error } = await geminiCall.callGeminiWithLadder({
     parts, deadlineMs: intelligence.RETRY_DEADLINE_MS, log,
+    // One hung attempt is cut at a cap that grows with the clip, and asked again within the budget (plan rev 12
+    // S3): a ten-second clip once waited all 240 s on one call. Unknown length: no cap, as before.
+    attemptTimeoutMs: intelligence.attemptTimeoutForAudioMs(durationSec),
+    // Thinking counts toward maxOutputTokens: capped, so the transcript and summary keep their room (rev 11
+    // LM4). The ladder picks the field each model takes (models.cjs thinkingConfigFor).
+    thinking: { budget: 2048 },
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: intelligence.FAST_PATH_RESPONSE_SCHEMA,

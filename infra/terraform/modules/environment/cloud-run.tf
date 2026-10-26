@@ -17,22 +17,25 @@ locals {
   # Public "hello" image used only until the deploy pipeline pushes the real one.
   placeholder_image = "us-docker.pkg.dev/cloudrun/container/hello"
 
-  region_bucket = { for s in local.bucket_suffixes : s => "algominutes-${var.env}-${s}" }
+  region_bucket = { for s in local.bucket_suffixes : s => "${var.project_id}-${s}" }
 
   # Deterministic Cloud Run URLs (see header).
-  service_names = ["api", "transcoder", "summarizer", "embedder", "extractor", "billing", "notifier"]
+  service_names = ["api", "transcoder", "summarizer", "embedder", "extractor", "billing", "notifier", "meetings"]
   service_url   = { for s in local.service_names : s => "https://${s}-${var.project_number}.${var.region}.run.app" }
 
   # Per-service runtime sizing. Long-audio transcode gets the most head-room and
   # concurrency 1 (one CPU-bound chunk job per instance); the rest are modest.
   service_config = {
     api        = { cpu = "1", memory = "512Mi", timeout = 60, concurrency = 80, sa = "run-api" }
-    transcoder = { cpu = "2", memory = "2Gi", timeout = 3600, concurrency = 1, sa = "run-transcoder" }
+    transcoder = { cpu = "2", memory = "2Gi", timeout = 1800, concurrency = 1, sa = "run-transcoder" }
     summarizer = { cpu = "1", memory = "1Gi", timeout = 900, concurrency = 4, sa = "run-summarizer" }
     embedder   = { cpu = "1", memory = "512Mi", timeout = 600, concurrency = 4, sa = "run-embedder" }
     extractor  = { cpu = "1", memory = "1Gi", timeout = 900, concurrency = 4, sa = "run-extractor" }
     billing    = { cpu = "1", memory = "512Mi", timeout = 60, concurrency = 80, sa = "run-billing" }
     notifier   = { cpu = "1", memory = "256Mi", timeout = 60, concurrency = 20, sa = "run-notifier" }
+    # The Recall.ai notetaker (docs/plans/MEETINGS.md): webhooks, and tasks that
+    # stream a meeting's audio into GCS (so a longer timeout than the api's).
+    meetings = { cpu = "1", memory = "512Mi", timeout = 900, concurrency = 20, sa = "run-meetings" }
   }
 
   # Env every service shares.
@@ -54,6 +57,7 @@ locals {
     SUMMARIZE_QUEUE                = "summarize"
     EMBED_QUEUE                    = "embed"
     EXTRACT_QUEUE                  = "extract"
+    MEETINGS_QUEUE                 = "meetings"
     NOTIFY_QUEUE                   = "notify"
     TRANSCODER_URL                 = local.service_url["transcoder"]
     SUMMARIZER_URL                 = local.service_url["summarizer"]
@@ -82,37 +86,87 @@ locals {
   # some: an unset ADMIN_UIDS means every admin route answers 403.
   admin_env = length(var.admin_uids) > 0 ? { ADMIN_UIDS = join(",", var.admin_uids) } : {}
 
+  # The daily spend cap, where it's checked (the api at kickoff, the transcoder
+  # before paid work). Unset, spend-guard.cjs uses its per-environment default.
+  spend_env = var.daily_spend_cap_aud == null ? {} : { DAILY_SPEND_CAP_AUD = tostring(var.daily_spend_cap_aud) }
+
+  # The free floor's minutes (FREE_FLOOR_MINUTES), on every service and job (any may resolve an entitlement). Unset, a new
+  # account on the free floor has 0 (packages/db configuredFreeFloorMinutes): staging's beta, where an invite code
+  # gives minutes.
+  free_floor_env = var.free_floor_minutes == null ? {} : { FREE_FLOOR_MINUTES = tostring(var.free_floor_minutes) }
+
   # Per-service extra plain env, merged over common_env. Every name a service's
   # src/env-spec.cjs requires must be set here, non-blank
   # (tests/tf-env-contract.test.ts).
   service_env = {
-    api = merge(local.db_env, local.admin_env, {
-      STORAGE_BUCKET    = local.region_bucket["recordings"]
-      ALLOWED_ORIGINS   = var.allowed_origins
-      PUBLIC_SITE_URL   = var.public_site_url
-      BROADCAST_CAPTURE = var.broadcast_capture
+    api = merge(local.db_env, local.admin_env, local.spend_env, {
+      STORAGE_BUCKET = local.region_bucket["recordings"]
+      # New users start the reverse trial unless it's switched off (the beta).
+      TRIAL_ON_FIRST_USE = var.trial_on_first_use
+      # Apple DeviceCheck, for a new iOS user's trial (device-check.js; the key is the devicecheck-key secret).
+      DEVICECHECK_KEY_ID = var.devicecheck_key_id
+      APPLE_TEAM_ID      = var.apple_team_id
+      DEVICECHECK_ENV    = "production"
+      ALLOWED_ORIGINS    = var.allowed_origins
+      PUBLIC_SITE_URL    = var.public_site_url
+      BROADCAST_CAPTURE  = var.broadcast_capture
+      # A disabled account or revoked sessions refused within a minute (session-check.cjs).
+      SESSION_CHECK = var.session_check
+      # Share links (RELEASE.md PR 29): off until the viewer's host is public.
+      SHARE_LINKS         = var.share_links
+      SHARE_VIEWER_ORIGIN = var.share_viewer_origin
+      # The notetaker's surfaces (off unless named) and where its tasks go.
+      NOTETAKER    = var.notetaker_surfaces
+      MEETINGS_URL = local.service_url["meetings"]
+      # The key the api encrypts a notetaker's meeting link with (kms.tf).
+      MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
     })
-    transcoder = merge(local.db_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
-    summarizer = local.db_env
+    # Speech-to-text stays on Google's global endpoint (stt.js's default without STT_LOCATION) until Sydney is proven
+    # with the transcoder's own identity: `long` there takes en-AU only, and the only probe so far ran as a user,
+    # which reads files differently (RELEASE.md rev 11, N2; DECISIONS 2026-10-01).
+    transcoder = merge(local.db_env, local.spend_env, { GCS_BUCKET = local.region_bucket["recordings"], LANGUAGE_CODES = "en-US,en-GB,en-AU", STT_PROVIDER = "google" })
+    # Must equal the summarize queue's max_attempts (main.tf queue_retry), so the
+    # summarizer's dead-letter write fires on that queue's true last attempt.
+    summarizer = merge(local.db_env, { MAX_TASK_ATTEMPTS = tostring(var.summarize_max_attempts) })
     embedder   = local.db_env
     extractor  = { GCS_BUCKET = local.region_bucket["imports"], TESSERACT_CACHE_PATH = "/tmp/tesseract" }
-    billing    = merge(local.db_env, { PUBLIC_SITE_URL = var.public_site_url })
-    notifier   = local.db_env
+    # Its own URL: /tasks/* checks that each OIDC token was minted for it. The App Store
+    # Server API's key is the app-store-server-key secret, read at run time.
+    billing = merge(local.db_env, {
+      SESSION_CHECK   = var.session_check
+      PUBLIC_SITE_URL = var.public_site_url
+      BILLING_URL     = local.service_url["billing"]
+      APPLE_ISSUER_ID = var.app_store_issuer_id
+      APPLE_KEY_ID    = var.app_store_key_id
+      # The web app's checkout and portal (RELEASE.md PR 17): the api's allowlist.
+      ALLOWED_ORIGINS = var.allowed_origins
+    })
+    notifier = local.db_env
+    # Its own URL: /tasks/* checks that each OIDC token was minted for it.
+    # Ingest writes a recording to the recordings bucket, then queues its note's
+    # run on the transcode queue (common_env's TRANSCODER_URL and TASKS_PROJECT).
+    meetings = merge(local.db_env, {
+      MEETINGS_URL        = local.service_url["meetings"]
+      RECALL_REGION       = var.recall_region
+      MEETING_URL_KMS_KEY = google_kms_crypto_key.meeting_url.id
+      GCS_BUCKET          = local.region_bucket["recordings"]
+    })
   }
 
   # Which services connect to Postgres (get the db-password secret). Every
   # service that imports @algominutes/db belongs here — api (repo layer),
   # billing (subscriptions repo), notifier (push-tokens repo) included.
-  db_services = ["api", "billing", "notifier", "transcoder", "summarizer", "embedder"]
+  db_services = ["api", "billing", "notifier", "transcoder", "summarizer", "embedder", "meetings"]
 
   # Services end users / third parties call directly. They authenticate at the
   # application layer (api: Firebase ID token; billing: store/Stripe webhook
-  # signatures), so Cloud Run must admit unauthenticated requests. That is done
+  # signatures; meetings: Recall's webhook signatures, and the Cloud Tasks OIDC
+  # token checked in the app), so Cloud Run must admit unauthenticated requests. That is done
   # by turning off the invoker IAM check (invoker_iam_disabled), not by granting
   # run.invoker to allUsers: the organization's iam.allowedPolicyMemberDomains
   # policy refuses any allUsers binding, so the apply would fail. Every other
   # service keeps the check on (only run-jobs may invoke).
-  public_services = ["api", "billing"]
+  public_services = ["api", "billing", "meetings"]
 }
 
 resource "google_cloud_run_v2_service" "services" {
@@ -134,7 +188,9 @@ resource "google_cloud_run_v2_service" "services" {
     max_instance_request_concurrency = each.value.concurrency
 
     scaling {
-      min_instance_count = 0
+      # Warm instances where the environment names them (prod: the api and billing, the user's first request),
+      # zero elsewhere: the workers are behind queues.
+      min_instance_count = lookup(var.min_instances, each.key, 0)
       # From the connection budget, so max instances x pools x PG_POOL_MAX fits
       # the database (connection-budget.json). Also the cost guard.
       max_instance_count = var.connection_budget.services[each.key].max_instances
@@ -165,6 +221,7 @@ resource "google_cloud_run_v2_service" "services" {
       dynamic "env" {
         for_each = merge(
           local.common_env,
+          local.free_floor_env,
           local.service_env[each.key],
           contains(local.db_services, each.key) ? { PG_POOL_MAX = tostring(var.connection_budget.services[each.key].pool_max) } : {},
         )
@@ -231,7 +288,7 @@ resource "google_cloud_run_v2_job" "db_job" {
           limits = { cpu = "1", memory = "1Gi" }
         }
         dynamic "env" {
-          for_each = merge(local.common_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
+          for_each = merge(local.common_env, local.free_floor_env, local.db_env, { PG_POOL_MAX = tostring(var.connection_budget.jobs["db-job"].pool_max) })
           content {
             name  = env.key
             value = env.value
@@ -279,7 +336,7 @@ resource "google_cloud_run_v2_service_iam_member" "jobs_invoker" {
 }
 
 resource "google_service_account_iam_member" "act_as_jobs" {
-  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep"])
+  for_each = toset(["run-api", "run-transcoder", "run-summarizer", "run-db-job", "run-sweep", "run-meetings"])
 
   service_account_id = google_service_account.runtime["run-jobs"].name
   role               = "roles/iam.serviceAccountUser"
@@ -305,6 +362,9 @@ resource "google_project_iam_member" "deployer_roles" {
     "roles/iam.serviceAccountUser", # deploy a service running AS a runtime SA
     "roles/cloudscheduler.admin",
     "roles/serviceusage.serviceUsageConsumer",
+    # The pipeline e2e (.github/workflows/e2e.yml) follows its run's traceId through the logs, and looks for
+    # dead letters: read-only.
+    "roles/logging.viewer",
   ])
 
   project = var.project_id

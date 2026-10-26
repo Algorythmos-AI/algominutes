@@ -120,9 +120,13 @@ describe("the transcoder's tasks client", () => {
   });
 
   it('the api puts the caller uid on the tasks it starts', () => {
-    const kickoff = fs.readFileSync('services/api/src/routes/process-intelligence.js', 'utf8');
+    // The kickoff task is built by queueNoteRun (@algominutes/db kickoff.ts), which
+    // every source shares; the api hands it the caller.
+    const kickoff = fs.readFileSync('packages/db/src/kickoff.ts', 'utf8');
+    const route = fs.readFileSync('services/api/src/routes/process-intelligence.js', 'utf8');
     const regen = fs.readFileSync('services/api/src/routes/regenerate-summary.js', 'utf8');
-    expect(kickoff).toMatch(/kind: 'kickoff',[\s\S]*?uid: callerUid,/);
+    expect(kickoff).toMatch(/kind: 'kickoff',[\s\S]*?\n\s*uid,\n/);
+    expect(route).toMatch(/queueNoteRun\(\{[\s\S]*?uid: callerUid,/);
     expect(regen).toMatch(/summaryGeneration: claimed\.summary_generation,[\s\S]*?uid: req\.uid,/);
   });
 });

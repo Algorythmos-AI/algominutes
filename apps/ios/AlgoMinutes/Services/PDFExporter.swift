@@ -37,7 +37,7 @@ enum PDFExporter {
             cursor.space(6 * mm)
 
             if scope.includesSummary {
-            cursor.draw(text: "Executive Summary", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
+            cursor.draw(text: "Summary", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
             cursor.space(2 * mm)
             let gist = note.summary?.gist.isEmpty == false ? note.summary!.gist : "No summary."
             cursor.draw(text: gist, font: .systemFont(ofSize: 11), lineSpacing: 3)
@@ -51,7 +51,7 @@ enum PDFExporter {
 
             if let items = note.summary?.actionItems, !items.isEmpty {
                 cursor.space(6 * mm)
-                cursor.draw(text: "Action Items", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
+                cursor.draw(text: "Action items", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
                 cursor.space(2 * mm)
                 for item in items {
                     cursor.draw(text: "- \(item)", font: .systemFont(ofSize: 11), lineSpacing: 3, indent: 2 * mm)
@@ -60,7 +60,7 @@ enum PDFExporter {
 
             if let decisions = note.summary?.keyDecisions, !decisions.isEmpty {
                 cursor.space(6 * mm)
-                cursor.draw(text: "Key Decisions", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
+                cursor.draw(text: "Key decisions", font: .boldSystemFont(ofSize: 14), lineSpacing: 3)
                 cursor.space(2 * mm)
                 for decision in decisions {
                     cursor.draw(text: "- \(decision)", font: .systemFont(ofSize: 11), lineSpacing: 3, indent: 2 * mm)

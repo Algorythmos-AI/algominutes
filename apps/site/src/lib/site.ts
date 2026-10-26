@@ -10,6 +10,8 @@ export const facts = {
   primaryRegionLabel: processing.primaryRegionLabel,
   backupWindowDays: processing.backupWindowDays,
   logRetentionDays: processing.logRetentionDays,
+  notetakerRetentionHours: processing.notetakerRetentionHours,
+  notetakerWaitMinutes: processing.notetakerWaitMinutes,
 };
 
 /** 2026-09-26 → "26 September 2026" (the legal pages' "last updated" line). */

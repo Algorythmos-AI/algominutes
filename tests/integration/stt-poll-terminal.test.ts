@@ -30,9 +30,20 @@ let googleOp: any = null;
 let assemblyOp: any = null;
 assemblyai.poll = async () => assemblyOp;
 
+// The dead letters a run wrote with its failure (RELEASE.md PR 5a), in the shape of the hook calls that used
+// to record them: a test reads both as one list, the dead letter's one record whichever path wrote it.
+async function deadLettersSince(id: number, chunkId: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM dead_letter WHERE note_id = 'n1' AND id > $1 AND payload->>'chunkId' = $2 ORDER BY id`, [id, chunkId],
+  );
+  return rows.map((r: any) => ({ deadLetterOnly: false, withFailure: true, noteId: r.note_id, workspaceId: r.workspace_id, attempts: r.attempts, reason: r.reason, payload: r.payload }));
+}
+const lastDeadLetterId = async () => (await pool.query(`SELECT COALESCE(max(id), 0)::int AS id FROM dead_letter`)).rows[0].id;
+
 function run(chunkId: string, { poll = 0 } = {}) {
   const hooks: any[] = [];
-  const done = handler.handleSttPoll({ kind: 'stt-poll', jobId: 'j', chunkId, noteId: 'n1', workspaceId: 'ws', poll }, {
+  const before = lastDeadLetterId();
+  const done = before.then((since) => handler.handleSttPoll({ kind: 'stt-poll', jobId: 'j', chunkId, noteId: 'n1', workspaceId: 'ws', poll }, {
     db: transcoderDb,
     stt: { checkOperation: async () => googleOp },
     tasks: { enqueue: async () => {} },
@@ -42,7 +53,7 @@ function run(chunkId: string, { poll = 0 } = {}) {
     env: { STT_PROVIDER: 'assemblyai', ASSEMBLYAI_API_KEY: 'test' },
     traceId: 't',
     terminalHooks: { onTranscodeTerminalFailure: async (a: any) => void hooks.push(a) },
-  });
+  }).finally(async () => hooks.push(...await deadLettersSince(since, chunkId))));
   return { hooks, done };
 }
 
@@ -404,14 +415,17 @@ describe('the real tail, on the ledger', () => {
     });
   }
 
-  it('two chunks fail and one attempt is re-driven: refunded once, one notice, a dead letter each', async () => {
+  it('two chunks fail and one attempt is re-driven: refunded once, one notice, one dead letter per chunk', async () => {
     await poll(c1);
     googleOp = { done: false };
     await poll(c2, { poll: MAX_STT_POLLS });
     await poll(c1); // a late chain, or the retry of an attempt that died after its commit
     expect(await ledger()).toEqual(['debit 30', 'reversal -30']);
     expect(infos.filter((m) => m === 'notify_enqueue_skipped_no_config')).toHaveLength(1);
-    expect(await deadLetters()).toBe(3);
+    // The re-driven attempt is the same loss as c1's first: deduped (RELEASE.md PR 5a; audit Q2, Q4).
+    expect(await deadLetters()).toBe(2);
+    const reasons = (await pool.query(`SELECT reason FROM dead_letter WHERE note_id = 'n1' ORDER BY id`)).rows.map((r: any) => r.reason);
+    expect(reasons).toEqual(['stt_operation_errored', 'stt_poll_exhausted']);
   });
 
   it('an attempt that died before its refund: the retry refunds', async () => {

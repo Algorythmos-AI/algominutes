@@ -5,12 +5,34 @@
 // actual count) + word time offsets. Operations resolve via the polling
 // task; we never block the request waiting for STT to finish.
 
-let _client = null;
-function getClient() {
-  if (_client) return _client;
+// Where speech-to-text runs (RELEASE.md rev 11, N2): STT_LOCATION, or `global` when unset, as staging runs today.
+// Sydney keeps audio in Australia, but Terraform sets it only once a batchRecognize there is proven as the
+// transcoder's own service account (DECISIONS, S1 correction). `long` in australia-southeast1 takes en-AU only
+// (probed 2026-10-01), so LANGUAGE_CODES has to change with it.
+const { lineIsFull } = require('./providers/neutral');
+
+function sttLocation() {
+  return process.env.STT_LOCATION || 'global';
+}
+
+/** The SpeechClient options for a location: a regional endpoint, or the default for `global`. */
+function clientOptionsFor(location) {
+  return location && location !== 'global' ? { apiEndpoint: `${location}-speech.googleapis.com` } : {};
+}
+
+/** The location an operation runs in, from its name (projects/…/locations/{loc}/operations/…). */
+function operationLocation(operationName) {
+  const m = /\/locations\/([^/]+)\//.exec(String(operationName || ''));
+  return m ? m[1] : 'global';
+}
+
+const _clients = new Map();
+function getClient(location = sttLocation()) {
+  if (_clients.has(location)) return _clients.get(location);
   const { v2 } = require('@google-cloud/speech');
-  _client = new v2.SpeechClient();
-  return _client;
+  const client = new v2.SpeechClient(clientOptionsFor(location));
+  _clients.set(location, client);
+  return client;
 }
 
 function buildConfig({ recognizer, languageCodes, diarization = true }) {
@@ -63,7 +85,7 @@ function buildConfig({ recognizer, languageCodes, diarization = true }) {
   return config;
 }
 
-async function startLongRunning({ recognizer, gcsUri, languageCodes, log, client = getClient() }) {
+async function startLongRunning({ recognizer, gcsUri, languageCodes, log, client = getClient(recognizer ? operationLocation(recognizer) : sttLocation()) }) {
   const request = buildBatchRecognizeRequest({ recognizer, gcsUri, languageCodes, diarization: true });
   try {
     const [operation] = await client.batchRecognize(request);
@@ -103,7 +125,7 @@ function defaultSystemRecognizer() {
     || process.env.GCLOUD_PROJECT
     || process.env.GCP_PROJECT
     || process.env.TASKS_PROJECT;
-  return `projects/${projectId || '-'}/locations/global/recognizers/_`;
+  return `projects/${projectId || '-'}/locations/${sttLocation()}/recognizers/_`;
 }
 
 function isUnsupportedDiarizationError(err) {
@@ -116,7 +138,7 @@ function isUnsupportedDiarizationError(err) {
     && /invalid[_ ]argument|3|unsupported fields/i.test(haystack);
 }
 
-async function checkOperation(operationName, client = getClient()) {
+async function checkOperation(operationName, client = getClient(operationLocation(operationName))) {
   // `checkBatchRecognizeProgress` returns a single LROperation instance,
   // NOT a tuple. The previous `const [op] = await ...` destructure threw
   // "(intermediate value) is not iterable" on every poll, exhausting
@@ -149,10 +171,24 @@ async function checkOperation(operationName, client = getClient()) {
   }
   return {
     done: op.done === true,
-    error: op.error || decodeError,
+    error: op.error || decodeError || fileError(result),
     result,
     metadata: op.metadata || null,
   };
+}
+
+// A job can finish with no operation error while its one file failed (no read access to the chunk, audio it
+// can't decode): the file's error is in results[uri].error, and its transcript is empty. Returned as the chunk's
+// error, so it fails like any other, instead of being saved as silence (RELEASE.md rev 11, found 2026-10-01).
+function fileError(result) {
+  if (!result || !result.results) return null;
+  for (const file of Object.values(result.results)) {
+    const err = file && file.error;
+    if (err && Number(err.code) !== 0) {
+      return { code: Number(err.code), message: `stt_file_failed: ${String(err.message || '').slice(0, 300)}` };
+    }
+  }
+  return null;
 }
 
 // Flatten batchRecognize response into word objects ready for
@@ -191,16 +227,22 @@ function durToMs(d) {
 }
 
 // Group consecutive same-speaker words into transcript lines.
-// Each line gets startMs/endMs from the first/last word.
+// Each line gets startMs/endMs from the first/last word. A line ends on a new
+// speaker, a pause over 1.5 s, or once it's full (neutral.lineIsFull: 30 s or
+// 1,000 characters), the same rule as the whole-file providers.
 function wordsToLines(words) {
   if (!words.length) return [];
   const lines = [];
   let current = null;
   for (const w of words) {
-    if (!current || current.speakerTag !== w.speakerTag || w.startMs - current.endMs > 1500) {
+    // An untagged word (no diarization: every recording on this path today) is speaker 0, as the line it joins
+    // is. Compared raw, null never equalled the line's 0, so every word started a line: a 52-minute meeting was
+    // saved as 7,942 one-word lines, and the summarizer was sent a timestamp and a speaker for each.
+    const tag = w.speakerTag || 0;
+    if (!current || current.speakerTag !== tag || w.startMs - current.endMs > 1500 || lineIsFull(current, w)) {
       if (current) lines.push(current);
       current = {
-        speakerTag: w.speakerTag || 0,
+        speakerTag: tag,
         startMs: w.startMs,
         endMs: w.endMs,
         text: w.text,
@@ -221,6 +263,9 @@ function wordsToLines(words) {
 }
 
 module.exports = {
+  sttLocation,
+  clientOptionsFor,
+  operationLocation,
   startLongRunning,
   checkOperation,
   flattenWords,

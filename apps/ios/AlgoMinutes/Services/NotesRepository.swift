@@ -30,7 +30,7 @@ final class NotesRepository {
     /// the local-notification fallback exactly once. Empty until the first
     /// snapshot so an app launch that finds already-finished notes stays silent.
     private var lastStatusById: [String: NoteStatus] = [:]
-    private var receivedFirstSnapshot = false
+    private(set) var receivedFirstSnapshot = false
 
     static let maxRetryAttempts = 3
 
@@ -76,10 +76,14 @@ final class NotesRepository {
         lastStatusById.removeAll()
         receivedFirstSnapshot = false
         resubscribeAttempts = 0
+        // A new session starts healthy: the last one's failure isn't this one's.
+        listenerHealthy = true
     }
 
     private func subscribe() {
         guard let uid, let collection = notesCollection() else { return }
+        // Never two listeners: a Retry during backoff, or a refresh, replaces the old one.
+        listener?.remove()
         listener = collection
             .whereField("authorId", isEqualTo: uid)
             .addSnapshotListener { [weak self] snapshot, error in
@@ -107,6 +111,10 @@ final class NotesRepository {
     /// deliver a fresh snapshot. The listener is already realtime, so this is a
     /// user-reassurance affordance (and recovers a silently-dropped listener).
     func refresh() async {
+        // A pending backoff resubscribe would attach a second listener later.
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
+        resubscribeAttempts = 0
         listener?.remove()
         listener = nil
         subscribe()
@@ -182,6 +190,8 @@ final class NotesRepository {
                 RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: true)
             case .error:
                 RecordingNotifier.noteFinished(noteId: note.id, title: note.title, ready: false)
+                // H15: a failure the user saw happen is a non-fatal, by its code.
+                CrashReporting.noteFailed(diagnosticCode: note.diagnosticCode)
             default:
                 break
             }
@@ -219,7 +229,7 @@ final class NotesRepository {
     }
 
     func retryProcessing(note: Note) async -> RetryOutcome {
-        guard let wsId else { return .blocked(message: "Not signed in") }
+        guard let wsId else { return .blocked(message: "Please sign in to do that.") }
         guard !retryInFlight.contains(note.id) else { return .queued }
 
         let currentAttempts = note.retryAttempt ?? 0
@@ -259,7 +269,8 @@ final class NotesRepository {
         ])
 
         do {
-            try await api.processAudio(request)
+            let answer = try await api.processAudio(request)
+            if APIClient.kickoffWasHeld(answer) { onQuotaExceeded?(nil) }
             return .queued
         } catch {
             let failure = KickoffFailure(error, fallback: "Could not queue this retry. Please try again.")
@@ -315,19 +326,5 @@ final class NotesRepository {
                 }
             }
         }
-    }
-}
-
-/// Minimal structured logging for the client. (Server-side logging invariants
-/// don't apply to the iOS app, but keep messages greppable.)
-enum AppLog {
-    static func info(_ message: String) {
-        #if DEBUG
-        print("[AlgoMinutes] \(message)")
-        #endif
-    }
-
-    static func error(_ message: String) {
-        print("[AlgoMinutes][error] \(message)")
     }
 }

@@ -33,3 +33,31 @@ test('an upstream operation error is passed through unchanged', async () => {
   const out = await stt.checkOperation('operations/x', fakeClient({ done: true, error: opErr }));
   assert.deepEqual(out.error, opErr);
 });
+
+// RELEASE.md rev 11, N2 (H10): speech-to-text in Sydney. Probed 2026-10-01: `long` serves batchRecognize in
+// australia-southeast1 (en-AU only). A chunk already running when the location changes still polls where it
+// started: its client follows the operation's own location.
+test('the recognizer and the client follow STT_LOCATION, and global is the default until it is set', () => {
+  const saved = { ...process.env };
+  try {
+    process.env.GOOGLE_CLOUD_PROJECT = 'p';
+    delete process.env.STT_LOCATION;
+    assert.equal(stt.defaultSystemRecognizer(), 'projects/p/locations/global/recognizers/_');
+    assert.deepEqual(stt.clientOptionsFor('global'), {});
+    process.env.STT_LOCATION = 'australia-southeast1';
+    assert.equal(stt.defaultSystemRecognizer(), 'projects/p/locations/australia-southeast1/recognizers/_');
+    assert.deepEqual(stt.clientOptionsFor('australia-southeast1'), { apiEndpoint: 'australia-southeast1-speech.googleapis.com' });
+  } finally {
+    process.env = saved;
+  }
+});
+
+test("an operation is polled in its own location, whatever STT_LOCATION says now", () => {
+  assert.equal(stt.operationLocation('projects/627/locations/australia-southeast1/operations/v2-abc'), 'australia-southeast1');
+  assert.equal(stt.operationLocation('projects/627/locations/global/operations/v2-abc'), 'global');
+  assert.equal(stt.operationLocation('operations/x'), 'global');
+});
+
+test("a named recognizer's own location wins over STT_LOCATION", () => {
+  assert.equal(stt.operationLocation('projects/p/locations/us-central1/recognizers/r1'), 'us-central1');
+});

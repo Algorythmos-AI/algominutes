@@ -24,7 +24,9 @@ export const CreateUploadSessionRequest = z
     workspaceId: z.string(),
     fileName: z.string(),
     contentType: z.string(),
-    totalBytes: z.number().int().nonnegative(),
+    // Absent: the length isn't known yet (RELEASE.md PR 33, R3): the web recorder uploads while it records,
+    // and the size cap is checked at /complete. Present: capped before a session is minted, as before.
+    totalBytes: z.number().int().nonnegative().optional(),
     sha256: z.string().optional(),
   })
   .openapi('CreateUploadSessionRequest');
@@ -97,6 +99,18 @@ export const EntitlementStateSchema = z
   .enum(['trialing', 'active', 'expired', 'free_floor'])
   .openapi('EntitlementState');
 
+// Where an entitlement comes from (RELEASE.md PR 26b): a paid subscription, a grant (an invite code or a
+// tester grant), the reverse trial, or the free floor. A grant reports `active` like a subscription does, so
+// the clients key the purchase funnel and "Manage Subscription" off this, never off `state`.
+export const EntitlementSourceSchema = z
+  .enum(['subscription', 'grant', 'trial', 'free'])
+  .openapi('EntitlementSource');
+
+// The store a subscription is billed on, which is where it's managed (App Store, Stripe, Google Play).
+export const SubscriptionRailSchema = z
+  .enum(['apple_storekit', 'stripe', 'google_play'])
+  .openapi('SubscriptionRail');
+
 export const EntitlementResponse = z
   .object({
     state: EntitlementStateSchema, // A9.3 reverse-trial state
@@ -107,6 +121,9 @@ export const EntitlementResponse = z
     remainingMinutes: z.number().nullable(), // null when includedMinutes is null
     overQuota: z.boolean(),
     trialEndsAt: z.string().nullable().optional(), // ISO; present while trialing
+    // Additive (PR 26b): optional, so a client still decodes a server from before it.
+    source: EntitlementSourceSchema.optional(),
+    rail: SubscriptionRailSchema.nullable().optional(), // set when source is 'subscription'
   })
   .openapi('EntitlementResponse');
 
@@ -120,6 +137,8 @@ export const DeadLetterEntry = z
     error: z.string().nullable(),
     attempts: z.number().nullable(),
     traceId: z.string().nullable(),
+    /** Why, as a stable code (stt_poll_exhausted, transcode_failed, ...): migration 027. Null on older rows. */
+    reason: z.string().nullable().optional(),
     createdAt: z.string(),
     resolvedAt: z.string().nullable(),
   })
@@ -130,4 +149,6 @@ export type CreateUploadSessionRequest = z.infer<typeof CreateUploadSessionReque
 export type CreateUploadSessionResponse = z.infer<typeof CreateUploadSessionResponse>;
 export type NotificationPayload = z.infer<typeof NotificationPayload>;
 export type EntitlementResponse = z.infer<typeof EntitlementResponse>;
+export type EntitlementSource = z.infer<typeof EntitlementSourceSchema>;
+export type SubscriptionRail = z.infer<typeof SubscriptionRailSchema>;
 export type DeadLetterEntry = z.infer<typeof DeadLetterEntry>;

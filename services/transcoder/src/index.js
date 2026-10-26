@@ -10,6 +10,7 @@ const express = require('express');
 function loadShared(name) {
   try { return require(`@algominutes/ai/${name}`); }
   catch (err) {
+    // silent-catch-ok: a module not in @algominutes/ai is loaded from @algominutes/db, whose require throws if it is missing there too
     if (err && err.code === 'MODULE_NOT_FOUND') return require(`@algominutes/db/${name}`);
     throw err;
   }
@@ -22,6 +23,13 @@ requireEnv(
   require('./env-spec.cjs'),
   { logger: sharedLogger.logger },
 );
+// An engine that can't be replayed safely refuses to boot, like missing env (audit Q30).
+try {
+  require('./stt-provider').assertProviderBootable(process.env);
+} catch (err) {
+  sharedLogger.logger.fatal({ err, provider: process.env.STT_PROVIDER }, 'transcoder_provider_refused');
+  throw err;
+}
 const noteTerminal = loadShared('note-terminal.cjs');
 const spendGuard = loadShared('spend-guard.cjs');
 const spendRepo = loadShared('spend-repo.cjs');
@@ -35,6 +43,9 @@ const mirror = require('./firestore-mirror');
 const fastPath = require('./fast-path');
 const tasksClient = require('./tasks-client');
 const terminalHooks = require('./terminal-hooks');
+// The run's charge follows the measured length (packages/db measured-length.ts,
+// through tsx like the summarizer's markSummaryReady).
+const { settleMeasuredLength } = require('@algominutes/db');
 const { spendGate } = require('./spend-gate');
 const { onLastAttempt } = require('./last-attempt');
 
@@ -97,7 +108,7 @@ app.post('/', async (req, res) => {
   // traceId is threaded into deps so the in-handler terminal paths (STT
   // exhaustion / errors, YouTube permanent failures) can propagate it across
   // the notify hop and onto the dead-letter row (CLAUDE.md §2 propagation).
-  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env, traceId, terminalHooks };
+  const deps = { db, storage, ffmpeg, youtube, stt, mirror, fastPath, tasks, log, env, traceId, terminalHooks, meter: { settleMeasuredLength } };
 
   try {
     await handler.handle(req.body || {}, deps);

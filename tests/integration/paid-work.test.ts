@@ -36,6 +36,8 @@ function deps(duration: number) {
     fastPath: require('../../services/transcoder/src/fast-path.js'),
     youtube: {},
     terminalHooks: { onTranscodeTerminalFailure: async () => {} },
+    // The charge-settling step has its own tests (measured-length.test.ts).
+    meter: { settleMeasuredLength: async () => ({ kind: 'settled', chargedMinutes: 0, deltaMinutes: 0 }) },
   };
 }
 const kickoff = { kind: 'kickoff', noteId: 'n1', workspaceId: 'ws', uid: 'u', type: 'recording', storagePath: 'recordings/ws/n1.aac' };

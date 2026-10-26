@@ -27,9 +27,41 @@ export function formatClock(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-export type StatusKind = 'working' | 'ready' | 'failed';
+export type StatusKind = 'working' | 'ready' | 'failed' | 'held';
 
-export function statusOf(status: NoteDoc['status']): { kind: StatusKind; label: string } {
+/**
+ * A notetaker's progress in words (contracts NotetakerStatus). It's an open string: a value this build doesn't
+ * know reads as "in progress", never an error (docs/plans/MEETINGS.md, forward compatibility).
+ */
+export function notetakerLabel(status: string | undefined): string {
+  switch (status) {
+    case 'scheduled':
+      return 'Notetaker on its way';
+    case 'joining':
+      return 'Notetaker joining';
+    case 'waiting_room':
+      return 'Notetaker waiting to be let in';
+    case 'in_call':
+      return 'Notetaker in the meeting';
+    case 'recording':
+      return 'Notetaker recording';
+    case 'processing':
+      return 'Meeting over: getting the recording';
+    default:
+      return 'Notetaker in progress';
+  }
+}
+
+/** What the user can do about a notetaker now: cancel it before it records, stop it while it does. */
+export function notetakerAction(status: string | undefined): 'cancel' | 'stop' | null {
+  if (status === 'scheduled' || status === 'joining' || status === 'waiting_room' || status === 'in_call') return 'cancel';
+  if (status === 'recording') return 'stop';
+  return null;
+}
+
+export function statusOf(status: NoteDoc['status'], notetaker?: NoteDoc['notetaker']): { kind: StatusKind; label: string } {
+  // A notetaker's note stays 'recording' until its meeting's recording is ours: its own progress says more.
+  if (status === 'recording' && notetaker) return { kind: 'working', label: notetakerLabel(notetaker.status) };
   switch (status) {
     case 'ready':
       return { kind: 'ready', label: 'Ready' };
@@ -45,6 +77,8 @@ export function statusOf(status: NoteDoc['status']): { kind: StatusKind; label: 
       return { kind: 'working', label: 'Transcribing' };
     case 'summarizing':
       return { kind: 'working', label: 'Summarising' };
+    case 'awaiting_minutes':
+      return { kind: 'held', label: 'Waiting for minutes' };
   }
 }
 

@@ -11,6 +11,19 @@ import UserNotifications
 /// recording was safe; the user had no way to know it had ended.
 @MainActor
 enum RecordingNotifier {
+    /// Whether to explain notifications before asking (RELEASE.md PR 10a): only
+    /// while iOS hasn't asked yet, and once per launch.
+    static func shouldPrePrompt(status: UNAuthorizationStatus, askedThisLaunch: Bool) -> Bool {
+        status == .notDetermined && !askedThisLaunch
+    }
+
+    static func authorizationStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    static let prePromptTitle = "Get notified?"
+    static let prePromptMessage = "AlgoMinutes can tell you when your notes are ready, and if a recording stops on its own. iOS asks next."
+
     /// Ask at the moment the first recording starts, not at launch.
     ///
     /// A notification prompt on first run, before the app has done anything,
@@ -92,7 +105,7 @@ enum RecordingNotifier {
     static func noteFinished(noteId: String, title: String, ready: Bool) {
         guard UIApplication.shared.applicationState != .active else { return }
         let content = UNMutableNotificationContent()
-        content.title = ready ? "Your notes are ready" : "Processing failed"
+        content.title = ready ? "Your notes are ready" : "Couldn’t process your recording"
         content.body = ready
             ? "\(title) is ready to read."
             : "\(title) couldn't be processed. Tap to try again."

@@ -1,0 +1,55 @@
+name: Playwright's Chromium (cached, no apt unless a library is missing)
+description: >-
+  Installs the Chromium of the repository's Playwright version, without `--with-deps`. That flag runs apt on
+  every job, and on 2026-10-26 (run 40288408438) it spent 5 minutes fetching 25 MB of CJK and Thai fonts at
+  70 kB/s from azure.archive.ubuntu.com before its timeout; the retry then failed on the dpkg lock, because the
+  timeout had killed npx but not the apt-get that Playwright had started under sudo. Every library Chromium
+  links is already on GitHub's Ubuntu image (that run's apt said "already the newest version" for each), so the
+  browser is restored from the cache (keyed by the Playwright version) or downloaded from Playwright's CDN, and
+  apt runs only if ldd finds a library missing, bounded, with apt-get inside the timeout. Run it after npm ci.
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ steps.version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+    # On a cache hit this finds the browser already there and downloads nothing. A healthy download takes well
+    # under a minute. Two tries of 150 s (5 minutes 10), plus the rare apt fallback below (5 minutes), fit the
+    # 12 minutes every caller gives this action.
+    - name: Install Chromium ${{ steps.version.outputs.version }}
+      shell: bash
+      run: |
+        install() { timeout 150 npx playwright install chromium; }
+        install || { echo "::warning::the Chromium download failed or hung; trying once more"; sleep 10; install; }
+    # Saved at once, not at the job's end, so a red test still leaves the next run a cached browser. A save that
+    # loses a race with another job's is only a warning.
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      continue-on-error: true
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ steps.version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Chromium's system libraries
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        echo "Chromium: $([ "$CACHE_HIT" = true ] && echo 'from the cache' || echo 'downloaded')"
+        # Each file beside its own directory's libraries, as Playwright's own launch-time check reads them.
+        missing=$(find ~/.cache/ms-playwright -type f \( -perm -u+x -o -name '*.so*' \) -print0 \
+          | while IFS= read -r -d '' f; do LD_LIBRARY_PATH="$(dirname "$f")" ldd "$f" 2>/dev/null || true; done \
+          | grep 'not found' | sort -u || true)
+        if [ -z "$missing" ]; then
+          echo "every library Chromium links is on the runner; no apt"
+          exit 0
+        fi
+        echo "::warning::the runner image lacks libraries Chromium links; installing Playwright's dependencies with apt:"
+        echo "$missing"
+        # As root under the timeout, so a hang kills apt-get itself. Once: a second try wouldn't fit the budget.
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo timeout 300 env "PATH=$PATH" npx playwright install-deps chromium

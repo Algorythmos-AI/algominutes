@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { reportCrash } from '../../lib/crashReport';
 import { displayTitle, formatDate, formatDuration, statusOf } from '../../lib/notes/format';
+import { useApi } from '../ApiContext';
 import { isSlow } from '../../lib/noteWatchdog';
+import { UnsentRecordingsNotice } from '../record/unsent';
 import { useNow } from '../useNow';
 import { useNotes } from './NotesContext';
 
@@ -8,17 +12,41 @@ const BADGE: Record<string, string> = {
   ready: 'bg-success/15 text-success',
   working: 'bg-accent/15 text-heading',
   failed: 'bg-danger/15 text-danger',
+  held: 'bg-warning/15 text-warning',
 };
+
+/** Whether the server has the notetaker on for this user (/v1/config notetaker.bot): off until it says so. */
+function useNotetakerOn(): boolean {
+  const { api } = useApi();
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.appConfig().then(
+      (c) => live && setOn(Boolean(c.notetaker?.bot)),
+      (err: unknown) => reportCrash('notes.appConfig', err),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api]);
+  return on;
+}
 
 export function NotesPage() {
   const { state, visible } = useNotes();
   const now = useNow();
+  const notetakerOn = useNotetakerOn();
   return (
     <section aria-labelledby="notes-title">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 id="notes-title" className="text-3xl font-bold text-heading">Your notes</h1>
-        <Link to="/import" className="rounded-xl bg-accent px-4 py-2 font-semibold text-white no-underline">Import a recording</Link>
+        <div className="flex gap-2">
+          <Link to="/record" className="rounded-xl bg-accent px-4 py-2 font-semibold text-white no-underline">Record</Link>
+          <Link to="/import" className="rounded-xl border border-border px-4 py-2 font-semibold text-heading no-underline">Import a recording</Link>
+          {notetakerOn && <Link to="/notetaker" className="rounded-xl border border-border px-4 py-2 font-semibold text-heading no-underline">Send the notetaker</Link>}
+        </div>
       </div>
+      <UnsentRecordingsNotice />
       {state.status === 'loading' && <p role="status" className="text-muted">Loading your notes…</p>}
       {state.status === 'error' && (
         <p role="alert" className="text-body">Your notes couldn't be loaded. Check your connection and reload the page.</p>
@@ -26,13 +54,13 @@ export function NotesPage() {
       {state.status === 'ready' && visible.length === 0 && (
         <div className="rounded-2xl border border-border bg-card p-6">
           <p className="text-heading font-semibold">No notes yet</p>
-          <p className="mt-1 text-muted">Record a meeting in the AlgoMinutes app and its summary appears here. Or import a recording here.</p>
+          <p className="mt-1 text-muted">Record a meeting in the AlgoMinutes app and its summary appears here. Or record one here, or import a recording.</p>
         </div>
       )}
       {visible.length > 0 && (
         <ul className="flex flex-col gap-3">
           {visible.map((n) => {
-            const s = statusOf(n.status);
+            const s = statusOf(n.status, n.notetaker);
             const slow = s.kind === 'working' && isSlow(n, now);
             const meta = [formatDate(n.createdAt), formatDuration(n.duration)].filter(Boolean).join(' · ');
             return (

@@ -119,6 +119,7 @@ function newMigrations() {
   try {
     git(['rev-parse', '--verify', '--quiet', base]);
   } catch {
+    // silent-catch-ok: no base ref: CI fails here, and a local run prints a skip line and checks untracked migrations only
     if (process.env.GITHUB_ACTIONS) {
       console.error(`  FAIL  base ${base} not available (fetch-depth: 0?); cannot tell which migrations are new`);
       process.exit(1);

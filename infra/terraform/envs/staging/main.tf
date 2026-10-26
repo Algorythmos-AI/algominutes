@@ -66,6 +66,14 @@ variable "broadcast_capture" {
   default = "on"
 }
 
+# The online-meeting notetaker's surfaces (GET /v1/config). Off unless named;
+# for testers in notetaker_testers only. To switch the bot on for them: plan
+# with TF_VAR_notetaker_surfaces=bot and apply.
+variable "notetaker_surfaces" {
+  type    = string
+  default = ""
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -101,17 +109,22 @@ module "environment" {
 
   # Smallest viable tiers. db-f1-micro is shared-core → requires ENTERPRISE
   # edition (set in tfvars); ENTERPRISE_PLUS rejects it.
-  connection_budget         = jsondecode(file("${path.module}/connection-budget.json"))
-  db_tier                   = "db-f1-micro"
-  db_edition                = var.db_edition
-  db_disk_size_gb           = 10
-  db_point_in_time_recovery = false
-  deletion_protection       = false
+  connection_budget = jsondecode(file("${path.module}/connection-budget.json"))
+  db_tier           = "db-f1-micro"
+  db_edition        = var.db_edition
+  db_disk_size_gb   = 10
+  # Staging carries the external beta's real notes (docs/plans/RELEASE.md,
+  # Wave 1), so its data is kept like prod's: point-in-time recovery (7 days of
+  # logs), deletion protection, recordings kept until the note or account is
+  # deleted (DATA-RETENTION.md: no lifecycle delete), and neither the buckets
+  # nor the Firestore database are destroyed with the stack.
+  db_point_in_time_recovery = true
+  deletion_protection       = true
 
-  recordings_lifecycle_days = 7    # 7-day retention on staging recordings
-  bucket_force_destroy      = true # staging is disposable
+  recordings_lifecycle_days = 0
+  bucket_force_destroy      = false
 
-  firestore_deletion_policy = "DELETE"
+  firestore_deletion_policy = "ABANDON"
 
   # Idle staging (db-f1-micro + a 2-instance VPC connector) is well under this;
   # 50% is the "someone left something running" signal, forecast-100% the
@@ -124,16 +137,28 @@ module "environment" {
   billing_account = var.billing_account
   alert_emails    = var.alert_emails
 
-  # The api's CORS allowlist (the public site, and the web app's staging
-  # address, staging.algominutes.algorythmos.com, behind Vercel Authentication)
+  # The api's CORS allowlist (the public site; the web app's staging address,
+  # staging.algominutes.algorythmos.com, behind Vercel Authentication; and the
+  # beta's, beta.algominutes.algorythmos.com, public to the testers)
   # and its operator/kill-switch settings. A blank allowed_origins fails the
   # plan (the api can't boot on it).
-  allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com"
+  allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com,https://beta.algominutes.algorythmos.com"
   admin_uids      = var.admin_uids
   # The public site's uptime checks live here until prod exists (S3-PR4).
-  site_uptime_host  = "algominutes.algorythmos.com"
-  broadcast_capture = var.broadcast_capture
-  monthly_budget    = 100
+  site_uptime_host   = "algominutes.algorythmos.com"
+  broadcast_capture  = var.broadcast_capture
+  notetaker_surfaces = var.notetaker_surfaces
+
+  # The external beta (RELEASE.md, Wave 1): new users get minutes from an invite
+  # code, not the reverse trial. On again once Apple DeviceCheck is set up here
+  # (RELEASE.md PR 22: devicecheck_key_id, apple_team_id and the devicecheck-key
+  # secret), so a reinstall can't start a fresh one.
+  trial_on_first_use = "off"
+  # About 1,600 minutes a day at the default A$0.03 a minute (a cohort of 25
+  # testers); A$20, the default, is about 660. The owner's figure.
+  daily_spend_cap_aud = 50
+  # Alerts only (budget.tf); the owner's figure.
+  monthly_budget = 250
 
   # In-VPC proof VM for proving staging (docs/runbooks/staging-proof.md).
   # About US$15/month while on; set false and apply to remove it.

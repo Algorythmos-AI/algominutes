@@ -8,6 +8,9 @@ on:
   push:
     branches: [integration, main]
   pull_request:
+  # The merge queue on integration: a required check must also report on the
+  # queue's commit, or the queue waits forever.
+  merge_group:
 
 permissions:
   contents: read
@@ -18,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, billing, db-job, embedder, extractor, notifier, summarizer, transcoder]
+        service: [api, billing, db-job, embedder, extractor, meetings, notifier, summarizer, transcoder]
     steps:
       - uses: actions/checkout@v7
       - name: Set up Docker Buildx

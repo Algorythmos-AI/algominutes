@@ -9,6 +9,7 @@ export * from './dead-letter-repo.js';
 export * from './push-tokens-repo.js';
 export * from './notices-repo.js';
 export * from './subscriptions-repo.js';
+export * from './stripe-cancellations-repo.js';
 export * from './analytics-repo.js';
 export * from './compliance-repo.js';
 export * from './note-speakers-repo.js';
@@ -16,7 +17,14 @@ export * from './upload-sessions-repo.js';
 export * from './storage-purges-repo.js';
 export * from './account-repo.js';
 export * from './entitlement-grants-repo.js';
+export * from './beta-invites-repo.js';
+export * from './measured-length.js';
 export * from './mirror-repair.js';
+export * from './kickoff.js';
+export * from './held-notes.js';
+export * from './meetings-repo.js';
+export * from './redrive-repo.js';
+export * from './text-note-builder.js';
 // Only the prune: the tombstone's write and check are correct only inside a
 // transaction holding the note lock, so the repo calls them itself.
 export { pruneDeletedNotes } from './deleted-notes-repo.js';

@@ -11,6 +11,8 @@
   "primaryRegionLabel": "Sydney, Australia",
   "backupWindowDays": 30,
   "logRetentionDays": 30,
+  "notetakerRetentionHours": 72,
+  "notetakerWaitMinutes": 10,
   "processors": [
     {
       "id": "firebase-auth",
@@ -59,6 +61,14 @@
       "data": "Your recordings.",
       "region": "global",
       "where": "Google's global endpoint, so audio may be processed outside Australia"
+    },
+    {
+      "id": "recall-ai",
+      "service": "Recall.ai",
+      "purpose": "Running the notetaker: joining an online meeting you send it to, and recording it for you. Only when you use the notetaker.",
+      "data": "The meeting link, the meeting's audio, and the names participants show in the meeting and when each spoke. Deleted there as soon as AlgoMinutes has its copy, and after 72 hours at the latest.",
+      "region": "ap-northeast-1",
+      "where": "Tokyo, Japan"
     },
     {
       "id": "cloud-logging",

@@ -103,9 +103,9 @@ struct PendingRecordingsView: View {
                 if busy == item.fileName {
                     ProgressView().tint(Theme.heading)
                 } else if !isDamaged {
-                    // A failed upload gets an explicit "Retry"; a never-attempted
+                    // A failed upload gets an explicit "Try again"; a never-attempted
                     // one gets "Upload". Both route through recoverRecording.
-                    Button(item.state == .failed ? "Retry" : "Upload") {
+                    Button(item.state == .failed ? "Try again" : "Upload") {
                         Task { await upload(item) }
                     }
                     .font(Typography.body(13))

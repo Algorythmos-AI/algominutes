@@ -11,8 +11,27 @@ final class StubURLProtocol: URLProtocol {
         let body: [String: Any]?
     }
 
-    nonisolated(unsafe) static var recorded: [Recorded] = []
-    nonisolated(unsafe) static var responder: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
+    // Requests are answered on URLSession's own threads, and one test's stray request (analytics, a retry) can
+    // land while the next test's is being recorded. Unlocked, two appends at once could lose one: that was
+    // `testCreateMeetingBotMapsEachAnswer` finding no recorded request, now and then.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _recorded: [Recorded] = []
+    nonisolated(unsafe) private static var _responder: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
+
+    static var recorded: [Recorded] {
+        get { lock.withLock { _recorded } }
+        set { lock.withLock { _recorded = newValue } }
+    }
+
+    static var responder: (URLRequest) -> (Int, Data) {
+        get { lock.withLock { _responder } }
+        set { lock.withLock { _responder = newValue } }
+    }
+
+    /// Append, as one step (a get then a set through `recorded` would be two).
+    private static func record(_ request: Recorded) {
+        lock.withLock { _recorded.append(request) }
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -32,7 +51,7 @@ final class StubURLProtocol: URLProtocol {
             bodyData = data
         }
         let body = bodyData.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
-        Self.recorded.append(Recorded(
+        Self.record(Recorded(
             method: request.httpMethod ?? "",
             url: request.url!,
             headers: request.allHTTPHeaderFields ?? [:],
@@ -94,6 +113,16 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(last.headers["X-Device-Platform"], DeviceAttestationService.platformHeaderValue)
     }
 
+    func testCancellingANotetakerPostsToItsBot() async throws {
+        respond(#"{"botId":"b0a1b2c3-0000-4000-8000-000000000001","status":"cancelled"}"#)
+        let status = try await api.cancelMeetingBot(botId: "b0a1b2c3-0000-4000-8000-000000000001")
+        assertRequest("POST", "/v1/meetings/bots/b0a1b2c3-0000-4000-8000-000000000001/cancel")
+        XCTAssertEqual(status, "cancelled")
+        // A bot id can't reach another path.
+        _ = try? await api.cancelMeetingBot(botId: "../notes/delete")
+        XCTAssertEqual(last.url.path, "/v1/meetings/bots/..%2Fnotes%2Fdelete/cancel")
+    }
+
     func testUploadSessionRoutes() async throws {
         respond(#"{"uploadId":"u-1","sessionUri":"https://storage.googleapis.com/s","storagePath":"recordings/workspace_u/n1.m4a","chunkSize":8388608,"expiresAt":"2026-10-02T00:00:00Z"}"#)
         let created = try await api.createUploadSession(
@@ -121,6 +150,45 @@ final class APIClientTests: XCTestCase {
         assertRequest("GET", "/v1/entitlement")
         XCTAssertNil(last.body)
         XCTAssertEqual(entitlement.state, .trialing)
+    }
+
+    func testRetentionIsReadFromTheAccount() async throws {
+        respond(#"{"retentionDays":30}"#)
+        let r = try await api.retention()
+        assertRequest("GET", "/v1/account/retention")
+        XCTAssertNil(last.body)
+        XCTAssertEqual(r.retentionDays, 30)
+        XCTAssertEqual(RetentionSettingsCard.stored(r.retentionDays), 30)
+
+        respond(#"{"retentionDays":null}"#)
+        let keep = try await api.retention()
+        XCTAssertNil(keep.retentionDays)
+        XCTAssertEqual(RetentionSettingsCard.stored(keep.retentionDays), 0) // "Keep until I delete"
+    }
+
+    func testRedeemInviteIsAPostWithTheCode() async throws {
+        respond(#"{"entitlement":{"state":"active","plan":"pro","billingPeriod":"2026-10","includedMinutes":600,"usedMinutes":0,"remainingMinutes":600,"overQuota":false,"trialEndsAt":null},"grantEndsAt":"2026-10-29T00:00:00.000Z","notetaker":false}"#)
+        let r = try await api.redeemInvite(code: "BETA-7K2QX-M9D4R-TW8HN")
+        assertRequest("POST", "/v1/beta/redeem")
+        XCTAssertEqual(last.body?["code"] as? String, "BETA-7K2QX-M9D4R-TW8HN")
+        XCTAssertEqual(r.entitlement.remainingMinutes, 600)
+        XCTAssertEqual(r.grantEndsAt, "2026-10-29T00:00:00.000Z")
+        XCTAssertFalse(r.notetaker)
+    }
+
+    func testARefusedInviteCarriesTheServersCode() async {
+        for (status, code) in [(400, "invite_invalid"), (409, "invite_used_up"), (410, "invite_expired"), (429, "rate_limited")] {
+            respond(#"{"error":"\#(code)"}"#, status: status)
+            do {
+                _ = try await api.redeemInvite(code: "x")
+                XCTFail("expected a refusal for \(code)")
+            } catch APIError.http(let s, let c) {
+                XCTAssertEqual(s, status)
+                XCTAssertEqual(c, code)
+            } catch {
+                XCTFail("\(error)")
+            }
+        }
     }
 
     func testPurchasesGoToTheBillingHost() async throws {
@@ -232,9 +300,25 @@ final class APIClientTests: XCTestCase {
     }
 
     func testChatStreamsFromV1OnTheInjectedSession() async throws {
-        StubURLProtocol.responder = { _ in (200, Data("data: {\"type\":\"done\"}\n\n".utf8)) }
+        // The server's frame (search-and-chat.cjs): `event: done`. A stream without it was cut short (S15).
+        StubURLProtocol.responder = { _ in (200, Data("event: done\ndata: {}\n\n".utf8)) }
         for try await _ in api.chatStream(query: "q", noteId: "n1") {}
         assertRequest("POST", "/v1/chat")
         XCTAssertEqual(last.body?["noteId"] as? String, "n1")
+    }
+
+    /// Plan rev 12 S15: a stream that ends without `done` throws, so the caller can't take it for an answer.
+    func testAChatStreamThatEndsWithoutDoneThrowsStreamEnded() async {
+        StubURLProtocol.responder = { _ in (200, Data("data: {\"text\":\"half\"}\n\n".utf8)) }
+        var texts: [String] = []
+        do {
+            for try await event in api.chatStream(query: "q", noteId: nil) {
+                if case .textDelta(let t) = event { texts.append(t) }
+            }
+            XCTFail("expected streamEnded")
+        } catch {
+            guard case APIError.streamEnded = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(texts, ["half"])
     }
 }

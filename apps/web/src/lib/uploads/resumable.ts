@@ -24,6 +24,8 @@ export interface ResumableOptions {
   onProgress?: (sent: number, total: number) => void;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  /** Where to begin: the bytes GCS already holds for this session (a resumed upload). Default 0. */
+  startAt?: number;
   /** Failed chunks in a row before giving up. */
   maxRetries?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -46,8 +48,9 @@ export async function uploadResumable(opts: ResumableOptions): Promise<void> {
   const chunk = Math.max(QUANTUM, Math.floor(opts.chunkSize / QUANTUM) * QUANTUM);
   const maxRetries = opts.maxRetries ?? 5;
   const cancelled = () => new UploadError('cancelled', 'The upload was cancelled.');
-  let offset = 0;
+  let offset = Math.min(total, Math.max(0, Math.floor(opts.startAt ?? 0)));
   let failures = 0;
+  if (offset > 0) opts.onProgress?.(offset, total);
 
   for (;;) {
     if (opts.signal?.aborted) throw cancelled();
@@ -105,9 +108,8 @@ export async function uploadResumable(opts: ResumableOptions): Promise<void> {
     try {
       offset = await opts.receivedBytes();
       opts.onProgress?.(offset, total);
-    } catch (err) {
-      // The status probe failed too: keep the offset we had; the next PUT's answer corrects it.
-      cause = err;
+    } catch {
+      // silent-catch-ok: the status probe failed too; keep the offset we had, and the next PUT's answer corrects it (if that PUT fails, its own error is the cause)
     }
   }
 }

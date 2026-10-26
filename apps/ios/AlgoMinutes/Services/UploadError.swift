@@ -10,6 +10,9 @@ enum UploadError: LocalizedError {
     /// its id for 30 days). Its own case so the caller keeps the recording as a
     /// new note instead of retrying into the 404.
     case noteGone
+    /// A PUT of the rest of the file ended with the session still open (308):
+    /// GCS didn't take it all, so the caller continues from the server's count.
+    case incomplete
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +32,8 @@ enum UploadError: LocalizedError {
             return "Upload failed. Please check your connection and try again."
         case .noteGone:
             return "This note was deleted, so your recording will be saved as a new note."
+        case .incomplete:
+            return "Upload didn't finish. Your recording is saved and will keep uploading."
         }
     }
 }

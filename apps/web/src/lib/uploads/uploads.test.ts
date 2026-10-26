@@ -7,8 +7,8 @@ import { importAudio, importProblem, titleFrom, MAX_IMPORT_BYTES } from './impor
 const KB = 1024;
 
 /** A GCS resumable session in memory: it keeps the bytes it's sent and answers as GCS does. */
-function gcs(opts: { failOnce?: Set<number>; expire?: boolean } = {}) {
-  let held = 0;
+function gcs(opts: { failOnce?: Set<number>; expire?: boolean; expireOnce?: boolean; held?: number } = {}) {
+  let held = opts.held ?? 0;
   let total = -1;
   const puts: string[] = [];
   let n = 0;
@@ -17,6 +17,11 @@ function gcs(opts: { failOnce?: Set<number>; expire?: boolean } = {}) {
     const range = (init?.headers as Record<string, string>)['Content-Range'];
     puts.push(range);
     if (opts.expire) return new Response(null, { status: 410 });
+    if (opts.expireOnce) {
+      opts.expireOnce = false;
+      held = 0;
+      return new Response(null, { status: 410 });
+    }
     if (opts.failOnce?.has(n)) {
       opts.failOnce.delete(n);
       throw new TypeError('network down');
@@ -43,6 +48,13 @@ describe('uploadResumable', () => {
     await uploadResumable({ file: file(700 * KB), sessionUri: 'https://s', chunkSize: 300 * KB, receivedBytes: async () => g.held(), fetchImpl: g.fetchImpl, onProgress: (s) => progress.push(s), sleep: noSleep });
     expect(g.puts).toEqual([`bytes 0-${256 * KB - 1}/${700 * KB}`, `bytes ${256 * KB}-${512 * KB - 1}/${700 * KB}`, `bytes ${512 * KB}-${700 * KB - 1}/${700 * KB}`]);
     expect(progress.at(-1)).toBe(700 * KB);
+  });
+
+  it('starts from startAt when the session already holds bytes (a resumed upload)', async () => {
+    const g = gcs({ held: 256 * KB });
+    await uploadResumable({ file: file(700 * KB), sessionUri: 'https://s', chunkSize: 256 * KB, startAt: 256 * KB, receivedBytes: async () => g.held(), fetchImpl: g.fetchImpl, sleep: noSleep });
+    expect(g.puts[0]).toBe(`bytes ${256 * KB}-${512 * KB - 1}/${700 * KB}`);
+    expect(g.held()).toBe(700 * KB);
   });
 
   it('after a dropped chunk, resumes from what the api says GCS holds', async () => {
@@ -105,8 +117,8 @@ describe('kickoff failures, as iOS KickoffFailure', () => {
   });
 
   it('the quota message says when the minutes come back, with no paywall to send people to', () => {
-    expect(quotaMessage({ state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 60, remainingMinutes: 0, overQuota: true })).toBe("You've used this month's 60 included minutes. They reset on 1 October.");
-    expect(quotaMessage(null)).toMatch(/isn't included on your account/);
+    expect(quotaMessage({ state: 'active', plan: 'free', billingPeriod: '2026-09', includedMinutes: 60, usedMinutes: 60, remainingMinutes: 0, overQuota: true })).toBe("You've used this month's 60 included minutes. They reset on 1 October, or a new invite code adds more (Settings).");
+    expect(quotaMessage(null)).toMatch(/come with an invite code\. Enter yours in Settings/);
   });
 });
 
@@ -164,7 +176,7 @@ describe('importAudio', () => {
     const quota = deps();
     quota.api.process.mockRejectedValueOnce(new ApiError('quota_exceeded', { entitlement: null }));
     await importAudio(file(10), quota.d);
-    expect(quota.d.markNoteFailed).toHaveBeenCalledWith('web1', expect.stringMatching(/isn't included/));
+    expect(quota.d.markNoteFailed).toHaveBeenCalledWith('web1', expect.stringMatching(/invite code/));
   });
 
   it("a session that couldn't be minted, or a note doc that couldn't be written, uploads nothing", async () => {
@@ -217,6 +229,96 @@ describe('importAudio', () => {
     const { d } = deps({ track: { start: (id: string) => events.push(`start ${id}`), end: (id: string) => events.push(`end ${id}`) } });
     await importAudio(file(10), d);
     expect(events).toEqual(['start web1', 'end web1']);
+  });
+
+  it("a cut-off recording upload's retry puts the audio into the note it left, not a second one", async () => {
+    const noted: string[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew', onNote: (id: string) => noted.push(id) });
+    const r = await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d);
+    expect(r).toEqual({ ok: true, noteId: 'webOld' });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(api.createUpload).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webOld' }));
+    // Its doc is already there: writing it again would be a second create.
+    expect(d.createNoteDoc).not.toHaveBeenCalled();
+    expect(api.process).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webOld', type: 'recording' }));
+    expect(noted).toEqual(['webOld']);
+  });
+
+  it('a note to reuse that was deleted since (404) gets a new note, and is forgotten', async () => {
+    const events: string[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew', onNote: (id: string) => events.push(`note ${id}`), onNoteDropped: () => events.push('dropped') });
+    api.createUpload.mockImplementationOnce(async () => { throw new ApiError('not_found', { status: 404 }); });
+    const r = await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d);
+    expect(r).toEqual({ ok: true, noteId: 'webNew' });
+    expect(api.createUpload.mock.calls.map((c) => (c as unknown as [{ noteId: string }])[0].noteId)).toEqual(['webOld', 'webNew']);
+    expect(d.createNoteDoc).toHaveBeenCalledWith(expect.objectContaining({ noteId: 'webNew' }));
+    expect(events).toEqual(['dropped', 'note webNew']);
+  });
+
+  it('any other refusal of a note to reuse stops there: no new note', async () => {
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'webOld', newNoteId: () => 'webNew' });
+    api.createUpload.mockImplementationOnce(async () => { throw new ApiError('bad_request', { status: 403 }); });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toMatchObject({ ok: false, noteId: null });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(d.createNoteDoc).not.toHaveBeenCalled();
+  });
+
+  // RELEASE.md rev 11, LM8 (the owner's choice, 2026-10-01): Try again carries on, it doesn't start over.
+  it("a recording's failed upload keeps its note, marked failed, with its session remembered for the retry", async () => {
+    const events: unknown[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, fetchImpl: (async () => { throw new TypeError('offline'); }) as typeof fetch, onNote: (id: string, s: unknown) => events.push([id, s]), onNoteDropped: () => events.push('dropped') });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toMatchObject({ ok: false, noteId: 'web1' });
+    expect(events).toEqual([['web1', { uploadId: 'u1', sessionUri: session.sessionUri, chunkSize: session.chunkSize, storagePath: session.storagePath, totalBytes: 10 * KB }]]);
+    expect(api.deleteNote).not.toHaveBeenCalled();
+    expect(d.markNoteFailed).toHaveBeenCalledWith('web1', expect.any(String));
+  });
+
+  it('the retry carries on in the same session, from the bytes Cloud Storage holds: no new session, no new note', async () => {
+    const g = gcs({ held: 512 * KB });
+    const kept = { uploadId: 'u1', sessionUri: session.sessionUri, chunkSize: 256 * KB, storagePath: session.storagePath, totalBytes: 700 * KB };
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'web1', reuseSession: kept, fetchImpl: g.fetchImpl });
+    api.uploadStatus.mockImplementation(async () => ({ uploadId: 'u1', receivedBytes: g.held(), complete: false }));
+    const progress: number[] = [];
+    expect(await importAudio(file(700 * KB, 'recording.webm', 'audio/webm'), { ...d, onProgress: (f: number) => progress.push(f) })).toEqual({ ok: true, noteId: 'web1' });
+    expect(api.createUpload).not.toHaveBeenCalled();
+    expect(d.createNoteDoc).not.toHaveBeenCalled();
+    // Only the last 188 KiB is sent.
+    expect(g.puts).toEqual([`bytes ${512 * KB}-${700 * KB - 1}/${700 * KB}`]);
+    expect(progress[0]).toBeCloseTo(512 / 700, 3);
+    expect(api.completeUpload).toHaveBeenCalledWith('u1');
+  });
+
+  it('a remembered session for a different size of file is not resumed', async () => {
+    const kept = { uploadId: 'old', sessionUri: 'https://old', chunkSize: 256 * KB, storagePath: session.storagePath, totalBytes: 999 };
+    const { d, api, g } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'web1', reuseSession: kept });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toEqual({ ok: true, noteId: 'web1' });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(g.puts[0]).toMatch(/^bytes 0-/);
+  });
+
+  it('a remembered session Cloud Storage has let go of: a new one, from the start, and it is remembered', async () => {
+    const g = gcs({ held: 512 * KB, expireOnce: true });
+    const kept = { uploadId: 'old', sessionUri: 'https://old', chunkSize: 256 * KB, storagePath: session.storagePath, totalBytes: 700 * KB };
+    const remembered: string[] = [];
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'web1', reuseSession: kept, fetchImpl: g.fetchImpl, onNote: (_id: string, s: { uploadId: string }) => remembered.push(s.uploadId) });
+    api.uploadStatus.mockImplementation(async () => ({ uploadId: 'old', receivedBytes: g.held(), complete: false }));
+    expect(await importAudio(file(700 * KB, 'recording.webm', 'audio/webm'), d)).toEqual({ ok: true, noteId: 'web1' });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+    expect(remembered).toEqual(['old', 'u1']);
+    expect(g.puts[1]).toMatch(/^bytes 0-/);
+  });
+
+  it('a remembered session the server no longer knows: a new one is minted', async () => {
+    const kept = { uploadId: 'gone', sessionUri: 'https://old', chunkSize: 256 * KB, storagePath: session.storagePath, totalBytes: 10 * KB };
+    const { d, api } = deps({ recording: { title: 'Recording' }, reuseNoteId: 'web1', reuseSession: kept });
+    api.uploadStatus.mockImplementationOnce(async () => { throw new ApiError('not_found', { status: 404, message: 'gone' } as never); });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toEqual({ ok: true, noteId: 'web1' });
+    expect(api.createUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembering the note is best effort: a failure there doesn't stop the upload", async () => {
+    const { d } = deps({ recording: { title: 'Recording' }, onNote: async () => { throw new Error('IndexedDB full'); } });
+    expect(await importAudio(file(10 * KB, 'recording.webm', 'audio/webm'), d)).toEqual({ ok: true, noteId: 'web1' });
   });
 
   it('titles come from the file name', () => {

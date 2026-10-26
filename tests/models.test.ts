@@ -55,6 +55,18 @@ describe(`lifecycle tripwire (${WARNING_DAYS}-day warning)`, () => {
   it('the ladder always has a live model', () => {
     expect(models.activeLadder().length).toBeGreaterThan(0);
   });
+  it(`keeps a live fallback rung ${WARNING_DAYS} days out, or has a recorded single-rung decision`, () => {
+    // Losing the fallback must be a decision, not a surprise: a rung retiring
+    // can leave one Sydney model, so either add a successor or record the choice.
+    const soon = new Date(Date.now() + WARNING_DAYS * DAY_MS);
+    if (models.activeLadder(soon).length < 2) {
+      expect(models.SINGLE_RUNG_DECISION, 'the ladder drops to one rung: add a Sydney successor or record SINGLE_RUNG_DECISION').toBeDefined();
+      expect(models.SINGLE_RUNG_DECISION.decision).toMatch(/DECISIONS\.md/);
+      // The decision must cover the first day the ladder is a single rung.
+      const firstRetirement = models.LADDER.map((id: string) => models.MODELS[id].retires).filter(Boolean).sort()[0];
+      expect(models.SINGLE_RUNG_DECISION.from <= firstRetirement, `decision from ${models.SINGLE_RUNG_DECISION.from}, single rung from ${firstRetirement}`).toBe(true);
+    }
+  });
 });
 
 describe('model ids live only in the registry', () => {

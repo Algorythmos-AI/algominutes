@@ -27,6 +27,10 @@ export function toEntitlementResponse(ent) {
     remainingMinutes: ent.includedMinutes == null ? null : ent.remainingMinutes,
     overQuota: ent.overQuota,
     trialEndsAt: ent.trialEndsAt ?? null,
+    // Where it comes from (RELEASE.md PR 26b): the clients count a purchase, and offer to manage one,
+    // only for a subscription, and manage it on its own rail.
+    source: ent.source,
+    rail: ent.rail ?? null,
   };
 }
 

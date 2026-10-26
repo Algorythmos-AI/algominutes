@@ -33,6 +33,8 @@ const toUser = (u: User | null): AuthUser | null =>
 /** The real adapter, on the app's Firebase Auth. */
 export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
   return {
+    // Diagnostic only (the sign-in trace): never let reading it break sign-in.
+    authDomain: (auth.config as { authDomain?: string } | undefined)?.authDomain ?? '',
     // onIdTokenChanged, not onAuthStateChanged: linking Apple or Google to a guest keeps the uid, so
     // only the token changes, and the user must stop reading as a guest at once.
     onChange: (cb) => onIdTokenChanged(auth, (u) => cb(toUser(u))),
@@ -44,6 +46,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await signInWithPopup(auth, providerFor(p));
         return true;
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel, and a blocked one falls back to a redirect
         if (CANCELLED.has(codeOf(err))) return false;
         if (REDIRECT_INSTEAD.has(codeOf(err))) {
           await signInWithRedirect(auth, providerFor(p));
@@ -62,6 +65,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await linkWithPopup(user, providerFor(p));
         return { outcome: 'linked' };
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel, and a blocked one falls back to a redirect
         const code = codeOf(err);
         if (CANCELLED.has(code)) return { outcome: 'cancelled' };
         if (REDIRECT_INSTEAD.has(code)) {
@@ -88,6 +92,7 @@ export function firebaseAdapter(auth: Auth = firebase().auth): AuthAdapter {
         await revokeAccessToken(auth, token);
         return true;
       } catch (err) {
+        // silent-catch-ok: a closed popup is the user's cancel
         if (CANCELLED.has(codeOf(err))) return false;
         throw err;
       }

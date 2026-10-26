@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { getPool, markQueued, deleteAccountData } from '@algominutes/db';
+import crypto from 'node:crypto';
+import { getPool, markQueued, deleteAccountData, queueNoteRun, grantEntitlement } from '@algominutes/db';
 import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
 
 // POST /v1/process end to end against real Postgres. Only the network edges are
@@ -72,7 +73,8 @@ async function kickoff(uid: string, body: Record<string, unknown>) {
   };
   const noop = () => {};
   const log = { info: noop, warn: noop, error: (o: any, m?: string) => { if (process.env.DEBUG_KICKOFF) console.error(m, o?.err?.message ?? o); }, child: () => log };
-  await processIntelligenceRoute({ uid, authEmail: `${uid}@test.invalid`, log, traceId: 'trace-1', headers: {}, body }, res);
+  // req.client as the client-version gate sets it: the web app, whose user has an email (the trial's rule).
+  await processIntelligenceRoute({ uid, authEmail: `${uid}@test.invalid`, log, traceId: 'trace-1', headers: {}, client: { platform: 'web', version: '1.0.0' }, body }, res);
   return out;
 }
 
@@ -99,6 +101,9 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     const debits = await pool.query(`SELECT uid, workspace_id, note_id, minutes::int AS minutes FROM usage_ledger WHERE entry_type = 'debit'`);
     expect(debits.rows).toEqual([{ uid: 'alice', workspace_id: 'workspace_alice', note_id: 'n1', minutes: 3 }]);
     expect(enqueued).toHaveLength(1);
+    // The run it queued rides with the task (audit Q12): the transcoder drops one from an older run.
+    const run = (await pool.query(`SELECT run_seq FROM notes WHERE id = 'n1'`)).rows[0].run_seq;
+    expect(enqueued[0]).toMatchObject({ kind: 'kickoff', noteId: 'n1', runSeq: Number(run) });
     expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'queued' });
   });
 
@@ -127,6 +132,28 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     enqueueFails = false;
     expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(200);
     expect(await ledger()).toEqual(['debit 3 ingest', 'reversal -3 refund:enqueue_failed', 'debit 3 ingest']);
+  });
+
+  it("an enqueue that fails while Postgres can't take the failure: a 500, and neither store says 'error'", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    enqueueFails = true;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_kickoff_fail_outage() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.status = 'error' THEN RAISE EXCEPTION 'simulated outage'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_kickoff_fail_outage BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION test_kickoff_fail_outage();`);
+    try {
+      // failNote logs and swallows markError's throw: the route still answers.
+      expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(500);
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS test_kickoff_fail_outage ON notes; DROP FUNCTION IF EXISTS test_kickoff_fail_outage();`);
+    }
+    // Postgres keeps the queued, charged note (the sweep fails and refunds it
+    // later), and the mirror is not flipped to 'error' ahead of it.
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('queued');
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1' AND entry_type = 'reversal'`)).toBe(0);
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'queued' });
   });
 
   it('a duplicate kickoff of the in-flight note neither re-queues nor debits again', async () => {
@@ -167,6 +194,114 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'error' });
   });
 
+  // 2026-10-01: an app's second kickoff, 4 minutes after a 52-minute meeting was ready, re-ran all of it.
+  it("a ready note is never run again by a kickoff, whatever its Firestore doc says", async () => {
+    await seedUser('alice');
+    await seedWorkspace('workspace_alice', 'alice');
+    noteDoc('alice', 'n1');
+    expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(200);
+    await pool.query(`UPDATE notes SET status = 'ready', updated_at = NOW() - INTERVAL '4 minutes' WHERE id = 'n1'`);
+    // A client wrote 'queued' on the doc (its retry does), so the route's own ready check is passed.
+    docs.set('workspaces/workspace_alice/notes/n1', { authorId: 'alice', status: 'queued' });
+    const again = await kickoff('alice', upload('alice', 'n1'));
+    expect(again).toEqual({ status: 200, body: { success: true, noteId: 'n1', cached: true } });
+    // And the doc is put back in step with Postgres, so the app stops offering a retry.
+    expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'ready' });
+    expect((await pool.query(`SELECT status, run_seq FROM notes WHERE id = 'n1'`)).rows[0]).toMatchObject({ status: 'ready' });
+    expect(enqueued).toHaveLength(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(1);
+    // markQueued itself refuses it under the lock.
+    expect(await markQueued(fakeDb as never, { noteId: 'n1', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'recording' }, quietLog as never)).toEqual({ queued: false, status: 'ready' });
+  });
+
+  // RELEASE.md rev 11, H6c.
+  describe('over the minutes left', () => {
+    beforeEach(async () => {
+      await seedUser('alice');
+      await seedWorkspace('workspace_alice', 'alice');
+      await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 2 });
+    });
+
+    it('an uploaded recording is held (202), kept and uncharged, with nothing queued', async () => {
+      noteDoc('alice', 'n1');
+      expect(await kickoff('alice', upload('alice', 'n1'))).toEqual({ status: 202, body: { success: true, noteId: 'n1', status: null, inFlight: true, held: true } });
+      expect((await pool.query(`SELECT status, storage_path FROM notes WHERE id = 'n1'`)).rows[0]).toEqual({ status: 'awaiting_minutes', storage_path: 'recordings/workspace_alice/n1.m4a' });
+      expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(0);
+      expect(enqueued).toEqual([]);
+      expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'awaiting_minutes' });
+      // A client's retry holds it again, and still charges nothing.
+      expect(await kickoff('alice', upload('alice', 'n1'))).toMatchObject({ status: 202, body: { held: true } });
+      expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'n1'`)).toBe(0);
+    });
+
+    it('a YouTube link, with nothing uploaded, is still refused with 402 and nothing written', async () => {
+      noteDoc('alice', 'y1');
+      const out = await kickoff('alice', { ...youtube('alice', 'y1'), durationSec: 600 });
+      expect(out).toMatchObject({ status: 402, body: { error: 'quota_exceeded' } });
+      expect(await count(`SELECT 1 FROM notes WHERE id = 'y1'`)).toBe(0);
+    });
+
+    it("a held note's retry whose queue transaction fails stays held, not failed (found by dual-write-auditor)", async () => {
+      noteDoc('alice', 'n1');
+      await kickoff('alice', upload('alice', 'n1'));
+      // The retry's upsert fails for real, and its transaction writes nothing.
+      await pool.query(`CREATE OR REPLACE FUNCTION fail_n1() RETURNS trigger AS $$ BEGIN
+                          IF NEW.id = 'n1' AND NEW.status = 'queued' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+      await pool.query(`CREATE TRIGGER fail_n1 BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION fail_n1()`);
+      try {
+        await grantEntitlement({ uid: 'alice', reason: 'test', includedMinutes: 100 });
+        expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(500);
+      } finally {
+        await pool.query('DROP TRIGGER fail_n1 ON notes');
+        await pool.query('DROP FUNCTION fail_n1()');
+      }
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
+      expect(docs.get('workspaces/workspace_alice/notes/n1')).toMatchObject({ status: 'awaiting_minutes' });
+    });
+
+    it('minutes that arrive while it waits for the meter lock queue it after all, and the spend cap it skipped is checked then', async () => {
+      const spend = ((await import('@algominutes/ai/spend-guard.cjs')) as any).default;
+      noteDoc('alice', 'n1');
+      const blocker = await pool.connect();
+      let released = false;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['meter:alice']);
+        const pending = kickoff('alice', upload('alice', 'n1'));
+        await new Promise((r) => setTimeout(r, 300));
+        // The grant is written on the blocker's own connection: the kickoff holds the app's while it waits for the
+        // lock, and CI also runs this suite with every pool capped at one connection (PG_POOL_MAX=1).
+        await blocker.query(
+          `INSERT INTO entitlement_grants (uid, plan, included_minutes, reason) VALUES ('alice', 'pro', 100, 'test')
+             ON CONFLICT (uid) DO UPDATE SET included_minutes = EXCLUDED.included_minutes, granted_at = NOW()`,
+        );
+        spend.setDailySpendReader(async () => 1e9);
+        await blocker.query('COMMIT');
+        blocker.release();
+        released = true;
+        expect((await pending).status).toBe(503);
+      } finally {
+        spend.setDailySpendReader(async () => 0);
+        if (!released) {
+          await blocker.query('ROLLBACK');
+          blocker.release();
+        }
+      }
+      // Queued and charged in the transaction, then failed and refunded for the cap: nothing enqueued, nothing owed.
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('error');
+      expect(Number((await pool.query(`SELECT COALESCE(SUM(minutes), 0) AS n FROM usage_ledger WHERE note_id = 'n1'`)).rows[0].n)).toBe(0);
+      expect(enqueued).toEqual([]);
+    });
+
+    it("a held note's retry refused for the rate limit stays held, not failed (found by dual-write-auditor)", async () => {
+      noteDoc('alice', 'n1');
+      await kickoff('alice', upload('alice', 'n1'));
+      budgetHook = async () => { throw new Error('RATE_LIMIT'); };
+      expect((await kickoff('alice', upload('alice', 'n1'))).status).toBe(429);
+      expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('awaiting_minutes');
+    });
+  });
+
   it('markQueued debits only when it queues: the in-transaction duplicate path charges nothing', async () => {
     await seedUser('alice');
     noteDoc('alice', 'n2');
@@ -203,3 +338,157 @@ describe('POST /v1/process, first kickoff of a new note', () => {
     expect(enqueued).toHaveLength(0);
   });
 });
+
+// A notetaker's note is created 'recording' while its bot is in the meeting
+// (docs/plans/MEETINGS.md). Nothing can process it until its own ingest ends
+// the recording, through the same queueNoteRun the api uses.
+describe('a note still recording', () => {
+  async function recordingNote(uid: string, noteId: string) {
+    await seedUser(uid);
+    await seedWorkspace(`workspace_${uid}`, uid);
+    await seedNote(noteId, `workspace_${uid}`, uid);
+    await pool.query(`UPDATE notes SET status = 'recording' WHERE id = $1`, [noteId]);
+    noteDoc(uid, noteId);
+  }
+
+  it('POST /v1/process refuses it with 409, and charges and queues nothing', async () => {
+    await recordingNote('alice', 'rec1');
+    const out = await kickoff('alice', upload('alice', 'rec1'));
+    expect(out).toMatchObject({ status: 409, body: { error: 'This note is still recording.' } });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec1' AND status = 'recording'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec1'`)).toBe(0);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it("the notetaker's ingest queues it through the same kickoff, without the quota gate", async () => {
+    await recordingNote('alice', 'rec2');
+    const r = await queueNoteRun({
+      firestore: fakeDb as never,
+      noteId: 'rec2', workspaceId: 'workspace_alice', uid: 'alice',
+      type: 'online_meeting', storagePath: 'recordings/workspace_alice/rec2.mp3', mimeType: 'audio/mpeg',
+      durationSec: 1800, allowRecording: true, quota: false, usageBudget: false,
+      traceId: 'trace-2', log: quietLog,
+    });
+    expect(r.kind).toBe('queued');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec2' AND status = 'queued'`)).toBe(1);
+    const debits = await pool.query(`SELECT minutes::int AS minutes FROM usage_ledger WHERE note_id = 'rec2' AND entry_type = 'debit'`);
+    expect(debits.rows).toEqual([{ minutes: 30 }]);
+    expect(enqueued).toEqual([expect.objectContaining({ kind: 'kickoff', noteId: 'rec2', uid: 'alice', type: 'online_meeting' })]);
+  });
+
+  it('a duplicate ingest (a replayed task) queues it once and charges once', async () => {
+    await recordingNote('alice', 'rec3');
+    const input = {
+      firestore: fakeDb as never, noteId: 'rec3', workspaceId: 'workspace_alice', uid: 'alice',
+      type: 'online_meeting', storagePath: 'recordings/workspace_alice/rec3.mp3', durationSec: 600,
+      allowRecording: true, quota: false, usageBudget: false, log: quietLog,
+    };
+    expect((await queueNoteRun(input)).kind).toBe('queued');
+    expect((await queueNoteRun(input)).kind).toBe('in_flight');
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec3' AND entry_type = 'debit'`)).toBe(1);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  // RELEASE.md PR 19: a notetaker's run is queued once per bot, decided under the note's lock. An ingest
+  // replayed after the run finished (a Postgres blip after the kickoff, a duplicate delivery) must not run a
+  // meeting again.
+  async function botFor(uid: string, noteId: string) {
+    const id = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO meeting_bots (id, uid, workspace_id, note_id, platform, meeting_url_hash, status, status_rank)
+         VALUES ($1, $2, $3, $4, 'google_meet', 'h', 'call_ended', 60)`,
+      [id, uid, `workspace_${uid}`, noteId],
+    );
+    return id;
+  }
+  const ingestInput = (noteId: string, meetingBotId: string) => ({
+    firestore: fakeDb as never, noteId, workspaceId: 'workspace_alice', uid: 'alice',
+    type: 'online_meeting', storagePath: `recordings/workspace_alice/${noteId}.mp3`, durationSec: 600,
+    allowRecording: true, quota: false, usageBudget: false, meetingBotId, log: quietLog,
+  });
+
+  it('a notetaker ingest replayed after its run finished is told it was queued, and runs nothing again', async () => {
+    await recordingNote('alice', 'rec5');
+    const botId = await botFor('alice', 'rec5');
+    expect((await queueNoteRun(ingestInput('rec5', botId))).kind).toBe('queued');
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NOT NULL`, [botId])).toBe(1);
+    // The run finishes; the replay arrives afterwards.
+    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'rec5'`);
+    const runSeq = (await pool.query(`SELECT run_seq FROM notes WHERE id = 'rec5'`)).rows[0].run_seq;
+    expect((await queueNoteRun(ingestInput('rec5', botId))).kind).toBe('in_flight');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec5' AND status = 'ready' AND run_seq = $1`, [runSeq])).toBe(1);
+    expect(await count(`SELECT 1 FROM usage_ledger WHERE note_id = 'rec5' AND entry_type = 'debit'`)).toBe(1);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('a notetaker kickoff that failed after queuing reopens its run, so the retry queues it once', async () => {
+    await recordingNote('alice', 'rec6');
+    const botId = await botFor('alice', 'rec6');
+    enqueueFails = true;
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('failed');
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NULL`, [botId])).toBe(1);
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec6' AND status = 'error'`)).toBe(1);
+    enqueueFails = false;
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('queued');
+    expect((await queueNoteRun(ingestInput('rec6', botId))).kind).toBe('in_flight');
+    expect(enqueued).toHaveLength(1);
+    // Charged once for the run that went: the failed one was refunded.
+    const net = await pool.query(`SELECT COALESCE(SUM(minutes), 0)::int AS net FROM usage_ledger WHERE note_id = 'rec6'`);
+    expect(net.rows[0].net).toBe(10);
+  });
+
+  it('a replay whose queue transaction fails leaves a finished run alone: nothing failed, refunded or run again', async () => {
+    await recordingNote('alice', 'rec9');
+    const botId = await botFor('alice', 'rec9');
+    expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('queued');
+    await pool.query(`UPDATE notes SET status = 'ready' WHERE id = 'rec9'`);
+    // The replay's transaction throws before it reaches the bot's row (a dropped connection, a deadlock victim).
+    await pool.query(`CREATE OR REPLACE FUNCTION fail_user_upsert() RETURNS trigger LANGUAGE plpgsql AS $$
+                        BEGIN RAISE EXCEPTION 'connection dropped'; END $$`);
+    await pool.query(`CREATE TRIGGER fail_user_upsert BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION fail_user_upsert()`);
+    try {
+      expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('failed');
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS fail_user_upsert ON users`);
+      await pool.query(`DROP FUNCTION IF EXISTS fail_user_upsert()`);
+    }
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec9' AND status = 'ready'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NOT NULL`, [botId])).toBe(1);
+    const net = await pool.query(`SELECT COALESCE(SUM(minutes), 0)::int AS net FROM usage_ledger WHERE note_id = 'rec9'`);
+    expect(net.rows[0].net).toBe(10);
+    expect((await queueNoteRun(ingestInput('rec9', botId))).kind).toBe('in_flight');
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('a notetaker kickoff that queued in Postgres but found its doc gone fails the note and reopens the run', async () => {
+    await recordingNote('alice', 'rec10');
+    const botId = await botFor('alice', 'rec10');
+    docs.delete('workspaces/workspace_alice/notes/rec10');
+    expect((await queueNoteRun(ingestInput('rec10', botId))).kind).toBe('failed');
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec10' AND status = 'error'`)).toBe(1);
+    expect(await count(`SELECT 1 FROM meeting_bots WHERE id = $1 AND run_queued_at IS NULL`, [botId])).toBe(1);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('a bot whose note was deleted (or another note\'s bot) queues nothing', async () => {
+    await recordingNote('alice', 'rec7');
+    await seedNote('rec8', 'workspace_alice', 'alice');
+    await pool.query(`UPDATE notes SET status = 'recording' WHERE id = 'rec8'`);
+    noteDoc('alice', 'rec8');
+    const botId = await botFor('alice', 'rec8');
+    expect((await queueNoteRun(ingestInput('rec7', botId))).kind).toBe('not_found');
+    await pool.query(`UPDATE meeting_bots SET note_id = NULL WHERE id = $1`, [botId]);
+    expect((await queueNoteRun(ingestInput('rec8', botId))).kind).toBe('not_found');
+    expect(await count(`SELECT 1 FROM notes WHERE id IN ('rec7', 'rec8') AND status = 'recording'`)).toBe(2);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('markQueued itself refuses a recording note under the lock unless the caller is its ingest', async () => {
+    await recordingNote('alice', 'rec4');
+    const base = { noteId: 'rec4', workspaceId: 'workspace_alice', authorUid: 'alice', sourceType: 'online_meeting' };
+    expect(await markQueued(fakeDb as never, base, quietLog)).toEqual({ queued: false, status: 'recording' });
+    expect(await count(`SELECT 1 FROM notes WHERE id = 'rec4' AND status = 'recording'`)).toBe(1);
+    expect(await markQueued(fakeDb as never, { ...base, allowRecording: true }, quietLog)).toEqual({ queued: true, status: 'queued', runSeq: expect.any(Number) });
+  });
+});
+

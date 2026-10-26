@@ -4,7 +4,7 @@ import { fakeAuth, PERMANENT } from '../../test/fakeAuth';
 import { fakeFeed, renderApp } from '../../test/renderApp';
 import type { NoteDoc } from '../../lib/notes/notesFeed';
 import { parseNotes } from '../../lib/notes/notesFeed';
-import { formatClock, formatDuration } from '../../lib/notes/format';
+import { formatClock, formatDuration, notetakerAction, notetakerLabel, statusOf } from '../../lib/notes/format';
 
 afterEach(() => {
   cleanup();
@@ -119,6 +119,70 @@ describe('the notes list', () => {
   });
 });
 
+// An action item can be ticked, and the tick is kept on the server.
+describe('a note’s action items', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const withItems = (items: Array<Record<string, unknown>>) => ({ ...READ, summary: { ...READ.summary, actionItems: items } });
+  const item = (id: string, text: string, status = 'open') => ({ id, text, status, assigneeName: null, dueDate: null });
+  const open = async (read: () => unknown, route: Route = () => undefined) => {
+    const { feed } = fakeFeed([note('n1')]);
+    const s = server((url, body) => (url.endsWith('/v1/notes/read') ? json(read()) : route(url, body)));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    await screen.findByRole('heading', { level: 1, name: 'Weekly sync' });
+    return s;
+  };
+  const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement;
+
+  it('shows each item with its tick as the server has it', async () => {
+    await open(() => withItems([item(A, 'Send the deck', 'done'), item(B, 'Book the room')]));
+    expect(box('Send the deck').checked).toBe(true);
+    expect(box('Book the room').checked).toBe(false);
+  });
+
+  it('ticking saves it for that item, and unticking saves that too', async () => {
+    const s = await open(() => withItems([item(A, 'Send the deck'), item(B, 'Book the room')]), (url, body) =>
+      url.endsWith('/v1/notes/action-items/status') ? json({ ok: true, noteId: 'n1', itemId: body.itemId, status: body.done ? 'done' : 'open' }) : undefined);
+    fireEvent.click(box('Book the room'));
+    await waitFor(() => expect(s.calls.find((c) => c.url.endsWith('/v1/notes/action-items/status'))?.body).toEqual({ noteId: 'n1', workspaceId: WS, itemId: B, done: true }));
+    await waitFor(() => expect(box('Book the room').disabled).toBe(false));
+    expect(box('Book the room').checked).toBe(true);
+    expect(box('Send the deck').checked).toBe(false);
+    fireEvent.click(box('Book the room'));
+    await waitFor(() => expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/action-items/status')).at(-1)?.body).toMatchObject({ itemId: B, done: false }));
+    await waitFor(() => expect(box('Book the room').checked).toBe(false));
+  });
+
+  it('a tick that can’t be saved is put back, and says so', async () => {
+    await open(() => withItems([item(A, 'Send the deck')]), (url) => (url.endsWith('/v1/notes/action-items/status') ? json({ error: 'boom' }, 500) : undefined));
+    fireEvent.click(box('Send the deck'));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/couldn’t be saved/);
+    expect(box('Send the deck').checked).toBe(false);
+  });
+
+  it('an item the server no longer knows (the summary was edited) reads the note again instead of failing', async () => {
+    let edited = false;
+    const s = await open(
+      () => withItems(edited ? [item(B, 'Send the deck', 'done')] : [item(A, 'Send the deck')]),
+      (url) => {
+        if (!url.endsWith('/v1/notes/action-items/status')) return undefined;
+        edited = true;
+        return json({ error: 'Action item not found' }, 404);
+      },
+    );
+    fireEvent.click(box('Send the deck'));
+    await waitFor(() => expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/read')).length).toBeGreaterThan(1));
+    await waitFor(() => expect(box('Send the deck').checked).toBe(true));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an item with no addressable id is shown without a tick', async () => {
+    await open(() => READ);
+    expect(screen.getByText('Ship the site')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /Ship the site/ })).toBeNull();
+  });
+});
+
 describe('a note', () => {
   it('shows the summary, actions, decisions, chapters and transcript from the api, and loads more', async () => {
     const { feed } = fakeFeed([note('n1')]);
@@ -149,6 +213,34 @@ describe('a note', () => {
     const { feed } = fakeFeed([note('n1', { status: 'error', errorMessage: 'The audio was silent.' })]);
     renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, feed);
     expect((await screen.findByRole('alert')).textContent).toMatch(/The audio was silent\. It didn’t use any of your minutes/);
+  });
+
+  // RELEASE.md rev 11, UX6 (H14): a failed note had only its message, and no way forward on the web.
+  it('a failed recording can be tried again: its audio is processed afresh, and the page says so', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', errorMessage: 'Transcription failed.', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm', mimeType: 'audio/webm', duration: 125 })]);
+    const s = server((url) => (url.endsWith('/v1/process') ? json({ success: true, noteId: 'n1', jobId: 'j', status: 'queued' }) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/Trying again/)).toBeTruthy();
+    expect(s.calls.find((c) => c.url.endsWith('/v1/process'))?.body).toEqual({
+      noteId: 'n1', workspaceId: 'workspace_u1', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm', mimeType: 'audio/webm', durationSec: 125,
+    });
+  });
+
+  it("a try that's refused says why, and can be tried again", async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', type: 'recording', storagePath: 'recordings/workspace_u1/n1.webm' })]);
+    const s = server((url) => (url.endsWith('/v1/process') ? json({ error: 'The service is busy. Try again in a minute.' }, 503) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/couldn’t start again|couldn't start again/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a failed note with no audio of ours to process offers no Try again', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'error', type: 'recording', storagePath: undefined, sourceUrl: undefined })]);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, feed);
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it("a note that isn't in the user's list isn't available", async () => {
@@ -193,6 +285,68 @@ describe('a note', () => {
     fireEvent.error(document.querySelector('audio')!);
     expect(await screen.findByText("The recording couldn't be played.")).toBeTruthy();
     expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/audio-url'))).toHaveLength(3);
+  });
+});
+
+// RELEASE.md PR 23: a notetaker's note (sourceKind bot) says what its notetaker is doing, and lets the user
+// cancel it before it records or stop it while it does.
+describe('a notetaker note', () => {
+  const botNote = (status: string, extra: Partial<NoteDoc> = {}) => note('n1', {
+    status: 'recording', type: 'online_meeting', sourceKind: 'bot', duration: undefined, storagePath: undefined,
+    notetaker: { botId: 'b0a1b2c3-0000-4000-8000-000000000001', status, platform: 'google_meet' }, ...extra,
+  });
+
+  it('the list says what the notetaker is doing, not just "Recording"', async () => {
+    renderApp('/app', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('waiting_room')]).feed);
+    const section = (await screen.findByRole('heading', { level: 1, name: 'Your notes' })).closest('section')!;
+    const [item] = await within(section).findAllByRole('listitem');
+    expect(within(item).getByRole('link').textContent).toMatch(/Notetaker waiting to be let in/);
+  });
+
+  it('before it records: the note offers to cancel it, asks first, and cancels through the api', async () => {
+    const s = server((url) => (url.includes('/v1/meetings/bots/') ? json({ botId: 'b0a1b2c3-0000-4000-8000-000000000001', status: 'cancelled' }) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('joining')]).feed);
+    expect(await screen.findByText(/Notetaker joining… You can leave this page/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel the notetaker' }));
+    expect(screen.getByRole('dialog', { name: 'Cancel the notetaker?' }).textContent).toMatch(/nothing is recorded or charged/);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel it' }));
+    await waitFor(() => expect(s.calls.map((c) => c.url)).toContain('https://api.example.test/v1/meetings/bots/b0a1b2c3-0000-4000-8000-000000000001/cancel'));
+    expect(await screen.findByText('The notetaker is cancelled.')).toBeTruthy();
+  });
+
+  it('while it records: stopping keeps what it recorded; keeping it sends nothing', async () => {
+    const s = server(() => undefined);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('recording')]).feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop the notetaker' }));
+    expect(screen.getByRole('dialog', { name: 'Stop the notetaker?' }).textContent).toMatch(/What it has recorded so far becomes this note/);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(s.calls.filter((c) => c.url.includes('/v1/meetings/bots/'))).toEqual([]);
+  });
+
+  it('a refused cancel says why', async () => {
+    const s = server((url) => (url.includes('/v1/meetings/bots/') ? json({ error: 'The notetaker already left.' }, 409) : undefined));
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([botNote('in_call')]).feed);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel the notetaker' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel it' }));
+    expect(await screen.findByText(/^The notetaker wasn't stopped\./)).toBeTruthy();
+  });
+
+  it('once the meeting is over there is nothing to cancel; a failed one says why, with no minutes used', async () => {
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('processing')]).feed);
+    expect(await screen.findByText(/Meeting over: getting the recording/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /notetaker/ })).toBeNull();
+    cleanup();
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, undefined, fakeFeed([botNote('failed', { status: 'error', errorMessage: 'The notetaker wasn’t let into the meeting.' })]).feed);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/wasn’t let into the meeting\. It didn’t use any of your minutes/);
+  });
+
+  it('a status this build doesn\'t know reads as in progress, never an error', () => {
+    expect(notetakerLabel('teleporting')).toBe('Notetaker in progress');
+    expect(notetakerAction('teleporting')).toBeNull();
+    expect(statusOf('recording', { botId: 'x', status: 'teleporting', platform: 'zoom' })).toEqual({ kind: 'working', label: 'Notetaker in progress' });
+    expect(statusOf('recording')).toEqual({ kind: 'working', label: 'Recording' });
+    expect(parseNotes([{ id: 'n1', data: { ...botNote('teleporting'), notetaker: { botId: 'x', status: 'teleporting', platform: 'hopin', rank: 45 } } }]).invalid).toEqual([]);
   });
 });
 
@@ -248,6 +402,25 @@ describe('deleting a note', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/delete'))).toEqual([]);
+  });
+});
+
+// RELEASE.md rev 11, H6: longer than the minutes left is held, not failed.
+describe('a note held for minutes', () => {
+  it('says it is saved and uncharged, and reads nothing from the api', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'awaiting_minutes' })]);
+    const s = server(() => undefined);
+    renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
+    const held = await screen.findByText(/longer than the minutes you have left this month/);
+    expect(held.closest('[role="status"]')?.textContent).toMatch(/nothing was charged.*processed on its own once you have minutes/s);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(s.calls.filter((c) => c.url.endsWith('/v1/notes/read'))).toEqual([]);
+  });
+
+  it('the list shows it as waiting for minutes', async () => {
+    const { feed } = fakeFeed([note('n1', { status: 'awaiting_minutes' })]);
+    renderApp('/app', fakeAuth(PERMANENT).adapter, undefined, feed);
+    expect(await screen.findByText('Waiting for minutes')).toBeTruthy();
   });
 });
 

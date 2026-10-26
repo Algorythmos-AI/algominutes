@@ -47,7 +47,9 @@ or directly verifiable.
 - **Never commit secrets.** `.gitleaks.toml` ships with an **empty allowlist** (BUILD-PLAN §4.2). Firebase
   per-project configs are regenerated per environment and are **git-ignored**, never committed. A test
   fixture that must hold a realistic-but-fake secret uses a targeted inline `# gitleaks:allow` on that
-  line — never a blanket path allowlist. Any real secret in git is an incident: rotate, then purge.
+  line — never a blanket path allowlist. A false positive already in git history (which an inline allow
+  on today's line can't reach) gets one full fingerprint in `.gitleaksignore`, recorded in
+  `docs/DECISIONS.md`. Any real secret in git is an incident: rotate, then purge.
 
 ### Multi-tenancy
 
@@ -140,6 +142,7 @@ If a check you'd want has no sub-agent, draft one in `.claude/agents/` rather th
 - `packages/db/migrations/*.sql` — **never edit a committed migration; add a new one.** Use
   expand/contract so a rollback never strands the schema (BUILD-PLAN §4.4).
 - `.gitleaks.toml` — do not widen the (empty) allowlist; use inline `# gitleaks:allow` instead.
+- `.gitleaksignore` — full fingerprints of historical false positives only, each recorded in `docs/DECISIONS.md`.
 - `packages/contracts/**` — a change here is a three-client change; regenerate models, don't hand-edit
   `generated/`.
 

@@ -148,55 +148,6 @@ final class SSEParserTests: XCTestCase {
     }
 }
 
-// MARK: - TextNoteBuilder (parity with finalizeExtractedTextNote)
-
-final class TextNoteBuilderTests: XCTestCase {
-    func testBasicBuild() {
-        let result = TextNoteBuilder.build(text: "First paragraph line.\n\nSecond paragraph.", source: .scannedImage)
-        XCTAssertEqual(result.transcript.count, 2)
-        XCTAssertEqual(result.transcript[0].speaker, "Scanned image")
-        XCTAssertEqual(result.wordCount, 5)
-        XCTAssertTrue(result.gist.hasPrefix("Scanned image - 5 words extracted."))
-        XCTAssertEqual(result.title, "First paragraph line.")
-        XCTAssertFalse(result.transcriptTruncated)
-    }
-
-    func testEmptyText() {
-        let result = TextNoteBuilder.build(text: "", source: .pdf)
-        XCTAssertEqual(result.transcript.count, 1)
-        XCTAssertTrue(result.transcript[0].text.contains("No text detected"))
-        XCTAssertNil(result.title)
-    }
-
-    func testTruncation() {
-        let long = String(repeating: "a", count: 200_000)
-        let result = TextNoteBuilder.build(text: long, source: .imported)
-        XCTAssertTrue(result.transcriptTruncated)
-        XCTAssertTrue(result.rawText.hasSuffix("[Text truncated for mobile display.]"))
-        XCTAssertTrue(result.gist.contains("(truncated)"))
-    }
-
-    func testTitleCapsAt60() {
-        let line = String(repeating: "t", count: 90)
-        let result = TextNoteBuilder.build(text: line, source: .imported)
-        XCTAssertEqual(result.title, String(repeating: "t", count: 60) + "...")
-    }
-
-    func testStripsNulCharacters() {
-        let result = TextNoteBuilder.build(text: "a\0b", source: .imported)
-        XCTAssertEqual(result.rawText, "ab")
-    }
-
-    func testRepeatedParagraphsGetDistinctIdentities() {
-        // Same speaker, same (empty) time, identical text — the exact shape
-        // that collided under the old content-derived id.
-        let result = TextNoteBuilder.build(text: "Yes.\n\nYes.\n\nYes.", source: .imported)
-        XCTAssertEqual(result.transcript.count, 3)
-        XCTAssertEqual(Set(result.transcript.map(\.id)).count, 3)
-        XCTAssertEqual(result.transcript.map(\.index), [0, 1, 2])
-    }
-}
-
 // MARK: - Export scope and plain text
 
 final class ExportScopeTests: XCTestCase {
@@ -1552,7 +1503,8 @@ final class RecorderWatchdogTests: XCTestCase {
         sinceLastResume: TimeInterval? = nil,
         warned: Bool = false,
         recorderRunning: Bool = false,
-        weThink: Bool = true
+        weThink: Bool = true,
+        inCall: Bool = false
     ) -> RecorderWatchdog.Decision {
         RecorderWatchdog.decide(
             weThinkWeAreRecording: weThink,
@@ -1560,8 +1512,40 @@ final class RecorderWatchdogTests: XCTestCase {
             divergedSince: diverged.map { t0.addingTimeInterval(-$0) },
             lastResumeAttempt: sinceLastResume.map { t0.addingTimeInterval(-$0) },
             alreadyWarned: warned,
+            inCall: inCall,
             now: t0
         )
+    }
+
+    // RELEASE.md rev 11, N1 (H4). A phone call longer than 5 minutes ended the recording: the watchdog gave up
+    // at 300 s, so one meeting became two notes, or lost its second half. During a call nothing can be
+    // captured, and nothing is lost by waiting, so it waits for as long as the call lasts.
+    func testDuringACallItNeverGivesUp() {
+        for minutes in [5.0, 30, 120] {
+            let d = decide(diverged: minutes * 60, inCall: true)
+            XCTAssertFalse(d.giveUp, "gave up \(Int(minutes)) minutes into a call")
+        }
+    }
+
+    func testDuringACallItDoesntFightForTheMicrophone() {
+        // setActive(true) fails while the call holds the session; retrying every 5 s only burns battery.
+        XCTAssertFalse(decide(diverged: 60, inCall: true).attemptResume)
+    }
+
+    func testDuringACallItSaysSoOnce() {
+        XCTAssertTrue(decide(diverged: RecorderWatchdog.graceSeconds, inCall: true).warnUser)
+        XCTAssertFalse(decide(diverged: 60, warned: true, inCall: true).warnUser)
+        XCTAssertTrue(RecorderWatchdog.pausedForCallNotice.contains("call"))
+        XCTAssertTrue(RecorderWatchdog.pausedForCallNotice.contains("carries on"))
+    }
+
+    // LM2: a recorder that stopped without an interruption (a watchdog resume, a route change) lost the time
+    // recorded before it stopped, because the resume reset the live span without banking it.
+    func testTimeRecordedBeforeADivergenceIsBanked() {
+        let start = t0.addingTimeInterval(-600)
+        XCTAssertEqual(RecorderWatchdog.banked(accumulated: 120, startedAt: start, until: t0), 720)
+        XCTAssertEqual(RecorderWatchdog.banked(accumulated: 120, startedAt: nil, until: t0), 120,
+                       "nothing live: nothing more to bank")
     }
 
     func testHealthyRecordingIsLeftAlone() {
@@ -1683,5 +1667,18 @@ final class UploadStallPolicyTests: XCTestCase {
     func testThresholdsAreOrderedSensibly() {
         XCTAssertLessThan(UploadStallPolicy.checkIntervalSeconds, UploadStallPolicy.stallSeconds)
         XCTAssertLessThan(UploadStallPolicy.stallSeconds, UploadStallPolicy.hardCeilingSeconds)
+    }
+}
+
+// RELEASE.md rev 11, L4 (H9b): the chat field stops at the api's limit.
+final class QuestionLimitTests: XCTestCase {
+    func testAShortQuestionIsLeftAlone() {
+        XCTAssertEqual(QuestionLimit.cap("What did we decide?"), "What did we decide?")
+    }
+
+    func testALongQuestionStopsAtTheApisLimit() {
+        let long = String(repeating: "q", count: 2500)
+        XCTAssertEqual(QuestionLimit.cap(long).count, 2000)
+        XCTAssertEqual(QuestionLimit.maxCharacters, 2000)
     }
 }

@@ -1,0 +1,6 @@
+{
+  "hits": { "hits": [
+    { "noteId": "n1", "noteTitle": "Weekly sync", "chunkText": "We agreed to ship the beta on Friday.", "startMs": 125000, "endMs": 131500, "score": 0.82, "source": "fused" },
+    { "noteId": "n2", "noteTitle": null, "chunkText": "Budget review next week.", "startMs": 0, "endMs": 4200 }
+  ] }
+}

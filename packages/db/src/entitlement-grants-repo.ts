@@ -29,9 +29,13 @@ export class GrantUserNotFoundError extends Error {
 const GRANTABLE: readonly string[] = ['pro'];
 
 /** The user's grant, if one is live at `now`. */
-export async function getActiveGrant(uid: string, now: Date = new Date()): Promise<EntitlementGrant | null> {
+export async function getActiveGrant(
+  uid: string,
+  now: Date = new Date(),
+  db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } = getPool(),
+): Promise<EntitlementGrant | null> {
   if (!isPostgresEnabled()) return null;
-  const { rows } = await getPool().query(
+  const { rows } = await db.query(
     `SELECT uid, plan, included_minutes, reason, granted_at, expires_at
        FROM entitlement_grants
       WHERE uid = $1 AND (expires_at IS NULL OR expires_at > $2)`,
@@ -95,4 +99,37 @@ export async function revokeEntitlement(who: { uid?: string; email?: string }): 
   const uid = await resolveUid(who);
   const { rowCount } = await getPool().query('DELETE FROM entitlement_grants WHERE uid = $1', [uid]);
   return { uid, revoked: (rowCount ?? 0) > 0 };
+}
+
+// ── Notetaker testers (migration 024) ──────────────────────────────────────
+// The notetaker is for allowlisted testers until the legal opinion (docs/
+// CONSENT.md §2.4). Same rules as a grant: the owner adds and revokes them
+// with the db-job `grant-notetaker` handler, and no identity is ever in git.
+
+/** Allow (or re-allow) one user to use the notetaker. Idempotent. Returns their uid. */
+export async function grantNotetaker(input: { uid?: string; email?: string; reason: string; expiresAt?: Date | null }): Promise<string> {
+  const uid = await resolveUid(input);
+  await getPool().query(
+    `INSERT INTO notetaker_testers (uid, reason, expires_at) VALUES ($1, $2, $3)
+     ON CONFLICT (uid) DO UPDATE SET reason = EXCLUDED.reason, expires_at = EXCLUDED.expires_at, granted_at = NOW()`,
+    [uid, input.reason, input.expiresAt ?? null],
+  );
+  return uid;
+}
+
+/** Remove a user from the notetaker's testers. Returns their uid, and whether they were one. */
+export async function revokeNotetaker(who: { uid?: string; email?: string }): Promise<{ uid: string; revoked: boolean }> {
+  const uid = await resolveUid(who);
+  const { rowCount } = await getPool().query('DELETE FROM notetaker_testers WHERE uid = $1', [uid]);
+  return { uid, revoked: (rowCount ?? 0) > 0 };
+}
+
+/** Whether this user may use the notetaker now. No Postgres, no uid: no. */
+export async function isNotetakerTester(uid: string | null | undefined): Promise<boolean> {
+  if (!isPostgresEnabled() || typeof uid !== 'string' || !uid) return false;
+  const { rowCount } = await getPool().query(
+    'SELECT 1 FROM notetaker_testers WHERE uid = $1 AND (expires_at IS NULL OR expires_at > NOW())',
+    [uid],
+  );
+  return (rowCount ?? 0) > 0;
 }

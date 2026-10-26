@@ -78,6 +78,9 @@ describe('summarizer chapters', () => {
     });
     await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(answer));
     expect(request.parts[0].text).toContain('"chapters"');
+    // The instruction names the recording's end (its last line's), so the chapters reach it: without that the
+    // model chaptered the first hour of a 4-hour meeting and stopped (the weekly 240-minute e2e, 2026-10-03).
+    expect(request.parts[0].text).toMatch(/must cover the whole recording, which ends at 44:\d\d: the last chapter begins in its final part\./);
     expect(request.generationConfig.responseSchema.properties.chapters).toBeDefined();
     expect(request.generationConfig.responseSchema.propertyOrdering.at(-1)).toBe('chapters');
     const { chapters } = await stored();
@@ -98,6 +101,28 @@ describe('summarizer chapters', () => {
     const [chapter] = (await stored()).chapters;
     expect(chapter.summary.length).toBeLessThanOrEqual(600);
     expect(chapter.summary).not.toMatch(/4111/);
+  });
+
+  // RELEASE.md rev 11, LM4 (H8). One call summarises the whole meeting, and its 16,384-token cap was shared with
+  // gemini-3.5-flash's uncapped thinking: chapters, which come last, were the first thing cut from a long
+  // meeting. The whole ladder also had 240 s, whatever the length. The cap is asked for as `thinking`, and the
+  // ladder picks each rung's field (gemini-call.test.ts): one fixed field is refused by one rung or the other.
+  it('a long meeting gets its thinking capped, room for its chapters, and time in proportion', async () => {
+    await lines(Array.from({ length: 240 }, (_, i) => i)); // a line a minute for 4 hours
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'g', actionItems: [], keyDecisions: [], chapters: [] })));
+    expect(request.thinking).toEqual({ budget: 2048 });
+    expect(request.generationConfig.thinkingConfig).toBeUndefined();
+    expect(request.generationConfig.maxOutputTokens).toBe(65536);
+    expect(request.deadlineMs).toBeGreaterThan(240_000);
+    expect(request.deadlineMs).toBeLessThanOrEqual(600_000);
+  });
+
+  it('a short meeting keeps the smaller cap and the base budget, with thinking capped too', async () => {
+    await lines([0, 1, 2]);
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'g', actionItems: [], keyDecisions: [] })));
+    expect(request.thinking).toEqual({ budget: 2048 });
+    expect(request.generationConfig.maxOutputTokens).toBe(16384);
+    expect(request.deadlineMs).toBeLessThan(250_000);
   });
 
   it('a 2-minute recording: no chapter request, and none stored', async () => {
@@ -137,5 +162,36 @@ describe('summarizer prompt', () => {
     expect(prompt).toContain('<<REDACTED:EMAIL>>: Hello.');
     expect(prompt).toContain('Bob: Hi Jane.');
     expect(prompt).toContain('Speaker 3: Bye.');
+  });
+
+  // Cloud Tasks delivers at least once. A second delivery after the summary went in used to pay for another
+  // summary, replace the first, and give the action items new ids (which would now also untick them).
+  it("a task delivered again after the note is ready is acknowledged: no model call, the summary and the ticks stand", async () => {
+    await lines([0, 1]);
+    const first = JSON.stringify({ gist: 'First summary.', actionItems: ['Send the deck', 'Book the room'], keyDecisions: [] });
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(first));
+    expect((await pool.query(`SELECT status FROM notes WHERE id = 'n1'`)).rows[0].status).toBe('ready');
+    await pool.query(`UPDATE action_items SET status = 'done', completed_at = NOW() WHERE note_id = 'n1' AND text = 'Send the deck'`);
+    const before = (await pool.query(`SELECT id, text, status FROM action_items WHERE note_id = 'n1' ORDER BY position`)).rows;
+
+    request = undefined;
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'A different summary.', actionItems: ['Other'], keyDecisions: [] })));
+    expect(request).toBeUndefined();
+    expect((await stored()).gist).toBe('First summary.');
+    expect((await pool.query(`SELECT id, text, status FROM action_items WHERE note_id = 'n1' ORDER BY position`)).rows).toEqual(before);
+    expect(before.map((r: any) => r.status)).toEqual(['done', 'open']);
+  });
+
+  it('a regenerate (the note back at summarizing) still runs, and starts its items open', async () => {
+    await lines([0, 1]);
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'First.', actionItems: ['Send the deck'], keyDecisions: [] })));
+    await pool.query(`UPDATE action_items SET status = 'done', completed_at = NOW() WHERE note_id = 'n1'`);
+    // What claimRegeneration does.
+    await pool.query(`UPDATE notes SET status = 'summarizing', summary_generation = summary_generation + 1 WHERE id = 'n1'`);
+    request = undefined;
+    await handler.handle({ noteId: 'n1', workspaceId: 'ws-a' }, deps(JSON.stringify({ gist: 'Second.', actionItems: ['Send the deck'], keyDecisions: [] })));
+    expect(request).toBeDefined();
+    expect((await stored()).gist).toBe('Second.');
+    expect((await pool.query(`SELECT status FROM action_items WHERE note_id = 'n1'`)).rows.map((r: any) => r.status)).toEqual(['open']);
   });
 });

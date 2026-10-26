@@ -6,6 +6,19 @@ const MAX_AUDIO_BYTES = 500 * 1024 * 1024;
 const RATE_LIMIT_PER_HOUR = 20;
 const MAX_BYTES_PER_HOUR = 1024 * 1024 * 1024;
 const RETRY_DEADLINE_MS = 240_000;
+
+// One Gemini attempt's cap on audio of this length (gemini-call.cjs attemptTimeoutMs; plan rev 12 S3): a floor
+// of 60 s, 9 s more per minute of audio, at most 150 s, so a second attempt always fits in the 240 s budget. A
+// clip that answers in seconds no longer waits the whole budget on one hung call (BLOCKERS 2026-10-06: a
+// ten-second recording hung for 240 s, and the task's retry answered in 3 s). An unknown length has no cap.
+const ATTEMPT_FLOOR_MS = 60_000;
+const ATTEMPT_PER_AUDIO_MINUTE_MS = 9_000;
+const ATTEMPT_CEILING_MS = 150_000;
+function attemptTimeoutForAudioMs(durationSec) {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return undefined;
+  const ms = ATTEMPT_FLOOR_MS + Math.floor(durationSec / 60) * ATTEMPT_PER_AUDIO_MINUTE_MS;
+  return Math.min(ATTEMPT_CEILING_MS, ms);
+}
 // Model ids live in models.cjs (lifecycle + region facts); this re-export keeps
 // existing importers working.
 const MODEL_LADDER = require('./models.cjs').LADDER;
@@ -278,6 +291,7 @@ module.exports = {
   RATE_LIMIT_PER_HOUR,
   MAX_BYTES_PER_HOUR,
   RETRY_DEADLINE_MS,
+  attemptTimeoutForAudioMs,
   MODEL_LADDER,
   resolveGeminiAudioMime,
   isValidId,

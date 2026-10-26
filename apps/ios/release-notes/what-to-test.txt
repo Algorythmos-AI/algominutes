@@ -3,8 +3,8 @@
 # the PR that goes into the build; keep it short. The recent changes and the
 # commit are added automatically (ci_scripts/what-to-test.sh).
 Thanks for testing AlgoMinutes. First, open the app (you start as a guest, no
-sign-up), go to Settings, copy your User ID and send it to whoever invited
-you. Recording minutes are switched on by hand in this beta.
+sign-up), go to Settings, tap Enter an invite code, and enter the code from
+your invitation. It adds your recording minutes.
 
 Then please try:
 1. Record a meeting of a minute or two, stop, and wait for the note. You can
@@ -12,6 +12,9 @@ Then please try:
 2. Open the note: read the summary, the action items and the transcript.
 3. Search for a word you said, and ask the note a question in chat.
 4. Settings, then Create account, to keep your notes with Apple or Google.
+5. Settings, then Go Pro. If plans show, buy one: TestFlight purchases are
+   Apple's test purchases, and you're never charged. Then Restore Purchases.
 
-This is a test environment: record only people who agreed, and nothing
-confidential.
+Your notes are kept for the whole beta, and backed up. The public release
+starts fresh: you'll be told before then, with time to export your notes.
+Record only people who agreed, and nothing confidential.

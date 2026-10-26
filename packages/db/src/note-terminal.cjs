@@ -77,12 +77,27 @@ function isFinalAttempt(headers, maxAttempts = Number(process.env.MAX_TASK_ATTEM
  *   notify task is enqueued after the commit (`enqueueNotice`), so no caller
  *   can forget to tell the author and a crash in between can't lose it (the
  *   sweep re-enqueues a notice left unsent). `traceId` is the recording's.
+ * - `deadLetterId` / `deadLetterDuplicate`: with `deadLetter` ({ queue, payload,
+ *   error, attempts, reason, chunkId }), the dead letter written in the
+ *   failure's own statement (RELEASE.md PR 5a), keyed like dead-letter-repo's
+ *   (queue:note:run:chunk). A duplicate (this work was already dead-lettered)
+ *   writes nothing. Only for a note this marks: a ready note's lost work is the
+ *   caller's to record (recordDeadLetter, which dedupes the same way).
+ *
+ * With `refusal` (the user's recording refused: longer than the plan allows, or
+ * than the minutes left), a new failure is logged `note_refused`, not
+ * `note_failed`, which alerts and counts against SLO 3.
  */
-async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null, traceId = null, enqueueNotice = defaultEnqueueNotice }) {
+/** Postgres refuses U+0000 in text and jsonb; tool output (ffmpeg, yt-dlp, a speech engine) can carry it. */
+const withoutNul = (text) => text.replace(/\u0000/g, '');
+/** A payload as jsonb, its strings without U+0000 (stripped before serialising, so no escape is left half-cut). */
+const payloadJson = (payload) => JSON.stringify(payload, (_k, v) => (typeof v === 'string' ? withoutNul(v) : v));
+
+async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, log, event, retryOnPgError = false, onlyIfStatus = null, chunkId = null, refund = null, traceId = null, enqueueNotice = defaultEnqueueNotice, refusal = false, deadLetter = null }) {
   const name = event || 'note_marked_failed';
   if (!noteId || !workspaceId) {
     log.error({ noteId, workspaceId }, `${name}_missing_ids`);
-    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false, notice: null };
+    return { failed: false, marked: false, pgErrored: false, exists: false, refunded: false, superseded: false, notice: null, deadLetterId: null, deadLetterDuplicate: false };
   }
 
   let pgOk = false;
@@ -94,6 +109,8 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   let minutesReversed = 0;
   let superseded = false;
   let notice = null;
+  let deadLetterId = null;
+  let deadLetterDuplicate = false;
   // The recording's traceId, into the notice row and its task. Minted only if
   // a caller had none, before the write, so the row and the task agree.
   const trace = traceId || randomUUID();
@@ -107,7 +124,10 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       // the same statement, and only if the note's was: a poll's retry finds
       // both or neither, and a note this doesn't fail keeps its chunk. A new
       // failure's notice is written by the same statement.
-      const failNote = () => client.query(
+      // The dead letter goes in the same statement only when the caller passed one (RELEASE.md PR 5a), so a
+      // caller without one runs exactly the statement it always did.
+      const dl = deadLetter && deadLetter.queue ? deadLetter : null;
+      const failNote = (withDeadLetter = Boolean(dl)) => client.query(
         `WITH p AS (
            SELECT id, status AS prev_status FROM notes
             WHERE id = $1 AND workspace_id = $3 FOR NO KEY UPDATE
@@ -128,15 +148,48 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
               WHERE prev_status IS DISTINCT FROM 'error'
            ON CONFLICT (note_id, run_seq, generation, kind) DO NOTHING
            RETURNING id, uid
-         )
+         )${withDeadLetter ? `, dl AS (
+           -- The dead letter with the failure: a crash after the commit can't lose it. Its key is
+           -- dead-letter-repo's (queue:note:run:generation:chunk), so the caller's later best-effort record of the
+           -- same work, or a replay's, writes nothing.
+           INSERT INTO dead_letter (queue, note_id, workspace_id, payload, error, attempts, trace_id, reason, dedupe_key)
+             SELECT $7::text, id, workspace_id, $8::jsonb, $9::text, $10::int, $6, $11::text,
+                    $7::text || ':' || id || ':' || run_seq || ':' || summary_generation || ':' || COALESCE($12::text, '')
+               FROM upd
+           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+           RETURNING id
+         )` : ''}
          SELECT prev_status, error_message, (SELECT id FROM notice) AS notice_id,
-                (SELECT uid FROM notice) AS notice_uid
+                (SELECT uid FROM notice) AS notice_uid${withDeadLetter ? ', (SELECT id FROM dl) AS dead_letter_id' : ''}
            FROM upd`,
-        [noteId, message, workspaceId, onlyIfStatus, chunkId, trace],
+        [
+          noteId, message, workspaceId, onlyIfStatus, chunkId, trace,
+          ...(withDeadLetter ? [
+            dl.queue,
+            dl.payload ? payloadJson(dl.payload) : null,
+            dl.error != null ? withoutNul(String(dl.error)) : null,
+            dl.attempts ?? null,
+            dl.reason ?? null,
+            dl.chunkId ?? chunkId ?? null,
+          ] : []),
+        ],
       );
+      // If the dead letter can't go with the failure (a column missing on an image deployed before migration
+      // 027), the failure still lands as it always did, and the caller records the dead letter itself.
+      let deadLetterWentWith = Boolean(dl);
+      const failNoteKeepingTheFailure = async () => {
+        if (!dl) return failNote(false);
+        try {
+          return await failNote(true);
+        } catch (err) {
+          log.error({ err, noteId, workspaceId, queue: dl.queue }, `${name}_dead_letter_with_failure_failed`);
+          deadLetterWentWith = false;
+          return failNote(false);
+        }
+      };
       let rows = [];
       if (!refund && !chunkId) {
-        ({ rows } = await failNote());
+        ({ rows } = await failNoteKeepingTheFailure());
       } else {
         try {
           await client.query('BEGIN');
@@ -179,7 +232,7 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
           // so the two stores agree, and say the refund was lost. A Postgres
           // that's down fails this too, into the catch below.
           log.error({ err, noteId, workspaceId, reason: refund && refund.reason }, `${name}_refund_lost`);
-          ({ rows } = await failNote());
+          ({ rows } = await failNoteKeepingTheFailure());
         }
       }
       pgOk = rows.length > 0;
@@ -187,6 +240,13 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
       if (pgOk && rows[0].error_message) storedMessage = rows[0].error_message;
       if (pgOk && rows[0].notice_id != null) {
         notice = { id: String(rows[0].notice_id), noteId, workspaceId, uid: rows[0].notice_uid, kind: 'note_failed' };
+      }
+      if (pgOk && dl && deadLetterWentWith) {
+        deadLetterId = rows[0].dead_letter_id != null ? Number(rows[0].dead_letter_id) : null;
+        deadLetterDuplicate = deadLetterId === null;
+        // Once per lost piece of work: the alert counts dead_letter_recorded.
+        if (deadLetterDuplicate) log.info({ noteId, workspaceId, queue: dl.queue }, 'dead_letter_already_recorded');
+        else log.info({ deadLetterId, queue: dl.queue, noteId, workspaceId, reason: dl.reason ?? null }, 'dead_letter_recorded');
       }
       exists = pgOk;
       if (superseded) {
@@ -254,7 +314,12 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
   // this matched nothing on (ready, gone, or an `onlyIfStatus` miss), since the
   // alert counts this line.
   const failed = pgOk && prevStatus !== 'error';
-  if (failed || pgErrored) {
+  if (failed && refusal) {
+    // The user's recording refused (longer than the plan, or than the minutes left), not a pipeline fault: it
+    // isn't what note_failed alerts on, nor SLO 3's failures (RELEASE.md PR 15b). A refusal that couldn't be
+    // marked is still note_failed, below.
+    log.warn({ traceId: trace, noteId, workspaceId, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_refused');
+  } else if (failed || pgErrored) {
     log.error({ noteId, workspaceId, pgOk, pgErrored, mirrored: shouldMirror, mirrorOk, reason: message }, 'note_failed');
   } else {
     log.info({ noteId, workspaceId, pgOk, prevStatus, exists }, `${name}_not_a_new_failure`);
@@ -270,7 +335,88 @@ async function markNoteFailed({ pool, firestore, noteId, workspaceId, message, l
     // sweep's to re-enqueue.
     await enqueueNotice({ notice, traceId: trace, log });
   }
-  return { failed, marked: pgOk, pgErrored, exists, refunded, superseded, notice };
+  return { failed, marked: pgOk, pgErrored, exists, refunded, superseded, notice, deadLetterId, deadLetterDuplicate };
 }
 
-module.exports = { markNoteFailed, isFinalAttempt };
+// The statuses a run is still being processed in before any paid work: the
+// transcoder's settle holds only these (measured-length.ts IN_PROGRESS).
+const HOLDABLE = ['queued', 'chunking', 'transcribing'];
+
+/**
+ * Holds a note for minutes (RELEASE.md rev 11, H6): the recording is longer
+ * than the minutes left this month, so it's kept, not refused. In one
+ * transaction under the note's row lock (the lock every refund and markQueued
+ * take): the note goes to 'awaiting_minutes' and the run's charge is reversed,
+ * so a held note is never charged. It's charged again when it's resumed (a
+ * new run, through the kickoff), once minutes cover it.
+ *
+ * Only a note still in progress is held: a run another attempt failed or
+ * finished is left alone. A replay finds the note held already and writes
+ * nothing (the refund is net-guarded and keyed per debit).
+ *
+ * Throws on a Postgres error, before anything is mirrored, so the task retries
+ * and decides again. The mirror is best-effort: a missed write is the sweep's
+ * mirror repair's (mirror-repair.ts covers 'awaiting_minutes').
+ *
+ * Returns `{ held, status }`: `held` when this write held it, else the status
+ * found (`null` when the note is gone from this workspace).
+ */
+async function holdNoteForMinutes({ pool, firestore, noteId, workspaceId, neededMinutes = null, measuredSec = null, log, traceId }) {
+  const client = await pool.connect();
+  let held = false;
+  let status = null;
+  let uid = null;
+  let minutesReversed = 0;
+  try {
+    await client.query('BEGIN');
+    try {
+      const { rows: [note] } = await client.query(
+        `SELECT status, author_uid FROM notes
+          WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+          FOR NO KEY UPDATE`,
+        [noteId, workspaceId],
+      );
+      status = note ? note.status : null;
+      uid = note ? note.author_uid : null;
+      if (note && HOLDABLE.includes(note.status)) {
+        await client.query(
+          // The measured length is kept: the resume charges it (the transcoder
+          // saves it only once it routes a run, which a held run never reaches).
+          `UPDATE notes SET status = 'awaiting_minutes', error_message = NULL, updated_at = NOW(),
+                  duration_sec_probed = COALESCE($3::numeric, duration_sec_probed)
+            WHERE id = $1 AND workspace_id = $2`,
+          [noteId, workspaceId, measuredSec],
+        );
+        const r = await reverseNoteUsage(client, {
+          noteId, reason: 'refund:held_for_minutes', idempotencyKey: `${noteId}:refund:held`,
+        });
+        minutesReversed = r.minutesReversed;
+        held = true;
+        status = 'awaiting_minutes';
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch((rollbackErr) => log.error({ err: rollbackErr, traceId, ...(uid && { userId: uid }), noteId, workspaceId }, 'note_hold_rollback_failed'));
+      throw err;
+    }
+  } finally {
+    client.release();
+  }
+  if (!held) {
+    // userId only when found: a null would hide the task's own on the bound logger.
+    log.info({ traceId, ...(uid && { userId: uid }), noteId, workspaceId, status }, 'note_hold_skipped');
+    return { held, status };
+  }
+  log.warn({ traceId, userId: uid, noteId, workspaceId, neededMinutes, minutesReversed }, 'note_held_for_minutes');
+  try {
+    // update(), never set(): a note deleted meanwhile mustn't come back as a doc.
+    await firestore.doc(`workspaces/${workspaceId}/notes/${noteId}`).update(
+      { status: 'awaiting_minutes', errorMessage: null, updatedAt: new Date().toISOString() },
+    );
+  } catch (err) {
+    log.error({ err, traceId, userId: uid, noteId, workspaceId }, 'note_hold_mirror_failed');
+  }
+  return { held, status };
+}
+
+module.exports = { markNoteFailed, holdNoteForMinutes, isFinalAttempt };

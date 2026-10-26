@@ -2,22 +2,27 @@ import Foundation
 
 enum NoteStatus: String, Codable, CaseIterable, Sendable {
     case recording, processing, queued, chunking, transcribing, summarizing, ready, error
+    /// Longer than the minutes left this month: kept, uncharged, and processed
+    /// on its own once minutes arrive (RELEASE.md rev 11, H6). Neither in
+    /// progress nor failed.
+    case awaitingMinutes = "awaiting_minutes"
 
     var label: String {
         switch self {
         case .recording: return "Recording"
-        case .processing: return "Processing"
-        case .queued: return "Queued"
-        case .chunking: return "Chunking audio"
+        case .processing: return "Waiting to start"
+        case .queued: return "Waiting to start"
+        case .chunking: return "Transcribing"
         case .transcribing: return "Transcribing"
-        case .summarizing: return "Summarizing"
+        case .summarizing: return "Summarising"
         case .ready: return "Ready"
-        case .error: return "Error"
+        case .error: return "Couldn’t process"
+        case .awaitingMinutes: return "Waiting for minutes"
         }
     }
 
     var isInProgress: Bool {
-        self != .ready && self != .error
+        self != .ready && self != .error && self != .awaitingMinutes
     }
 }
 
@@ -113,6 +118,54 @@ struct NoteProgress: Equatable, Sendable {
     var total: Int
 }
 
+/// The notetaker on a note it records (contracts `NoteNotetaker`; RELEASE.md
+/// PR 23). Its fields are open strings: a status this build doesn't know
+/// reads as "in progress", never an error, so an older build keeps working
+/// when the server adds one.
+struct NoteNotetaker: Equatable, Sendable {
+    enum Action: Equatable, Sendable {
+        /// Before it records: it won't join, and nothing is charged.
+        case cancel
+        /// While it records: it leaves, and what it recorded becomes the note.
+        case stop
+    }
+
+    var botId: String
+    var status: String
+    var failureReason: String?
+    var platform: String
+
+    init?(_ d: [String: Any]) {
+        guard let botId = d["botId"] as? String, !botId.isEmpty,
+              let status = d["status"] as? String, !status.isEmpty
+        else { return nil }
+        self.botId = botId
+        self.status = status
+        self.failureReason = d["failureReason"] as? String
+        self.platform = d["platform"] as? String ?? ""
+    }
+
+    var label: String {
+        switch status {
+        case "scheduled": return "Notetaker on its way"
+        case "joining": return "Notetaker joining"
+        case "waiting_room": return "Notetaker waiting to be let in"
+        case "in_call": return "Notetaker in the meeting"
+        case "recording": return "Notetaker recording"
+        case "processing": return "Meeting over: getting the recording"
+        default: return "Notetaker in progress"
+        }
+    }
+
+    var action: Action? {
+        switch status {
+        case "scheduled", "joining", "waiting_room", "in_call": return .cancel
+        case "recording": return .stop
+        default: return nil
+        }
+    }
+}
+
 /// Mirrors the Firestore note document (`src/types.ts` Note). Dates are kept
 /// as ISO-8601 strings — that's what the backend writes.
 struct Note: Identifiable, Equatable, Sendable {
@@ -139,6 +192,17 @@ struct Note: Identifiable, Equatable, Sendable {
     var jobId: String?
     var progress: NoteProgress?
     var retryAttempt: Int?
+    /// How the audio arrived (device, upload, bot, ...): an open string.
+    var sourceKind: String?
+    /// The notetaker, on a note one records.
+    var notetaker: NoteNotetaker?
+
+    /// What the note is doing, in words: a notetaker's note stays `recording`
+    /// until its meeting's recording is ours, and its own progress says more.
+    var statusLabel: String {
+        if status == .recording, let notetaker { return notetaker.label }
+        return status.label
+    }
 
     var createdAtDate: Date? { Note.parseISO(createdAt) }
     var updatedAtDate: Date? { Note.parseISO(updatedAt) }
@@ -218,5 +282,7 @@ extension Note {
             self.progress = NoteProgress(done: done, total: total)
         }
         self.retryAttempt = (data["retryAttempt"] as? NSNumber)?.intValue
+        self.sourceKind = data["sourceKind"] as? String
+        self.notetaker = (data["notetaker"] as? [String: Any]).flatMap(NoteNotetaker.init)
     }
 }

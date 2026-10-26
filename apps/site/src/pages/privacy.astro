@@ -45,6 +45,15 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
       Text you scan from a document or photo is used to create a note the same way. Your recordings contain the
       voices of the people you record; see <a href="#others">People you record</a>.
     </p>
+    <h3 id="notetaker">Online meetings (the notetaker)</h3>
+    <p>
+      If you send the AlgoMinutes notetaker to an online meeting (available to testers only), it joins as a visible
+      participant and records the meeting's audio for you. It collects the meeting link, the audio, and the names
+      participants show in the meeting and when each of them spoke, so the transcript says who said what. It doesn't
+      collect participants' email addresses, video or the meeting chat. The recording becomes a note in your account
+      only. The notetaker is run for us by Recall.ai (see <a href="#processors">the table below</a>); the link is kept
+      encrypted, and only until the notetaker has joined.
+    </p>
     <h3>How you use the app</h3>
     <p>
       A small set of product events tied to your account, such as "first recording completed" or "plan screen
@@ -111,7 +120,7 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
     <h3 id="overseas">Information sent outside Australia</h3>
     <p>
       Your notes and recordings are stored in {facts.primaryRegionLabel}. The following services may process
-      information in other countries, including the United States: {overseas.map((p) => p.service).join('; ')}.
+      information in other countries, including the United States and Japan: {overseas.map((p) => (p.region === 'global' ? p.service : `${p.service} (${p.where})`)).join('; ')}.
       We choose providers that protect information to a standard comparable to the Australian Privacy Principles,
       and, for information from the EU or UK, use the safeguards those laws require, such as standard contractual
       clauses.
@@ -142,6 +151,12 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
       If you're recorded by an AlgoMinutes user, the recording belongs to their account and we process it on their
       behalf. You must be told before you're recorded; our <a href="/terms">Terms</a> require it. You can ask the
       person who recorded you to delete it, or contact us at <a href={`mailto:${operator.privacy}`}>{operator.privacy}</a>.
+    </p>
+    <p>
+      If an AlgoMinutes notetaker joined a meeting you were in, we collect, for the person who sent it, the meeting's
+      audio, the name you showed in the meeting and when you spoke. It announces itself by its name and in
+      the meeting chat, and the host can remove it at any time. <a href="/notetaker">About the notetaker</a> explains
+      what it does and what you can do.
     </p>
 
     <h2 id="rights">Your rights and choices</h2>

@@ -42,7 +42,7 @@ struct QuickActionsRow: View {
     // A note with no action items has nowhere to jump to, so the tile is
     // present but unavailable rather than scrolling to an empty section.
     private var actionItemsTile: some View {
-        IconTile("Action Items", icon: "checkmark.circle",
+        IconTile("Action items", icon: "checkmark.circle",
                  enabled: hasActionItems, action: onActionItems)
     }
 

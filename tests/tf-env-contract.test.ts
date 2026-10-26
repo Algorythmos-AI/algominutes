@@ -102,7 +102,7 @@ const show = (r: Resolved) => (r.kind === 'literal' ? JSON.stringify(r.value) : 
 
 describe.each(ENVS)('%s: Terraform sets every env a service requires', (env: Env) => {
   it('covers every service with an env-spec.cjs', () => {
-    expect(services.sort()).toEqual(['api', 'billing', 'embedder', 'extractor', 'notifier', 'summarizer', 'transcoder']);
+    expect(services.sort()).toEqual(['api', 'billing', 'embedder', 'extractor', 'meetings', 'notifier', 'summarizer', 'transcoder']);
   });
 
   it.each(targets)('$name', ({ specOf, env: envOf }) => {
@@ -123,14 +123,25 @@ describe.each(ENVS)('%s: Terraform sets every env a service requires', (env: Env
   });
 });
 
+describe('the meetings env', () => {
+  it('gives ingest the recordings bucket (read at use, not at boot, so it isn\'t in the env spec)', () => {
+    expect(envOfService('meetings')).toMatchObject({ GCS_BUCKET: 'local.region_bucket["recordings"]' });
+    expect(spec('meetings').required).not.toContain('GCS_BUCKET');
+  });
+
+  it('won\'t boot without where ingest queues a note\'s run (queueNoteRun would fail the note)', () => {
+    expect(spec('meetings').required).toEqual(expect.arrayContaining(['TRANSCODER_URL', 'TASKS_PROJECT']));
+  });
+});
+
 describe('the api env', () => {
   it('carries the broadcast kill switch, and the public site for the api and billing', () => {
     expect(envOfService('api')).toMatchObject({ BROADCAST_CAPTURE: 'var.broadcast_capture', PUBLIC_SITE_URL: 'var.public_site_url' });
     expect(envOfService('billing')).toMatchObject({ PUBLIC_SITE_URL: 'var.public_site_url' });
   });
 
-  it.each(ENVS)('%s: gives the api a real CORS origin', (env) => {
-    const r = resolve(envOfService('api').ALLOWED_ORIGINS, env);
+  it.each(ENVS.flatMap((env) => [['api', env], ['billing', env]]))('%s, %s: gets a real CORS origin', (svc, env) => {
+    const r = resolve(envOfService(svc).ALLOWED_ORIGINS, env);
     expect(r.kind).toBe('literal');
     expect((r as { value: string }).value).toMatch(/^https:\/\/[^,\s]+(,https:\/\/[^,\s]+)*$/);
   });

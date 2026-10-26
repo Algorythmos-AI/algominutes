@@ -34,9 +34,6 @@ settings:
     CURRENT_PROJECT_VERSION: "14"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    # Share links (POST /v1/shares) open on the public site, which has no
-    # viewer yet. Off everywhere until it does; the share sheet still exports.
-    SHARE_LINKS_ENABLED: "NO"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MACCATALYST: NO
     # ALGORYTHMOS PTY LTD. — inherited by every target. Signing stays Automatic
@@ -51,24 +48,31 @@ settings:
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
       PAYWALL_ENABLED: "YES"
+      INVITE_CODES_ENABLED: "YES"
     Staging:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
       UPDATE_URL: itms-beta://
-      # No paywall until the products exist and purchases verify (PR-32).
-      PAYWALL_ENABLED: "NO"
+      # The beta sells Pro in Apple's sandbox (RELEASE.md PR 27; TestFlight buys
+      # there, nobody is charged). Until the products exist in App Store Connect
+      # the paywall offers the invite code instead of a dead end.
+      PAYWALL_ENABLED: "YES"
+      # The beta's way to minutes (BETA-XXXXX-... codes, RELEASE.md rev 10).
+      INVITE_CODES_ENABLED: "YES"
     Release:
-      # TODO(prod): the production Cloud Run origins, once prod is applied
-      # (https://api-<prod project number>.australia-southeast1.run.app). Until
-      # then they're empty, and the "Backend origins are set" phase fails a
-      # Release build rather than shipping one that talks to nothing (it named
-      # api.algominutes.com, a domain that isn't registered).
-      API_BASE_URL: ""
-      BILLING_BASE_URL: ""
-      # The update screen's button (426). TestFlight until the App Store
-      # listing exists; then itms-apps://apps.apple.com/app/id<app id>.
-      UPDATE_URL: itms-beta://
-      PAYWALL_ENABLED: "NO"
+      # Production's Cloud Run origins (algominutes-production, project number
+      # 43914754953). The "Backend origins are set" phase still fails a build
+      # whose origins are empty or not https.
+      API_BASE_URL: https://api-43914754953.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-43914754953.australia-southeast1.run.app
+      # The update screen's button (426): the App Store listing (App Store
+      # Connect app 6816333591). A Release build must never open TestFlight.
+      UPDATE_URL: itms-apps://apps.apple.com/app/id6816333591
+      # The App Store build (plan rev 12, Stage 3, I2): Pro is sold with StoreKit, and nothing of the beta shows
+      # (no invite code entry, no beta wording). A Release archive needs prod and its App Store Connect products
+      # first, so this sells nothing until they exist.
+      PAYWALL_ENABLED: "YES"
+      INVITE_CODES_ENABLED: "NO"
 
 targets:
   AlgoMinutes:
@@ -112,7 +116,7 @@ targets:
             case "$value" in
               https://?*) ;;
               *)
-                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Release waits for the production origins: TODO(prod)."
+                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Each build needs its backend's origins."
                 exit 1 ;;
             esac
           done
@@ -177,6 +181,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: AlgoMinutesTests
+      # The contract's /v1 fixtures (packages/contracts/fixtures), which ContractFixturesTests decodes with the
+      # app's own models: a folder in the test bundle, never in the app.
+      - path: ../../packages/contracts/fixtures/v1
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: AlgoMinutes
 
@@ -207,6 +216,9 @@ targets:
         INFOPLIST_FILE: BroadcastExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: BroadcastExtension/BroadcastExtension.entitlements
         CODE_SIGN_STYLE: Automatic
+        # iPhone only, like the app. XcodeGen's extension default is "1,2",
+        # which would declare an iPad extension inside an iPhone-only app.
+        TARGETED_DEVICE_FAMILY: "1"
 
 schemes:
   AlgoMinutes:
@@ -218,6 +230,10 @@ schemes:
         BroadcastExtension: all
     run:
       config: Debug
+      # Debug runs from Xcode buy from the local StoreKit configuration (the
+      # beta's products, placeholder prices). Kept out of every target: it never
+      # ships.
+      storeKitConfiguration: StoreKit/AlgoMinutes.storekit
     test:
       config: Debug
       targets:

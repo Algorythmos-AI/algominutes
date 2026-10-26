@@ -156,7 +156,7 @@ struct SupportComposerView: View {
 
                 Text("Attached: app \(DeviceInfo.appVersion) · \(DeviceInfo.deviceDescription)\(noteId != nil ? " · note ref" : "")")
                     .font(Typography.body(11))
-                    .foregroundStyle(Theme.tertiary)
+                    .foregroundStyle(Theme.muted)
 
                 if let errorMessage {
                     Label(errorMessage, systemImage: "exclamationmark.triangle.fill")

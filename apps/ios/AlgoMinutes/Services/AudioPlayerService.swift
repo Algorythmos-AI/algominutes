@@ -52,6 +52,12 @@ final class AudioPlayerService {
     private var timeObserver: Any?
     private var itemObservation: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
+    /// The note a streamed (signed-URL) source came from, to ask for a fresh
+    /// link when the old one expires (RELEASE.md rev 11, H17).
+    private var remoteNote: (noteId: String, workspaceId: String)?
+    /// When the link was last replaced: at most one refresh a minute, so a
+    /// recording that really can't play doesn't loop.
+    private var lastRefreshAt: Date?
 
     init(session: AudioSessionCoordinator, store: RecordingStore, api: APIClient) {
         self.api = api
@@ -62,8 +68,12 @@ final class AudioPlayerService {
     // MARK: - Loading
 
     func load(note: Note) async {
-        guard currentNoteId != note.id else { return }
+        // The same note again is a no-op, unless its playback failed: then it's
+        // loaded afresh (a new link). It used to stay failed until another note
+        // was opened.
+        guard currentNoteId != note.id || error != nil else { return }
         stop()
+        remoteNote = nil
 
         let local = store.pendingRecording(forNoteId: note.id).map { store.audioURL(for: $0) }
         let existingLocal = local.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
@@ -86,6 +96,7 @@ final class AudioPlayerService {
                 let url = try await api.noteAudioURL(noteId: note.id, workspaceId: note.workspaceId)
                 sizeBytes = nil
                 attach(url: url, noteId: note.id)
+                remoteNote = (note.id, note.workspaceId)
             } catch {
                 AppLog.error("audio_resolve_failed: \(error)")
                 self.error = .loadFailed
@@ -123,8 +134,12 @@ final class AudioPlayerService {
             guard item.status == .failed else { return }
             Task { @MainActor [weak self] in
                 AppLog.error("audio_item_failed: \(String(describing: item.error))")
-                self?.error = .playbackFailed
-                self?.isPlaying = false
+                guard let self else { return }
+                // A streamed recording's link lasts 15 minutes. Past that, a seek
+                // or a resume fails: ask for a new link and carry on where it was.
+                if await self.refreshRemoteLink() { return }
+                self.error = .playbackFailed
+                self.isPlaying = false
             }
         }
 
@@ -136,6 +151,30 @@ final class AudioPlayerService {
                 self?.seek(to: 0)
                 self?.updateNowPlaying()
             }
+        }
+    }
+
+    /// A fresh signed link for the streamed note, resuming at the same place
+    /// and in the same state. False when there's nothing to refresh, it was
+    /// refreshed less than a minute ago, or the api refused.
+    private func refreshRemoteLink() async -> Bool {
+        guard let source = remoteNote else { return false }
+        if let last = lastRefreshAt, Date().timeIntervalSince(last) < 60 { return false }
+        lastRefreshAt = Date()
+        let resumeAt = currentTime
+        let wasPlaying = isPlaying
+        do {
+            let url = try await api.noteAudioURL(noteId: source.noteId, workspaceId: source.workspaceId)
+            stop()
+            attach(url: url, noteId: source.noteId)
+            remoteNote = source
+            seek(to: resumeAt)
+            if wasPlaying { play() }
+            AppLog.info("audio_link_refreshed")
+            return true
+        } catch {
+            AppLog.error("audio_link_refresh_failed: \(error)")
+            return false
         }
     }
 

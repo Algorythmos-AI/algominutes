@@ -13,13 +13,18 @@
 // @algominutes/db (CLAUDE.md §Data plane), never re-implemented here.
 
 let _repoWarned = false;
-function requireRepo(basename) {
+function requireRepo(basename, misses = []) {
   const specs = [`@algominutes/db/${basename}.ts`, `@algominutes/db/${basename}`];
   for (const spec of specs) {
     try {
       return require(spec);
     } catch (err) {
-      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) continue;
+      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ERR_MODULE_NOT_FOUND')) {
+        // Kept for repoFn's warning: a spec that resolves but whose own import
+        // fails looks the same here, and only the message tells them apart.
+        misses.push(err);
+        continue;
+      }
       throw err;
     }
   }
@@ -27,11 +32,12 @@ function requireRepo(basename) {
 }
 
 function repoFn(basename, fnName, log) {
-  const mod = requireRepo(basename);
+  const misses = [];
+  const mod = requireRepo(basename, misses);
   if (mod && typeof mod[fnName] === 'function') return mod[fnName];
   if (!_repoWarned) {
     _repoWarned = true;
-    log.warn({ basename, fnName }, 'db_repo_unavailable_skipping');
+    log.warn({ basename, fnName, misses: misses.map((e) => String(e.message)) }, 'db_repo_unavailable_skipping');
   }
   return null;
 }
@@ -49,8 +55,11 @@ async function onEmbedTerminalFailure({ noteId, workspaceId, err, attempts, trac
       error: err && err.message ? err.message : (err ? String(err) : null),
       attempts: attempts != null ? attempts : null,
       traceId: traceId || null,
+      reason: 'embed_failed',
     });
-    log.info({ deadLetterId: r && r.id, noteId }, 'dead_letter_recorded');
+    // Once per lost piece of work (migration 027): the alert counts dead_letter_recorded.
+    if (r && r.duplicate) log.info({ deadLetterId: r.id, noteId }, 'dead_letter_already_recorded');
+    else log.info({ deadLetterId: r && r.id, noteId, reason: 'embed_failed' }, 'dead_letter_recorded');
   } catch (dlErr) {
     log.error({ err: dlErr, noteId }, 'dead_letter_record_failed');
   }

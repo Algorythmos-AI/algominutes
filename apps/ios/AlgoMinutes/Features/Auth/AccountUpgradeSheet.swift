@@ -24,7 +24,7 @@ struct AccountUpgradeSheet: View {
                 Text("Save your notes")
                     .font(Typography.title())
                     .foregroundStyle(Theme.heading)
-                Text(Self.message(paywallEnabled: AppConfig.paywallEnabled))
+                Text(Self.message(trialing: env.billing.isTrialing))
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
@@ -92,7 +92,7 @@ struct AccountUpgradeSheet: View {
                 Link("Terms of Service", destination: LegalLinks.terms)
             }
             .font(Typography.body(12))
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(Theme.muted)
         }
         .padding(Theme.Spacing.xl)
         // The upgrade preserved the uid — once no longer anonymous, close.
@@ -116,10 +116,10 @@ struct AccountUpgradeSheet: View {
         }
     }
 
-    /// The prompt's promise. The trial is only mentioned when there's a paywall
-    /// it leads to.
-    static func message(paywallEnabled: Bool) -> String {
+    /// The prompt's promise. The trial is mentioned only to someone in one: production starts with the trial
+    /// off (until DeviceCheck is set up there), and a reviewer must never be promised one.
+    static func message(trialing: Bool) -> String {
         let save = "Create a free account so your recordings and summaries are backed up and available on your other devices."
-        return paywallEnabled ? save + " Your 7-day trial keeps going — nothing is lost." : save + " Nothing is lost."
+        return trialing ? save + " Your 7-day trial keeps going — nothing is lost." : save + " Nothing is lost."
     }
 }

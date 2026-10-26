@@ -43,15 +43,27 @@ enum RecorderWatchdog {
         divergedSince: Date?,
         lastResumeAttempt: Date?,
         alreadyWarned: Bool,
+        inCall: Bool = false,
+        userPaused: Bool = false,
         now: Date
     ) -> Decision {
-        guard weThinkWeAreRecording, !recorderIsRunning else { return .doNothing }
+        // Paused by the user (RELEASE.md rev 11, H13): the recorder is meant to be still. Not a divergence, so
+        // nothing resumes it, warns about it or gives up on it; only Resume or End does.
+        guard weThinkWeAreRecording, !recorderIsRunning, !userPaused else { return .doNothing }
         // First tick of a divergence: the caller stamps `divergedSince` and the
         // grace period starts from there.
         guard let divergedSince else { return .doNothing }
 
         let diverged = now.timeIntervalSince(divergedSince)
         guard diverged >= graceSeconds else { return .doNothing }
+
+        // A call holds the microphone (RELEASE.md rev 11, N1). Nothing can be captured and nothing is lost by
+        // waiting, so it waits for as long as the call lasts: giving up at 300 s split one meeting into two notes.
+        // It doesn't fight the call for the session either; the call's end (or the app's return) resumes it,
+        // and the usual timing starts again from there.
+        if inCall {
+            return Decision(attemptResume: false, warnUser: !alreadyWarned, giveUp: false)
+        }
 
         if diverged >= giveUpSeconds {
             return Decision(attemptResume: false, warnUser: false, giveUp: true)
@@ -66,6 +78,19 @@ enum RecorderWatchdog {
         }
         return decision
     }
+
+    /// The time recorded up to `until`: what was banked, plus the live span since `startedAt` (none if paused).
+    static func banked(accumulated: Int, startedAt: Date?, until: Date) -> Int {
+        guard let startedAt else { return accumulated }
+        return accumulated + max(0, Int(until.timeIntervalSince(startedAt)))
+    }
+
+    /// Shown while the user has paused: said plainly, as "paused" alone reads as harmless.
+    static let pausedByUserNotice = "Paused. Nothing is being captured until you resume."
+
+    /// Shown while a call holds the microphone: the recording is paused, not over.
+    static let pausedForCallNotice =
+        "Paused for your call. Recording carries on when the call ends; nothing is being captured until then."
 
     /// Shown while the recorder is not actually capturing. Deliberately concrete
     /// about the consequence — "paused" alone reads as harmless.

@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@algominutes/ai": "*",
-    "@google-cloud/storage": "^8.2.0",
+    "@google-cloud/storage": "^8.4.0",
     "express": "^4.21.2",
-    "mammoth": "^1.9.1",
-    "pdfjs-dist": "^6.3.289",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.4.299",
     "tesseract.js": "^7.0.0"
   },
   "engines": {

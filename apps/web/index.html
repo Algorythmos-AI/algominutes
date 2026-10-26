@@ -10,7 +10,8 @@
     <link rel="icon" href="/app/logo.svg" type="image/svg+xml" />
     <link rel="icon" type="image/png" sizes="32x32" href="/app/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/app/apple-touch-icon.png" />
-    <link rel="manifest" href="/app/manifest.webmanifest" />
+    <!-- With cookies: on staging, Vercel Authentication would otherwise redirect the manifest to its login. -->
+    <link rel="manifest" href="/app/manifest.webmanifest" crossorigin="use-credentials" />
   </head>
   <body>
     <noscript><p>AlgoMinutes on the web needs JavaScript. Turn it on in your browser, or use the AlgoMinutes app.</p></noscript>

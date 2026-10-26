@@ -38,6 +38,21 @@ final class AppEnvironment {
 
     /// Global user-facing alert (parity with the web `alert(...)` calls).
     var alertMessage: String?
+    /// The microphone was refused when recording started (RootView offers Settings).
+    var micPermissionDenied = false
+    /// The recording screen, while a recording carries on without it (RELEASE.md rev 11, H13 / UX4: Back
+    /// minimises and never stops). `isRecordingScreenVisible` is set by the screen itself; a tap on the bar
+    /// that stands in for it, or an outcome it has to present, asks for it back.
+    var isRecordingScreenVisible = false
+    var recordingScreenRequested = false
+    /// The recorder stopped itself, or failed, while the screen was away: the screen presents that when it
+    /// comes back, instead of starting a new recording.
+    var recorderOutcomePending = false
+    /// Ask whether to turn on notifications before iOS's one-shot prompt
+    /// (RecordingView shows it; RELEASE.md PR 10a).
+    var isNotificationPrePromptPending = false
+    /// Once per launch: "Not now" isn't asked again until the next launch.
+    private var notificationPrePromptShown = false
 
     /// A capture of another app finished without this session's pre-recording
     /// notice (it was started from Control Center). RootView asks the user to
@@ -88,11 +103,14 @@ final class AppEnvironment {
         // relaunch in the background gets to do it.
         backgroundUploads.onOrphanUploadFinished = { [weak self] in
             guard let self else { return }
-            let bgTask = UIApplication.shared.beginBackgroundTask(withName: "finish-upload")
+            // Before the first await, with an expiration handler (BackgroundActivity):
+            // the old one had none, and a task left running when time ran out gets
+            // the app killed.
+            let activity = BackgroundActivity.begin("finish-upload")
             Task { @MainActor in
                 AppLog.info("bg_upload_finished_while_away_resuming")
                 await self.resumePendingUploads()
-                if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) }
+                activity.end()
             }
         }
     }
@@ -139,6 +157,20 @@ final class AppEnvironment {
         }
     }
 
+    /// Save a summary edited by hand. Through the api, not Firestore: Postgres is the record, and an edit
+    /// written only to the mirror would leave search and chat on the old text.
+    func saveSummary(noteId: String, summary: Summary) async -> Bool {
+        guard let wsId = auth.workspaceId else { return false }
+        do {
+            try await api.updateNote(noteId: noteId, workspaceId: wsId, summary: summary)
+            return true
+        } catch {
+            AppLog.error("edit_summary_failed: \(error)")
+            alertMessage = "Couldn't save the summary. Please try again."
+            return false
+        }
+    }
+
     /// Start a recording, handing the audio session over from playback first.
     ///
     /// Every recording start goes through here rather than calling
@@ -158,7 +190,17 @@ final class AppEnvironment {
         // Only now — the microphone prompt has resolved, so the two never stack,
         // and the request lands at the one moment its purpose is obvious. Asking
         // at launch gets denied, and iOS only ever asks once.
-        Task { await RecordingNotifier.requestAuthorizationIfNeeded() }
+        // A short explanation comes first, so iOS's one-shot prompt isn't spent
+        // on a question nobody has had explained to them.
+        Task {
+            let status = await RecordingNotifier.authorizationStatus()
+            if RecordingNotifier.shouldPrePrompt(status: status, askedThisLaunch: notificationPrePromptShown) {
+                notificationPrePromptShown = true
+                isNotificationPrePromptPending = true
+            } else {
+                await RecordingNotifier.requestAuthorizationIfNeeded()
+            }
+        }
         // A9.6: the recorder is now actually capturing — the funnel's entry.
         billing.onFirstRecordingStarted()
     }
@@ -236,6 +278,12 @@ final class AppEnvironment {
         // Don't carry one user's recording-consent acknowledgement into the
         // next user's session on a shared device.
         consentGate.reset()
+        // Nor their capture of another app's audio, waiting in the App Group:
+        // the next account to sign in would have claimed it (H11/L8).
+        if broadcast.hasFinishedCapture {
+            AppLog.error("sign_out_discarding_broadcast_capture")
+            broadcast.discardFinished()
+        }
         let pending = recordingStore.allPending()
         if !pending.isEmpty {
             AppLog.error("sign_out_discarding_pending count=\(pending.count)")
@@ -369,16 +417,17 @@ final class AppEnvironment {
             return
         }
 
-        // Upload confirmed — the bytes are safely in Storage, so the local copy
-        // is no longer the only copy and can go. The doc records where they are
-        // (the player asks the api to sign it).
+        // The doc records where the bytes are (the player asks the api to sign it).
+        // The local copy stays until the kickoff is settled (RELEASE.md rev 11, L2): an app
+        // killed between here and the kickoff left a note with no Postgres row, which nothing
+        // ever re-ran; with the file kept, the next launch re-sends it (resumePendingUploads).
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-        if kind == .recording {
-            recordingStore.remove(fileURL: fileURL)
-        }
 
+        // The kickoff finishes even if the user has left the app (L10).
+        let kickoffTime = BackgroundActivity.begin("upload-kickoff")
+        defer { kickoffTime.end() }
         do {
-            try await api.processAudio(.init(
+            let answer = try await api.processAudio(.init(
                 noteId: noteId,
                 workspaceId: wsId,
                 type: type,
@@ -386,7 +435,16 @@ final class AppEnvironment {
                 mimeType: mimeType,
                 durationSec: durationSeconds.map { Double($0) }
             ))
+            if kind == .recording { recordingStore.remove(fileURL: fileURL) }
+            if APIClient.kickoffWasHeld(answer) {
+                // Held for minutes: kept, and processed once there are minutes. Offer them now.
+                AppLog.info("process_kickoff_held noteId=\(noteId)")
+                billing.onQuotaExceeded()
+            }
         } catch {
+            // The server decided (out of minutes, too long): the audio is in Storage and Try
+            // again uses it, so the copy can go. A network failure keeps it for the next launch.
+            if kind == .recording, Self.kickoffWasDecided(error) { recordingStore.remove(fileURL: fileURL) }
             // Out of minutes opens the paywall (the recording is safe and can
             // process once Pro); a refusal the server recorded is left as is.
             handleKickoffFailure(
@@ -437,6 +495,8 @@ final class AppEnvironment {
         case .claim:
             break
         }
+        // This capture uses up the acknowledgement that covered it (H11/L9).
+        if broadcast.hasFinishedCapture { consentGate.consume(.appAudio) }
         switch await broadcast.claim() {
         case .none:
             break
@@ -450,8 +510,12 @@ final class AppEnvironment {
                 durationSeconds: seconds,
                 title: "App audio \(Self.dateStamp())"
             )
+            // More than one capture can be waiting (a second broadcast before the app was opened): each
+            // becomes its own note, and each needs its own acknowledgement, so go round again.
+            if broadcast.hasFinishedCapture { await claimBroadcastCapture() }
         case .failed(let message):
             alertMessage = message
+            if broadcast.hasFinishedCapture { await claimBroadcastCapture() }
         }
     }
 
@@ -459,7 +523,7 @@ final class AppEnvironment {
     /// the app: record that on the consent gate, then make the note.
     func confirmBroadcastConsent() async {
         isBroadcastConsentPending = false
-        consentGate.acknowledge()
+        consentGate.acknowledge(for: .appAudio)
         await claimBroadcastCapture()
     }
 
@@ -542,7 +606,7 @@ final class AppEnvironment {
     private func reupload(
         noteId: String, type: NoteType, pending: RecordingStore.PendingRecording, retryAttempt: Int?
     ) async -> NotesRepository.RetryOutcome {
-        guard let wsId = auth.workspaceId else { return .blocked(message: "Not signed in") }
+        guard let wsId = auth.workspaceId else { return .blocked(message: "Please sign in to do that.") }
         let fileURL = recordingStore.audioURL(for: pending)
 
         var fields: [String: Any] = [
@@ -594,16 +658,24 @@ final class AppEnvironment {
         }
 
         notes.updateNote(id: noteId, fields: ["storagePath": storagePath])
-        recordingStore.remove(fileName: pending.fileName)
 
+        let kickoffTime = BackgroundActivity.begin("reupload-kickoff")
+        defer { kickoffTime.end() }
         do {
-            try await api.processAudio(.init(
+            let answer = try await api.processAudio(.init(
                 noteId: noteId, workspaceId: wsId, type: type,
                 storagePath: storagePath, mimeType: pending.mimeType, retryAttempt: retryAttempt,
                 durationSec: pending.durationSeconds.map { Double($0) }
             ))
+            // Settled: the copy can go (kept until now, rev 11 L2, as in uploadAndProcess).
+            recordingStore.remove(fileName: pending.fileName)
+            if APIClient.kickoffWasHeld(answer) {
+                AppLog.info("reupload_process_kickoff_held noteId=\(noteId)")
+                billing.onQuotaExceeded()
+            }
             return .queued
         } catch {
+            if Self.kickoffWasDecided(error) { recordingStore.remove(fileName: pending.fileName) }
             return .blocked(message: handleKickoffFailure(
                 error, noteId: noteId, event: "reupload_process_kickoff_failed",
                 fallback: "Could not start processing. Please try again."
@@ -615,6 +687,20 @@ final class AppEnvironment {
     /// the save sheet so its prefilled value and the fallback cannot drift —
     /// TitleDeriver.isPlaceholder matches this exact shape to decide whether
     /// an auto-generated title may be replaced by one derived from the gist.
+    /// Whether a failed kickoff was the server's decision (a refusal it answered), rather than
+    /// the request not getting through. A decided one is final until the user acts, so the local
+    /// copy can go; one that didn't get through is re-sent on the next launch (rev 11, L2).
+    nonisolated static func kickoffWasDecided(_ error: Error) -> Bool {
+        switch error {
+        case APIError.quotaExceeded, APIError.updateRequired:
+            return true
+        case APIError.http(let status, _):
+            return (400..<500).contains(status) && status != 408 && status != 429
+        default:
+            return false
+        }
+    }
+
     nonisolated static func defaultRecordingName(_ date: Date = Date()) -> String {
         "Session_\(dateStamp(date))"
     }

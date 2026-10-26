@@ -24,6 +24,58 @@ locals {
       severity  = "ERROR"
       doc       = "A note or account purge failed 10 times and is no longer retried: a deleted note's doc or audio still exists. See the sweep's storage_purge_stuck log line (purgeId, noteId, lastError) and runbook 'Deletion'."
     }
+    # An upload no note followed within 30 minutes (RELEASE.md rev 11, L2): the app died between the upload and
+    # the kickoff. Reported once per upload by the sweep.
+    upload_never_processed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "A recording was uploaded but never processed: no note followed it within 30 minutes (upload_never_processed: uid, noteId, storagePath). The audio is in Cloud Storage. The app re-sends the kickoff when it next runs; if the user doesn't come back, contact them, or run it from the admin tools."
+    }
+    # The notetaker (RELEASE.md PR 19). The purge worker re-logs an exhausted purge every 30 minutes, so the
+    # alert stays open until a person acts.
+    recall_purge_exhausted = {
+      threshold = 0
+      window    = "1800s"
+      severity  = "ERROR"
+      doc       = "Recall's copy of a notetaker recording wasn't confirmed deleted after 10 attempts. See recall_purge_exhausted (recallBotId, reason, traceId) and the recall_media_delete_failed lines under the same traceId. Recall's 72-hour retention deletes it regardless; delete it by hand (POST /api/v1/bot/{id}/delete_media/) and confirm the recall_purges row."
+    }
+    notetaker_media_never_arrived = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recorded a meeting but its media never reached us in 6 hours, so its note failed (nothing charged, Recall's copy queued to go). See notetaker_media_never_arrived (meetingBotId, noteId, endedAt): check Recall's status for the bot and the webhook endpoint (an endpoint Recall disabled stops every event)."
+    }
+    notetaker_reconcile_step_failed = {
+      threshold = 0
+      window    = "1800s"
+      severity  = "ERROR"
+      doc       = "A whole step of the notetaker reconcile failed (it couldn't read what to re-drive): the steps after it still ran, this one didn't. See notetaker_reconcile_step_failed (step, err): usually Postgres."
+    }
+    cancel_bot_gave_up = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A user's cancel of a notetaker couldn't reach Recall in 5 attempts (dead-lettered). A bot already recording keeps recording until its reservation runs out: make it leave by hand (POST /api/v1/bot/{id}/leave_call/) and see cancel_bot_gave_up (meetingBotId, err)."
+    }
+    notetaker_reconcile_item_failed = {
+      threshold = 2
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "The notetaker reconcile couldn't re-drive some work more than twice in an hour. See notetaker_reconcile_item_failed (meetingBotId or recallEventId, err): usually Recall or the queue unreachable."
+    }
+    notetaker_ingest_gave_up = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recording couldn't be made ours in 5 attempts: its note failed (or, if its run was already queued, only Recall's copy was left to the purge worker). See notetaker_ingest_gave_up (noteId, meetingBotId, err) and the notetaker_ingest_attempt_failed lines under the same traceId."
+    }
+    notetaker_ingested_audio_missing = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A notetaker recording was ingested but its audio object is gone from the recordings bucket, so its note can't run. See notetaker_ingested_audio_missing (noteId, storagePath) and the ingest's traceId."
+    }
     delete_account_incomplete = {
       threshold = 0
       window    = "900s"
@@ -48,6 +100,32 @@ locals {
       severity  = "WARNING"
       doc       = "More than two notes failed in 30 minutes. See note_failed (noteId, reason) and the transcoder/summarizer logs under the same traceId."
     }
+    gemini_transient = {
+      threshold = 20
+      window    = "900s"
+      severity  = "WARNING"
+      doc       = "Gemini answered overloaded (429/503) more than 20 times in 15 minutes. From 2026-10-20 the ladder has one Sydney model, so the summarize queue retries for about an hour before a note fails. Check Vertex status for australia-southeast1 and the gemini_transient lines (model, attempt); if it persists, consider Provisioned Throughput (DECISIONS 2026-09-28)."
+    }
+    # Plan rev 12 S2: one Gemini model in Sydney since 2026-10-20, busy at near-zero traffic on 10-06 (9
+    # transient, 5 timeouts, 1 exhausted in a day).
+    gemini_rate_limited = {
+      threshold = 5
+      window    = "900s"
+      severity  = "WARNING"
+      doc       = "Vertex refused Gemini calls for quota (429 RESOURCE_EXHAUSTED) more than 5 times in 15 minutes: the project's quota or Google's shared capacity in australia-southeast1, not an outage. Check the project's Vertex quota page for the model (gemini_rate_limited: model, location); if it's the quota, ask for more, or for Provisioned Throughput (DECISIONS 2026-09-28)."
+    }
+    gemini_model_exhausted = {
+      threshold = 2
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "A Gemini model used all its attempts more than twice in 15 minutes. With one model on the ladder, each is a task attempt that failed: Cloud Tasks retries it (10 attempts), but notes are slowing toward failure. See gemini_model_exhausted (model) and the gemini_transient / gemini_rate_limited lines under the same traceId."
+    }
+    gemini_attempt_timeout = {
+      threshold = 3
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "More than three Gemini calls in an hour hung past their cap and were asked again (gemini_attempt_timeout: model, latencyMs, attemptTimeoutMs; plan rev 12 S3). Notes still finish, later. Many in a row means Vertex in australia-southeast1 is stalling: check its status, and the gemini_ok latencyMs that follow."
+    }
     gemini_model_unavailable = {
       threshold = 0
       window    = "3600s"
@@ -60,11 +138,121 @@ locals {
       severity  = "ERROR"
       doc       = "The api or billing couldn't reach Postgres to admit a caller, so it answered 503. Check Cloud SQL, the VPC connector and the connection budget."
     }
+    # App Store subscriptions (RELEASE.md PR 26: billing's /tasks/reconcile-apple, hourly).
+    apple_server_api_unauthorized = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Apple refused billing's App Store Server API key (401/403), so no subscription is being checked with Apple: a missed renewal or refund notification stays wrong. Check the app-store-server-key secret, APPLE_ISSUER_ID and APPLE_KEY_ID against App Store Connect (Users and Access, Integrations, In-App Purchase). See apple_server_api_unauthorized (status, errorCode)."
+    }
+    apple_reconcile_failed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Billing's Apple reconcile checked nothing this run: it couldn't read its key from Secret Manager (step key: the app-store-server-key secret or run-billing's access to it) or which subscriptions to check (step list: usually Postgres). See apple_reconcile_failed (step, err)."
+    }
+    apple_reconcile_item_failed = {
+      threshold = 5
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "Billing's Apple reconcile couldn't check more than five subscriptions in an hour (Apple unreachable, 429/5xx, or an answer that wasn't Apple's). They're due again next run. See apple_reconcile_item_failed (userId, railId, status, errorCode, code)."
+    }
+    # Deleted accounts' Stripe subscriptions (RELEASE.md PR 28b: billing's /tasks/cancel-stripe).
+    stripe_cancellation_stuck = {
+      threshold = 0
+      window    = "86400s"
+      severity  = "ERROR"
+      doc       = "A deleted account's Stripe subscription couldn't be cancelled in 10 attempts, so Stripe may still be charging someone who deleted their account. Cancel it by hand in the Stripe dashboard (stripeSubscriptionId in stripe_cancellation_stuck), then set cancelled_at on its stripe_cancellations row. See the stripe_cancel_failed lines (reason) for why."
+    }
+    stripe_cancel_not_configured = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Deleted accounts' Stripe subscriptions are waiting to be cancelled, and billing has no Stripe key to cancel them with, so charges continue. Restore STRIPE_SECRET_KEY for billing. See stripe_cancel_not_configured (due)."
+    }
+    stripe_cancel_run_failed = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "Billing's Stripe cancellation run couldn't read what to cancel (usually Postgres), so it cancelled nothing this run. See stripe_cancel_run_failed (err)."
+    }
     readiness_db_unreachable = {
       threshold = 0
       window    = "300s"
       severity  = "ERROR"
       doc       = "/health/ready couldn't reach Postgres. Check Cloud SQL, the VPC connector and the connection budget."
+    }
+
+    # RELEASE.md PR 15b.
+    # A task out of attempts whose failure could be lost: its dead letter wasn't written, or its note wasn't
+    # marked failed (the user sees it stuck). dead_letter_recorded, above, covers the ones that were.
+    dead_letter_record_failed = {
+      threshold = 0
+      window    = "300s"
+      severity  = "ERROR"
+      doc       = "A task ran out of attempts and its dead letter couldn't be written: the failure is only in this log line (CLAUDE.md §2). See dead_letter_record_failed (noteId, queue, err), fix the cause, and re-drive or fail the note by hand."
+    }
+    sweep_dead_letter_failed = {
+      threshold = 0
+      window    = "900s"
+      severity  = "ERROR"
+      doc       = "The sweep couldn't dead-letter a note it gave up on. See sweep_dead_letter_failed (noteId, err)."
+    }
+    transcoder_last_attempt_dead_letter_only = {
+      threshold = 0
+      window    = "600s"
+      severity  = "ERROR"
+      doc       = "A transcode ran out of attempts and was dead-lettered, but its note couldn't be marked failed (reason: postgres_error, missing_ids or note_not_failed): the user sees it stuck. Review it in the admin view; the sweep fails a stuck note after STUCK_NOTE_MS."
+    }
+    summarizer_last_attempt_dead_letter_only = {
+      threshold = 0
+      window    = "600s"
+      severity  = "ERROR"
+      doc       = "A summary ran out of attempts and was dead-lettered, but its note couldn't be marked failed: the user sees it stuck. Review it in the admin view; the sweep fails a stuck note after STUCK_NOTE_MS."
+    }
+    # SLO 4 (docs/SLO.md): the summarizer logs a pipeline run slower than half its recording's length plus 5 min.
+    time_to_summary_slo_missed = {
+      threshold = 2
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "More than two recordings in an hour took longer than SLO 4 allows (half the recording's length plus 5 minutes). See time_to_summary_slo_missed (noteId, timeToSummarySec, recordingSec, objectiveSec) and the run's traceId: queue backlog, STT latency or Gemini retries (gemini_transient)."
+    }
+    # The daily spend cap (DAILY_SPEND_CAP_AUD): at 80%, and reached (every recording is then refused until the
+    # day turns, with its minutes refunded).
+    spend_cap_approaching = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "Today's paid audio has passed 80% of DAILY_SPEND_CAP_AUD. At the cap, every new recording is refused (and refunded) until tomorrow. Decide whether to raise the cap (Terraform daily_spend_cap_aud)."
+    }
+    spend_cap_tripped = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "ERROR"
+      doc       = "The daily spend cap was reached: recordings are refused, with their minutes refunded, until the day turns. See spend_cap_tripped (spent, cap). Raise daily_spend_cap_aud and apply if it's real use; look for a runaway if it isn't."
+    }
+    # The sweep found pipeline work lost after its claim and enqueued it again (RELEASE.md PR 5c): recovered,
+    # but something lost it.
+    lost_work_redriven = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "The sweep re-drove a summary or an embed whose task was lost after its claim (lost_work_redriven: noteId, worker). The note recovers; find why the task was lost (redrive_enqueue_failed, chunk_complete_enqueue_failed, a crash) under the note's traceId."
+    }
+    # A Gemini answer was cut off at maxOutputTokens (RELEASE.md rev 11, LM4): the summary salvaged what it
+    # could, and the chapters, which come last, are what goes.
+    gemini_output_truncated = {
+      threshold = 0
+      window    = "3600s"
+      severity  = "WARNING"
+      doc       = "A Gemini answer hit maxOutputTokens (gemini_output_truncated: model, promptTokens, outputTokens, thoughtsTokens). The note is ready, but its summary may have lost its chapters. If thoughtsTokens is large, lower the thinking budget; if outputTokens is at the cap, raise it (services/summarizer/src/handler.js)."
+    }
+    # Someone asked for help in the app (Settings → Help & Support, or a bad transcript/summary report).
+    support_request_created = {
+      threshold = 0
+      window    = "300s"
+      severity  = "WARNING"
+      doc       = "A user sent a support request. Find it by id: SELECT * FROM support_requests WHERE id = '<supportId>'. Answer within one working day (docs/runbooks/testflight-internal.md, Triage feedback)."
     }
   }
 }

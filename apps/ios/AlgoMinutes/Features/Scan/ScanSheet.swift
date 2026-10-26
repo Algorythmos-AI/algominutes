@@ -18,6 +18,8 @@ struct ScanSheet: View {
     @State private var busyLabel: String?
     @State private var errorMessage: String?
     @State private var shareItem: ShareItem?
+    /// The text of a save that failed, kept so Try again sends the same note (no offline queue in 1.0).
+    @State private var pendingSave: PendingTextNote?
 
     var body: some View {
         ScrollView {
@@ -67,6 +69,18 @@ struct ScanSheet: View {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(Typography.body(13))
                         .foregroundStyle(Theme.heading)
+                }
+
+                if let pending = pendingSave, busyLabel == nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Your text is kept here until you close this.")
+                            .font(Typography.body(12))
+                            .foregroundStyle(Theme.muted)
+                        Button("Try again") {
+                            Task { await save(pending) }
+                        }
+                        .font(Typography.heading(15, weight: .bold))
+                    }
                 }
             }
             .padding(24)
@@ -175,6 +189,7 @@ struct ScanSheet: View {
     private func ocrImages(_ images: [UIImage]) async {
         busyLabel = "Reading text…"
         errorMessage = nil
+        pendingSave = nil
         defer { busyLabel = nil }
         do {
             var texts: [String] = []
@@ -182,15 +197,7 @@ struct ScanSheet: View {
                 texts.append(try await ScanService.recognizeText(in: image))
             }
             let combined = texts.joined(separator: "\n\n")
-            let jpegData = images.first.flatMap { $0.jpegData(compressionQuality: 0.85) }
-            await createTextNote(
-                text: combined,
-                source: .scannedImage,
-                sourceData: jpegData,
-                sourceExt: "jpg",
-                sourceMime: "image/jpeg",
-                fallbackTitle: nil
-            )
+            await createTextNote(text: combined, source: .scannedImage, fallbackTitle: nil)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not read that image. Please try again."
         }
@@ -199,6 +206,7 @@ struct ScanSheet: View {
     private func extractDocument(_ pickedURL: URL) async {
         busyLabel = "Reading document…"
         errorMessage = nil
+        pendingSave = nil
         defer { busyLabel = nil }
 
         let secured = pickedURL.startAccessingSecurityScopedResource()
@@ -217,60 +225,33 @@ struct ScanSheet: View {
         do {
             let extraction = try await ScanService.extractText(fromFileAt: localURL)
             let fileTitle = localURL.deletingPathExtension().lastPathComponent
-            // Read the source bytes off the main actor — files can be large.
-            let sourceData = await Task.detached(priority: .utility) { try? Data(contentsOf: localURL) }.value
-            await createTextNote(
-                text: extraction.text,
-                source: extraction.source,
-                sourceData: sourceData,
-                sourceExt: localURL.pathExtension.lowercased(),
-                sourceMime: UTType(filenameExtension: localURL.pathExtension.lowercased())?.preferredMIMEType ?? "application/octet-stream",
-                fallbackTitle: fileTitle.isEmpty ? nil : fileTitle
-            )
+            await createTextNote(text: extraction.text, source: extraction.source, fallbackTitle: fileTitle.isEmpty ? nil : fileTitle)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not extract text from that file."
         }
     }
 
-    /// Parity with processDocumentTextFile + finalizeExtractedTextNote.
-    private func createTextNote(
-        text: String,
-        source: TextNoteBuilder.SourceKind,
-        sourceData: Data?,
-        sourceExt: String,
-        sourceMime: String,
-        fallbackTitle: String?
-    ) async {
+    /// Saved by the server (POST /v1/notes/text): Postgres first, then the doc the note list reads, so the note is
+    /// inside retention, backups, search and export like every other note. The server builds it from the text.
+    /// The source file isn't uploaded: the note is its text.
+    private func createTextNote(text: String, source: TextNoteSource, fallbackTitle: String?) async {
         guard let wsId = env.auth.workspaceId else { return }
-        let placeholder = fallbackTitle ?? "Import \(AppEnvironment.dateStamp())"
-        let built = TextNoteBuilder.build(text: text, source: source)
+        await save(PendingTextNote(workspaceId: wsId, text: text, source: source, title: fallbackTitle))
+    }
 
-        let noteId: String
-        do {
-            noteId = try env.notes.createNote(fields: [
-                "title": built.title ?? placeholder,
-                "status": NoteStatus.ready.rawValue,
-                "type": NoteType.scanText.rawValue,
-                "duration": 0,
-                "rawText": built.rawText,
-                "wordCount": built.wordCount,
-                "transcriptTruncated": built.transcriptTruncated,
-                "transcript": built.transcript.map { ["speaker": $0.speaker, "text": $0.text, "time": $0.time] },
-                "summary": [
-                    "gist": built.gist,
-                    "actionItems": [String](),
-                    "keyDecisions": [String](),
-                ],
-            ])
-        } catch {
-            errorMessage = "Could not save the scan. Please try again."
-            return
+    private func save(_ note: PendingTextNote) async {
+        busyLabel = "Saving…"
+        errorMessage = nil
+        defer { busyLabel = nil }
+        switch await TextNoteSave.save(note, api: env.api) {
+        case .saved(let noteId):
+            pendingSave = nil
+            onDone(noteId)
+        case .failed(let message, let retry):
+            AppLog.error("text_note_save_failed: \(message)")
+            errorMessage = message
+            pendingSave = retry
         }
-
-        // The source image isn't uploaded: the note is its text. (It used to go to
-        // Firebase's default bucket, which account deletion never purged.)
-
-        onDone(noteId)
     }
 
     private func buildPdf(from images: [UIImage]) async {

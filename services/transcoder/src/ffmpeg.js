@@ -7,24 +7,42 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function runChild(cmd, args, { stdoutSink } = {}) {
+// A hung ffmpeg would otherwise hold the transcoder until Cloud Run's 3600s
+// request timeout. Each run is killed after its budget: a probe gets a minute; a
+// decode or transcode of up to 4 h of audio gets 20 min. A kill is an
+// infrastructure fault (isInfraFault), so the task is retried, not the note failed.
+const PROBE_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = Number(process.env.FFMPEG_TIMEOUT_MS) || 20 * 60_000;
+
+function runChild(cmd, args, { stdoutSink, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
     child.stdout.on('data', (b) => {
       const s = b.toString();
       if (stdoutSink) stdoutSink(s);
       else stdout += s;
     });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on('close', (code, signal) => {
+      clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr });
       else {
-        const err = new Error(`${cmd} exited ${code}${signal ? ` (${signal})` : ''}: ${stderr.slice(0, 500)}`);
+        const why = timedOut ? `timed out after ${timeoutMs}ms` : `exited ${code}${signal ? ` (${signal})` : ''}`;
+        const err = new Error(`${cmd} ${why}: ${stderr.slice(0, 500)}`);
         err.code = code;
         err.signal = signal || null;
+        err.timedOut = timedOut;
         reject(err);
       }
     });
@@ -47,7 +65,7 @@ async function probeDuration(localPath) {
       '-show_entries', 'format=duration,format_name',
       '-of', 'default=noprint_wrappers=1',
       localPath,
-    ]);
+    ], { timeoutMs: PROBE_TIMEOUT_MS });
     const fields = {};
     for (const line of String(stdout).split('\n')) {
       const eq = line.indexOf('=');
@@ -132,6 +150,9 @@ function cleanupTempDir(noteId) {
 }
 
 module.exports = {
+  runChild,
+  isInfraFault,
+  PROBE_TIMEOUT_MS,
   probeDuration,
   transcodeToFlac,
   extractChunk,

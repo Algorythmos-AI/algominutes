@@ -40,15 +40,39 @@ final class BroadcastHandoff {
         self.now = now
     }
 
-    /// A finished capture is waiting to be claimed.
-    var hasFinishedCapture: Bool {
+    /// Captures that finished before a later broadcast started, and weren't claimed in between (RELEASE.md
+    /// rev 11, N4). The extension lists them (`unclaimedBroadcastFiles`) instead of dropping their pointer,
+    /// which used to orphan the file and lose the meeting. Claimed first, oldest first.
+    static let unclaimedKey = "unclaimedBroadcastFiles"
+
+    private var unclaimed: [String] { defaults?.stringArray(forKey: Self.unclaimedKey) ?? [] }
+
+    /// Take the oldest unclaimed capture off the list, if there is one.
+    private func takeUnclaimed() -> String? {
+        var list = unclaimed
+        guard !list.isEmpty else { return nil }
+        let first = list.removeFirst()
+        if list.isEmpty { defaults?.removeObject(forKey: Self.unclaimedKey) } else { defaults?.set(list, forKey: Self.unclaimedKey) }
+        return first
+    }
+
+    /// The latest capture finished and waits to be claimed.
+    private var hasLatestFinished: Bool {
         defaults?.string(forKey: "state") == "finished" && defaults?.string(forKey: "completedBroadcastFile") != nil
     }
 
+    /// A finished capture is waiting to be claimed: the latest, or an earlier one a later broadcast kept.
+    var hasFinishedCapture: Bool { !unclaimed.isEmpty || hasLatestFinished }
+
     /// Throws away a finished capture without making a note (the user declined
-    /// to confirm they had permission to record it).
+    /// to confirm they had permission to record it). One at a time, the same one `claim()` would take.
     func discardFinished() {
         guard let d = defaults, hasFinishedCapture else { return }
+        if let earlier = takeUnclaimed() {
+            try? FileManager.default.removeItem(atPath: earlier)
+            AppLog.info("broadcast_discarded earlier=true")
+            return
+        }
         if let path = d.string(forKey: "completedBroadcastFile") {
             try? FileManager.default.removeItem(atPath: path)
         }
@@ -94,36 +118,19 @@ final class BroadcastHandoff {
     /// whose extension died, and clears it.
     func claim() async -> Pickup {
         guard let d = defaults else { return .none }
+        // An earlier capture a later broadcast kept: taken off the list before any work, so no other call
+        // picks it up meanwhile. The latest capture's own state is left as it is, for the next call.
+        if let earlier = takeUnclaimed() {
+            AppLog.info("broadcast_claiming_earlier remaining=\(unclaimed.count)")
+            return await pickUp(path: earlier)
+        }
         switch d.string(forKey: "state") {
         case "finished":
             guard let path = d.string(forKey: "completedBroadcastFile") else { return .none }
             // Claimed before any work, so no other call picks it up meanwhile.
             d.removeObject(forKey: "completedBroadcastFile")
             d.set("claimed", forKey: "state")
-            let source = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: source.path) else {
-                AppLog.error("broadcast_file_missing")
-                return .failed(message: "The captured audio couldn't be found.")
-            }
-            let destination = store.makeRecordingURL(ext: "m4a")
-            do {
-                let seconds = try await Self.mixDown(source: source, destination: destination)
-                try? FileManager.default.removeItem(at: source)
-                AppLog.info("broadcast_claimed seconds=\(seconds)")
-                return .ready(fileURL: destination, durationSeconds: seconds)
-            } catch {
-                // Keep the capture rather than lose it: move it as recorded (one
-                // track may go untranscribed, which beats no note at all).
-                AppLog.error("broadcast_mix_failed: \(error.localizedDescription)")
-                do {
-                    try FileManager.default.moveItem(at: source, to: destination)
-                    let seconds = Int((try? await AVURLAsset(url: destination).load(.duration).seconds) ?? 0)
-                    return .ready(fileURL: destination, durationSeconds: seconds)
-                } catch {
-                    AppLog.error("broadcast_move_failed: \(error.localizedDescription)")
-                    return .failed(message: "The captured audio couldn't be saved.")
-                }
-            }
+            return await pickUp(path: path)
         case "error":
             let message = d.string(forKey: "errorMessage") ?? "The capture didn't record any audio."
             d.set("claimed", forKey: "state")
@@ -143,6 +150,34 @@ final class BroadcastHandoff {
                 return .failed(message: "The capture stopped unexpectedly and couldn't be saved.")
             }
             return .none
+        }
+    }
+
+    /// A finished capture at `path`, mixed into the recording store.
+    private func pickUp(path: String) async -> Pickup {
+        let source = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            AppLog.error("broadcast_file_missing")
+            return .failed(message: "The captured audio couldn't be found.")
+        }
+        let destination = store.makeRecordingURL(ext: "m4a")
+        do {
+            let seconds = try await Self.mixDown(source: source, destination: destination)
+            try? FileManager.default.removeItem(at: source)
+            AppLog.info("broadcast_claimed seconds=\(seconds)")
+            return .ready(fileURL: destination, durationSeconds: seconds)
+        } catch {
+            // Keep the capture rather than lose it: move it as recorded (one
+            // track may go untranscribed, which beats no note at all).
+            AppLog.error("broadcast_mix_failed: \(error.localizedDescription)")
+            do {
+                try FileManager.default.moveItem(at: source, to: destination)
+                let seconds = Int((try? await AVURLAsset(url: destination).load(.duration).seconds) ?? 0)
+                return .ready(fileURL: destination, durationSeconds: seconds)
+            } catch {
+                AppLog.error("broadcast_move_failed: \(error.localizedDescription)")
+                return .failed(message: "The captured audio couldn't be saved.")
+            }
         }
     }
 

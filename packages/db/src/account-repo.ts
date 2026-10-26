@@ -15,7 +15,11 @@
  *     events (their foreign keys only NULL the uid, keeping the content);
  *   - the users row is deleted, and ON DELETE CASCADE removes the rest
  *     (workspaces and their notes, transcripts, summaries, embeddings,
- *     memberships, subscriptions, push tokens, terms, upload sessions).
+ *     memberships, subscriptions, push tokens, terms, upload sessions);
+ *   - a Stripe subscription is recorded for cancellation first (RELEASE.md
+ *     PR 28b): the cascade takes its row, and Stripe would go on charging.
+ *     Billing's cancel-stripe task cancels it. An App Store subscription can't
+ *     be cancelled by us: the apps say so before the deletion.
  * The purges then remove each note's mirror doc and audio
  * (storage-purges-repo). deleteAccountMirror removes the account's own
  * Firestore docs, and the route deletes the Auth user last.
@@ -34,6 +38,7 @@ import { getPool, isPostgresEnabled, withTx } from './db';
 import { listStoragePurgesForAccount, runStoragePurge } from './storage-purges-repo';
 import { recordNoteDeleted } from './deleted-notes-repo';
 import { AccountDeletedError, ensureUser, ensureWorkspaceAccess } from './workspace-access';
+import { purgeRecallBotsOf } from './meetings-repo';
 import noteStorage from '@algominutes/ai/note-storage.cjs';
 
 const { purgeWorkspaceObjects, cancelResumableUpload } = noteStorage as {
@@ -50,6 +55,10 @@ export interface AccountDeletion {
   uploadSessionUris: string[];
   notesQueued: number;
   membershipsDeleted: number;
+  /** Recall copies of the account's meetings queued for deletion (and live bots for leaving). */
+  recallPurges: number;
+  /** Stripe subscriptions recorded for billing to cancel (stripe_cancellations). */
+  stripeCancellations: number;
 }
 
 export async function deleteAccountData(
@@ -107,6 +116,20 @@ export async function deleteAccountData(
         );
         await recordNoteDeleted(client, { noteId: n.id, workspaceId: n.workspace_id });
       }
+      // The account's notetakers cascade away with it (the user's, and any in a
+      // workspace it owns), but Recall's copies of their meetings mustn't
+      // outlive it, and one still in a meeting must leave: queued here, with
+      // the deletion, for the purge worker (recall_purges outlives the bots).
+      // Every one of them locked, in id order, before its purge row: failNotetaker takes a bot before its
+      // purge row, so the same order can't deadlock; and a create task attaching a Recall bot to one of them
+      // waits, then finds it gone and removes the Recall bot itself.
+      const bots = await client.query<{ recall_bot_id: string | null; status: string; status_rank: number; trace_id: string | null }>(
+        `SELECT recall_bot_id, status, status_rank, trace_id FROM meeting_bots
+          WHERE uid = $1 OR workspace_id = ANY($2::text[])
+          ORDER BY id FOR UPDATE`,
+        [input.uid, ownedIds],
+      );
+      const recallPurges = await purgeRecallBotsOf(client, bots.rows, 'account_deleted');
       await client.query(
         'DELETE FROM dead_letter WHERE workspace_id = ANY($1::text[]) OR note_id = ANY($2::text[])',
         [workspaceIds, notes.rows.map((n) => n.id)],
@@ -114,6 +137,13 @@ export async function deleteAccountData(
       await client.query('DELETE FROM support_requests WHERE uid = $1', [input.uid]);
       await client.query('DELETE FROM analytics_events WHERE uid = $1', [input.uid]);
       const members = await client.query('SELECT 1 FROM workspace_members WHERE uid = $1', [input.uid]);
+      // Before the cascade takes the subscription row: its Stripe subscription, to be cancelled (PR 28b).
+      const stripe = await client.query(
+        `INSERT INTO stripe_cancellations (stripe_subscription_id, trace_id)
+           SELECT stripe_subscription_id, $2 FROM subscriptions WHERE uid = $1 AND stripe_subscription_id IS NOT NULL
+         ON CONFLICT (stripe_subscription_id) DO NOTHING`,
+        [input.uid, input.traceId ?? null],
+      );
       const gone = await client.query('DELETE FROM users WHERE uid = $1', [input.uid]);
       return {
         // A real account row went (not just the placeholder made above).
@@ -122,6 +152,8 @@ export async function deleteAccountData(
         uploadSessionUris,
         notesQueued: notes.rows.length,
         membershipsDeleted: members.rowCount ?? 0,
+        recallPurges,
+        stripeCancellations: stripe.rowCount ?? 0,
       };
     },
     { log, fields: { userId: input.uid } },
@@ -210,6 +242,7 @@ export async function admitUser(
       );
     }, { log, fields: { userId: user.uid } });
   } catch (err) {
+    // silent-catch-ok: AccountDeletedError is the answer 'deleted'; the auth middleware logs auth_account_deleted and refuses the token
     if (err instanceof AccountDeletedError) {
       admitted.delete(user.uid);
       return 'deleted';
@@ -309,7 +342,8 @@ export async function finishAccountDeletion(
       log.error({ err, userId: uid }, 'delete_account_auth_failed');
       return { complete: false, errors: 0, authDeleted: false, authFailed: true };
     }
-    // An earlier attempt already did it.
+    // An earlier attempt already did it (or Auth is pointed at the wrong project: say so either way).
+    log.info({ userId: uid }, 'delete_account_auth_already_gone');
   }
   // The account is gone. Failing to mark the tombstone complete must not
   // turn that into a 500 for the user: log it, and the sweeper (which re-runs

@@ -5,12 +5,12 @@
 # first `terraform init`. Terraform cannot create the bucket that holds its
 # own state. One-time bootstrap (run as an Owner, e.g. algorythmos.france@gmail.com):
 #
-#   gcloud storage buckets create gs://algominutes-prod-tfstate \
-#     --project=algominutes-prod \
+#   gcloud storage buckets create gs://algominutes-production-tfstate \
+#     --project=algominutes-production \
 #     --location=australia-southeast1 \
 #     --uniform-bucket-level-access \
 #     --public-access-prevention
-#   gcloud storage buckets update gs://algominutes-prod-tfstate --versioning
+#   gcloud storage buckets update gs://algominutes-production-tfstate --versioning
 #
 # ⚠️ STATE CONTAINS THE DB PASSWORD (and the random_password) in plaintext.
 # It MUST live in this GCS bucket and MUST NEVER be committed to git. GCS
@@ -19,7 +19,7 @@
 
 terraform {
   backend "gcs" {
-    bucket = "algominutes-prod-tfstate"
+    bucket = "algominutes-production-tfstate"
     prefix = "terraform/state"
   }
 }

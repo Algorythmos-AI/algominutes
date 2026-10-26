@@ -17,23 +17,27 @@ import rateLimitModule from '@algominutes/ai/rate-limit.cjs';
 // server.ts-derived routes (ESM).
 import { updateNoteRoute } from './update-note.js';
 import { deleteNoteRoute } from './delete-note.js';
+import { textNoteRoute } from './text-notes.js';
 import { noteAudioUrlRoute } from './note-audio.js';
 import { setNoteSpeakersRoute } from './set-note-speakers.js';
 
 // functions/index.js HTTP handlers, ported to services/api (ESM).
 import { processIntelligenceRoute } from './process-intelligence.js';
 import { regenerateSummaryRoute } from './regenerate-summary.js';
-import { shareCreateRoute, shareRevokeRoute } from './shares.js';
+import { shareCreateRoute, shareRevokeRoute, shareListRoute } from './shares.js';
 import { noteFeedbackRoute } from './note-feedback.js';
+import { actionItemStatusRoute } from './action-item.js';
 import { clientErrorRoute } from './client-error.js';
 
 // A7 async-UX + reliability and A9 entitlement routes (ESM).
 import { createUploadSessionRoute, getUploadStatusRoute, completeUploadRoute } from './uploads.js';
 import { registerPushTokenRoute } from './push-register.js';
 import { entitlementRoute } from './entitlement.js';
+import { redeemInviteRoute } from './beta.js';
 import { appConfigRoute } from './app-config.js';
+import { createMeetingBotRoute, cancelMeetingBotRoute } from './meetings.js';
 import { trackEventRoute } from './events.js';
-import { setRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
+import { setRetentionRoute, getRetentionRoute, acceptTermsRoute, supportRoute } from './compliance.js';
 import { listDeadLettersRoute, resolveDeadLetterRoute } from './admin-dead-letters.js';
 
 // Ported Functions handlers (framework-agnostic CJS; default-import interop).
@@ -53,7 +57,7 @@ const { handleSharedNote } = sharedNoteModule;
 const { pool } = pgQueryModule;
 const readPool = pool;
 const { pingPool } = pgConfigModule;
-const { userRateLimit } = rateLimitModule;
+const { userRateLimit, aiRouteLimits } = rateLimitModule;
 
 const DOCX_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -107,6 +111,9 @@ export function buildRouter() {
   // ── /v1/notes/delete ── the single deletion path (notes-repo deleteNote) ──
   router.post('/notes/delete', authed, wrap(deleteNoteRoute));
 
+  // ── POST /v1/notes/text ── a scan, a PDF, an imported file: Postgres first (notes-repo createTextNote) ──
+  router.post('/notes/text', authed, wrap(textNoteRoute));
+
   // ── POST /v1/notes/audio-url ── a 15-minute signed URL for playback ──────
   router.post('/notes/audio-url', authed, wrap(noteAudioUrlRoute));
 
@@ -118,6 +125,9 @@ export function buildRouter() {
 
   // ── POST /v1/notes/feedback ── functions/index.js noteFeedback ─────────
   router.post('/notes/feedback', authed, wrap(noteFeedbackRoute));
+
+  // ── POST /v1/notes/action-items/status ── tick or untick an action item ──
+  router.post('/notes/action-items/status', authed, wrap(actionItemStatusRoute));
 
   // ── POST /v1/export ── functions/export-note.cjs (binary DOCX) ─────────
   router.post('/export', authed, wrap(async (req, res) => {
@@ -131,7 +141,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/search ── functions/search-and-chat.cjs handleSearch ──────
-  router.post('/search', authed, wrap(async (req, res) => {
+  router.post('/search', authed, ...aiRouteLimits('search'), wrap(async (req, res) => {
     const result = await handleSearch({
       uid: req.uid,
       body: req.body,
@@ -144,7 +154,7 @@ export function buildRouter() {
   }));
 
   // ── POST /v1/chat ── functions/search-and-chat.cjs handleChatStream (SSE) ─
-  router.post('/chat', authed, wrap(async (req, res) => {
+  router.post('/chat', authed, ...aiRouteLimits('chat'), wrap(async (req, res) => {
     await handleChatStream({
       uid: req.uid,
       body: req.body,
@@ -159,6 +169,9 @@ export function buildRouter() {
 
   // ── POST /v1/shares/revoke ── functions/index.js shareRevoke ───────────
   router.post('/shares/revoke', authed, wrap(shareRevokeRoute));
+
+  // ── POST /v1/shares/list ── the caller's links for a note (rev 11, H20) ─
+  router.post('/shares/list', authed, wrap(shareListRoute));
 
   // ── POST /v1/shares/read ── functions/shared-note.cjs (PUBLIC, no auth) ─
   //
@@ -216,11 +229,26 @@ export function buildRouter() {
 
   // ── A9.1 GET /v1/entitlement ── entitlement.js ──────────────────────────
   router.get('/entitlement', authed, wrap(entitlementRoute));
+
+  // Beta invite codes (docs/plans/RELEASE.md PR 2). Codes carry 75 random bits,
+  // so guessing is hopeless; this per-user budget (10 an hour) keeps a script
+  // from hammering Postgres with attempts anyway.
+  router.post(
+    '/beta/redeem',
+    authed,
+    userRateLimit({ limit: 10, windowMs: 60 * 60_000, event: 'rate_limited_redeem' }),
+    wrap(redeemInviteRoute),
+  );
   // Server-side feature switches (broadcast capture's kill switch).
   router.get('/config', authed, wrap(appConfigRoute));
+  // ── online meetings (docs/plans/MEETINGS.md) ── meetings.js ─────────────
+  // 503 feature_disabled until the notetaker is built and switched on.
+  router.post('/meetings/bots', authed, wrap(createMeetingBotRoute));
+  router.post('/meetings/bots/:botId/cancel', authed, wrap(cancelMeetingBotRoute));
   // ── A9.6 POST /v1/events ── events.js ──────────────────────────────────
   router.post('/events', authed, wrap(trackEventRoute));
   // ── A10 compliance ── compliance.js ────────────────────────────────────
+  router.get('/account/retention', authed, wrap(getRetentionRoute));
   router.post('/account/retention', authed, wrap(setRetentionRoute));
   router.post('/account/accept-terms', authed, wrap(acceptTermsRoute));
   router.post('/support', authed, wrap(supportRoute));

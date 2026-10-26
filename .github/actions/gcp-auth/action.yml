@@ -1,0 +1,38 @@
+name: Authenticate to Google Cloud (WIF, two attempts)
+description: >-
+  google-github-actions/auth through Workload Identity Federation, asked twice. GitHub's OIDC token exchange
+  fails now and then with "Unable to retrieve Identity Pool subject token" (docs/BLOCKERS.md, 2026-10-06: four
+  rollout preflights after #376 failed on it, and re-running them passed), so a first failure pauses 20 s and
+  asks once more instead of failing the deploy. A second failure fails the step as before. Every job of
+  deploy-staging.yml and deploy-production.yml that talks to GCP authenticates through this action, after its
+  checkout (a local action needs the repository on disk). The auth action's own outputs and env
+  (GOOGLE_APPLICATION_CREDENTIALS, CLOUDSDK_AUTH_ACCESS_TOKEN, ...) reach the job's later steps as before.
+inputs:
+  workload_identity_provider:
+    description: The Workload Identity provider resource name (vars.GCP_WIF_PROVIDER).
+    required: true
+  service_account:
+    description: The service account to impersonate (vars.GCP_DEPLOYER_SA).
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: first
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      # A failure here does not fail the job: the next two steps try once more.
+      continue-on-error: true
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+    - if: steps.first.outcome == 'failure'
+      name: Pause before the second attempt
+      shell: bash
+      run: |
+        echo "::warning::The WIF token exchange failed once; asking again in 20 s (a transient GitHub OIDC failure, docs/BLOCKERS.md 2026-10-06)"
+        sleep 20
+    - if: steps.first.outcome == 'failure'
+      name: Second attempt
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}

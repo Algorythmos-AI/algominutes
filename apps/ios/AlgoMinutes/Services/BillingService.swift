@@ -34,19 +34,33 @@ final class BillingService {
     /// summary — never at launch.
     var isAccountPromptPresented = false
 
-    private let api: APIClient
-    private let defaults = UserDefaults.standard
+    /// The beta's way to minutes (docs/plans/RELEASE.md PR 8): an invite code.
+    /// With the paywall off it's what a quota hit, or a recording with no
+    /// minutes left, opens; Settings opens it too.
+    var isInviteSheetPresented = false
 
-    init(api: APIClient) {
+    private let api: APIClient
+    private let defaults: UserDefaults
+    /// PAYWALL_ENABLED for this build; injectable so tests can try both.
+    private let paywallEnabled: Bool
+    /// INVITE_CODES_ENABLED: the beta's invite codes. Off in the App Store build, where nothing opens the sheet.
+    let inviteCodesEnabled: Bool
+
+    init(api: APIClient, paywallEnabled: Bool = AppConfig.paywallEnabled, inviteCodesEnabled: Bool = AppConfig.inviteCodesEnabled, defaults: UserDefaults = .standard) {
         self.api = api
+        self.inviteCodesEnabled = inviteCodesEnabled
+        self.defaults = defaults
+        self.paywallEnabled = paywallEnabled
         self.store = StoreKitService(api: api)
         // When StoreKit forwards a verified receipt, re-read the authoritative
         // entitlement and note the purchase in the funnel.
         store.onEntitlementMayHaveChanged = { [weak self] in
             guard let self else { return }
-            let wasActive = self.entitlement?.state == .active
+            // A purchase is the entitlement becoming a subscription. A grant was
+            // `active` already, and isn't one (RELEASE.md PR 26b).
+            let wasSubscribed = self.entitlement?.isSubscription == true
             await self.refresh()
-            if !wasActive, self.entitlement?.state == .active {
+            if !wasSubscribed, self.entitlement?.isSubscription == true {
                 await self.track(.purchase)
             }
         }
@@ -57,15 +71,16 @@ final class BillingService {
     /// Re-read the entitlement from the server. Safe to call often.
     func refresh() async {
         do {
-            let previous = entitlement?.state
+            let previous = entitlement
             let next = try await api.fetchEntitlement()
             entitlement = next
-            // A9.6 `cancellation`: a lapse out of a paid/trial state into the
-            // free floor (or expiry) is the funnel's churn signal. Best-effort —
-            // the server's webhook is the authoritative cancellation record.
-            if let previous, previous == .active || previous == .trialing,
+            // A9.6 `cancellation`: a lapse out of a subscription or the trial into
+            // the free floor (or expiry) is the funnel's churn signal. A grant
+            // running out isn't. Best-effort — the server's webhook is the
+            // authoritative cancellation record.
+            if let previous, previous.isSubscription || previous.state == .trialing,
                next.state == .expired || next.state == .freeFloor {
-                await track(.cancellation, props: ["from": previous.rawValue])
+                await track(.cancellation, props: ["from": previous.state.rawValue])
             }
         } catch {
             // TODO(A9-infra): endpoint not live yet — leave prior value in place
@@ -95,20 +110,97 @@ final class BillingService {
     var isTrialing: Bool { entitlement?.state == .trialing }
     var trialDaysRemaining: Int? { entitlement?.trialDaysRemaining }
 
+    /// No minutes left right now, by the server's count. Unknown (not fetched
+    /// yet) or unmetered counts as having minutes, so a slow network never
+    /// blocks anyone.
+    var hasNoMinutesLeft: Bool {
+        guard let remaining = entitlement?.remainingMinutes else { return false }
+        return remaining <= 0
+    }
+
     /// Gate helper for metered call sites. If allowed, returns true. If gated,
-    /// presents the paywall and returns false so the caller aborts.
+    /// presents the paywall (or, with no paywall, the invite code sheet) and
+    /// returns false so the caller aborts.
     func guardMeteredAction() -> Bool {
-        // With no paywall to offer, let the server decide: a refused kickoff
-        // marks the note with the quota message (KickoffFailure).
-        if canStartMeteredAction || !AppConfig.paywallEnabled { return true }
+        if !paywallEnabled {
+            // No products on sale: an invite code is the way to minutes. Ask for
+            // it before a recording the server would refuse, rather than after
+            // the meeting. Otherwise the server decides.
+            if hasNoMinutesLeft, inviteCodesEnabled {
+                presentInviteSheet()
+                return false
+            }
+            return true
+        }
+        if canStartMeteredAction { return true }
         presentPaywall(.meteredGate)
         return false
+    }
+
+    func presentInviteSheet() {
+        guard inviteCodesEnabled else {
+            AppLog.info("invite_sheet_suppressed")
+            return
+        }
+        isInviteSheetPresented = true
+    }
+
+    /// Set while the paywall closes to make way for the invite code sheet: one
+    /// sheet can't present while another is still dismissing, so the paywall's
+    /// `onDismiss` opens it (`paywallDismissed()`).
+    private(set) var inviteAfterPaywall = false
+
+    /// From a paywall with nothing to sell (no products in App Store Connect yet,
+    /// or the App Store unreachable) to the beta's other way to minutes, an
+    /// invite code (RELEASE.md PR 27), rather than a dead end.
+    func switchToInviteSheet() {
+        guard inviteCodesEnabled else { return }
+        inviteAfterPaywall = true
+        isPaywallPresented = false
+    }
+
+    /// The paywall sheet's `onDismiss`.
+    func paywallDismissed() {
+        guard inviteAfterPaywall else { return }
+        inviteAfterPaywall = false
+        presentInviteSheet()
+    }
+
+    // MARK: - Pre-purchase check
+
+    /// Whether a purchase may start. StoreKit buys on the device, where the server
+    /// can't refuse it, and a store's charge can't be refunded from our side, so
+    /// the entitlement is read again first: anyone already subscribed, on any
+    /// store, isn't sold a second subscription (RELEASE.md PR 26b's check, on iOS).
+    /// A grant or the trial isn't a subscription, and can buy.
+    enum PurchaseGate: Equatable {
+        case allowed
+        /// Managed in the App Store (so the paywall offers Manage), or billed on the web.
+        case alreadySubscribed(managedInAppStore: Bool)
+    }
+
+    func purchaseGate() async -> PurchaseGate {
+        await refresh()
+        guard let e = entitlement, e.isSubscription else { return .allowed }
+        // The event only: which store bills them is the entitlement's, and stays off the device log
+        // (CodeQL swift/cleartext-logging); the server logs its own refusal with the rail.
+        AppLog.info("purchase_refused_subscribed")
+        return .alreadySubscribed(managedInAppStore: e.isManagedInAppStore)
+    }
+
+    /// Redeem an invite code; the entitlement it produced becomes the current
+    /// one. Throws the api's error (see `APIClient.redeemInvite`).
+    @discardableResult
+    func redeemInvite(_ code: String) async throws -> RedeemInviteResponse {
+        let result = try await api.redeemInvite(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+        entitlement = result.entitlement
+        return result
     }
 
     // MARK: - Paywall / prompt triggers
 
     func presentPaywall(_ context: PaywallContext) {
-        guard AppConfig.paywallEnabled else {
+        guard paywallEnabled else {
             AppLog.info("paywall_suppressed context=\(context.rawValue)")
             return
         }
@@ -125,20 +217,36 @@ final class BillingService {
     }
 
     /// Called when a note's summary is first shown (NoteDetailView, ready state).
-    /// Fires `first_summary_viewed` once, then — NOT at launch — presents the
-    /// A6.3 account prompt to a still-anonymous guest, or the paywall if the
-    /// user is already past the trial. During the trial we never hard-sell.
+    /// The guest has seen their first summary and has not yet been asked to make an account.
+    /// Kept across launches: an app closed on the summary still asks, the next time a note is left.
+    static let accountPromptOwedKey = "account_prompt.owed_after_first_summary"
+
+    /// Fires `first_summary_viewed` once, then, NOT at launch, owes a still-anonymous
+    /// guest the A6.3 account prompt, or presents the paywall if the user is already
+    /// past the trial. During the trial we never hard-sell.
+    ///
+    /// The prompt used to go up here, the moment the summary was on screen: over the
+    /// first note anyone had made, before they had read a word of it. It now waits
+    /// until they leave the note (`onLeftNote`; RELEASE.md rev 11, H16).
     func onFirstSummaryViewed(isGuest: Bool) {
         let firstTime = fireOnce(.firstSummaryViewed, key: "analytics.first_summary_viewed")
         guard firstTime else { return }
         if isGuest {
             // Convert the guest to a permanent account first (A6.3). The sheet
             // itself links onward to Pro plans.
-            isAccountPromptPresented = true
+            defaults.set(true, forKey: Self.accountPromptOwedKey)
         } else if entitlement?.gatesMeteredActions == true {
             // Already past the reverse trial: surface the paywall now.
             presentPaywall(.firstSummary)
         }
+    }
+
+    /// The note screen has gone: ask the guest who has read their first summary to make
+    /// an account, once. Someone who made an account in the meantime is not asked.
+    func onLeftNote(isGuest: Bool) {
+        guard defaults.bool(forKey: Self.accountPromptOwedKey) else { return }
+        defaults.removeObject(forKey: Self.accountPromptOwedKey)
+        if isGuest { isAccountPromptPresented = true }
     }
 
     /// Called when the server refuses a metered action (402 quota_exceeded).
@@ -147,7 +255,8 @@ final class BillingService {
     func onQuotaExceeded(entitlement: EntitlementResponse? = nil) {
         if let entitlement { self.entitlement = entitlement }
         Task { await track(.quotaHit) }
-        presentPaywall(.quotaHit)
+        // With no paywall, the invite code sheet is where minutes come from.
+        if paywallEnabled { presentPaywall(.quotaHit) } else { presentInviteSheet() }
     }
 
     // MARK: - Analytics

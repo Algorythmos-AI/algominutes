@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserPlus, X } from 'lucide-react';
+import { reportCrash } from '../lib/crashReport';
 
 interface Props {
   open: boolean;
@@ -40,7 +41,9 @@ export default function AccountPrompt({
       // On success the host observes onAuthStateChanged (user no longer
       // anonymous) and closes this prompt.
     } catch (err) {
+      // silent-catch-ok: credential-already-in-use is the user's other account, and the prompt says so; anything else is reported
       const code = (err as { code?: string } | null)?.code;
+      if (code !== 'auth/credential-already-in-use') reportCrash('account.upgrade', err);
       setError(
         code === 'auth/credential-already-in-use'
           ? 'That account is already registered. Sign out and sign back in with it to continue.'

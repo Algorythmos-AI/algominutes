@@ -41,6 +41,19 @@ if [ -n "${GOOGLE_SERVICE_INFO_PLIST_B64:-}" ]; then
   fi
   PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" "$PLIST")
   echo "GoogleService-Info.plist for Firebase project: ${PROJECT_ID}"
+  # The plist must belong to the backend the scheme archives against: the
+  # AlgoMinutes scheme is Release (production), AlgoMinutes-Staging is staging.
+  # A Release archive carrying staging's plist would ship an App Store build
+  # signed in to the test project.
+  case "${CI_XCODE_SCHEME:-}" in
+    AlgoMinutes) EXPECTED_PROJECT=algominutes-production ;;
+    AlgoMinutes-Staging) EXPECTED_PROJECT=algominutes-staging ;;
+    *) EXPECTED_PROJECT="" ;;
+  esac
+  if [ -n "$EXPECTED_PROJECT" ] && [ "$PROJECT_ID" != "$EXPECTED_PROJECT" ]; then
+    echo "error: scheme ${CI_XCODE_SCHEME} archives against ${EXPECTED_PROJECT}, but GoogleService-Info.plist is for ${PROJECT_ID}. Set this workflow's GOOGLE_SERVICE_INFO_PLIST_B64 to that project's plist."
+    exit 1
+  fi
 else
   echo "No GOOGLE_SERVICE_INFO_PLIST_B64: fine for tests (Debug); Staging and Release archives need it."
 fi

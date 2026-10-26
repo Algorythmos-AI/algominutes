@@ -10,8 +10,8 @@ enum ExportScope: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .summary: return "AI Summary"
-        case .transcript: return "Transcription"
+        case .summary: return "Summary"
+        case .transcript: return "Transcript"
         case .both: return "AI Summary & Transcription"
         }
     }
