@@ -220,9 +220,10 @@ the services it affects.
 ## 3b. Production deploys (`.github/workflows/deploy-production.yml`)
 
 `deploy-production.yml` runs exactly deploy-staging's jobs for pushes to `main` (a promotion from
-`integration`), in the `production` GitHub Environment. `tests/deploy-production.test.ts` fails if the
-two workflows differ in anything but the environment, the gate variable, the smoke's API-key secret and
-the failure issue's label (`prod-deploy-failed`), so a change to one is made to both.
+`integration`), in the `production` GitHub Environment, plus one job of its own, `approve`, where the owner
+approves the deploy once. `tests/deploy-production.test.ts` fails if the two workflows differ in anything but
+the environment, the gate variable, the smoke's API-key secret, the failure issue's label (`prod-deploy-failed`)
+and that job, so a change to one is made to both.
 
 It does nothing until all of these exist, and it cannot touch staging while they don't: until the
 `production` Environment and its variables exist, its first job (`changes`) reads the repo's staging
@@ -233,7 +234,7 @@ Before `DEPLOY_PRODUCTION` is set, not even that runs: every job is skipped. Do 
 (plan rev 12 Stage 2), in this order:
 
 1. `bash scripts/github-settings.sh --apply`, if it hasn't run since the `production` Environment was added:
-   the Environment accepts `main` only, and the owner approves each run.
+   both production Environments accept `main` only, and the owner is `production-approval`'s reviewer (below).
 2. The Environment's variables, from the prod Terraform outputs. They are set **on the Environment**,
    where they override the repo's staging values of the same name; the gate variable is the repo's:
 
@@ -272,8 +273,62 @@ runs), so a hung job fails naming itself. A job that never starts ("waiting", se
 What the owner creates, in one list. Variables, on the `production` Environment: `GCP_PROJECT_ID`
 (`algominutes-production`), `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`. Secret, on the Environment:
 `PROD_FIREBASE_API_KEY`. Repository variable, last: `DEPLOY_PRODUCTION` (`true`). Optional, on the
-repository, shared with staging: `SWEEPER_HOLD` (`true` keeps `db-sweep` paused). The Environment itself,
-with `main` as its only branch and the owner as its reviewer, comes from `scripts/github-settings.sh`.
+repository, shared with staging: `SWEEPER_HOLD` (`true` keeps `db-sweep` paused). The Environments
+themselves (`production` and `production-approval`, both with `main` as their only branch, the owner as
+`production-approval`'s reviewer) come from `scripts/github-settings.sh`.
+
+### One approval per production deploy
+
+GitHub asks a reviewer once **per job** that names an Environment with required reviewers, and an approval
+doesn't carry to the run's next job (`deployment: false` doesn't help: reviewers still apply). With the
+reviewer on `production`, every stage waited for the owner: the first prod deploy (run 40299616305, 2026-10-26)
+holds 10 approval records. So the reviewer is on its own Environment:
+
+| Environment | Branches | Reviewer | Holds | Named by |
+|---|---|---|---|---|
+| `production-approval` | `main` | the owner | nothing | `approve` only |
+| `production` | `main` | none | prod's variables and `PROD_FIREBASE_API_KEY` | `changes` and every job that reaches GCP |
+
+How a deploy runs: `changes` checks the target project (as before), then `approve` waits for the owner while
+`ci-gate` waits for CI. Approve it in the run's page (**Review deployments**), or:
+
+```bash
+run=<run id>
+env_id=$(gh api repos/Algorythmos-AI/algominutes/environments/production-approval --jq .id)
+gh api -X POST "repos/Algorythmos-AI/algominutes/actions/runs/$run/pending_deployments" \
+  -F "environment_ids[]=$env_id" -f state=approved -f comment=ship
+```
+
+Nothing that reaches GCP starts before both: `build` needs `approve`, and every later job needs `build`.
+`approve` then reads this run's approvals back from the API and fails unless one names
+`production-approval`, so a missing Environment (GitHub creates one, unprotected, when a job names it) or one
+that lost its reviewer stops the deploy instead of running it unasked. Rejecting the approval fails the run
+without opening a `prod-deploy-failed` issue (a decision, not an outage).
+
+Who can deploy, and from where, is unchanged: a prod token still needs `refs/heads/main` (which takes only
+promotion PRs, merged by the owner) and the `production` Environment claim, and now also this workflow file
+(`job_workflow_ref` must be `.github/workflows/deploy-production.yml@refs/heads/main`,
+`wif_allowed_workflows` in `infra/terraform/envs/prod/main.tf`). That last condition replaces what the
+reviewer on `production` did for any other workflow on `main`: with no reviewer there, only this file's jobs,
+which all wait for `approve`, can mint a token. **Re-run failed jobs** reuses the run's approval (the same commit
+and workflow); **Re-run all jobs** asks again.
+
+**Switching over, in this order** (the reviewer comes off `production` last, so no deploy is ever unapproved):
+
+1. The owner applies the reviewed WIF plan (only the provider's `attribute_condition` changes; nothing else,
+   no Cloud Run image): `terraform apply reviewed-<sha>.tfplan` in `infra/terraform/envs/prod`. Check it:
+   `gcloud iam workload-identity-pools providers describe github --workload-identity-pool=github-prod
+   --location=global --project=algominutes-production --format='value(attributeCondition)'` ends with the
+   `job_workflow_ref` clause.
+2. `bash scripts/github-settings.sh --apply`: creates `production-approval` with the owner as reviewer.
+   `production` keeps its reviewer, because `main`'s `deploy-production.yml` has no `approve` job yet (the
+   script reads it from `main`, and says so).
+3. The promotion that carries this change to `main`. Its deploy still asks per job (one last time), plus once
+   for `approve`.
+4. `bash scripts/github-settings.sh --apply` again: `main` now has the `approve` job, so the reviewer comes off
+   `production`. From the next deploy on, one approval.
+
+To undo: put the owner back as `production`'s reviewer (the run asks per job again; nothing else changes).
 
 ## 4. Give internal testers minutes
 
