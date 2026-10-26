@@ -78,21 +78,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # Bounded, with one more try, as ci.yml's ffmpeg step: on 10-23 this step hung for 39 minutes in apt and
-      # the job was killed at its 40-minute limit with no step having failed. Green nights take 38-54 s.
-      # Each fetch has its own timeout, man-db's slow trigger is off, and the output is kept so a hang names
-      # its stage.
-      - name: Install Chromium and ffmpeg (the fake microphone)
-        timeout-minutes: 12
-        run: |
-          sudo rm -f /var/lib/man-db/auto-update
-          apt() { sudo timeout 300 apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 "$@"; }
-          install() {
-            timeout 300 npx playwright install --with-deps chromium \
-              && apt update -q && apt install -y -q --no-install-recommends ffmpeg
-          }
-          install || { echo "::warning::the browser or ffmpeg install failed or hung; trying once more"; sleep 10; install; }
-          ffmpeg -version | head -1
+      # Neither install waits on apt's mirror any more: on 10-23 apt hung here for 39 minutes, and on 10-26 for 5
+      # (fonts for --with-deps), then the retry hit the dpkg lock. Both come from the cache; each action says how.
+      # Same 12 minutes in all as before.
+      - name: Install Chromium
+        timeout-minutes: 6
+        uses: ./.github/actions/playwright-chromium
+      - name: Install ffmpeg (the fake microphone)
+        timeout-minutes: 6
+        uses: ./.github/actions/ffmpeg
       - name: The journey
         timeout-minutes: 30
         env:

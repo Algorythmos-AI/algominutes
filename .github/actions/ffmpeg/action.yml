@@ -1,0 +1,86 @@
+name: ffmpeg 6.1.1 (a pinned static build, cached)
+description: >-
+  Puts ffmpeg and ffprobe 6.1.1 on PATH without apt. apt's mirror (azure.archive.ubuntu.com) has stalled this
+  install for 5 to 39 minutes at a time (2026-10-01, 10-23, 10-26: runs 40286851064 and 40288408438), failing
+  jobs whose tests were never reached. The build is mwader/static-ffmpeg 6.1.1 (the version apt gave Ubuntu
+  24.04's runners, so the tests see the same ffmpeg), a single static layer pinned by its sha256: the cache key
+  carries the digest and every run checks it again before unpacking. A cache miss downloads the layer once from
+  Docker Hub's CDN; only if that fails too does it fall back to apt, bounded and tried twice. Either way it then
+  encodes what the tests and the e2e scripts use (AAC in ADTS, Opus in WebM, FLAC) and probes each, so a build
+  missing a codec fails here, not in a test. Needs the repository checked out (a local action).
+runs:
+  using: composite
+  steps:
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/ffmpeg-static
+        # The layer's digest (LAYER below): a different build is a different key.
+        key: ffmpeg-static-6.1.1-6a50276a3bb9cfb113cdea2914393956f9fa74f0878398001bb0c811974170d6
+    - id: download
+      if: steps.restore.outputs.cache-hit != 'true'
+      name: Download ffmpeg (cache miss)
+      shell: bash
+      env:
+        REPO: mwader/static-ffmpeg
+        # The linux/amd64 image of mwader/static-ffmpeg@sha256:a44cd22b260c527f54e99517186a209b805d0a2319e0886d356e840f62a72132
+        # (tag 6.1.1) has this one layer: /ffmpeg, /ffprobe and their docs.
+        LAYER: 6a50276a3bb9cfb113cdea2914393956f9fa74f0878398001bb0c811974170d6
+      run: |
+        dir=~/.cache/ffmpeg-static
+        mkdir -p "$dir"
+        # Chained with &&: inside `if`, bash's -e is off, and a partial download must never be kept.
+        fetch() {
+          local token
+          token=$(curl -fsS --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$REPO:pull" | jq -er .token) \
+            && timeout 300 curl -fsSL --connect-timeout 10 --retry 3 --retry-all-errors -H "Authorization: Bearer $token" \
+              -o "$dir/layer.tgz.part" "https://registry-1.docker.io/v2/$REPO/blobs/sha256:$LAYER" \
+            && echo "$LAYER  $dir/layer.tgz.part" | sha256sum -c --quiet \
+            && mv "$dir/layer.tgz.part" "$dir/layer.tgz"
+        }
+        if fetch || { echo "::warning::the ffmpeg download failed; trying once more"; sleep 10; fetch; }; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # Docker Hub is down too: apt, bounded as before. timeout runs under sudo, so a hang kills apt-get itself
+        # and the second try isn't locked out by the first. man-db's slow trigger is off.
+        rm -f "$dir/layer.tgz.part"
+        echo "::warning::the static ffmpeg couldn't be downloaded; installing Ubuntu's with apt"
+        sudo rm -f /var/lib/man-db/auto-update
+        apt() { sudo timeout 300 apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 "$@"; }
+        install() { apt update -q && apt install -y -q --no-install-recommends ffmpeg; }
+        install || { echo "::warning::ffmpeg install failed or hung; trying once more"; sleep 10; install; }
+    # Saved at once, not at the job's end, so a red test still leaves the next run a cached ffmpeg. A save that
+    # loses a race with another job's is only a warning.
+    - if: steps.download.outputs.ok == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      continue-on-error: true
+      with:
+        path: ~/.cache/ffmpeg-static
+        key: ffmpeg-static-6.1.1-6a50276a3bb9cfb113cdea2914393956f9fa74f0878398001bb0c811974170d6
+    - name: Put ffmpeg on PATH, and check it encodes what the tests use
+      shell: bash
+      env:
+        LAYER: 6a50276a3bb9cfb113cdea2914393956f9fa74f0878398001bb0c811974170d6
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        dir=~/.cache/ffmpeg-static
+        if [ -f "$dir/layer.tgz" ]; then
+          echo "$LAYER  $dir/layer.tgz" | sha256sum -c --quiet
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xzf "$dir/layer.tgz" -C "$RUNNER_TEMP/ffmpeg" ffmpeg ffprobe
+          export PATH="$RUNNER_TEMP/ffmpeg:$PATH"
+          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+          echo "ffmpeg: the pinned static build ($([ "$CACHE_HIT" = true ] && echo 'from the cache' || echo 'downloaded'))"
+        else
+          echo "ffmpeg: Ubuntu's, from apt"
+        fi
+        ffmpeg -hide_banner -version | head -1
+        t=$(mktemp -d)
+        for spec in 'aac adts aac' 'libopus webm webm' 'flac flac flac'; do
+          read -r codec format ext <<< "$spec"
+          ffmpeg -v error -y -f lavfi -i anoisesrc=d=1:r=48000 -ac 1 -c:a "$codec" -f "$format" "$t/check.$ext"
+          echo "$codec in $format: $(ffprobe -v error -show_entries format=duration -of csv=p=0 "$t/check.$ext") s"
+        done
+        rm -rf "$t"

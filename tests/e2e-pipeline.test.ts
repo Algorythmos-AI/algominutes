@@ -413,7 +413,8 @@ describe('its workflow', () => {
     expect(wf).toContain("elif [ \"$SCHEDULE\" = \"7 15 * * 6\" ]; then minutes='[120,240]'");
     expect(wf).toContain("else minutes='[2,15,60]'; fi");
     expect(wf).toMatch(/options: \['2', '15', '60', '120', '180', '240'\]/);
-    expect(wf).toMatch(/apt-get install -y -q ffmpeg espeak-ng/);
+    expect(job).toContain('uses: ./.github/actions/ffmpeg');
+    expect(job).toMatch(/apt install -y -q --no-install-recommends espeak-ng/);
   });
 
   it('the 2-minute run goes held first and deletes a note mid-pipeline, and only it', () => {
