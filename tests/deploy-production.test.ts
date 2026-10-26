@@ -7,6 +7,25 @@ import fs from 'node:fs';
 const staging = fs.readFileSync('.github/workflows/deploy-staging.yml', 'utf8');
 const production = fs.readFileSync('.github/workflows/deploy-production.yml', 'utf8');
 const jobs = (s: string) => s.slice(s.indexOf('\njobs:\n'));
+const blocks = (s: string) => jobs(s).split(/\n  (?=[a-z-]+:\n)/).slice(1);
+const block = (s: string, name: string) => blocks(s).find((b) => b.startsWith(`${name}:\n`)) ?? '';
+// A job's direct `needs`, one name or a list.
+const needsOf = (b: string) => {
+  const m = b.match(/\n    needs: (?:\[([^\]]*)\]|(\S+))\n/);
+  return m ? (m[1] ?? m[2]).split(',').map((n) => n.trim()) : [];
+};
+
+// Production's one addition: the job that waits for the single approval, and `build` waiting on it. Everything
+// else is staging's pipeline.
+const GATE_COMMENT = '\n  # The one person in a production deploy.';
+const withoutGate = (s: string) => {
+  const from = s.indexOf(GATE_COMMENT);
+  const to = s.indexOf('\n  # Nothing deploys a commit whose CI');
+  expect(from).toBeGreaterThan(-1);
+  expect(to).toBeGreaterThan(from);
+  expect(s.split('needs: [changes, ci-gate, approve]')).toHaveLength(2);
+  return (s.slice(0, from) + s.slice(to)).replace('needs: [changes, ci-gate, approve]', 'needs: [changes, ci-gate]');
+};
 
 const SUBSTITUTIONS: Array<[string, string]> = [
   ["vars.DEPLOY_STAGING == 'true'", "vars.DEPLOY_PRODUCTION == 'true'"],
@@ -29,16 +48,47 @@ describe('the production deploy', () => {
       expect(expected).toContain(from);
       expected = expected.split(from).join(to);
     }
-    expect(jobs(production)).toBe(expected);
+    expect(withoutGate(jobs(production))).toBe(expected);
   });
 
   it('deploys nothing to prod from staging\'s side, and nothing to staging from prod\'s', () => {
     expect(jobs(production)).not.toMatch(/environment: staging|DEPLOY_STAGING|STAGING_FIREBASE_API_KEY/);
     expect(jobs(staging)).not.toMatch(/environment: production|DEPLOY_PRODUCTION|PROD_FIREBASE_API_KEY/);
-    // Every job that authenticates to GCP runs in the production Environment, whose WIF provider trusts only main.
+    // Every job that authenticates to GCP runs in the production Environment, whose WIF provider trusts only main
+    // (and only this workflow file); the approval job alone names production-approval.
     const envs = [...jobs(production).matchAll(/environment: (\S+)/g)].map((m) => m[1]);
-    expect(envs.length).toBeGreaterThanOrEqual(6);
-    expect(new Set(envs)).toEqual(new Set(['production']));
+    expect(envs.filter((e) => e === 'production').length).toBeGreaterThanOrEqual(6);
+    expect(envs.filter((e) => e === 'production-approval')).toHaveLength(1);
+    expect(new Set(envs)).toEqual(new Set(['production', 'production-approval']));
+    for (const b of blocks(production)) {
+      if (b.includes('./.github/actions/gcp-auth')) expect(b, b.split('\n')[0]).toContain('\n    environment: production\n');
+    }
+  });
+
+  // GitHub asks a reviewer once per job that names an Environment with required reviewers (the first prod deploy,
+  // run 40299616305, holds 10 approval records), and a job's approval doesn't carry to the next. So the reviewer
+  // sits on an Environment only one job names, and everything that reaches GCP waits for that job.
+  it('one approval per deploy: a single job waits for the reviewer, and every GCP job waits for it', () => {
+    const approve = block(production, 'approve');
+    expect(approve).toContain('\n    environment: production-approval\n');
+    expect(needsOf(approve)).toEqual(['changes']);
+    // The approval is read back from this run: a missing or reviewer-less Environment (GitHub creates a missing
+    // one, unprotected, when a job names it) fails here instead of deploying unasked.
+    expect(approve).toContain('GATE: production-approval\n');
+    expect(approve).toContain('repos/$REPO/actions/runs/$RUN_ID/approvals');
+    expect(approve).toContain('select(.state == "approved" and any(.environments[]; .name == env.GATE))');
+    expect(approve).toMatch(/if \[ -z "\$by" \]; then\n[^\n]*\n\s+exit 1\n/);
+    expect(approve).toMatch(/\n      actions: read\n/);
+    expect(approve).not.toContain('id-token: write');
+
+    const needs = new Map(blocks(production).map((b) => [b.split(':')[0], needsOf(b)]));
+    const waitsFor = (job: string, target: string): boolean =>
+      (needs.get(job) ?? []).some((n) => n === target || waitsFor(n, target));
+    const gcpJobs = blocks(production).filter((b) => b.includes('id-token: write')).map((b) => b.split(':')[0]);
+    expect(gcpJobs).toEqual(['build', 'migrate', 'rollout', 'rollout-solo', 'rollout-meetings', 'rollout-api', 'smoke']);
+    for (const job of gcpJobs) expect(waitsFor(job, 'approve'), job).toBe(true);
+    // A rejected deploy is a decision, not an outage: it opens no prod-deploy-failed issue.
+    expect(needsOf(block(production, 'report-failure'))).not.toContain('approve');
   });
 
   it('a failed prod deploy reports under its own label, and every job has a ceiling', () => {
@@ -124,9 +174,25 @@ describe('the production deploy', () => {
     expect(fs.readFileSync('.github/workflows/invariants.yml', 'utf8')).toMatch(/push:\n    branches: \[integration, main\]/);
   });
 
-  it('prod\'s keyless deploys trust main, in the production Environment', () => {
+  it('prod\'s keyless deploys trust main, in the production Environment, from this workflow only', () => {
     const prod = fs.readFileSync('infra/terraform/envs/prod/main.tf', 'utf8');
     expect(prod).toMatch(/wif_allowed_refs\s*=\s*\["refs\/heads\/main"\]/);
     expect(prod).toMatch(/wif_github_environment\s*=\s*"production"/);
+    // `production` has no reviewer of its own, so no other workflow on main may mint a prod token.
+    expect(prod).toMatch(/wif_allowed_workflows\s*=\s*\["\.github\/workflows\/deploy-production\.yml"\]/);
+    expect(fs.readFileSync('infra/terraform/envs/staging/main.tf', 'utf8')).not.toContain('wif_allowed_workflows');
+    const provider = fs.readFileSync('infra/terraform/modules/environment/cloud-run.tf', 'utf8');
+    expect(provider).toContain('"assertion.job_workflow_ref == \\"${var.github_repo}/${w}@${r}\\""');
+  });
+
+  it('the repo settings put the reviewer on production-approval, and take it off production only once main is gated', () => {
+    const settings = fs.readFileSync('scripts/github-settings.sh', 'utf8');
+    expect(settings).toContain('environment production-approval main "$owner_id"');
+    expect(settings).toMatch(
+      /\nif main_has_gate; then\n  environment production main\nelse\n[^\n]*\n  environment production main "\$owner_id"\nfi\n/,
+    );
+    expect(settings).toContain("grep -q '^    environment: production-approval$'");
+    // The line main_has_gate looks for is the approve job's.
+    expect(production).toContain('\n    environment: production-approval\n');
   });
 });

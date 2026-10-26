@@ -393,12 +393,15 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # branch(es), in a job running in its GitHub Environment (whose protection
   # rules apply). A workflow on any other branch, a PR ref (refs/pull/N/merge),
   # or a job without the environment is rejected: a missing claim cannot
-  # satisfy the expression.
-  attribute_condition = join(" && ", [
+  # satisfy the expression. With wif_allowed_workflows set, the job must also
+  # be defined in one of those files, at an allowed ref (job_workflow_ref).
+  attribute_condition = join(" && ", concat([
     "assertion.repository == \"${var.github_repo}\"",
     "(${join(" || ", [for r in var.wif_allowed_refs : "assertion.ref == \"${r}\""])})",
     "assertion.environment == \"${var.wif_github_environment}\"",
-  ])
+    ], length(var.wif_allowed_workflows) == 0 ? [] : [
+    "(${join(" || ", flatten([for w in var.wif_allowed_workflows : [for r in var.wif_allowed_refs : "assertion.job_workflow_ref == \"${var.github_repo}/${w}@${r}\""]]))})",
+  ]))
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
