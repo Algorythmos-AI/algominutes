@@ -44,9 +44,11 @@
 #       silent for 90 min fails (the Swift CodeQL job takes about 40).
 #       Not strict: the queue tests each PR on the latest integration plus the
 #       entries ahead of it, which is what "up to date" was for.
-#   - main: classic protection, strict (a PR must be up to date with main), and
-#     promotion-guard's `guard` is also required. No queue: promotions are
-#     merge commits, one at a time.
+#   - main: classic protection, not strict, and promotion-guard's `guard` is
+#     also required. No queue: promotions are merge commits, one at a time.
+#     Not strict because each promotion's merge commit exists only on main and
+#     integration's squash queue can never take it, so "up to date" blocked
+#     every promotion after the first (DECISIONS, 2026-10-26).
 #   - Dependabot security updates on (alerts are already on).
 #   - The dry run also prints how each branch's live required checks differ
 #     from this script's.
@@ -109,7 +111,7 @@ protection() { # branch extra-check...
   local branch="$1"
   shift
   jq -n --argjson checks "$(checks_json "$@")" '{
-    required_status_checks: { strict: true, checks: $checks },
+    required_status_checks: { strict: false, checks: $checks },
     enforce_admins: true,
     required_pull_request_reviews: { required_approving_review_count: 0, dismiss_stale_reviews: false },
     restrictions: null,
