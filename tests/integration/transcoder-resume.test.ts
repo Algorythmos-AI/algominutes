@@ -143,6 +143,21 @@ describe('transcoder kickoff, replayed', () => {
     expect(late.enqueued.filter((e) => e.payload.kind === 'stt-poll' && e.payload.chunkId === c0.id)).toEqual([]);
   });
 
+  it("an attempt whose claim was taken over during its start can't save its operation", async () => {
+    // The paid start outlasted the claim, and another attempt took chunk 0 over: that one's job is the one tracked.
+    const slow = deps({
+      beforeStart: async (idx) => {
+        if (idx === 0) await pool.query(`UPDATE audio_chunks SET stt_claimed_at = NOW() + INTERVAL '1 second' WHERE note_id = 'n1' AND idx = 0`);
+      },
+    });
+    await handler.handle(kickoff, slow.d);
+    const [c0] = await chunks();
+    expect(c0.stt_operation_id).toBeNull();
+    expect(slow.enqueued.filter((e) => e.payload.kind === 'stt-poll' && e.payload.chunkId === c0.id)).toEqual([]);
+    // The takeover's claim is untouched, so it goes on to save its own operation.
+    expect(await count(`SELECT 1 FROM audio_chunks WHERE note_id = 'n1' AND idx = 0 AND stt_claimed_at > NOW()`)).toBe(1);
+  });
+
   it("a claim left by an attempt that died is taken over once it's stale", async () => {
     const failed = deps({ sttFailOn: 0 });
     await expect(handler.handle(kickoff, failed.d)).rejects.toThrow(/stt start failed/);

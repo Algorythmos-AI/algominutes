@@ -171,11 +171,16 @@ async function releaseChunkStt(client, { chunkId, claim }) {
   );
 }
 
-/** Saves a chunk's operation unless one is already saved. True when this one was saved. */
-async function setChunkOperation(client, { chunkId, operationName }) {
+/**
+ * Saves a chunk's operation unless one is already saved and, given the attempt's claim, only while that claim is
+ * still its own: a start that outlasted the claim may have been taken over, and then the takeover's job is the one
+ * saved. True when this one was saved.
+ */
+async function setChunkOperation(client, { chunkId, operationName, claim = null }) {
   const { rowCount } = await client.query(
-    'UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1 AND stt_operation_id IS NULL',
-    [chunkId, operationName],
+    `UPDATE audio_chunks SET stt_operation_id = $2
+      WHERE id = $1 AND stt_operation_id IS NULL AND ($3::timestamptz IS NULL OR stt_claimed_at = $3::timestamptz)`,
+    [chunkId, operationName, claim],
   );
   return rowCount === 1;
 }

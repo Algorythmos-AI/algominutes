@@ -442,10 +442,11 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
 
     const c2 = await db.pool().connect();
     let saved;
-    try { saved = await db.setChunkOperation(c2, { chunkId, operationName }); }
+    try { saved = await db.setChunkOperation(c2, { chunkId, operationName, claim }); }
     finally { c2.release(); }
     if (!saved) {
-      // Another attempt saved its operation first and polls it; this one's job runs unpolled. Paid twice, so loud.
+      // Another attempt saved its operation first, or took the claim over while this start ran: its job is the one
+      // tracked and polled, and this one's runs unpolled. Paid twice, so loud.
       log.error({ noteId, workspaceId, chunkIdx: slice.idx, operationName }, 'chunk_operation_already_saved');
       continue;
     }
