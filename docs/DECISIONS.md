@@ -3,6 +3,31 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## A production deploy takes one approval, not one per job (2026-10-26)
+
+- **Context.** Every job in `deploy-production.yml` named the `production` Environment, whose required reviewer
+  is the owner. GitHub asks a reviewer once per job that names such an Environment, and an approval doesn't carry
+  to the run's next job; `deployment: false` keeps reviewers too. The first prod deploy (run 40299616305) holds 10
+  approval records, and the owner scripted them.
+- **Decision.** The reviewer moves to a new Environment, `production-approval` (`main` only, no variables or
+  secrets), named only by a new `approve` job. `build` needs `approve` and every GCP job needs `build`, so
+  nothing reaches GCP before the one approval. `approve` reads the run's approvals back and fails unless one names
+  its Environment, so a missing or reviewer-less Environment can't wave a deploy through. `production` keeps
+  prod's variables and secret, `main` as its only branch, and loses its reviewer. The prod WIF provider also
+  requires `workflow_ref == Algorythmos-AI/algominutes/.github/workflows/deploy-production.yml@refs/heads/main`
+  (`wif_allowed_workflows`), so no other workflow on `main` can mint a prod token without the approval.
+- **Why it's no weaker.** A prod token still needs `main` (promotions only, merged by the owner), the `production`
+  claim, and now this exact workflow file, whose GCP jobs all wait for the owner's approval. Changing that file
+  takes a reviewed promotion to `main`. `scripts/github-settings.sh` takes the reviewer off `production` only once
+  `main`'s workflow has the `approve` job. Re-running failed jobs reuses the run's approval (same commit, same
+  workflow).
+- **Rejected.**
+  - **A second, reviewer-less Environment for the later jobs (`production-deploy`), WIF widened to both names:**
+    the same trust, but prod's variables and secret held twice, and the target check in `changes` would read
+    one Environment's variables while the deploy used the other's.
+  - **One job doing all of the GCP work:** loses the matrix builds, the waves, and the one-pipeline test against
+    staging.
+
 ## `main` no longer requires a promotion to be up to date with it (2026-10-26)
 
 - **Context.** The second promotion (#490, `integration → main`) was blocked as "behind" `main`. `main` required

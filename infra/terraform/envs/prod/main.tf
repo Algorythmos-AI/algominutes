@@ -124,9 +124,13 @@ module "environment" {
   # Placeholder until prod is provisioned (plan PR-35): set it from staging's
   # measured gross cost plus expected traffic, and record the figure in DECISIONS.
   # Keyless deploys: only the main branch's jobs in the `production`
-  # GitHub Environment may impersonate gha-deployer (public repo).
+  # GitHub Environment may impersonate gha-deployer (public repo), and only
+  # jobs of deploy-production.yml: the Environment has no reviewer of its own,
+  # the one approval per deploy is that workflow's `approve` job
+  # (docs/runbooks/resume-staging-and-deploy.md §3b).
   wif_allowed_refs       = ["refs/heads/main"]
   wif_github_environment = "production"
+  wif_allowed_workflows  = [".github/workflows/deploy-production.yml"]
 
   billing_account = var.billing_account
   alert_emails    = var.alert_emails

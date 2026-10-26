@@ -13,11 +13,18 @@
 #   - Auto-merge on (`gh pr merge <n> --auto` queues a PR once its checks
 #     pass), and "Always suggest updating pull request branches" on.
 #   - Environments:
-#       staging    — only the `integration` branch may deploy.
-#       production — only `main`, and a human (the owner) approves each run.
+#       staging             — only the `integration` branch may deploy.
+#       production          — only `main`. It holds prod's variables and secret,
+#                             and has no reviewer: GitHub would ask for each job.
+#       production-approval — only `main`, and the owner approves. Only
+#                             deploy-production.yml's `approve` job names it, and
+#                             every job that reaches GCP needs that job: one
+#                             approval per deploy.
 #     The WIF provider ALSO requires the matching ref + environment claim
-#     (infra/terraform/modules/environment/cloud-run.tf), so a deploy token
-#     needs both GitHub's gate and Google's.
+#     (infra/terraform/modules/environment/cloud-run.tf), and for prod the
+#     deploy-production.yml workflow file, so a deploy token needs both
+#     GitHub's gate and Google's. `production` keeps its reviewer until main's
+#     deploy-production.yml has the approve job (checked live, below).
 #   - Both branches: PR-only (no direct pushes), no force-push or deletion,
 #     conversations resolved, and every check required. Every workflow runs on
 #     every PR and in the merge queue (`merge_group`), so each check reports:
@@ -37,9 +44,11 @@
 #       silent for 90 min fails (the Swift CodeQL job takes about 40).
 #       Not strict: the queue tests each PR on the latest integration plus the
 #       entries ahead of it, which is what "up to date" was for.
-#   - main: classic protection, strict (a PR must be up to date with main), and
-#     promotion-guard's `guard` is also required. No queue: promotions are
-#     merge commits, one at a time.
+#   - main: classic protection, not strict, and promotion-guard's `guard` is
+#     also required. No queue: promotions are merge commits, one at a time.
+#     Not strict because each promotion's merge commit exists only on main and
+#     integration's squash queue can never take it, so "up to date" blocked
+#     every promotion after the first (DECISIONS, 2026-10-26).
 #   - Dependabot security updates on (alerts are already on).
 #   - The dry run also prints how each branch's live required checks differ
 #     from this script's.
@@ -102,7 +111,7 @@ protection() { # branch extra-check...
   local branch="$1"
   shift
   jq -n --argjson checks "$(checks_json "$@")" '{
-    required_status_checks: { strict: true, checks: $checks },
+    required_status_checks: { strict: false, checks: $checks },
     enforce_admins: true,
     required_pull_request_reviews: { required_approving_review_count: 0, dismiss_stale_reviews: false },
     restrictions: null,
@@ -118,7 +127,7 @@ environment() { # name branch [reviewer-id]
   local body
   body=$(jq -n --arg r "$reviewer" '{
       deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
-    } + (if $r == "" then {} else { reviewers: [{ type: "User", id: ($r | tonumber) }], prevent_self_review: false } end)')
+    } + (if $r == "" then { reviewers: [] } else { reviewers: [{ type: "User", id: ($r | tonumber) }], prevent_self_review: false } end)')
   call PUT "repos/$REPO/environments/$name" "$body"
   # Replace the branch policy list with exactly this branch.
   if [ "$APPLY" -eq 1 ]; then
@@ -126,6 +135,12 @@ environment() { # name branch [reviewer-id]
       while read -r id; do gh api -X DELETE "repos/$REPO/environments/$name/deployment-branch-policies/$id" >/dev/null; done
   fi
   call POST "repos/$REPO/environments/$name/deployment-branch-policies" "$(jq -n --arg b "$branch" '{name: $b, type: "branch"}')"
+}
+
+main_has_gate() { # main's deploy-production.yml has the approve job (any failure reads as no)
+  gh api -H 'Accept: application/vnd.github.raw+json' \
+    "repos/$REPO/contents/.github/workflows/deploy-production.yml?ref=main" 2>"$ERR" |
+    grep -q '^    environment: production-approval$'
 }
 
 ruleset() { # branch: one ruleset holding all of its rules, the merge queue included
@@ -224,7 +239,15 @@ call PATCH "repos/$REPO" "$(jq -n '{
 
 owner_id=$(gh api user --jq .id)
 environment staging integration
-environment production main "$owner_id"
+environment production-approval main "$owner_id"
+# Before main's workflow has the approve job, the reviewer on `production` is
+# the only approval a deploy gets: taking it off would deploy unasked.
+if main_has_gate; then
+  environment production main
+else
+  echo "     main's deploy-production.yml has no approve job yet: production keeps its reviewer (run this again after the promotion)"
+  environment production main "$owner_id"
+fi
 
 ruleset integration # before the classic rule goes, so integration is never unprotected
 unprotect integration

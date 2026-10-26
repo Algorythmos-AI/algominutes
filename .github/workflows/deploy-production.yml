@@ -10,7 +10,8 @@ name: deploy-production
 #   - it's gated by the repo variable DEPLOY_PRODUCTION == 'true' (set it after the prod `terraform apply`,
 #     Apply P);
 #   - the authenticated smoke signs its test user up with the secret PROD_FIREBASE_API_KEY;
-#   - a failed run opens its own `prod-deploy-failed` issue, never a comment on staging's.
+#   - a failed run opens its own `prod-deploy-failed` issue, never a comment on staging's;
+#   - one job of its own, `approve`, waits for a person: the one approval a production deploy needs.
 # So: build → migrate + Vertex smoke → the live-env preflight before each rollout → rollout in three waves
 # (workers, then meetings, then the api; billing on its own) → the reachability smoke and the authenticated
 # smoke (a real user, end to end, then deleted) → the sweeper resumed. Every job has deploy-staging's ceiling,
@@ -20,9 +21,16 @@ name: deploy-production
 # The `production` Environment holds prod's GCP_PROJECT_ID, GCP_WIF_PROVIDER and GCP_DEPLOYER_SA (environment
 # variables override the repo's staging ones of the same name; until the Environment and its variables exist,
 # the first job fails naming the missing variable, and nothing else runs) and the PROD_FIREBASE_API_KEY secret. Its WIF
-# provider accepts tokens only from refs/heads/main in that Environment (infra/terraform/envs/prod/main.tf), so
-# no other branch, PR or workflow can deploy to prod. Add required reviewers to the Environment if a person
-# should approve each prod deploy.
+# provider accepts tokens only from this file, on refs/heads/main, in that Environment
+# (infra/terraform/envs/prod/main.tf), so no other branch, PR or workflow can deploy to prod.
+#
+# One approval per deploy. GitHub asks a reviewer separately for every job that names an Environment with
+# required reviewers, so a reviewer on `production` meant an approval per stage (six on the first prod deploy,
+# run 40299616305). The reviewer is on `production-approval` instead: an Environment with no variables or
+# secrets, `main` only, that only the `approve` job names. Every job that reaches GCP needs `approve`
+# (directly or through `build`), and `approve` fails unless this run holds an approval for that Environment, so
+# a missing or reviewer-less `production-approval` stops the deploy rather than waving it through.
+# tests/deploy-production.test.ts holds both rules.
 on:
   push:
     branches: [main]
@@ -160,6 +168,37 @@ jobs:
             echo "wave3=$(printf '%s' "$out" | jq -c 'map(select(. == "api"))')"
           } >> "$GITHUB_OUTPUT"
 
+  # The one person in a production deploy. This job waits for the owner's approval of the
+  # `production-approval` Environment (its required reviewer), alongside ci-gate, so the approval can be given
+  # while CI still runs; nothing that reaches GCP starts before both. It then checks that the approval is on
+  # record for this run: if the Environment were missing (GitHub creates one, unprotected, on first use) or
+  # lost its reviewer, the job would start unasked, and this stops it.
+  approve:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # an API read: seconds (the wait for the reviewer comes before the job starts, and isn't counted)
+    environment: production-approval
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: The deploy was approved, in this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          GATE: production-approval
+        run: |
+          set -euo pipefail
+          by=$(gh api "repos/$REPO/actions/runs/$RUN_ID/approvals" \
+                 --jq '[.[] | select(.state == "approved" and any(.environments[]; .name == env.GATE)) | .user.login] | unique | join(", ")')
+          if [ -z "$by" ]; then
+            echo "::error::No approval of the $GATE Environment in this run: it is missing or has no required reviewer. Not deploying. Add the owner as its reviewer (scripts/github-settings.sh) and re-run."
+            exit 1
+          fi
+          echo "Approved by $by"
+
   # Nothing deploys a commit whose CI hasn't passed. A push to integration
   # starts this workflow and CI at the same time, so wait for CI's runs on this
   # exact commit (ci: tests, integration, web build, rules; invariants: the
@@ -207,7 +246,7 @@ jobs:
     # `image (<svc>)`, not `build (<svc>)`: docker-build.yml already reports
     # `build (<svc>)` checks, and check names should be unambiguous.
     name: image (${{ matrix.service }})
-    needs: [changes, ci-gate]
+    needs: [changes, ci-gate, approve]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30 # measured 31 s – 1 min 21 s with a warm layer cache; room for a cold one
