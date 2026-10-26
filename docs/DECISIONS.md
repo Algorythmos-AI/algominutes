@@ -3,6 +3,24 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## `main` no longer requires a promotion to be up to date with it (2026-10-26)
+
+- **Context.** The second promotion (#490, `integration → main`) was blocked as "behind" `main`. `main` required
+  branches to be up to date (`strict`), even for admins (`enforce_admins`). Each promotion is merged as a merge
+  commit, and that commit exists only on `main`. `integration` accepts changes only through its squash merge queue,
+  so the commit can never reach it. Every promotion after the first would be blocked the same way, although the
+  missing commit adds no content: #198's merge commit has the same tree as its `integration` parent.
+- **Decision.** The owner turned `strict` off on `main` (2026-10-26), using the API on their instruction:
+  `PATCH branches/main/protection/required_status_checks strict=false`. The 23 required checks, `enforce_admins`,
+  and the deletion and force-push rules are unchanged.
+- **Why it's safe.** `main` takes only promotion PRs from `integration` (the `promotion-guard` check), and
+  `integration` takes only PRs that passed the same checks in its merge queue. The required checks still run on
+  the promotion's own head, which is `integration`'s tip, so what merges is exactly what passed.
+- **Rejected.**
+  - **Syncing `main` back into `integration` after each promotion:** the squash queue drops the merge commit's
+    ancestry, so it would never count.
+  - **Turning it off for one merge each time:** a manual settings change before every release, easily forgotten.
+
 ## Production launches with a 120-minute free floor, A$60 a day, and a warm api and billing (2026-10-24)
 
 - **Context.** Plan rev 12's audit: a reviewer on production would open on 0 minutes behind an invite code
