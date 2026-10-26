@@ -80,12 +80,13 @@ jobs:
       - run: npm ci
       # Neither install waits on apt's mirror any more: on 10-23 apt hung here for 39 minutes, and on 10-26 for 5
       # (fonts for --with-deps), then the retry hit the dpkg lock. Both come from the cache; each action says how.
-      # Same 12 minutes in all as before.
+      # From the cache each takes seconds; 12 minutes each covers its slowest path (cold cache, slow download,
+      # then apt), as in ci.yml. The job's 40-minute limit still bounds the whole, and a kill is reported.
       - name: Install Chromium
-        timeout-minutes: 6
+        timeout-minutes: 12
         uses: ./.github/actions/playwright-chromium
       - name: Install ffmpeg (the fake microphone)
-        timeout-minutes: 6
+        timeout-minutes: 12
         uses: ./.github/actions/ffmpeg
       - name: The journey
         timeout-minutes: 30

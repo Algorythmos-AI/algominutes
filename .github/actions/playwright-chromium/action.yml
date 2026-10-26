@@ -18,11 +18,13 @@ runs:
       with:
         path: ~/.cache/ms-playwright
         key: playwright-chromium-${{ steps.version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
-    # On a cache hit this finds the browser already there and downloads nothing.
+    # On a cache hit this finds the browser already there and downloads nothing. A healthy download takes well
+    # under a minute. Two tries of 150 s (5 minutes 10), plus the rare apt fallback below (5 minutes), fit the
+    # 12 minutes every caller gives this action.
     - name: Install Chromium ${{ steps.version.outputs.version }}
       shell: bash
       run: |
-        install() { timeout 300 npx playwright install chromium; }
+        install() { timeout 150 npx playwright install chromium; }
         install || { echo "::warning::the Chromium download failed or hung; trying once more"; sleep 10; install; }
     # Saved at once, not at the job's end, so a red test still leaves the next run a cached browser. A save that
     # loses a race with another job's is only a warning.
@@ -48,7 +50,6 @@ runs:
         fi
         echo "::warning::the runner image lacks libraries Chromium links; installing Playwright's dependencies with apt:"
         echo "$missing"
-        # As root under the timeout, so a hang kills apt-get itself and the second try isn't locked out.
+        # As root under the timeout, so a hang kills apt-get itself. Once: a second try wouldn't fit the budget.
         sudo rm -f /var/lib/man-db/auto-update
-        deps() { sudo timeout 300 env "PATH=$PATH" npx playwright install-deps chromium; }
-        deps || { echo "::warning::the dependency install failed or hung; trying once more"; sleep 10; deps; }
+        sudo timeout 300 env "PATH=$PATH" npx playwright install-deps chromium
