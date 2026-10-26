@@ -307,7 +307,7 @@ without opening a `prod-deploy-failed` issue (a decision, not an outage).
 
 Who can deploy, and from where, is unchanged: a prod token still needs `refs/heads/main` (which takes only
 promotion PRs, merged by the owner) and the `production` Environment claim, and now also this workflow file
-(`job_workflow_ref` must be `.github/workflows/deploy-production.yml@refs/heads/main`,
+(`workflow_ref` must be `.github/workflows/deploy-production.yml@refs/heads/main`,
 `wif_allowed_workflows` in `infra/terraform/envs/prod/main.tf`). That last condition replaces what the
 reviewer on `production` did for any other workflow on `main`: with no reviewer there, only this file's jobs,
 which all wait for `approve`, can mint a token. **Re-run failed jobs** reuses the run's approval (the same commit
@@ -319,7 +319,7 @@ and workflow); **Re-run all jobs** asks again.
    no Cloud Run image): `terraform apply reviewed-<sha>.tfplan` in `infra/terraform/envs/prod`. Check it:
    `gcloud iam workload-identity-pools providers describe github --workload-identity-pool=github-prod
    --location=global --project=algominutes-production --format='value(attributeCondition)'` ends with the
-   `job_workflow_ref` clause.
+   `workflow_ref` clause.
 2. `bash scripts/github-settings.sh --apply`: creates `production-approval` with the owner as reviewer.
    `production` keeps its reviewer, because `main`'s `deploy-production.yml` has no `approve` job yet (the
    script reads it from `main`, and says so).

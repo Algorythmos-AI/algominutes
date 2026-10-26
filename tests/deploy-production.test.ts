@@ -182,7 +182,9 @@ describe('the production deploy', () => {
     expect(prod).toMatch(/wif_allowed_workflows\s*=\s*\["\.github\/workflows\/deploy-production\.yml"\]/);
     expect(fs.readFileSync('infra/terraform/envs/staging/main.tf', 'utf8')).not.toContain('wif_allowed_workflows');
     const provider = fs.readFileSync('infra/terraform/modules/environment/cloud-run.tf', 'utf8');
-    expect(provider).toContain('"assertion.job_workflow_ref == \\"${var.github_repo}/${w}@${r}\\""');
+    // workflow_ref is in every run's token; job_workflow_ref only in a reusable workflow's jobs, so it would refuse these.
+    expect(provider).toContain('"assertion.workflow_ref == \\"${var.github_repo}/${w}@${r}\\""');
+    expect(provider).not.toContain('assertion.job_workflow_ref');
   });
 
   it('the repo settings put the reviewer on production-approval, and take it off production only once main is gated', () => {

@@ -14,7 +14,7 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   nothing reaches GCP before the one approval. `approve` reads the run's approvals back and fails unless one names
   its Environment, so a missing or reviewer-less Environment can't wave a deploy through. `production` keeps
   prod's variables and secret, `main` as its only branch, and loses its reviewer. The prod WIF provider also
-  requires `job_workflow_ref == Algorythmos-AI/algominutes/.github/workflows/deploy-production.yml@refs/heads/main`
+  requires `workflow_ref == Algorythmos-AI/algominutes/.github/workflows/deploy-production.yml@refs/heads/main`
   (`wif_allowed_workflows`), so no other workflow on `main` can mint a prod token without the approval.
 - **Why it's no weaker.** A prod token still needs `main` (promotions only, merged by the owner), the `production`
   claim, and now this exact workflow file, whose GCP jobs all wait for the owner's approval. Changing that file
