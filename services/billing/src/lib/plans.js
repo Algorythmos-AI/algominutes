@@ -5,7 +5,7 @@
 // strings here only drive the paywall and must be kept in sync with them.
 //
 // Pricing figures mirror `@algominutes/contracts` PRICING (A9.3 in DECISIONS.md:
-// Pro A$14.99/mo, A$149.90/yr ≈ two months free). They are duplicated as plain
+// Pro A$14.99/mo, A$149.99/yr ≈ two months free). They are duplicated as plain
 // constants rather than imported so this service does not take a runtime
 // dependency on the contracts package's zod/OpenAPI graph — but they are NOT a
 // secret and NOT the charging authority.
@@ -14,7 +14,7 @@
 // default to the products in App Store Connect, which the iPhone sells
 // (apps/ios/AlgoMinutes/Models/Entitlement.swift, tests/billing-plans.test.ts).
 
-const PRICING = { currency: 'AUD', proMonthly: 14.99, proAnnual: 149.9 };
+const PRICING = { currency: 'AUD', proMonthly: 14.99, proAnnual: 149.99 };
 
 /**
  * Catalog keyed by the wire `Product.id` (`pro_monthly` | `pro_annual`).
@@ -27,7 +27,7 @@ export function productCatalog() {
       id: 'pro_monthly',
       plan: 'pro',
       period: 'monthly',
-      priceDisplay: `A$${PRICING.proMonthly}`,
+      priceDisplay: `A$${PRICING.proMonthly.toFixed(2)}`,
       // TODO(A11): real Play / Stripe product + price ids from Secret Manager.
       appleProductId: process.env.APPLE_PRODUCT_PRO_MONTHLY || 'com.algorythmos.algominutes.pro.monthly',
       googleProductId: process.env.GOOGLE_PRODUCT_PRO_MONTHLY || 'pro_monthly',
@@ -37,7 +37,7 @@ export function productCatalog() {
       id: 'pro_annual',
       plan: 'pro',
       period: 'annual',
-      priceDisplay: `A$${PRICING.proAnnual}`,
+      priceDisplay: `A$${PRICING.proAnnual.toFixed(2)}`,
       // TODO(A11): real Play / Stripe product + price ids from Secret Manager.
       appleProductId: process.env.APPLE_PRODUCT_PRO_ANNUAL || 'com.algorythmos.algominutes.pro.annual',
       googleProductId: process.env.GOOGLE_PRODUCT_PRO_ANNUAL || 'pro_annual',

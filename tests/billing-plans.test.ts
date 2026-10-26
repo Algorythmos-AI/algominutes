@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 // @ts-expect-error: plain ESM module, no type declarations
-import { planFromStoreProductId } from '../services/billing/src/lib/plans.js';
+import { planFromStoreProductId, productCatalog } from '../services/billing/src/lib/plans.js';
+import { PRICING } from '../packages/contracts/src/limits';
 
 // The iPhone sells the product ids in Entitlement.swift (the ones created in App Store Connect). The billing
 // service must recognise them with no env set, or every purchase logs `unknown_store_product` and is recorded
@@ -37,5 +38,25 @@ describe('planFromStoreProductId', () => {
 
   it('flags an unknown product, still as Pro', () => {
     expect(planFromStoreProductId('com.example.unknown')).toEqual({ plan: 'pro', period: null, known: false });
+  });
+});
+
+// The paywall shows billing's priceDisplay; the App Store charges the price set in App Store Connect (and the local
+// StoreKit config mirrors it). The three must agree, and a price always shows two decimals.
+describe('the catalog\'s prices', () => {
+  const storekit = JSON.parse(fs.readFileSync(path.join(__dirname, '../apps/ios/StoreKit/AlgoMinutes.storekit'), 'utf8'));
+  const storePrice = (id: string) =>
+    Number(storekit.subscriptionGroups.flatMap((g: any) => g.subscriptions).find((s: any) => s.productID === id).displayPrice);
+  const display = (id: string) => productCatalog().find((p: any) => p.id === id).priceDisplay;
+
+  it('match the App Store prices', () => {
+    expect(PRICING.proMonthly).toBe(storePrice(iosId('proMonthly')));
+    expect(PRICING.proAnnual).toBe(storePrice(iosId('proAnnual')));
+  });
+
+  it('show two decimals', () => {
+    expect(display('pro_monthly')).toBe(`A$${PRICING.proMonthly.toFixed(2)}`);
+    expect(display('pro_annual')).toBe(`A$${PRICING.proAnnual.toFixed(2)}`);
+    expect(display('pro_annual')).toMatch(/^A\$\d+\.\d{2}$/);
   });
 });

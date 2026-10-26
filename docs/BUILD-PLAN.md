@@ -443,7 +443,7 @@ and a marketing page with store badges.
 ## A9 — Revenue layer *(nothing here exists in the source)*
 
 **A9.1 Plans and entitlements · P0.** `plans`, `subscriptions`, `usage_ledger` via migration. **Free**
-120 min/month · **Pro** A$14.99/mo or A$149.90/yr (DECISIONS A9.3), ~1,500 min · **Team** per-seat (**P2**). Config-driven limits.
+120 min/month · **Pro** A$14.99/mo or A$149.99/yr (DECISIONS A9.3; 2026-10-26), ~1,500 min · **Team** per-seat (**P2**). Config-driven limits.
 Entitlement checked **server-side** on every metered action; never trust the client.
 
 **A9.2 Metering · P0.** Meter minutes at ingest, **before transcode is queued** — rejecting over-quota
