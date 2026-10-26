@@ -389,10 +389,10 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
     // first is still at work, must not start (and pay for) another. It's retried until the first has saved the
     // operation, and then only polls; a claim left by an attempt that died goes stale and is taken over.
     const cc = await db.pool().connect();
-    let claimed;
-    try { claimed = await db.claimChunkStt(cc, { chunkId }); }
+    let claim;
+    try { claim = await db.claimChunkStt(cc, { chunkId }); }
     finally { cc.release(); }
-    if (!claimed) {
+    if (!claim) {
       log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_start_in_progress');
       throw Object.assign(new Error(`chunk ${slice.idx} is being started by another attempt`), { code: 'CHUNK_START_IN_PROGRESS' });
     }
@@ -409,6 +409,16 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
       const gcsUri = await storage.uploadFromLocal(localChunk, gcsPath, 'audio/flac');
       fs.rmSync(localChunk, { force: true });
 
+      // Preparing the chunk can outlast the claim, and another attempt may have taken it over: start the paid
+      // job only while the claim is still this attempt's.
+      const rn = await db.pool().connect();
+      try { claim = await db.renewChunkStt(rn, { chunkId, claim }); }
+      finally { rn.release(); }
+      if (!claim) {
+        log.warn({ noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_claim_lost');
+        throw Object.assign(new Error(`chunk ${slice.idx} was taken over by another attempt`), { code: 'CHUNK_START_IN_PROGRESS', claimLost: true });
+      }
+
       operationName = await stt.startLongRunning({
         recognizer: env.STT_RECOGNIZER || null,
         gcsUri,
@@ -416,9 +426,11 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
         log,
       });
     } catch (err) {
-      // Nothing started: give the claim back, so the retry needn't wait for it to go stale.
+      // Nothing started: give the claim back, so the retry needn't wait for it to go stale. A lost claim is
+      // another attempt's now, and is left alone.
+      if (err && err.claimLost) throw err;
       const rc = await db.pool().connect();
-      try { await db.releaseChunkStt(rc, { chunkId }); }
+      try { await db.releaseChunkStt(rc, { chunkId, claim }); }
       catch (releaseErr) { log.error({ err: releaseErr, noteId, workspaceId, chunkIdx: slice.idx }, 'chunk_claim_release_failed'); }
       finally { rc.release(); }
       throw err;
@@ -429,8 +441,14 @@ async function runChunkedPath({ noteId, workspaceId, inputLocal, durationSec, tm
     await recordPaidWork('stt_call', slice.endSec - slice.startSec, 'google-stt');
 
     const c2 = await db.pool().connect();
-    try { await db.setChunkOperation(c2, { chunkId, operationName }); }
+    let saved;
+    try { saved = await db.setChunkOperation(c2, { chunkId, operationName }); }
     finally { c2.release(); }
+    if (!saved) {
+      // Another attempt saved its operation first and polls it; this one's job runs unpolled. Paid twice, so loud.
+      log.error({ noteId, workspaceId, chunkIdx: slice.idx, operationName }, 'chunk_operation_already_saved');
+      continue;
+    }
 
     await tasks.enqueue({
       kind: STT_POLL,
@@ -861,8 +879,14 @@ async function runWholeFilePath({ noteId, workspaceId, inputLocal, durationSec, 
   const operationName = sttProvider.encodeOperationId(provider.name, jobId);
 
   const c2 = await db.pool().connect();
-  try { await db.setChunkOperation(c2, { chunkId, operationName }); }
+  let saved;
+  try { saved = await db.setChunkOperation(c2, { chunkId, operationName }); }
   finally { c2.release(); }
+  if (!saved) {
+    // Another attempt saved its job first and polls it; this one runs unpolled. Paid twice, so loud.
+    plog.error({ operationName }, 'chunk_operation_already_saved');
+    return;
+  }
 
   await tasks.enqueue({
     kind: STT_POLL,
