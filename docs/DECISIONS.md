@@ -28,6 +28,18 @@ choices made during the automated A2/A3 run so they are auditable from the git l
   - **One job doing all of the GCP work:** loses the matrix builds, the waves, and the one-pipeline test against
     staging.
 
+## Pro annual is A$149.99, the App Store's price (2026-10-26)
+
+- **Context.** A9.3 set Pro annual at A$149.90. App Store Connect's AUD price points end in .99, so the annual
+  product was created at **A$149.99** (25 Oct). The code still said 149.9. Billing's `priceDisplay` also printed it
+  as "A$149.9", without the trailing zero.
+- **Decision.** One price everywhere: A$149.99, matching what the App Store charges. Monthly stays A$14.99.
+  `PRICING.proAnnual` (contracts) and billing's copy are 149.99, and `priceDisplay` always shows two decimals.
+  `tests/billing-plans.test.ts` fails if contracts, billing, the local StoreKit config and the display disagree.
+  Stripe (web, test mode) gets its annual price at A$149.99 when it goes live.
+- **Rejected.** Keeping A$149.90: the App Store has no such AUD price point, so the store and the paywall would
+  disagree by 9 cents.
+
 ## `main` no longer requires a promotion to be up to date with it (2026-10-26)
 
 - **Context.** The second promotion (#490, `integration → main`) was blocked as "behind" `main`. `main` required

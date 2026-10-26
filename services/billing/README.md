@@ -14,7 +14,7 @@ starve authed user-request capacity in `services/api`.
 
 ## Reverse-trial model (A9.3)
 
-Pro is the only paid plan: **A$14.99/mo**, **A$149.90/yr** (≈ two months free).
+Pro is the only paid plan: **A$14.99/mo**, **A$149.99/yr** (≈ two months free).
 The 7-day reverse trial (no card) is materialised by `@algominutes/db`
 (`ensureTrial`); this service only records **paid** state. The wire display
 prices in `src/lib/plans.js` mirror `@algominutes/contracts` PRICING — the
