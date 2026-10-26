@@ -132,27 +132,57 @@ async function insertAudioChunkRow(client, { noteId, idx, startSec, endSec, stor
 const STT_CLAIM_STALE_MS = 2 * 60 * 1000;
 
 /**
- * Claims a chunk's speech job for this attempt (RELEASE.md rev 11, L6). True when this attempt may start it:
- * the chunk is pending, has no operation, and no other attempt holds a live claim. Atomic, so of two attempts
- * racing for one chunk exactly one gets true.
+ * Claims a chunk's speech job for this attempt (RELEASE.md rev 11, L6). Returns the claim (its timestamp, as
+ * Postgres prints it) when this attempt may start the job: the chunk is pending, has no operation, and no other
+ * attempt holds a live claim. Null otherwise. Atomic, so of two attempts racing for one chunk exactly one gets a
+ * claim. The claim fences what follows: renew it before the paid start, and release only your own.
  */
 async function claimChunkStt(client, { chunkId, staleMs = STT_CLAIM_STALE_MS }) {
-  const { rowCount } = await client.query(
+  const { rows } = await client.query(
     `UPDATE audio_chunks SET stt_claimed_at = NOW()
       WHERE id = $1 AND status = 'pending' AND stt_operation_id IS NULL
-        AND (stt_claimed_at IS NULL OR stt_claimed_at < NOW() - $2::bigint * INTERVAL '1 millisecond')`,
+        AND (stt_claimed_at IS NULL OR stt_claimed_at < NOW() - $2::bigint * INTERVAL '1 millisecond')
+      RETURNING stt_claimed_at::text AS claim`,
     [chunkId, staleMs],
   );
+  return rows[0] ? rows[0].claim : null;
+}
+
+/**
+ * Renews this attempt's claim just before the paid start: preparing a chunk (cut, upload) can outlast the claim,
+ * and another attempt may have taken it over meanwhile. Returns the renewed claim, or null when the claim is no
+ * longer this attempt's (or an operation was saved): then this attempt must not start the job.
+ */
+async function renewChunkStt(client, { chunkId, claim }) {
+  const { rows } = await client.query(
+    `UPDATE audio_chunks SET stt_claimed_at = NOW()
+      WHERE id = $1 AND stt_operation_id IS NULL AND stt_claimed_at = $2::timestamptz
+      RETURNING stt_claimed_at::text AS claim`,
+    [chunkId, claim],
+  );
+  return rows[0] ? rows[0].claim : null;
+}
+
+/** Gives this attempt's claim back after the start failed, so a retry needn't wait for it to go stale. */
+async function releaseChunkStt(client, { chunkId, claim }) {
+  await client.query(
+    'UPDATE audio_chunks SET stt_claimed_at = NULL WHERE id = $1 AND stt_operation_id IS NULL AND stt_claimed_at = $2::timestamptz',
+    [chunkId, claim],
+  );
+}
+
+/**
+ * Saves a chunk's operation unless one is already saved and, given the attempt's claim, only while that claim is
+ * still its own: a start that outlasted the claim may have been taken over, and then the takeover's job is the one
+ * saved. True when this one was saved.
+ */
+async function setChunkOperation(client, { chunkId, operationName, claim = null }) {
+  const { rowCount } = await client.query(
+    `UPDATE audio_chunks SET stt_operation_id = $2
+      WHERE id = $1 AND stt_operation_id IS NULL AND ($3::timestamptz IS NULL OR stt_claimed_at = $3::timestamptz)`,
+    [chunkId, operationName, claim],
+  );
   return rowCount === 1;
-}
-
-/** Gives a claim back after the start failed, so a retry needn't wait for it to go stale. */
-async function releaseChunkStt(client, { chunkId }) {
-  await client.query('UPDATE audio_chunks SET stt_claimed_at = NULL WHERE id = $1 AND stt_operation_id IS NULL', [chunkId]);
-}
-
-async function setChunkOperation(client, { chunkId, operationName }) {
-  await client.query('UPDATE audio_chunks SET stt_operation_id = $2 WHERE id = $1', [chunkId, operationName]);
 }
 
 async function markChunkDone(client, { chunkId, noteId }) {
@@ -459,6 +489,7 @@ module.exports = {
   insertAudioChunkRow,
   setChunkOperation,
   claimChunkStt,
+  renewChunkStt,
   releaseChunkStt,
   STT_CLAIM_STALE_MS,
   markChunkDone,

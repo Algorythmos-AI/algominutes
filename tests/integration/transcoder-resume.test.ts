@@ -15,7 +15,7 @@ const transcoderDb = require('../../services/transcoder/src/db.js');
 const noop = () => {};
 const log: any = { info: noop, warn: noop, error: noop, child: () => log };
 
-function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = async () => {}, beforeStart = async (_idx: number) => {} } = {}) {
+function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = async () => {}, onExtract = async (_idx: number) => {}, beforeStart = async (_idx: number) => {} } = {}) {
   const extracted: number[] = [];
   const started: number[] = [];
   const enqueued: Array<{ payload: any; delay: number; taskId?: string }> = [];
@@ -33,7 +33,7 @@ function deps({ duration = 1500 as number | Error, sttFailOn = -1, onProbe = asy
       ensureTempDir: () => '/tmp/transcoder-resume-test',
       cleanupTempDir: noop,
       probeDuration: async () => { await onProbe(); if (duration instanceof Error) throw duration; return duration; },
-      extractChunk: async ({ startSec }: { startSec: number }) => { extracted.push(startSec / 600); },
+      extractChunk: async ({ startSec }: { startSec: number }) => { extracted.push(startSec / 600); await onExtract(startSec / 600); },
     },
     stt: {
       startLongRunning: async ({ gcsUri }: { gcsUri: string }) => {
@@ -112,6 +112,50 @@ describe('transcoder kickoff, replayed', () => {
     const retry = deps();
     await handler.handle(kickoff, retry.d);
     expect(retry.started).toEqual([0, 1, 2]);
+  });
+
+  it('a claim taken over while its chunk is prepared starts no second job', async () => {
+    // Preparing a chunk (cut, upload) outlasted the claim, and another attempt took chunk 0 over meanwhile.
+    const slow = deps({
+      onExtract: async (idx) => {
+        if (idx === 0) await pool.query(`UPDATE audio_chunks SET stt_claimed_at = NOW() + INTERVAL '1 second' WHERE note_id = 'n1' AND idx = 0`);
+      },
+    });
+    await expect(handler.handle(kickoff, slow.d)).rejects.toMatchObject({ code: 'CHUNK_START_IN_PROGRESS' });
+    expect(slow.started).toEqual([]);
+    const [c0] = await chunks();
+    expect(c0.stt_operation_id).toBeNull();
+    // The takeover's claim is left as it was: losing it doesn't release it.
+    expect(await count(`SELECT 1 FROM audio_chunks WHERE note_id = 'n1' AND idx = 0 AND stt_claimed_at > NOW()`)).toBe(1);
+  });
+
+  it("a late attempt can't overwrite the operation another attempt saved", async () => {
+    // Another attempt saved chunk 0's operation while this one's start call was in flight.
+    const late = deps({
+      beforeStart: async (idx) => {
+        if (idx === 0) await pool.query(`UPDATE audio_chunks SET stt_operation_id = 'op-other' WHERE note_id = 'n1' AND idx = 0`);
+      },
+    });
+    await handler.handle(kickoff, late.d);
+    const [c0] = await chunks();
+    expect(c0.stt_operation_id).toBe('op-other');
+    // The other attempt polls its own operation; this one doesn't start a second chain for chunk 0.
+    expect(late.enqueued.filter((e) => e.payload.kind === 'stt-poll' && e.payload.chunkId === c0.id)).toEqual([]);
+  });
+
+  it("an attempt whose claim was taken over during its start can't save its operation", async () => {
+    // The paid start outlasted the claim, and another attempt took chunk 0 over: that one's job is the one tracked.
+    const slow = deps({
+      beforeStart: async (idx) => {
+        if (idx === 0) await pool.query(`UPDATE audio_chunks SET stt_claimed_at = NOW() + INTERVAL '1 second' WHERE note_id = 'n1' AND idx = 0`);
+      },
+    });
+    await handler.handle(kickoff, slow.d);
+    const [c0] = await chunks();
+    expect(c0.stt_operation_id).toBeNull();
+    expect(slow.enqueued.filter((e) => e.payload.kind === 'stt-poll' && e.payload.chunkId === c0.id)).toEqual([]);
+    // The takeover's claim is untouched, so it goes on to save its own operation.
+    expect(await count(`SELECT 1 FROM audio_chunks WHERE note_id = 'n1' AND idx = 0 AND stt_claimed_at > NOW()`)).toBe(1);
   });
 
   it("a claim left by an attempt that died is taken over once it's stale", async () => {
