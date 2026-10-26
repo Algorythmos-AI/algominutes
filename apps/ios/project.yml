@@ -60,13 +60,11 @@ settings:
       # The beta's way to minutes (BETA-XXXXX-... codes, RELEASE.md rev 10).
       INVITE_CODES_ENABLED: "YES"
     Release:
-      # TODO(prod): the production Cloud Run origins, once prod is applied
-      # (https://api-<prod project number>.australia-southeast1.run.app). Until
-      # then they're empty, and the "Backend origins are set" phase fails a
-      # Release build rather than shipping one that talks to nothing (it named
-      # api.algominutes.com, a domain that isn't registered).
-      API_BASE_URL: ""
-      BILLING_BASE_URL: ""
+      # Production's Cloud Run origins (algominutes-production, project number
+      # 43914754953). The "Backend origins are set" phase still fails a build
+      # whose origins are empty or not https.
+      API_BASE_URL: https://api-43914754953.australia-southeast1.run.app
+      BILLING_BASE_URL: https://billing-43914754953.australia-southeast1.run.app
       # The update screen's button (426): the App Store listing (App Store
       # Connect app 6816333591). A Release build must never open TestFlight.
       UPDATE_URL: itms-apps://apps.apple.com/app/id6816333591
@@ -118,7 +116,7 @@ targets:
             case "$value" in
               https://?*) ;;
               *)
-                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Release waits for the production origins: TODO(prod)."
+                echo "error: ${CONFIGURATION} has no ${pair%%=*} (an https origin; project.yml). Each build needs its backend's origins."
                 exit 1 ;;
             esac
           done
