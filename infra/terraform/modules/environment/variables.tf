@@ -354,6 +354,17 @@ variable "wif_github_environment" {
   }
 }
 
+variable "wif_allowed_workflows" {
+  description = "Workflow files (repo-relative, e.g. .github/workflows/deploy-production.yml) whose jobs may deploy, on the allowed refs. Empty: any workflow on those refs, in the Environment. Prod pins its deploy workflow, because its Environment has no reviewer of its own (the one approval is a job in that workflow)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for w in var.wif_allowed_workflows : can(regex("^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$", w))])
+    error_message = "wif_allowed_workflows must be .github/workflows/<file>.yml paths."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # In-VPC proof VM (bastion.tf)
 # ---------------------------------------------------------------------------
