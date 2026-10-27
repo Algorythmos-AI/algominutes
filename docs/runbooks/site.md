@@ -15,7 +15,7 @@ app (`/app`). It's static HTML with no JavaScript, hosted on Vercel, with DNS on
 | Vercel's handling of `vercel.json`, locally | `scripts/serve-site.mjs` (`node scripts/serve-site.mjs` serves `apps/site/dist` on :4322) |
 | Deploy check | `scripts/smoke-site.mjs <origin>`, run by `.github/workflows/site-smoke.yml` |
 | CI | the `site-build` job in `ci.yml` |
-| Uptime | `google_monitoring_uptime_check_config.site` in `monitoring.tf` (staging's project until prod exists) |
+| Uptime | `google_monitoring_uptime_check_config.site` in `monitoring.tf` (production's project; `site_uptime_host` in `envs/prod/main.tf`) |
 
 ## Environments
 

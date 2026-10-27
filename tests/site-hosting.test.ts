@@ -155,10 +155,10 @@ describe('the site in Terraform', () => {
   const env = (e: string) => fs.readFileSync(`infra/terraform/envs/${e}/main.tf`, 'utf8').replace(/#.*$/gm, '');
   const host = (e: string) => /^\s*site_uptime_host\s*=\s*"([^"]*)"/m.exec(env(e))?.[1] ?? '';
 
-  it('exactly one environment runs the site uptime checks, on the public host', () => {
+  it('production alone runs the site uptime checks, on the public host', () => {
     const watching = ['staging', 'prod'].filter((e) => host(e) !== '');
-    expect(watching).toHaveLength(1);
-    expect(host(watching[0])).toBe('algominutes.algorythmos.com');
+    expect(watching).toEqual(['prod']);
+    expect(host('prod')).toBe('algominutes.algorythmos.com');
     expect(fs.readFileSync('infra/terraform/modules/environment/variables.tf', 'utf8')).toMatch(/variable "site_uptime_host"\s*\{[^}]*default\s*=\s*""/);
   });
 

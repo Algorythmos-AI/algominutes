@@ -71,8 +71,7 @@ export function freeFloorMinutes(): number {
 export const PRICING = {
   currency: 'AUD',
   proMonthly: 14.99,
-  proAnnual: 149.9, // ≈ two months free
-  // TODO(A9-pricing): confirm the annual figure + store/Stripe product prices match.
+  proAnnual: 149.99, // ≈ two months free; App Store Connect's AUD price point (DECISIONS 2026-10-26)
 } as const;
 
 /** Entitlement lifecycle states (A9.3): trialing → active | (expired →) free_floor. */

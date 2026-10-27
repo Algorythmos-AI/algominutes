@@ -138,9 +138,12 @@ environment() { # name branch [reviewer-id]
 }
 
 main_has_gate() { # main's deploy-production.yml has the approve job (any failure reads as no)
-  gh api -H 'Accept: application/vnd.github.raw+json' \
-    "repos/$REPO/contents/.github/workflows/deploy-production.yml?ref=main" 2>"$ERR" |
-    grep -q '^    environment: production-approval$'
+  # Read it whole first: piping gh into `grep -q` lets grep exit on the first match, gh then dies of SIGPIPE,
+  # and pipefail turns a found gate into "no gate".
+  local workflow
+  workflow=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+    "repos/$REPO/contents/.github/workflows/deploy-production.yml?ref=main" 2>"$ERR") || return 1
+  grep -q '^    environment: production-approval$' <<<"$workflow"
 }
 
 ruleset() { # branch: one ruleset holding all of its rules, the merge queue included
