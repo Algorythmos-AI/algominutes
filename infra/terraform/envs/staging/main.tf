@@ -153,6 +153,15 @@ module "environment" {
   # (RELEASE.md PR 22: devicecheck_key_id, apple_team_id and the devicecheck-key
   # secret), so a reinstall can't start a fresh one.
   trial_on_first_use = "off"
+
+  # App Store Server API (RELEASE.md PR 26): prod's In-App Purchase key "AlgoMinutes
+  # billing server", its .p8 in this project's app-store-server-key secret. Billing's
+  # hourly reconcile asks Production, then Sandbox, so the beta's sandbox purchases
+  # are checked with the same key. Add the secret's version before applying, or the
+  # reconcile logs apple_reconcile_failed (step key) every hour.
+  app_store_issuer_id = "6f9e67b0-fb28-401d-b347-2bd4ce854e2c"
+  app_store_key_id    = "99C25AQ9YL"
+
   # About 1,600 minutes a day at the default A$0.03 a minute (a cohort of 25
   # testers); A$20, the default, is about 660. The owner's figure.
   daily_spend_cap_aud = 50
