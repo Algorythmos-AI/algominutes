@@ -155,8 +155,13 @@ final class RecordingStore {
 
     /// A recording made for another backend keeps its bytes and loses that backend's note and upload session,
     /// so recovery makes a new note here and nothing retries into an id this backend has never seen.
+    ///
+    /// Decided on the live sidecar, not the caller's copy: launch-time resume works from a snapshot, and an Upload
+    /// in the meantime may already have made the recording a note here. One that belongs to this backend (or says
+    /// nothing either way) is left alone.
     func detachFromOtherBackend(fileName: String) {
-        guard var recording = readSidecar(forFileName: fileName) else { return }
+        guard var recording = readSidecar(forFileName: fileName),
+              let current = currentProjectId(), let made = recording.projectId, made != current else { return }
         recording.noteId = nil
         recording.uploadId = nil
         recording.uploadSessionUri = nil

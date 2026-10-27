@@ -84,6 +84,32 @@ final class RecordingRecoveryTests: XCTestCase {
         XCTAssertEqual(reloaded?.projectId, "algominutes-production")
     }
 
+    /// Review on #508: launch-time resume works from a snapshot. If Upload made the recording a note here meanwhile,
+    /// a detach from that stale snapshot must not undo it: detaching reads the live sidecar, and leaves alone a
+    /// recording that already belongs to this backend.
+    func testDetachingLeavesARecordingThatAlreadyBelongsHere() throws {
+        let store = RecordingStore(directory: tempDir, currentProjectId: { "algominutes-production" })
+        let url = store.makeRecordingURL()
+        try Data(repeating: 0xAB, count: 16).write(to: url)
+        var staging = recording(projectId: "algominutes-staging")
+        staging.fileName = url.lastPathComponent
+        store.write(staging)
+        let staleSnapshot = try XCTUnwrap(store.allPending().first)
+
+        // Upload in the sheet re-associates it with a new note in this backend, and its session starts.
+        store.associate(fileURL: url, noteId: "n-prod", mimeType: "audio/mp4", ext: "m4a", durationSeconds: 23)
+        store.setUploadSession(fileName: url.lastPathComponent, uploadId: "u-prod", sessionUri: "https://storage.googleapis.com/prod")
+
+        // The resume loop reaches its stale snapshot, which still says staging.
+        XCTAssertEqual(staleSnapshot.projectId, "algominutes-staging")
+        store.detachFromOtherBackend(fileName: staleSnapshot.fileName)
+
+        let live = store.pendingRecording(forNoteId: "n-prod")
+        XCTAssertNotNil(live, "the new note's association is kept")
+        XCTAssertEqual(live?.uploadId, "u-prod")
+        XCTAssertEqual(live?.projectId, "algominutes-production")
+    }
+
     func testARefusalIsKeptOnTheRecordingSoTheListCanShowIt() throws {
         let store = RecordingStore(directory: tempDir)
         let url = store.makeRecordingURL()
