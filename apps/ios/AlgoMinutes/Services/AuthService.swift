@@ -1,6 +1,7 @@
 import AuthenticationServices
 import CryptoKit
 import FirebaseAuth
+import FirebaseCore
 import FirebaseFirestore
 import Foundation
 import GoogleSignIn
@@ -14,6 +15,10 @@ final class AuthService: NSObject {
     private(set) var user: User?
     private(set) var isSigningIn = false
     var authError: String?
+
+    /// The Firebase project this build talks to (its GoogleService-Info.plist): the backend a recording is made
+    /// for. Staging and Release share a bundle id, so a recording on disk may have been made for the other one.
+    nonisolated static var firebaseProjectId: String? { FirebaseApp.app()?.options.projectID }
 
     var workspaceId: String? { user.map { AlgoMinutes.workspaceId(forUid: $0.uid) } }
 
