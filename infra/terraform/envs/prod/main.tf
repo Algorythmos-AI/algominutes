@@ -141,10 +141,18 @@ module "environment" {
   admin_uids        = var.admin_uids
   broadcast_capture = var.broadcast_capture
 
-  # No reverse trial until Apple DeviceCheck is set up here (devicecheck_key_id, apple_team_id and the
-  # devicecheck-key secret; RELEASE.md PR 22): without it every new iOS user would open on the free floor,
-  # with devicecheck_not_configured on each first kickoff. Turned on with them.
-  trial_on_first_use = "off"
+  # Apple DeviceCheck (RELEASE.md PR 22): the key "AlgoMinutes DeviceCheck", its .p8 in the devicecheck-key
+  # secret. With it a new iOS device gets the reverse trial once; add the secret's version before applying,
+  # or every first kickoff logs devicecheck_not_configured and settles on the free floor.
+  devicecheck_key_id = "Y928C8QZTY"
+  apple_team_id      = "NY9MS8GSBK"
+  trial_on_first_use = "on"
+
+  # App Store Server API (RELEASE.md PR 26): the In-App Purchase key "AlgoMinutes billing server", its .p8 in
+  # the app-store-server-key secret. Billing's hourly reconcile checks subscriptions with Apple using it.
+  app_store_issuer_id = "6f9e67b0-fb28-401d-b347-2bd4ce854e2c"
+  app_store_key_id    = "99C25AQ9YL"
+
   notetaker_surfaces = var.notetaker_surfaces
 
   # Every new account's minutes before buying (plan rev 12, Stage 3; owner decision 1), so App Review and every
