@@ -29,11 +29,17 @@ class DeviceCheckError extends Error {
     this.code = code;
   }
 
-  /** Apple refused this request for good (a bad token, our key, a bad payload), not an outage to retry. */
+  /**
+   * Apple refused this request for good (a bad token, our key, a bad payload), not an outage to retry. A 200
+   * whose body isn't JSON is Apple's answer too: asking again gets the same one.
+   */
   get permanent() {
-    return this.status >= 400 && this.status < 500 && this.status !== 429;
+    return (this.status >= 400 && this.status < 500 && this.status !== 429) || this.status === 200;
   }
 }
+
+// Apple's body is its descriptive string; kept only if it is one (short, letters and spaces), never the request.
+const appleReason = (text) => (/^[A-Za-z ]{1,60}$/.test(text) ? text : null);
 
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
 
@@ -86,8 +92,7 @@ function createDeviceCheckClient({
       throw new DeviceCheckError(`devicecheck ${path}: ${err?.name === 'TimeoutError' ? 'timed out' : 'network error'}`, { code });
     }
     if (!res.ok) {
-      // Apple's body is its descriptive string; kept only if it is one (short, no JSON), never the request.
-      const reason = /^[A-Za-z ]{1,60}$/.test(text) ? text : null;
+      const reason = appleReason(text);
       throw new DeviceCheckError(`devicecheck ${path}: HTTP ${res.status}${reason ? ` ${reason}` : ''}`, { status: res.status, reason });
     }
     return text;
@@ -97,13 +102,14 @@ function createDeviceCheckClient({
     /** { found: false } for a device whose bits were never set; else { found: true, bit0, bit1, lastUpdateTime }. */
     async queryTwoBits(deviceToken) {
       const text = await call('query_two_bits', deviceToken);
-      if (!text || /bit state not found/i.test(text)) return { found: false };
+      // The docs' "Bit State Not Found", and what the live service answers: "Failed to find bit state".
+      if (!text || /bit state not found|failed to find bit state/i.test(text)) return { found: false };
       let body;
       try {
         body = JSON.parse(text);
       } catch (err) {
         // Not JSON.parse's message: it would quote the body.
-        if (err instanceof SyntaxError) throw new DeviceCheckError('devicecheck query_two_bits: answer is not JSON', { status: 200 });
+        if (err instanceof SyntaxError) throw new DeviceCheckError('devicecheck query_two_bits: answer is not JSON', { status: 200, reason: appleReason(text) });
         throw err;
       }
       return { found: true, bit0: body.bit0 === true, bit1: body.bit1 === true, lastUpdateTime: body.last_update_time ?? null };
