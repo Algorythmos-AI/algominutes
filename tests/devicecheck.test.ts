@@ -48,6 +48,34 @@ describe('the DeviceCheck client', () => {
     expect(a.calls[1].body.transaction_id).not.toBe(a.calls[0].body.transaction_id);
   });
 
+  it('reads Apple\'s live "never marked" answer too, not only the documented one', async () => {
+    // Production, 2026-10-27: a new iPhone's first kickoff got 200 with a non-JSON body and returned 500 on every
+    // retry. The docs say "Bit State Not Found"; the live service answers "Failed to find bit state"
+    // (rinchsan/device-check-go matches that string).
+    const a = fakeApple([{ status: 200, body: 'Failed to find bit state' }, { status: 200, body: 'failed to find bit state\n' }]);
+    const dc = client(a.fetchImpl);
+    expect(await dc.queryTwoBits(TOKEN)).toEqual({ found: false });
+    expect(await dc.queryTwoBits(TOKEN)).toEqual({ found: false });
+  });
+
+  it('any other 200 that isn\'t JSON is Apple\'s answer for good, with its short text kept and never the token', async () => {
+    const a = fakeApple([
+      { status: 200, body: 'Some New Apple Answer' },
+      { status: 200, body: `{"bit0":` },
+      { status: 200, body: `unexpected ${TOKEN}` },
+    ]);
+    const dc = client(a.fetchImpl);
+    const phrase = await dc.queryTwoBits(TOKEN).catch((e: any) => e);
+    expect(phrase).toMatchObject({ name: 'DeviceCheckError', status: 200, reason: 'Some New Apple Answer', message: 'devicecheck query_two_bits: answer is not JSON' });
+    expect(phrase.permanent).toBe(true);
+    const cut = await dc.queryTwoBits(TOKEN).catch((e: any) => e);
+    expect(cut).toMatchObject({ reason: null });
+    expect(cut.permanent).toBe(true);
+    const echo = await dc.queryTwoBits(TOKEN).catch((e: any) => e);
+    expect(echo.reason).toBeNull();
+    for (const e of [phrase, cut, echo]) expect(JSON.stringify({ m: e.message, r: e.reason, s: e.stack })).not.toContain(TOKEN);
+  });
+
   it('writes both bits, to the environment asked for', async () => {
     const a = fakeApple([{ status: 200, body: '' }]);
     await client(a.fetchImpl, { environment: 'development' }).updateTwoBits(TOKEN, { bit0: true, bit1: true });
@@ -190,6 +218,25 @@ describe('the api\'s trial device (services/api device-check.js)', async () => {
     }
     for (const status of [429, 500, 503]) {
       await expect(refusing(status, 'Service Unavailable')({ token: TOKEN, platform: 'ios', log: logger().log }).trialUsed()).rejects.toMatchObject({ status });
+    }
+  });
+
+  it('an answer the client can\'t read is no trial and an error line, never a kickoff that fails on every retry', async () => {
+    // Through the real client: before the fix this threw, and POST /v1/process answered 500 each time.
+    for (const body of ['Failed to find bit state', 'Some New Apple Answer']) {
+      const { log, lines } = logger();
+      const d = createTrialDevices({
+        env: ENV, readSecret: async () => PEM,
+        createClient: (cfg: any) => createDeviceCheckClient({ ...cfg, fetchImpl: fakeApple([{ status: 200, body }]).fetchImpl }),
+      })({ token: TOKEN, platform: 'ios', log });
+      if (body.startsWith('Failed')) {
+        expect(await d.trialUsed()).toBe(false);
+        expect(lines).toEqual([expect.objectContaining({ m: 'trial_device_checked', trialUsed: false, known: false })]);
+      } else {
+        expect(await d.trialUsed()).toBe(true);
+        expect(lines).toEqual([expect.objectContaining({ level: 'error', m: 'devicecheck_refused', status: 200, reason: 'Some New Apple Answer' })]);
+      }
+      expect(JSON.stringify(lines)).not.toContain(TOKEN);
     }
   });
 
