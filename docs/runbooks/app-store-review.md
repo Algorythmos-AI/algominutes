@@ -44,8 +44,10 @@ Keep it short and literal; the reviewer follows it step by step. Update the brac
 AlgoMinutes records meetings on iPhone and turns them into a transcript and a summary.
 
 No account is needed to try it. On first launch the app creates a private guest account
-for this device, with 120 free recording minutes a month, so you can record and read a
-summary straight away. Signing in with Apple or Google later keeps the same notes.
+for this device, so you can record and read a summary straight away. A new iPhone gets a
+7-day free trial with Pro's recording minutes (no payment, once per device); after it,
+every account keeps 120 free recording minutes a month. Signing in with Apple or Google
+later keeps the same notes.
 
 To review:
 1. Open the app and tap the record button on Home ("Record and generate a smart summary").
@@ -97,7 +99,7 @@ user's account, and never an invite code: invite codes don't exist in the App St
 | Is recording consent handled? | The "Before you record" sheet asks for confirmation every first recording and explains processing (`RecorderFlow.swift`). Legal's opinion on recording consent is a Stage 5 sign-off item. |
 | Does it use AI? | Yes: transcription and summaries by Google Cloud (Speech-to-Text, Gemini on Vertex AI in Sydney); the consent sheet and Privacy Policy say so, and the chat is labelled "Ask AI". Transcripts are scrubbed of payment card and similar numbers before any model sees them (CLAUDE.md, `redaction.cjs`). **Open (owner):** the summary itself carries no "written by AI" label; consider one before submission. |
 | CallKit? | Only `CXCallObserver`, so a recording waits while a phone call holds the microphone (`RecorderService`); no VoIP calling. The app isn't offered in mainland China. |
-| Free trial? | Not in 1.0: every account gets a free monthly floor instead (120 minutes). The app promises a trial only to someone in one (#472). |
+| Free trial? | Yes, with no payment: the first recording on a new iPhone starts a 7-day reverse trial with Pro's minutes (`trial_on_first_use = "on"` in production since 2026-10-27; `TRIAL_DAYS`, `packages/contracts/src/limits.ts`). Apple DeviceCheck marks the device, so a reinstall doesn't start another (#503). After it, the free floor of 120 minutes a month. Pro is sold only with StoreKit (A$14.99 a month, A$149.99 a year). The app shows "N days left in your trial" only to someone in one (#472). |
 | Account deletion (5.1.1(v)) | In-app, with Apple token revocation; a failed revocation asks Try again or Delete anyway (#451). |
 
 ## 5. After submitting

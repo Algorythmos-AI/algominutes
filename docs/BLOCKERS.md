@@ -9,6 +9,55 @@ Rev 12 leads `docs/plans/RELEASE.md`: the App-Review readiness check of 2026-10-
 I1–I9, O1–O9), and the five stages to a submission that passes. Each bug closes here under its id, with a
 failing-then-passing test and staging evidence. Rev 11's entries follow, then rev 10's.
 
+- **2026-10-27: production runs end to end** (RELEASE.md "Status, 2026-10-27" has the phases and new ids).
+  - [x] Promotion #499 (e71a0892) and #504 (c354fe12) to `main` as merge commits. All 9 production services run
+    c354fe12, ready, 100% traffic (`gcloud run services describe`). Deploy run 40508312951 was green, including
+    migrate and the authenticated smoke.
+  - [x] #501: a promotion deploys what it changed. Run 40473240214 (#499) logged `Detected 0 changed files` and
+    deployed nothing. Run 40508312951 (#504) logged `between e71a0892 and main` and `Detected 7 changed files`,
+    and deployed all 9 services.
+  - [x] Production Terraform `reviewed-e71a0892` applied: 6 added, 15 changed, 0 destroyed;
+    `check-tfplan-env` OK.
+    - Without `TF_VAR_alert_emails` the plan would have destroyed both alert e-mail channels; planned with them.
+    - api has `TRIAL_ON_FIRST_USE=on`, `DEVICECHECK_KEY_ID`, `APPLE_TEAM_ID`; billing has `APPLE_ISSUER_ID`
+      and `APPLE_KEY_ID`.
+    - The site's 5 uptime checks moved to production (#500). Staging's were removed in `reviewed-89408ffa`,
+      which also added the session-check role and 3 Gemini alerts.
+    - Staging billing got the In-App Purchase key (#502, `reviewed-f22d8d7f`). Its reconcile at 11:32Z logged
+      `apple_reconcile_done` with due=0, so no Apple call was made yet (S18).
+  - [x] #497: billing `billing-00004-l2q` on e71a0892 (dispatch run 40480597486); annual price A$149.99.
+  - [x] Xcode Cloud "Release → App Store": `main`, `/apps/ios`, Xcode 26.3, App Store Connect distribution,
+    internal TestFlight. Build 76 (e71a089), 10 minutes:
+    - post-clone `Firebase project: algominutes-production`;
+    - dSYMs uploaded to Crashlytics on attempt 1;
+    - TestFlight 1.0.0 (76) Ready to Submit.
+    - The plist variable saved unredacted despite the box; re-ticked, and it shows `**********` after a reload.
+  - [x] **P0, fixed: a new iPhone's first note failed to process** (#503).
+    - Build 76 at 12:22Z: upload OK, then `POST /v1/process` 500 on four tries with `meter_ingest_failed:
+      devicecheck query_two_bits: answer is not JSON`.
+    - Cause: Apple's live answer "Failed to find bit state" wasn't recognised.
+    - After #504, "Try again" at 13:39Z: `/v1/process` 200, `trial_device_checked {trialUsed:false,
+      known:false}`, `trial_device_marked`.
+    - Note `Ik4Ke9p4iAZGsVJEQzuh` reached status `ready` at 13:58:21Z, and the app shows "7 days left in your
+      trial".
+  - [ ] S17 (P0): that note's transcoder hit Vertex 429 `RESOURCE_EXHAUSTED` in australia-southeast1 on 4
+    task attempts (`gemini_model_exhausted` ×4, trace `00386a5b`): 19 minutes for 23 s of audio. The nightly
+    e2e (60) failed on 10-25 at 617 s against 600 s.
+    - #505: longer 429 backoff (2/4/8/16 s, 5 attempts).
+    - #506: location fallback, off by default; `processing.json` guarded by `tests/vertex-locations-policy.test.ts`.
+    - Provisioned Throughput: the owner's.
+  - [ ] S18 (P1): a sandbox purchase reconciled with Apple (`apple_reconcile_done` checked ≥1, failed 0).
+  - [ ] I10 (P1): `notify_no_tokens` for that note: no push token on production.
+  - [ ] I11 (P1): "Not yet uploaded" › Upload on a recording made at 11:39Z by the staging build sent nothing
+    to production (no `/v1/uploads` request) and showed nothing. Fix: recovery returns and keeps its reason,
+    and a recording is stamped with its Firebase project (#508).
+  - [ ] I12 (P2): What to Test empty on builds 75 and 76; #507 writes en-AU too (proof: the next build shows it).
+  - [ ] O10 (P1): production `broadcast_capture` is "on" (live env `BROADCAST_CAPTURE=on`) while I3 is open.
+  - [ ] O11 (P2): production `admin_uids` unset.
+  - Docs corrected: the review notes said "Free trial? Not in 1.0" while production runs one.
+    `apps/site/src/components/LegalNotice.astro` still says "AlgoMinutes is in beta" on Terms and Privacy
+    (Phase C, with legal).
+
 - **The readiness check of 2026-10-24 (plan rev 12 R12.1), at integration `6ce9c3f0`.** Read-only: docs, CI
   history, the public site, both GCP projects (read-only), an App-Review audit of `apps/ios`, a backend and
   operations audit. Findings and their ids are in RELEASE.md R12.3. The facts that decide the plan:
