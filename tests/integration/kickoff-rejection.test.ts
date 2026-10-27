@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { getPool, markKickoffRejected } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, lockWaiters } from './helpers';
 
 // markKickoffRejected: a kickoff refused before it queued marks the note
 // failed, unless a duplicate kickoff has it in flight.
@@ -84,8 +84,11 @@ describe('markKickoffRejected', () => {
       await twin.query('BEGIN');
       await twin.query(`UPDATE notes SET status = 'queued', updated_at = NOW() WHERE id = 'n1'`);
       const refusal = markKickoffRejected(fs, input, quietLog);
-      await new Promise((r) => setTimeout(r, 200));
+      // Queued behind the duplicate, not a fixed wait: a refusal that only starts after the COMMIT reads 'queued'
+      // anyway, and this would pass without the race it is about.
+      const waiting = await lockWaiters(twin, 1);
       await twin.query('COMMIT');
+      expect(waiting).toBe(1);
       expect(await refusal).toEqual({ marked: false });
     } finally {
       twin.release();
