@@ -141,6 +141,10 @@ module "environment" {
   admin_uids        = var.admin_uids
   broadcast_capture = var.broadcast_capture
 
+  # The public site's uptime checks (monitoring.tf): production watches it now that it exists, so a site outage
+  # e-mails production's alert_emails. Staging no longer sets it (exactly one environment may).
+  site_uptime_host = "algominutes.algorythmos.com"
+
   # Apple DeviceCheck (RELEASE.md PR 22): the key "AlgoMinutes DeviceCheck", its .p8 in the devicecheck-key
   # secret. With it a new iOS device gets the reverse trial once; add the secret's version before applying,
   # or every first kickoff logs devicecheck_not_configured and settles on the free floor.
