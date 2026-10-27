@@ -145,6 +145,10 @@ jobs:
         if: github.event_name == 'push'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
+          # The commit before this push (dorny compares against it when the base is the
+          # pushed ref). Left unset it diffs against the default branch, which on main
+          # is a promotion's own tree: 0 files, nothing deployed (#499).
+          base: ${{ github.ref }}
           # A change to a shared package or the lockfile redeploys everything
           # that bundles it.
           filters: |
