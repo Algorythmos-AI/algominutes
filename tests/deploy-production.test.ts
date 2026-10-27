@@ -103,6 +103,16 @@ describe('the production deploy', () => {
     }
   });
 
+  it('a push deploys what it changed since the commit before it, not since the default branch', () => {
+    // Without a base the paths filter diffs against the repo's default branch (integration). A promotion's
+    // merge commit has integration's tree, so prod saw 0 changed files and deployed nothing (run 40473240214,
+    // #499). Naming the pushed ref compares against the push's previous commit, on either branch.
+    for (const file of [staging, production]) {
+      const filter = file.slice(file.indexOf('- id: filter'), file.indexOf('- id: pick'));
+      expect(filter).toMatch(/\n {8}with:\n(?: {10}#[^\n]*\n)* {10}base: \$\{\{ github\.ref \}\}\n/);
+    }
+  });
+
   it('authenticates through the local action, which asks WIF a second time, after a checkout', () => {
     const action = fs.readFileSync('.github/actions/gcp-auth/action.yml', 'utf8');
     // The pinned auth action appears twice in the composite (the attempt and the retry), and nowhere else:
