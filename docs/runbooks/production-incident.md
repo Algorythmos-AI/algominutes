@@ -34,9 +34,7 @@ Nobody. There is no paging and no on-call rota (RELEASE.md O4).
   incident) says what to look at. The log-based ones are named after their log event (`jsonPayload.msg`), for
   example `algominutes-prod: dead_letter_recorded`. Incidents auto-close an hour after the condition clears.
 - **The site's uptime alert** (`algominutes site down (<host>)`) lives in the one project that sets
-  `site_uptime_host`. Today that is staging (`envs/staging/main.tf`), so it e-mails staging's `alert_emails`.
-  TODO(verify): move `site_uptime_host` to prod at Apply P, as `variables.tf` says ("staging until prod exists,
-  then prod"); `envs/prod/main.tf` doesn't set it yet.
+  `site_uptime_host`. That is production (`envs/prod/main.tf`), so it e-mails production's `alert_emails`.
 - **A failed production deploy** opens (or comments on) a GitHub issue labelled `prod-deploy-failed`
   (`deploy-production.yml`, `report-failure`). It notifies whoever watches the repo's issues.
 - **Budget alerts** e-mail the billing account's admins (`budget.tf`; resume-staging runbook, "Budget alerts").

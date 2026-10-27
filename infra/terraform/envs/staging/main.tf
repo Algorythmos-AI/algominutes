@@ -144,8 +144,7 @@ module "environment" {
   # plan (the api can't boot on it).
   allowed_origins = "https://algominutes.algorythmos.com,https://staging.algominutes.algorythmos.com,https://beta.algominutes.algorythmos.com"
   admin_uids      = var.admin_uids
-  # The public site's uptime checks live here until prod exists (S3-PR4).
-  site_uptime_host   = "algominutes.algorythmos.com"
+  # The public site's uptime checks moved to prod once it existed (envs/prod/main.tf).
   broadcast_capture  = var.broadcast_capture
   notetaker_surfaces = var.notetaker_surfaces
 
