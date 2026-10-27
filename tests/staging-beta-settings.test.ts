@@ -27,6 +27,17 @@ describe('staging holds the beta’s data', () => {
     expect(setting('allowed_origins')).toContain('https://beta.algominutes.algorythmos.com');
   });
 
+  it('checks the beta’s sandbox subscriptions with Apple, with prod’s In-App Purchase key', () => {
+    // Without these the hourly reconcile logs apple_reconcile_not_configured and checks nothing (staging,
+    // 2026-10-23 → 10-27). One key answers for both of Apple's environments: billing asks Production, then Sandbox.
+    const prod = readFileSync('infra/terraform/envs/prod/main.tf', 'utf8');
+    const prodSetting = (name: string) => new RegExp(`^\\s*${name}\\s*=\\s*(.+?)\\s*(#.*)?$`, 'm').exec(prod)?.[1];
+    for (const name of ['app_store_issuer_id', 'app_store_key_id']) {
+      expect(setting(name), name).toMatch(/^"[^"]+"$/);
+      expect(setting(name), name).toBe(prodSetting(name));
+    }
+  });
+
   it('wires the switches to the services that read them', () => {
     expect(cloudRun).toMatch(/TRIAL_ON_FIRST_USE\s*=\s*var\.trial_on_first_use/);
     // The cap is checked in the api (kickoff) and the transcoder (paid work).
