@@ -227,6 +227,71 @@ describe('callGeminiWithLadder', () => {
     expect(urls[0]).toMatch(/^https:\/\/australia-southeast1-aiplatform\.googleapis\.com\/v1\/projects\/p\/locations\/australia-southeast1\//);
   });
 
+  describe('location fallback (S17, plan A2)', () => {
+    const limited = { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' };
+    // Answers by location: the URL's /locations/<loc>/ segment picks the queue.
+    function byLocation(replies: Record<string, Reply[]>) {
+      const urls: string[] = [];
+      const impl = async (url: string) => {
+        urls.push(url);
+        const loc = /\/locations\/([^/]+)\//.exec(url)![1]!;
+        const r = replies[loc]!.shift()!;
+        return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.body, text: async () => r.text ?? '' };
+      };
+      return { impl, urls };
+    }
+    afterEach(() => { delete process.env.VERTEX_FALLBACK_LOCATIONS; });
+
+    it('off by default: a location that stays at 429 is the only one asked', async () => {
+      const f = byLocation({ 'australia-southeast1': Array(5).fill(limited) });
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: f.impl, log: logSpy().log }));
+      expect(out.error?.message).toMatch(/429/);
+      expect(f.urls.every((u) => u.includes('/locations/australia-southeast1/'))).toBe(true);
+    });
+
+    it('asks the next location, in order, only after the primary ends on a 429; global uses the global host', async () => {
+      process.env.VERTEX_FALLBACK_LOCATIONS = ' australia-southeast2 , global, australia-southeast1';
+      const f = byLocation({
+        'australia-southeast1': Array(5).fill(limited),
+        'australia-southeast2': Array(5).fill(limited),
+        global: [ok('{"g":1}')],
+      });
+      const { log, events } = logSpy();
+      const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: f.impl, log }));
+      expect(out).toMatchObject({ rawText: '{"g":1}', error: null });
+      expect(f.urls.at(-1)).toMatch(/^https:\/\/aiplatform\.googleapis\.com\/v1\/projects\/p\/locations\/global\//);
+      expect(f.urls.filter((u) => u.includes('/locations/australia-southeast2/'))[0]).toMatch(/^https:\/\/australia-southeast2-aiplatform\.googleapis\.com\//);
+      expect(events.filter((e) => e.msg === 'gemini_location_fallback').map((e) => e.obj)).toEqual([
+        { from: 'australia-southeast1', to: 'australia-southeast2' },
+        { from: 'australia-southeast2', to: 'global' },
+      ]);
+    });
+
+    it('an outage or a bad request is not a reason to send the data elsewhere', async () => {
+      for (const failure of [{ status: 503, text: 'UNAVAILABLE' }, { status: 400, text: 'INVALID_ARGUMENT' }]) {
+        const f = byLocation({ 'australia-southeast1': [failure, failure, failure], global: [ok('{}')] });
+        const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: f.impl, log: logSpy().log, fallbackLocations: ['global'] }));
+        expect(out.error).toBeTruthy();
+        expect(f.urls.some((u) => u.includes('/locations/global/'))).toBe(false);
+      }
+    });
+
+    it('falls back only when every rung ended on a 429, not when one rung was an outage', async () => {
+      // Rung a: an outage (503 ×3). Rung b: quota (429 ×5). The last error is a 429, but this location is also down.
+      const replies = { a: [503, 503, 503].map((s) => ({ status: s, text: 'UNAVAILABLE' })), b: Array(5).fill(limited) };
+      const urls: string[] = [];
+      const impl = async (url: string) => {
+        urls.push(url);
+        const model = /models\/([^:]+):/.exec(url)![1]! as 'a' | 'b';
+        const r = url.includes('/locations/global/') ? ok('{}') : replies[model].shift()!;
+        return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => (r as any).body, text: async () => (r as any).text ?? '' };
+      };
+      const out = await callGeminiWithLadder(base({ modelLadder: ['a', 'b'], fetchImpl: impl, log: logSpy().log, fallbackLocations: ['global'] }));
+      expect(out.error?.message).toMatch(/429/);
+      expect(urls.some((u) => u.includes('/locations/global/'))).toBe(false);
+    });
+  });
+
   it('aborts a call that hangs past the budget, instead of holding the worker until Cloud Run times out', async () => {
     const { log, events } = logSpy();
     let signalSeen: AbortSignal | undefined;
