@@ -125,6 +125,8 @@ async function callGeminiWithLadder({
   });
 
   let lastErr = null;
+  // Whether every rung so far ended on a quota refusal (the location fallback's condition, below).
+  let everyRungRateLimited = true;
   for (const modelName of ladder) {
     const url = `https://${hostFor(loc)}/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
     // Dropped for this rung if Vertex refuses the cap itself: an answer with uncapped thinking beats no answer.
@@ -243,11 +245,13 @@ async function callGeminiWithLadder({
         await sleepFn(backoff);
       }
     }
+    if (!isRateLimited(lastErr)) everyRungRateLimited = false;
     log.warn({ model: modelName }, 'gemini_model_exhausted');
   }
   // Every rung here ended on a quota refusal: ask the next location, with what's left of the budget. Any other
-  // failure (an outage, a bad request) isn't this location's capacity, and another location wouldn't fix it.
-  if (fallbacks.length && isRateLimited(lastErr) && Date.now() < deadline) {
+  // failure on any rung (an outage, a bad request, a model not served) isn't this location's capacity, and
+  // another location wouldn't fix it.
+  if (fallbacks.length && everyRungRateLimited && isRateLimited(lastErr) && Date.now() < deadline) {
     const [next, ...rest] = fallbacks;
     log.warn({ from: loc, to: next }, 'gemini_location_fallback');
     return callGeminiWithLadder({

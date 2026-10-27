@@ -275,6 +275,21 @@ describe('callGeminiWithLadder', () => {
         expect(f.urls.some((u) => u.includes('/locations/global/'))).toBe(false);
       }
     });
+
+    it('falls back only when every rung ended on a 429, not when one rung was an outage', async () => {
+      // Rung a: an outage (503 ×3). Rung b: quota (429 ×5). The last error is a 429, but this location is also down.
+      const replies = { a: [503, 503, 503].map((s) => ({ status: s, text: 'UNAVAILABLE' })), b: Array(5).fill(limited) };
+      const urls: string[] = [];
+      const impl = async (url: string) => {
+        urls.push(url);
+        const model = /models\/([^:]+):/.exec(url)![1]! as 'a' | 'b';
+        const r = url.includes('/locations/global/') ? ok('{}') : replies[model].shift()!;
+        return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => (r as any).body, text: async () => (r as any).text ?? '' };
+      };
+      const out = await callGeminiWithLadder(base({ modelLadder: ['a', 'b'], fetchImpl: impl, log: logSpy().log, fallbackLocations: ['global'] }));
+      expect(out.error?.message).toMatch(/429/);
+      expect(urls.some((u) => u.includes('/locations/global/'))).toBe(false);
+    });
   });
 
   it('aborts a call that hangs past the budget, instead of holding the worker until Cloud Run times out', async () => {
