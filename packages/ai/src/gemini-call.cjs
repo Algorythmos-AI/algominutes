@@ -49,6 +49,17 @@ const RATE_LIMITED_ATTEMPTS = 5;
 const isRateLimited = (err) => /\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '');
 const rateLimitBackoffMs = (attempt) => Math.min(2_000 * 2 ** attempt, 16_000) + Math.floor(Math.random() * 1_000);
 
+// Where else Gemini may be asked when the primary location ends on a quota refusal: VERTEX_FALLBACK_LOCATIONS,
+// comma-separated, in order, and EMPTY by default. A location here is a place users' transcripts and audio are
+// sent, so it must be in the Privacy Policy's processor table first (apps/site/src/data/processing.json;
+// tests/vertex-locations-policy.test.ts holds Terraform to it). 'global' is Vertex's global endpoint, whose host
+// has no region prefix.
+const hostFor = (loc) => (loc === 'global' ? 'aiplatform.googleapis.com' : `${loc}-aiplatform.googleapis.com`);
+function fallbackLocationsFrom(value, primary) {
+  const list = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(list.map((l) => String(l).trim()).filter(Boolean))].filter((l) => l !== primary);
+}
+
 function extractText(data) {
   // Vertex AI generateContent returns:
   //   { candidates: [ { content: { parts: [{ text }] }, finishReason } ] }
@@ -76,6 +87,8 @@ async function callGeminiWithLadder({
   thinking,
   project,
   location,
+  // Asked in order when `location` ends on a 429 (default: VERTEX_FALLBACK_LOCATIONS, empty unless set).
+  fallbackLocations,
   // Injection points for tests; production uses ADC, global fetch and real sleeps.
   tokenProvider,
   fetchImpl = globalThis.fetch,
@@ -93,6 +106,7 @@ async function callGeminiWithLadder({
     });
   }
   const loc = location || process.env.AIPLATFORM_LOCATION || 'us-central1';
+  const fallbacks = fallbackLocationsFrom(fallbackLocations ?? process.env.VERTEX_FALLBACK_LOCATIONS, loc);
   if (!proj) {
     return { rawText: null, model: null, error: new Error('callGeminiWithLadder: project not resolvable') };
   }
@@ -112,7 +126,7 @@ async function callGeminiWithLadder({
 
   let lastErr = null;
   for (const modelName of ladder) {
-    const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
+    const url = `https://${hostFor(loc)}/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
     // Dropped for this rung if Vertex refuses the cap itself: an answer with uncapped thinking beats no answer.
     let withThinking = true;
     let attempts = ATTEMPTS;
@@ -230,6 +244,16 @@ async function callGeminiWithLadder({
       }
     }
     log.warn({ model: modelName }, 'gemini_model_exhausted');
+  }
+  // Every rung here ended on a quota refusal: ask the next location, with what's left of the budget. Any other
+  // failure (an outage, a bad request) isn't this location's capacity, and another location wouldn't fix it.
+  if (fallbacks.length && isRateLimited(lastErr) && Date.now() < deadline) {
+    const [next, ...rest] = fallbacks;
+    log.warn({ from: loc, to: next }, 'gemini_location_fallback');
+    return callGeminiWithLadder({
+      parts, deadlineMs: deadline - Date.now(), attemptTimeoutMs, log, modelLadder: ladder, generationConfig, thinking,
+      project: proj, location: next, fallbackLocations: rest, tokenProvider: getToken, fetchImpl, sleepFn,
+    });
   }
   return { rawText: null, model: null, error: lastErr || new Error('All Gemini models overloaded') };
 }
