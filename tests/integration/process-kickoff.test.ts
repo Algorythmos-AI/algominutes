@@ -268,7 +268,16 @@ describe('POST /v1/process, first kickoff of a new note', () => {
         await blocker.query('BEGIN');
         await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['meter:alice']);
         const pending = kickoff('alice', upload('alice', 'n1'));
-        await new Promise((r) => setTimeout(r, 300));
+        // Wait until the kickoff really queues behind the lock, not a fixed time: one that reaches its early quota
+        // check after the grant commits sees the minutes, is capped there and writes no row (CI, 2026-10-27).
+        // pg_locks, not pg_stat_activity: the latter is snapshotted per transaction.
+        let waiting = 0;
+        for (let i = 0; i < 1000 && !waiting; i++) {
+          const { rows } = await blocker.query(`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`);
+          waiting = rows[0].n;
+          if (!waiting) await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(waiting).toBe(1);
         // The grant is written on the blocker's own connection: the kickoff holds the app's while it waits for the
         // lock, and CI also runs this suite with every pool capped at one connection (PG_POOL_MAX=1).
         await blocker.query(
