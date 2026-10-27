@@ -40,6 +40,15 @@ function isModelUnavailable(status) {
   return status === 404;
 }
 
+// A quota refusal (429 RESOURCE_EXHAUSTED) is Vertex's shared capacity saying "not now", not an outage. Asked
+// again 2–4 s later it refused again for minutes (production, 2026-10-27: four task attempts, 19 minutes for a
+// 23 s note). So it gets more attempts on the rung, further apart: 2, 4, 8, 16 s plus up to 1 s of jitter, about
+// 30 s in all, and never past the ladder's budget. Other transient errors keep 3 quick attempts.
+const ATTEMPTS = 3;
+const RATE_LIMITED_ATTEMPTS = 5;
+const isRateLimited = (err) => /\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '');
+const rateLimitBackoffMs = (attempt) => Math.min(2_000 * 2 ** attempt, 16_000) + Math.floor(Math.random() * 1_000);
+
 function extractText(data) {
   // Vertex AI generateContent returns:
   //   { candidates: [ { content: { parts: [{ text }] }, finishReason } ] }
@@ -106,7 +115,8 @@ async function callGeminiWithLadder({
     const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
     // Dropped for this rung if Vertex refuses the cap itself: an answer with uncapped thinking beats no answer.
     let withThinking = true;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let attempts = ATTEMPTS;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       if (Date.now() > deadline) {
         lastErr = new Error('TIME_BUDGET');
         return { rawText: null, model: null, error: lastErr };
@@ -204,13 +214,18 @@ async function callGeminiWithLadder({
           log.error({ err, model: modelName }, 'gemini_non_retryable');
           return { rawText: null, model: null, error: err };
         }
-        const backoff = backoffMs(attempt);
+        const rateLimited = isRateLimited(err);
+        if (rateLimited) attempts = RATE_LIMITED_ATTEMPTS;
+        const backoff = rateLimited ? rateLimitBackoffMs(attempt) : backoffMs(attempt);
         log.warn({ err, model: modelName, attempt: attempt + 1, backoff }, 'gemini_transient');
         // A quota refusal, told apart from an outage (503): the case for more quota or provisioned throughput
-        // (plan rev 12 S2). It's still a gemini_transient, and retried the same way.
-        if (/\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '')) {
+        // (plan rev 12 S2). It's still a gemini_transient, retried with the longer backoff above.
+        if (rateLimited) {
           log.warn({ model: modelName, attempt: attempt + 1, location: loc }, 'gemini_rate_limited');
         }
+        if (attempt + 1 >= attempts) break;
+        // A wait that would end past the budget can't be followed by an attempt: the next rung gets what's left.
+        if (Date.now() + backoff > deadline) break;
         await sleepFn(backoff);
       }
     }

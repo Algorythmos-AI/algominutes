@@ -79,6 +79,60 @@ describe('callGeminiWithLadder', () => {
     expect(limited[0]!.obj).toMatchObject({ model: 'model-a', attempt: 1 });
   });
 
+  // Production, 2026-10-27: a 23 s note's fast path hit 429s 2–4 s apart, gave the rung up after 3, and the task
+  // went back to Cloud Tasks four times (19 minutes). A quota refusal now backs off longer (2, 4, 8, 16 s, with
+  // jitter) and gets 5 attempts on the rung, all inside the ladder's budget; an outage keeps 3 quick ones.
+  it('a 429 backs off for longer and gets 5 attempts on the rung; a 503 keeps 3 quick ones', async () => {
+    const waits: number[] = [];
+    const sleepFn = async (ms: number) => { waits.push(ms); };
+    const limited = { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' };
+    const { impl, calls } = fakeFetch({ 'model-a': [limited, limited, limited, limited, ok('{"a":1}')] });
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log, sleepFn }));
+    expect(out).toMatchObject({ rawText: '{"a":1}', error: null });
+    expect(calls).toHaveLength(5);
+    expect(waits).toHaveLength(4);
+    [2_000, 4_000, 8_000, 16_000].forEach((floor, i) => {
+      expect(waits[i]).toBeGreaterThanOrEqual(floor);
+      expect(waits[i]).toBeLessThan(floor + 1_000);
+    });
+
+    const outage = { status: 503, text: '{"error":{"status":"UNAVAILABLE"}}' };
+    const quick: number[] = [];
+    const { impl: down, calls: downCalls } = fakeFetch({ 'model-a': [outage, outage, outage] });
+    const failed = await callGeminiWithLadder(base({ modelLadder: ['model-a'], fetchImpl: down, log: logSpy().log, sleepFn: async (ms: number) => { quick.push(ms); } }));
+    expect(failed.error?.message).toMatch(/503/);
+    expect(downCalls).toHaveLength(3);
+    expect(Math.max(...quick)).toBeLessThan(2_500);
+  });
+
+  it('a 429 that never clears ends the rung after 5 attempts, then the next rung is asked', async () => {
+    const limited = { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' };
+    const { impl, calls } = fakeFetch({ 'model-a': Array(5).fill(limited), 'model-b': [ok('{"b":1}')] });
+    const { log, events } = logSpy();
+    const out = await callGeminiWithLadder(base({ modelLadder: ['model-a', 'model-b'], fetchImpl: impl, log }));
+    expect(out).toMatchObject({ model: 'model-b', error: null });
+    expect(calls.filter((m) => m === 'model-a')).toHaveLength(5);
+    expect(events.filter((e) => e.msg === 'gemini_rate_limited')).toHaveLength(5);
+    expect(events.find((e) => e.msg === 'gemini_model_exhausted')?.obj).toMatchObject({ model: 'model-a' });
+  });
+
+  it('never sleeps past the budget: a 429 backoff longer than what is left ends the call with the 429', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const waits: number[] = [];
+    const limited = { status: 429, text: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' };
+    const { impl, calls } = fakeFetch({ 'model-a': [limited, limited, limited, limited, limited] });
+    const out = await callGeminiWithLadder(base({
+      modelLadder: ['model-a'], fetchImpl: impl, log: logSpy().log, deadlineMs: 10_000,
+      sleepFn: async (ms: number) => { waits.push(ms); now += ms; },
+    }));
+    // 2 s and 4 s fit in 10 s; 8 s more would not.
+    expect(waits).toHaveLength(2);
+    expect(calls).toHaveLength(3);
+    expect(out.error?.message).toMatch(/429/);
+    vi.restoreAllMocks();
+  });
+
   it('stops on a non-transient request error (400): another model will not fix a bad request', async () => {
     const { impl, calls } = fakeFetch({ 'model-a': [{ status: 400, text: 'INVALID_ARGUMENT' }], 'model-b': [ok('{}')] });
     const { log } = logSpy();
