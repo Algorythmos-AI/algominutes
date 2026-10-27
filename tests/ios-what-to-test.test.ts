@@ -99,4 +99,13 @@ describe('ci_post_xcodebuild.sh', () => {
     expect(call).toBeGreaterThan(POST_BUILD.indexOf('cd "${CI_PRIMARY_REPOSITORY_PATH'));
     expect(call).toBeLessThan(POST_BUILD.indexOf('"$UPLOAD" -gsp'));
   });
+
+  it("also writes it for the app's primary language, English (Australia)", () => {
+    // Xcode Cloud attaches a WhatToTest.<locale>.txt only for a language the app's test information has. The app's
+    // primary language is English (Australia), and every build so far showed no notes (builds 75 and 76,
+    // 2026-10-27) with only en-US written.
+    const copy = POST_BUILD.indexOf('cp TestFlight/WhatToTest.en-US.txt TestFlight/WhatToTest.en-AU.txt');
+    expect(copy).toBeGreaterThan(POST_BUILD.indexOf('if ! sh ci_scripts/what-to-test.sh'));
+    expect(copy).toBeLessThan(POST_BUILD.indexOf('"$UPLOAD" -gsp'));
+  });
 });
