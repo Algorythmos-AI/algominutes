@@ -27,6 +27,8 @@ final class PushTokenRegistrar {
 
     /// Set at launch to FirebaseMessaging's `deleteToken`.
     var deleteDeviceToken: (() async throws -> Void)?
+    /// Set at launch to FirebaseMessaging's `token()`.
+    var fetchDeviceToken: (() async throws -> String)?
 
     private let appVersion: String?
     private let register: Register
@@ -44,6 +46,21 @@ final class PushTokenRegistrar {
         guard let token, !token.isEmpty else { return }
         self.token = token
         await registerIfNeeded()
+    }
+
+    /// APNs gave the device its token, now handed to FirebaseMessaging. The FCM token is asked for outright, not
+    /// left to the delegate: Messaging fetches one by itself only when it has no cached token at all or the APNs
+    /// token changed. A device that last ran a build on the other Firebase project (staging and Release share the
+    /// bundle id) keeps that project's token and never got this one's, so build 76 registered nothing on
+    /// production (2026-10-27). `token()` returns the cached token when it is this project's.
+    func apnsTokenArrived() async {
+        guard let fetchDeviceToken else { return }
+        do {
+            let token = try await fetchDeviceToken()
+            await tokenRefreshed(token)
+        } catch {
+            AppLog.error("push_token_fetch_failed: \(error.localizedDescription)")
+        }
     }
 
     /// The signed-in user changed (`nil`: signed out).
