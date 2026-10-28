@@ -27,6 +27,8 @@ export interface SubscriptionRow {
   google_purchase_token: string | null;
   stripe_subscription_id: string | null;
   stripe_customer_id: string | null;
+  /** An iPhone's first kickoff came without a DeviceCheck token: the trial waits for one (migration 041). */
+  trial_device_pending?: boolean;
 }
 
 export async function getSubscription(
@@ -96,10 +98,20 @@ export async function ensureTrial(
     };
   }
   const existing = await getSubscription(uid);
-  if (existing) return existing; // never restart on same uid
+  if (existing) {
+    // Never restart on the same uid. The one exception: an iPhone whose first kickoff came without its
+    // DeviceCheck token was only deferred (plan rev 12 S8), and the first kickoff with one decides it.
+    if (existing.trial_device_pending && opts.platform === 'ios' && opts.device && trialOnFirstUse()
+      && deriveState(existing) === 'free_floor' && !existing.trial_end && !everPaid(existing)) {
+      return startDeferredTrial(uid, opts.device, opts.log);
+    }
+    return existing;
+  }
 
   // Eligibility gate for a FRESH trial. Switched off, nobody new gets one.
   let eligible = trialOnFirstUse();
+  // An iPhone with no token to ask Apple about opens on the free floor, its trial deferred, not refused.
+  let deferred = false;
   if (eligible && opts.platform === 'web') {
     eligible = opts.emailPresent === true; // web requires an email
   } else if (eligible && opts.platform === 'ios') {
@@ -111,6 +123,7 @@ export async function ensureTrial(
       const { rowCount } = await getPool().query('SELECT 1 FROM account_deletions WHERE uid = $1', [uid]);
       if (rowCount) throw new AccountDeletedError(uid);
     }
+    deferred = !opts.device;
     eligible = !!opts.device && !(await opts.device.trialUsed());
   } else if (eligible && opts.platform !== undefined) {
     // Android (Play Integrity isn't checked yet, A11), or a platform nobody ships: no fresh trial.
@@ -135,11 +148,11 @@ export async function ensureTrial(
       )
       // Not eligible for a fresh trial → open on the free floor (no trial_end set).
       : await client.query(
-        `INSERT INTO subscriptions (uid, plan, status, entitlement_state)
-           VALUES ($1, 'free', 'active', 'free_floor')
+        `INSERT INTO subscriptions (uid, plan, status, entitlement_state, trial_device_pending)
+           VALUES ($1, 'free', 'active', 'free_floor', $2)
          ON CONFLICT (uid) DO NOTHING
          RETURNING *`,
-        [uid],
+        [uid, deferred],
       );
     return rows[0] as SubscriptionRow | undefined;
   }, { log: opts.log, fields: { userId: uid } });
@@ -155,15 +168,63 @@ export async function ensureTrial(
   return created ?? (await getSubscription(uid))!;
 }
 
+function everPaid(row: SubscriptionRow): boolean {
+  return !!row.apple_original_transaction_id || !!row.google_purchase_token || !!row.stripe_subscription_id;
+}
+
+/**
+ * The first kickoff with a DeviceCheck token on an account whose trial was deferred (no token the first time):
+ * the same rules as a new user's first kickoff with one. Apple says whether the device has had a trial; if not,
+ * the trial starts and the device is marked, if so, the free floor is settled. Either way the account is never
+ * asked about again. The UPDATE is guarded on the pending mark, so a replayed or racing kickoff starts no
+ * second trial and marks the device once.
+ */
+async function startDeferredTrial(
+  uid: string,
+  device: TrialDevice,
+  log?: { error: (o: any, m?: string) => void; warn: (o: any, m?: string) => void },
+): Promise<SubscriptionRow> {
+  // A deleted account is refused before Apple is asked, as on a first kickoff.
+  const { rowCount } = await getPool().query('SELECT 1 FROM account_deletions WHERE uid = $1', [uid]);
+  if (rowCount) throw new AccountDeletedError(uid);
+  const used = await device.trialUsed(); // throws in an Apple outage: nothing written, the retry asks again
+  const { rows } = used
+    ? await getPool().query(
+      `UPDATE subscriptions SET trial_device_pending = FALSE, updated_at = NOW()
+        WHERE uid = $1 AND trial_device_pending
+        RETURNING *`,
+      [uid],
+    )
+    : await getPool().query(
+      `UPDATE subscriptions
+          SET status = 'trialing', entitlement_state = 'trialing',
+              trial_started_at = NOW(), trial_end = NOW() + ($2 || ' days')::interval,
+              trial_device_pending = FALSE, updated_at = NOW()
+        WHERE uid = $1 AND trial_device_pending AND entitlement_state = 'free_floor' AND trial_end IS NULL
+          AND apple_original_transaction_id IS NULL AND google_purchase_token IS NULL
+          AND stripe_subscription_id IS NULL
+        RETURNING *`,
+      [uid, String(TRIAL_DAYS)],
+    );
+  const updated = rows[0] as SubscriptionRow | undefined;
+  if (updated?.entitlement_state === 'trialing' && !used) {
+    // After the write, as on a first kickoff: a failure costs at most one more trial on that device, and says so.
+    try {
+      await device.markTrialUsed();
+    } catch (err) {
+      (log ?? rootLog).error({ err, userId: uid }, 'trial_device_mark_failed');
+    }
+  }
+  return updated ?? (await getSubscription(uid))!;
+}
+
 /** Pure, server-time derivation of the current entitlement state. */
 export function deriveState(row: SubscriptionRow | null, now: Date = new Date()): EntitlementState {
   if (!row) return 'trialing'; // brand-new caller; ensureTrial materialises it
   const periodEnd = row.current_period_end ? new Date(row.current_period_end) : null;
   if (periodEnd && periodEnd > now) return 'active'; // a paid period (any rail) is current
   const trialEnd = row.trial_end ? new Date(row.trial_end) : null;
-  const everPaid =
-    !!row.apple_original_transaction_id || !!row.google_purchase_token || !!row.stripe_subscription_id;
-  if (trialEnd && trialEnd > now && !everPaid) return 'trialing';
+  if (trialEnd && trialEnd > now && !everPaid(row)) return 'trialing';
   return 'free_floor';
 }
 
