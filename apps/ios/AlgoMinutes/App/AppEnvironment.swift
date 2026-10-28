@@ -76,7 +76,7 @@ final class AppEnvironment {
         self.api = api
         self.auth = AuthService()
         self.notes = NotesRepository(api: api)
-        let store = RecordingStore()
+        let store = RecordingStore(currentProjectId: { AuthService.firebaseProjectId })
         self.recordingStore = store
         let consentGate = SessionConsentGate()
         self.consentGate = consentGate
@@ -318,6 +318,14 @@ final class AppEnvironment {
         let resumable = recordingStore.allPending().filter { $0.noteId != nil }
         for pending in resumable {
             guard let noteId = pending.noteId else { continue }
+            // Made for the other build's backend: its note isn't here. It waits in "Not yet uploaded" as a
+            // recording without a note, where Upload makes it a new one.
+            if RecoveryPlan.decide(pending, fileExists: true, currentProjectId: AuthService.firebaseProjectId)
+                == .newNote(fromOtherBackend: true) {
+                AppLog.info("resume_pending_other_backend file=\(pending.fileName) madeFor=\(pending.projectId ?? "unknown")")
+                recordingStore.detachFromOtherBackend(fileName: pending.fileName)
+                continue
+            }
             // Skip anything already uploading (live capture flow), retrying, or
             // mid-resume.
             guard uploadProgress[noteId] == nil,
@@ -325,7 +333,9 @@ final class AppEnvironment {
                   !resumeInFlight.contains(noteId) else { continue }
             resumeInFlight.insert(noteId)
             AppLog.info("resuming_pending_upload noteId=\(noteId)")
-            _ = await reupload(noteId: noteId, type: .recording, pending: pending, retryAttempt: nil)
+            if case .blocked(let message) = await reupload(noteId: noteId, type: .recording, pending: pending, retryAttempt: nil) {
+                AppLog.error("resume_pending_upload_blocked noteId=\(noteId): \(message)")
+            }
             resumeInFlight.remove(noteId)
         }
     }
@@ -559,11 +569,23 @@ final class AppEnvironment {
     /// Recover an unfinished recording found on launch. If it is still linked to
     /// a live note, re-upload into that note (never a duplicate); otherwise the
     /// app died before any note existed, so create a fresh one.
-    func recoverRecording(_ pending: RecordingStore.PendingRecording, onNoteCreated: @MainActor (String) -> Void = { _ in }) async {
+    ///
+    /// Returns what happened, and never ends quietly: a refusal is logged and kept on the recording, so the
+    /// "Not yet uploaded" list can say it. Its sheet hides `alertMessage` (the root alert can't show over it), and
+    /// on 2026-10-27 an Upload there sent nothing and showed nothing.
+    @discardableResult
+    func recoverRecording(
+        _ pending: RecordingStore.PendingRecording, onNoteCreated: @MainActor (String) -> Void = { _ in }
+    ) async -> NotesRepository.RetryOutcome {
         let fileURL = recordingStore.audioURL(for: pending)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        let plan = RecoveryPlan.decide(
+            pending, fileExists: FileManager.default.fileExists(atPath: fileURL.path),
+            currentProjectId: AuthService.firebaseProjectId
+        )
+        if plan == .gone {
+            AppLog.info("recording_recovery_gone file=\(pending.fileName)")
             recordingStore.remove(fileName: pending.fileName)
-            return
+            return .blocked(message: "This recording is no longer on this iPhone.")
         }
         // Everything recovered from disk goes through here, so this is the one
         // place that has to prove the file is actually playable. A recording the
@@ -577,13 +599,23 @@ final class AppEnvironment {
         guard verdict.isPlayable else {
             AppLog.error("recording_recovery_rejected file=\(pending.fileName)")
             alertMessage = RecordingValidator.damagedMessage
-            return
+            return .blocked(message: RecordingValidator.damagedMessage)
         }
 
-        if let noteId = pending.noteId {
+        switch plan {
+        case .reupload(let noteId):
             onNoteCreated(noteId)
-            _ = await reupload(noteId: noteId, type: .recording, pending: pending, retryAttempt: nil)
-        } else {
+            let outcome = await reupload(noteId: noteId, type: .recording, pending: pending, retryAttempt: nil)
+            if case .blocked(let message) = outcome {
+                AppLog.error("recording_recovery_blocked noteId=\(noteId): \(message)")
+            }
+            return outcome
+        case .gone, .newNote:
+            if plan == .newNote(fromOtherBackend: true) {
+                AppLog.info("recording_recovery_other_backend file=\(pending.fileName) madeFor=\(pending.projectId ?? "unknown")")
+                recordingStore.detachFromOtherBackend(fileName: pending.fileName)
+            }
+            let alertBefore = alertMessage
             await uploadAndProcess(
                 fileURL: fileURL,
                 mimeType: pending.mimeType,
@@ -598,6 +630,12 @@ final class AppEnvironment {
                 durationSeconds: pending.durationSeconds ?? verdict.durationSeconds,
                 onNoteCreated: onNoteCreated
             )
+            // uploadAndProcess reports a failure through alertMessage only.
+            if let message = alertMessage, message != alertBefore {
+                AppLog.error("recording_recovery_blocked file=\(pending.fileName): \(message)")
+                return .blocked(message: message)
+            }
+            return .queued
         }
     }
 
@@ -606,7 +644,12 @@ final class AppEnvironment {
     private func reupload(
         noteId: String, type: NoteType, pending: RecordingStore.PendingRecording, retryAttempt: Int?
     ) async -> NotesRepository.RetryOutcome {
-        guard let wsId = auth.workspaceId else { return .blocked(message: "Please sign in to do that.") }
+        guard let wsId = auth.workspaceId else {
+            // Kept on the recording: this used to leave it on "Waiting to upload" with nothing said.
+            let message = "Please sign in to do that."
+            recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
+            return .blocked(message: message)
+        }
         let fileURL = recordingStore.audioURL(for: pending)
 
         var fields: [String: Any] = [
@@ -675,11 +718,16 @@ final class AppEnvironment {
             }
             return .queued
         } catch {
-            if Self.kickoffWasDecided(error) { recordingStore.remove(fileName: pending.fileName) }
-            return .blocked(message: handleKickoffFailure(
+            let message = handleKickoffFailure(
                 error, noteId: noteId, event: "reupload_process_kickoff_failed",
                 fallback: "Could not start processing. Please try again."
-            ))
+            )
+            if Self.kickoffWasDecided(error) {
+                recordingStore.remove(fileName: pending.fileName)
+            } else {
+                recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
+            }
+            return .blocked(message: message)
         }
     }
 

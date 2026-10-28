@@ -74,6 +74,10 @@ final class RecordingStore {
         /// a retry continues it from the server's byte count instead of starting over.
         var uploadId: String?
         var uploadSessionUri: String?
+        /// The Firebase project the recording was made for (its note and upload session live there). Nil for a
+        /// sidecar written before this was kept. RecoveryPlan uses it so a recording found by the other build
+        /// (Staging and Release share a bundle id) becomes a new note here, not a retry into a foreign note.
+        var projectId: String?
 
         var id: String { recordingId }
         var isAssociated: Bool { noteId != nil }
@@ -83,9 +87,12 @@ final class RecordingStore {
     /// volume before starting, so it needs to know which volume that is.
     let directory: URL
     private let fileManager: FileManager
+    /// Stamped on each recording as it's associated with a note (PendingRecording.projectId).
+    private let currentProjectId: () -> String?
 
-    init(directory: URL? = nil, fileManager: FileManager = .default) {
+    init(directory: URL? = nil, fileManager: FileManager = .default, currentProjectId: @escaping () -> String? = { nil }) {
         self.fileManager = fileManager
+        self.currentProjectId = currentProjectId
         self.directory = directory ?? Self.defaultDirectory(fileManager: fileManager)
         ensureDirectory()
     }
@@ -133,7 +140,7 @@ final class RecordingStore {
     /// same note.
     func associate(fileURL: URL, noteId: String, mimeType: String, ext: String, durationSeconds: Int?) {
         let fileName = fileURL.lastPathComponent
-        write(PendingRecording(
+        var recording = PendingRecording(
             recordingId: recordingId(fromFileName: fileName),
             fileName: fileName,
             mimeType: mimeType,
@@ -141,7 +148,27 @@ final class RecordingStore {
             durationSeconds: durationSeconds,
             noteId: noteId,
             createdAt: Date()
-        ))
+        )
+        recording.projectId = currentProjectId()
+        write(recording)
+    }
+
+    /// A recording made for another backend keeps its bytes and loses that backend's note and upload session,
+    /// so recovery makes a new note here and nothing retries into an id this backend has never seen.
+    ///
+    /// Decided on the live sidecar, not the caller's copy: launch-time resume works from a snapshot, and an Upload
+    /// in the meantime may already have made the recording a note here. One that belongs to this backend (or says
+    /// nothing either way) is left alone.
+    func detachFromOtherBackend(fileName: String) {
+        guard var recording = readSidecar(forFileName: fileName),
+              let current = currentProjectId(), let made = recording.projectId, made != current else { return }
+        recording.noteId = nil
+        recording.uploadId = nil
+        recording.uploadSessionUri = nil
+        recording.state = .recorded
+        recording.lastError = nil
+        recording.projectId = currentProjectId()
+        write(recording)
     }
 
     func write(_ recording: PendingRecording) {
@@ -287,5 +314,6 @@ extension RecordingStore.PendingRecording {
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
         uploadId = try c.decodeIfPresent(String.self, forKey: .uploadId)
         uploadSessionUri = try c.decodeIfPresent(String.self, forKey: .uploadSessionUri)
+        projectId = try c.decodeIfPresent(String.self, forKey: .projectId)
     }
 }

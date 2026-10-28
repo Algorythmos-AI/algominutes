@@ -20,6 +20,8 @@ struct PendingRecordingsView: View {
     @State private var checking = true
     @State private var busy: String?
     @State private var pendingDeletion: RecordingStore.PendingRecording?
+    /// Why the last Upload didn't go ahead. Shown here: the app's alert can't show over this sheet.
+    @State private var notice: String?
 
     var body: some View {
         NavigationStack {
@@ -78,6 +80,12 @@ struct PendingRecordingsView: View {
 
     private var list: some View {
         List {
+            if let notice {
+                Text(notice)
+                    .font(Typography.body(13))
+                    .foregroundStyle(Theme.outline)
+                    .listRowBackground(Theme.surface)
+            }
             ForEach(pending) { item in
                 row(item)
                     .listRowBackground(Theme.surface)
@@ -190,7 +198,12 @@ struct PendingRecordingsView: View {
     private func upload(_ item: RecordingStore.PendingRecording) async {
         busy = item.fileName
         defer { busy = nil }
-        await env.recoverRecording(item) { noteId in onNoteOpened(noteId) }
+        notice = nil
+        if case .blocked(let message) = await env.recoverRecording(item, onNoteCreated: { noteId in onNoteOpened(noteId) }) {
+            notice = message
+            // Said here instead: it would otherwise wait under this sheet and pop up after it closes.
+            if env.alertMessage == message { env.alertMessage = nil }
+        }
         await refresh()
     }
 }
