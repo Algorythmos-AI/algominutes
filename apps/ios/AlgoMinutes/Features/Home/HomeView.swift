@@ -345,6 +345,7 @@ struct HomeView: View {
                         .buttonStyle(.plain)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(note.title.isEmpty ? "Untitled" : note.title). \(Self.recentStatus(note, uploadPercent: env.uploadProgress[note.id]))")
+                        .accessibilityIdentifier("home.recent.\(note.id)")
                         if note.id != notes.last?.id {
                             Divider().overlay(Theme.borderSoft).padding(.horizontal, Theme.Spacing.lg)
                         }
@@ -396,6 +397,7 @@ struct HomeView: View {
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.surface))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Example note: \(SampleNote.note.title)")
+                .accessibilityIdentifier("home.example")
                 .accessibilityHint("Shows what a note looks like")
             }
         }

@@ -15,6 +15,18 @@ enum UITestHooks {
         #endif
     }()
 
+    /// `-AMUITestFreshGuest`: sign out a signed-in account at launch, so the app starts as a brand-new guest, as on a
+    /// first install (AppEnvironment.signOutForFreshGuest). Passed only by the opt-in fresh-guest test.
+    static let freshGuestArgument = "-AMUITestFreshGuest"
+
+    static let freshGuest: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains(freshGuestArgument)
+        #else
+        return false
+        #endif
+    }()
+
     /// The value after `-AMUITestClientVersion`, when there is one.
     static func clientVersion(arguments: [String]) -> String? {
         guard let flag = arguments.firstIndex(of: clientVersionArgument), flag + 1 < arguments.count else { return nil }

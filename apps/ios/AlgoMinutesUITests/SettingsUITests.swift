@@ -87,7 +87,9 @@ final class SettingsUITests: XCTestCase {
                       "a guest's sign-out didn't ask first")
         XCTAssertTrue(app.buttons["Create account instead"].exists)
         screenshot(app, "guest sign-out asks")
-        app.buttons["Cancel"].firstMatch.tap()
+        dismissDialog(app)
+        XCTAssertTrue(app.staticTexts["Sign out of the guest account?"].waitForNonExistence(timeout: 5),
+                      "the sign-out question didn't close")
         XCTAssertTrue(app.element("settings.account.guest").waitForExistence(timeout: 5), "the guest was signed out")
     }
 

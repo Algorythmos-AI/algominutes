@@ -458,6 +458,7 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(label): \(value)")
         .accessibilityHint("Copies it, to send to AlgoMinutes support")
+        .accessibilityIdentifier("settings.copy.\(label)")
     }
 
     private func linkRow(label: String, icon: String? = nil) -> some View {

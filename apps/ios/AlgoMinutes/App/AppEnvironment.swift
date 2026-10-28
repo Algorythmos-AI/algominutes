@@ -97,6 +97,7 @@ final class AppEnvironment {
             MainActor.assumeIsolated { self?.updateRequired = true }
         }
         startNetworkWatch()
+        if UITestHooks.freshGuest { signOutForFreshGuest() }
         // A transfer that finished while the app wasn't running (the system
         // relaunched it to say so): finish the job, complete the upload session
         // and kick processing off, under a background-time assertion so a
@@ -292,6 +293,20 @@ final class AppEnvironment {
             recordingStore.remove(fileName: item.fileName)
         }
         auth.signOut()
+    }
+
+    /// The fresh-guest UI test (UITestHooks.freshGuest, Debug only): sign out a signed-in account at launch, before
+    /// the first screen, so RootView makes a new anonymous guest as on a first install. A guest is never signed out
+    /// (its notes couldn't be reached again): the test uses it, and stops if it has notes. Refused while a
+    /// recording or a capture of another app waits on this phone, because signing out deletes it.
+    func signOutForFreshGuest() {
+        guard auth.user != nil, !auth.isAnonymous else { return }
+        guard pendingRecordingsAtRisk == 0, !broadcast.hasFinishedCapture else {
+            AppLog.error("ui_test_fresh_guest_refused pending=\(pendingRecordingsAtRisk)")
+            return
+        }
+        AppLog.info("ui_test_fresh_guest_sign_out")
+        signOut()
     }
 
     /// Deletes a note (NotesRepository.deleteNote, through the api), then any

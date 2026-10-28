@@ -66,6 +66,7 @@ struct RecordingView: View {
                 .disabled(isStopping)
                 .accessibilityLabel("Minimise")
                 .accessibilityHint("The recording carries on")
+                .accessibilityIdentifier("recording.minimise")
                 Spacer()
                 Text(env.recorder.isPaused ? "Paused" : "Recording…")
                     .font(Typography.label(15))
@@ -118,6 +119,7 @@ struct RecordingView: View {
                 .monospacedDigit()
                 .accessibilityLabel("Recording time")
                 .accessibilityValue(formatTimer(seconds: elapsed))
+                .accessibilityIdentifier("recording.timer")
 
             Text(env.recorder.isPaused ? "Paused" : "Recording in progress")
                 .font(Typography.body(14))
@@ -186,6 +188,7 @@ struct RecordingView: View {
                 }
                 .disabled(isStopping || !env.recorder.isRecording)
                 .accessibilityLabel(env.recorder.isPaused ? "Resume recording" : "Pause recording")
+                .accessibilityIdentifier("recording.pause")
 
                 // Stop button
                 Button {
@@ -205,6 +208,7 @@ struct RecordingView: View {
                 }
                 .disabled(isStopping)
                 .accessibilityLabel("End recording")
+                .accessibilityIdentifier("recording.end")
             }
             .padding(.bottom, 48)
         }
@@ -414,6 +418,7 @@ struct RecordingBar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(Self.title(isPaused: env.recorder.isPaused)), \(formatTimer(seconds: env.recorder.elapsedSeconds))")
         .accessibilityHint("Opens the recording")
+        .accessibilityIdentifier("recording.bar")
     }
 }
 

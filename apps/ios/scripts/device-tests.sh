@@ -5,11 +5,16 @@
 #   apps/ios/scripts/device-tests.sh                   # the only paired iPhone, both lanes
 #   apps/ios/scripts/device-tests.sh --device ID       # ID: the phone's Identifier in `xcrun devicectl list devices`
 #   DEVICE_ID=ID apps/ios/scripts/device-tests.sh      # the same
-#   apps/ios/scripts/device-tests.sh --lane ui         # one lane: unit (AlgoMinutesTests) or ui (AlgoMinutesUITests)
+#   apps/ios/scripts/device-tests.sh --lane ui         # one lane: unit (AlgoMinutesTests), ui (AlgoMinutesUITests)
+#                                                      # or guest (the fresh-guest test alone; implies --fresh-guest)
 #   apps/ios/scripts/device-tests.sh --only AlgoMinutesTests/StoreBuildTests   # only these (repeatable)
 #   apps/ios/scripts/device-tests.sh --check           # the preconditions only
 #
-#   --keep-dd   keep the build's intermediates (deleted after the run otherwise)
+#   --keep-dd       keep the build's intermediates (deleted after the run otherwise)
+#   --recording     also the tests that record on the phone (RecordingDeviceUITests): each makes a note on
+#                   staging, waits for it to be processed and deletes it. They cost staging minutes.
+#   --fresh-guest   also, last and in a lane of its own (guest), FreshGuestDeviceUITests: it SIGNS THE PHONE
+#                   OUT, records as a brand-new guest, then deletes that guest's account. Sign back in after.
 #
 # The build goes to DEVICE_TESTS_DERIVED_DATA (default: AlgoMinutes-device-tests in Xcode's DerivedData
 # folder); the results to apps/ios/build/device-tests/<date>-<time>-<commit>/ (git-ignored):
@@ -26,16 +31,24 @@ lanes="unit ui"
 only=()
 keep_dd=0
 check_only=0
+recording=0
+fresh_guest=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --device) device_id="${2:?--device needs the Identifier of the phone from xcrun devicectl list devices}"; shift 2 ;;
     --lane)
-      case "${2:-}" in unit|ui) lanes="$2" ;; *) echo "--lane takes unit or ui" >&2; exit 2 ;; esac
+      case "${2:-}" in
+        unit|ui) lanes="$2" ;;
+        guest) lanes=""; fresh_guest=1 ;;
+        *) echo "--lane takes unit, ui or guest" >&2; exit 2 ;;
+      esac
       shift 2 ;;
     --only) only+=("-only-testing:${2:?--only needs Target, Target/Class or Target/Class/method}"); shift 2 ;;
     --keep-dd) keep_dd=1; shift ;;
+    --recording) recording=1; shift ;;
+    --fresh-guest) fresh_guest=1; shift ;;
     --check) check_only=1; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -167,8 +180,12 @@ if ! git diff --quiet -- "$resolved"; then
   echo "warning: this Xcode rewrote $resolved (not committed; CI's Xcode is the reference)" >&2
 fi
 
-# 4. The lanes: unit, then UI with each failed test run again (a pass on the repetition is flaky).
-unit_exit="not run" ui_exit="not run"
+# 4. The lanes: unit, then UI with each failed test run again (a pass on the repetition is flaky), then the
+# fresh guest, which signs the phone out and so goes last. The opt-in tests read their switch from the test
+# runner's environment: xcodebuild hands TEST_RUNNER_<name> to the tests as <name>.
+unit_exit="not run" ui_exit="not run" guest_exit="not run"
+lane_env=()
+[ "$recording" = 0 ] || lane_env+=(TEST_RUNNER_AM_UITEST_RECORDING=1)
 run_lane() { # LANE TARGET EXTRA...
   local lane="$1" target="$2"; shift 2
   local selectors=()
@@ -182,8 +199,9 @@ run_lane() { # LANE TARGET EXTRA...
   wake_phone
   echo "== Lane $lane: ${selectors[*]}"
   set +e
-  xcodebuild test-without-building "${common[@]}" "${selectors[@]}" "$@" \
-    -test-timeouts-enabled YES -maximum-test-execution-time-allowance 300 \
+  env ${lane_env[@]+"${lane_env[@]}"} xcodebuild test-without-building "${common[@]}" "${selectors[@]}" "$@" \
+    -test-timeouts-enabled YES -default-test-execution-time-allowance 300 \
+    -maximum-test-execution-time-allowance 900 \
     -resultBundlePath "$out/$lane.xcresult" > "$out/$lane.log" 2>&1
   local status=$?
   set -e
@@ -197,20 +215,30 @@ run_lane() { # LANE TARGET EXTRA...
   eval "${lane}_exit=$status"
 }
 case " $lanes " in *" unit "*) run_lane unit AlgoMinutesTests ;; esac
-case " $lanes " in *" ui "*) run_lane ui AlgoMinutesUITests -retry-tests-on-failure -test-iterations 2 ;; esac
+case " $lanes " in *" ui "*)
+  run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
+    -retry-tests-on-failure -test-iterations 2 ;;
+esac
+if [ "$fresh_guest" = 1 ]; then
+  lane_env+=(TEST_RUNNER_AM_UITEST_FRESH_GUEST=1)
+  run_lane guest AlgoMinutesUITests/FreshGuestDeviceUITests
+  echo "   The phone is signed out: open AlgoMinutes and sign in again."
+fi
 
 # 5. The record: what the bundles cannot say, for the test-history ingest. Never the phone's id or name,
 # never a backend URL (the ingest refuses them).
 ci_ios_test="$(gh api "repos/Algorythmos-AI/algominutes/commits/$full_sha/check-runs?check_name=ios-test" \
   --jq '.check_runs[0].conclusion // .check_runs[0].status // "not run"' 2>/dev/null || echo unknown)"
 flags=()
-[ "$lanes" = "unit ui" ] || flags+=("--lane $lanes")
+[ "$lanes" = "unit ui" ] || flags+=("--lane ${lanes:-guest}")
 flags+=(${only[@]+"${only[@]}"})
+[ "$recording" = 0 ] || flags+=(--recording)
+[ "$fresh_guest" = 0 ] || flags+=(--fresh-guest)
 [ "$dirty" = false ] || flags+=(dirty)
 RI_COMMIT="$full_sha" RI_TITLE="$(git log -1 --format=%s)" RI_BRANCH="$(git rev-parse --abbrev-ref HEAD)" \
 RI_DIRTY="$dirty" RI_XCODE="$xcode_version ($xcode_build)" RI_MODEL="$model" RI_OS="$os_version" \
 RI_TRANSPORT="$transport" RI_CI="$ci_ios_test" RI_STARTED="$started_at" RI_SECONDS="$(( $(date +%s) - start_s ))" \
-RI_FLAGS="${flags[*]:-none}" RI_UNIT="$unit_exit" RI_UI="$ui_exit" \
+RI_FLAGS="${flags[*]:-none}" RI_UNIT="$unit_exit" RI_UI="$ui_exit" RI_GUEST="$guest_exit" \
 python3 -I - "$out/run-info.json" "$dd/Build/Products/Debug-iphoneos/AlgoMinutes.app/Info.plist" <<'PY'
 import json, os, plistlib, sys
 e = os.environ
@@ -229,7 +257,7 @@ json.dump({
     "started_at": e["RI_STARTED"], "duration_seconds": int(e["RI_SECONDS"]),
     "workflow": "apps/ios/scripts/device-tests.sh",
     "flags": e["RI_FLAGS"],
-    "lane_exits": {"unit": e["RI_UNIT"], "ui": e["RI_UI"]},
+    "lane_exits": {"unit": e["RI_UNIT"], "ui": e["RI_UI"], "guest": e["RI_GUEST"]},
 }, open(sys.argv[1], "w"), indent=2)
 PY
 
@@ -239,6 +267,6 @@ PY
 echo
 echo "== Results: $out"
 echo "   Record them: python3 -I tools/ingest_device.py $out (in the private test-history repository)"
-for status in "$unit_exit" "$ui_exit"; do
+for status in "$unit_exit" "$ui_exit" "$guest_exit"; do
   case "$status" in 0|"not run") ;; *) exit 1 ;; esac
 done
