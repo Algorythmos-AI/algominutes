@@ -77,6 +77,7 @@ struct RecorderConsentFlow: View {
                 isChecked: $permissionChecked,
                 text: "I have permission from anyone whose voice may be captured. If others are present, I'll let them know the meeting is being recorded."
             )
+            .accessibilityIdentifier("recorder.consent.acknowledge")
             // Said before iOS asks (only while it hasn't yet), so the prompt isn't a surprise.
             if micStatus == .undetermined {
                 Label(MicPermission.explainer, systemImage: "mic.fill")
@@ -144,6 +145,7 @@ struct RecorderConsentFlow: View {
             .buttonStyle(PrimaryButtonStyle())
             .disabled(!permissionChecked)
             .opacity(permissionChecked ? 1 : 0.5)
+            .accessibilityIdentifier("recorder.consent.start")
             // The same notice, acknowledged for the next capture of another
             // app's audio (H11/L9: it covers that one capture). Shown only while the server allows it (AppSwitches: the
             // broadcast kill switch).
@@ -159,6 +161,7 @@ struct RecorderConsentFlow: View {
             }
             Button("Cancel") { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())
+                .accessibilityIdentifier("recorder.consent.cancel")
 
         case .micDenied:
             if let url = MicPermission.settingsURL {

@@ -73,6 +73,7 @@ struct MoreOperationsSheet: View {
                         .fill(Theme.surfaceElevated)
                 )
             }
+            .accessibilityIdentifier("note.delete")
 
             Spacer(minLength: 0)
         }

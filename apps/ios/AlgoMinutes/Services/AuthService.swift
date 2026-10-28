@@ -318,6 +318,9 @@ final class AuthService: NSObject {
     func signOut() {
         do {
             try Auth.auth().signOut()
+            // Signed out now, not a moment later when the listener says so: a sign-out at launch (the fresh-guest UI
+            // test) never shows the previous user's tabs.
+            user = nil
             // Also clear the Google session so the next sign-in starts fresh.
             GIDSignIn.sharedInstance.signOut()
         } catch {

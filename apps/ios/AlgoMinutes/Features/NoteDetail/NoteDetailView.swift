@@ -73,6 +73,7 @@ struct NoteDetailView: View {
                         Image(systemName: "ellipsis")
                     }
                     .accessibilityLabel("More operations")
+                    .accessibilityIdentifier("note.more")
                 }
             }
         }

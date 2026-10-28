@@ -38,6 +38,8 @@ apps/ios/scripts/device-tests.sh
 - `--lane unit` or `--lane ui`: one lane.
 - `--only AlgoMinutesTests/StoreBuildTests`: only these tests (repeatable).
 - `--keep-dd`: keep the build's intermediates, for a faster re-run.
+- `--recording`: also the tests that record (see below).
+- `--fresh-guest`: also the fresh-guest test, last (see below). **It signs the phone out.**
 
 The build goes to `~/Library/Developer/Xcode/DerivedData/AlgoMinutes-device-tests`
 (`DEVICE_TESTS_DERIVED_DATA`). The results go to `apps/ios/build/device-tests/<date>-<time>-<commit>/`
@@ -47,6 +49,26 @@ fails.
 
 The phone's identifier and name are never printed or written to `run-info.json`, because this repository
 is public. The xcodebuild logs in the results folder do name the phone, so they stay on the Mac.
+
+## Tests that record
+
+Off unless asked for, because they make real notes on staging and cost its minutes. The microphone hears
+whatever is in the room, so a quiet room makes a note with little in it: the tests ask only that the note is
+processed (Ready, or Couldn't process), never stuck. Each deletes what it made, whatever the outcome.
+
+- `--recording` (`RecordingDeviceUITests`, on the account the phone is signed in to): a 15-second recording,
+  paused and resumed, minimised and opened again from the recording bar, then ended. The note must be
+  processed within 10 minutes, then it's deleted from the note's More operations.
+- `--fresh-guest` (`FreshGuestDeviceUITests`, in a lane of its own, `guest`, after the others): the app is
+  launched with `-AMUITestFreshGuest`, which **signs out whoever is on the phone** and starts as a brand-new
+  guest, as on a first install. The guest records a 10-second note without signing in, then deletes their
+  account with both confirmations. It deletes only the guest it made (it checks the User ID first), and the
+  launch refuses to sign out while a recording waits to upload, because signing out would delete it.
+  Afterwards the app is on the sign-in screen: sign in again (Settings › Create account, then your existing
+  account).
+
+The launch arguments (`-AMUITestFreshGuest`, `-AMUITestClientVersion`) are read only by Debug builds
+(`UITestHooks`); TestFlight and App Store builds ignore them.
 
 ## Record the run
 
