@@ -10,6 +10,13 @@ extension XCTestCase {
         app.launch()
         let home = app.tabBars.buttons["Home"]
         try waitPastSignIn(app, for: home, file: file, line: line)
+        // A recording the app never finished (killed while recording) is offered at launch. Later keeps it on the
+        // phone for whoever owns it; a test never uploads or deletes it.
+        let unfinished = app.alerts["Unfinished recording found"]
+        if unfinished.waitForExistence(timeout: 3) {
+            XCTContext.runActivity(named: "an unfinished recording is waiting on the phone: answered Later") { _ in }
+            unfinished.buttons["Later"].tap()
+        }
         return app
     }
 

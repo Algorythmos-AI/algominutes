@@ -2,8 +2,8 @@ import XCTest
 
 /// A first install, on a real phone: a brand-new guest records a note without signing in, then deletes their
 /// account (App Review's path, and 5.1.1(v)). Opt-in, and last (device-tests.sh --fresh-guest): the launch SIGNS
-/// THE PHONE OUT (-AMUITestFreshGuest), so whoever uses it signs in again afterwards. Only the guest this test
-/// made is ever deleted.
+/// A SIGNED-IN ACCOUNT OUT (-AMUITestFreshGuest), so whoever uses the phone signs in again afterwards. A guest
+/// already on the phone is used as it is, and only while it has no notes: a guest with notes is never deleted.
 final class FreshGuestDeviceUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -23,20 +23,27 @@ final class FreshGuestDeviceUITests: XCTestCase {
                       "not a guest: the fresh-guest launch is refused while a recording waits to upload")
         let guest = try userId(app)
         app.openTab("Home")
-        XCTAssertTrue(recentNoteIds(app).isEmpty, "a new guest already has notes")
+        Thread.sleep(forTimeInterval: 3)
+        guard recentNoteIds(app).isEmpty else {
+            XCTFail("this guest has notes: not a fresh guest, and never deleted here")
+            return
+        }
         // The example is a per-phone choice (hidden once, hidden for every account), so it's said, not asserted.
         XCTContext.runActivity(named: "example note shown: \(app.element("home.example").waitForExistence(timeout: 10))") { _ in }
 
-        // A guest records without signing in.
-        try startRecording(app)
-        waitUntilRecorded(app, seconds: 10)
-        let noteId = try endRecording(app, before: [])
-
-        // From here the account is deleted whatever the outcome.
+        // A guest records without signing in. From here the account is deleted whatever the outcome.
         continueAfterFailure = true
-        let status = waitUntilProcessed(app, noteId: noteId, timeout: 600)
-        XCTContext.runActivity(named: "outcome: \(status)") { _ in }
-        XCTAssertTrue(["Ready", "Couldn’t process"].contains(status), "a guest's note wasn't processed in 10 min: \(status)")
+        do {
+            try startRecording(app)
+            waitUntilRecorded(app, seconds: 10)
+            let noteId = try endRecording(app, before: [])
+            let status = waitUntilProcessed(app, noteId: noteId, timeout: 600)
+            XCTContext.runActivity(named: "outcome: \(status)") { _ in }
+            XCTAssertTrue(["Ready", "Couldn’t process"].contains(status), "a guest's note wasn't processed in 10 min: \(status)")
+        } catch {
+            XCTFail("a new guest can't record: \(error)")
+            cleanUpRecording(app, before: [])
+        }
 
         try deleteAccount(app, of: guest)
         XCTAssertTrue(app.buttons["Sign in with Apple"].waitForExistence(timeout: 60), "deleting the account didn't sign out")

@@ -295,11 +295,12 @@ final class AppEnvironment {
         auth.signOut()
     }
 
-    /// The fresh-guest UI test (UITestHooks.freshGuest, Debug only): sign out at launch, before the first screen,
-    /// so RootView makes a new anonymous guest as on a first install. Refused while a recording or a capture of
-    /// another app waits on this phone, because signing out deletes it.
+    /// The fresh-guest UI test (UITestHooks.freshGuest, Debug only): sign out a signed-in account at launch, before
+    /// the first screen, so RootView makes a new anonymous guest as on a first install. A guest is never signed out
+    /// (its notes couldn't be reached again): the test uses it, and stops if it has notes. Refused while a
+    /// recording or a capture of another app waits on this phone, because signing out deletes it.
     func signOutForFreshGuest() {
-        guard auth.user != nil else { return }
+        guard auth.user != nil, !auth.isAnonymous else { return }
         guard pendingRecordingsAtRisk == 0, !broadcast.hasFinishedCapture else {
             AppLog.error("ui_test_fresh_guest_refused pending=\(pendingRecordingsAtRisk)")
             return

@@ -17,6 +17,7 @@ final class RecordingDeviceUITests: XCTestCase {
         let app = try launchToTabs()
         app.openTab("Home")
         let before = recentNoteIds(app)
+        addTeardownBlock { @MainActor in self.cleanUpRecording(app, before: before) }
         try startRecording(app)
 
         waitUntilRecorded(app, seconds: 4)
@@ -35,18 +36,17 @@ final class RecordingDeviceUITests: XCTestCase {
         let bar = app.element("recording.bar")
         XCTAssertTrue(bar.waitForExistence(timeout: 5), "no recording bar after minimising")
         Thread.sleep(forTimeInterval: 3)
-        bar.tap()
+        openRecordingFromBar(app)
         XCTAssertTrue(app.element("recording.timer").waitForExistence(timeout: 5), "the bar didn't open the recording")
         XCTAssertGreaterThanOrEqual(recordedSeconds(app) ?? 0, beforeMinimise + 3, "the recording stopped while minimised")
 
         waitUntilRecorded(app, seconds: 15)
         let noteId = try endRecording(app, before: before)
 
-        // From here the note is deleted whatever the outcome.
-        continueAfterFailure = true
         let status = waitUntilProcessed(app, noteId: noteId, timeout: 600)
         XCTContext.runActivity(named: "outcome: \(status)") { _ in }
         XCTAssertTrue(["Ready", "Couldn’t process"].contains(status), "the note wasn't processed in 10 min: \(status)")
+        // Deleted here, through the note's own Delete; the teardown deletes it if the test stopped before.
         deleteNote(app, noteId: noteId)
     }
 }

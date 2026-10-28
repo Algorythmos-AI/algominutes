@@ -28,8 +28,11 @@ extension XCTestCase {
         let start = app.buttons["recorder.consent.start"]
         guard start.waitForExistence(timeout: 10) else {
             screenshot(app, "no consent sheet")
-            XCTFail("the consent sheet didn't open (no minutes left? the paywall or invite sheet came up)", file: file, line: line)
-            throw XCTSkip("can't record")
+            if app.navigationBars["AlgoMinutes Pro"].exists {
+                app.buttons["Close"].firstMatch.tap()
+                throw RecordingRefused.paywall
+            }
+            throw RecordingRefused.noConsentSheet
         }
         XCTAssertFalse(start.isEnabled, "Start is enabled before the permission is ticked", file: file, line: line)
         app.element("recorder.consent.acknowledge").tap()
@@ -126,10 +129,54 @@ extension XCTestCase {
         XCTAssertTrue(row.waitForNonExistence(timeout: 30), "the deleted note is still in Recent", file: file, line: line)
     }
 
+    /// Opens a minimised recording from its bar. The bar's frame reaches up behind the status bar, so it's tapped
+    /// low down, where its words are.
+    @MainActor
+    func openRecordingFromBar(_ app: XCUIApplication) {
+        app.element("recording.bar").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+    }
+
+    /// After a recording test, whatever happened: a recording still going is ended, and the note it made (the one
+    /// note in Recent that isn't in `before`) is deleted. Nothing is left running to greet the next test. More than
+    /// one new note means someone else made one meanwhile (another device): then nothing is deleted.
+    @MainActor
+    func cleanUpRecording(_ app: XCUIApplication, before: Set<String>) {
+        guard app.state == .runningForeground else { return }
+        dismissAppAlerts(app)
+        if app.element("recording.bar").exists { openRecordingFromBar(app) }
+        if app.element("recording.end").waitForExistence(timeout: 2) {
+            app.element("recording.end").tap()
+            _ = app.buttons["note.more"].waitForExistence(timeout: 60)
+        }
+        if app.buttons["note.more"].exists { goBack(app) }
+        app.openTab("Home")
+        Thread.sleep(forTimeInterval: 3)
+        let made = recentNoteIds(app).subtracting(before)
+        if made.count == 1, let noteId = made.first {
+            deleteNote(app, noteId: noteId)
+        } else if made.count > 1 {
+            XCTContext.runActivity(named: "\(made.count) new notes: none deleted") { _ in }
+        }
+    }
+
     /// The navigation bar's Back: its leftmost button (the note's own buttons are on the right).
     @MainActor
     func goBack(_ app: XCUIApplication) {
         let buttons = app.navigationBars.buttons.allElementsBoundByIndex.filter(\.isHittable)
         buttons.min { $0.frame.minX < $1.frame.minX }?.tap()
+    }
+}
+
+/// Why a recording couldn't start: each is a failure with its own words.
+enum RecordingRefused: LocalizedError {
+    /// The metered gate showed the paywall instead of the consent sheet: this account has no minutes.
+    case paywall
+    case noConsentSheet
+
+    var errorDescription: String? {
+        switch self {
+        case .paywall: return "the paywall came up instead of the consent sheet: this account has no minutes to record with"
+        case .noConsentSheet: return "the consent sheet didn't open"
+        }
     }
 }

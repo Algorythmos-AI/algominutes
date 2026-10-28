@@ -5,7 +5,8 @@
 #   apps/ios/scripts/device-tests.sh                   # the only paired iPhone, both lanes
 #   apps/ios/scripts/device-tests.sh --device ID       # ID: the phone's Identifier in `xcrun devicectl list devices`
 #   DEVICE_ID=ID apps/ios/scripts/device-tests.sh      # the same
-#   apps/ios/scripts/device-tests.sh --lane ui         # one lane: unit (AlgoMinutesTests) or ui (AlgoMinutesUITests)
+#   apps/ios/scripts/device-tests.sh --lane ui         # one lane: unit (AlgoMinutesTests), ui (AlgoMinutesUITests)
+#                                                      # or guest (the fresh-guest test alone; implies --fresh-guest)
 #   apps/ios/scripts/device-tests.sh --only AlgoMinutesTests/StoreBuildTests   # only these (repeatable)
 #   apps/ios/scripts/device-tests.sh --check           # the preconditions only
 #
@@ -36,7 +37,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --device) device_id="${2:?--device needs the Identifier of the phone from xcrun devicectl list devices}"; shift 2 ;;
     --lane)
-      case "${2:-}" in unit|ui) lanes="$2" ;; *) echo "--lane takes unit or ui" >&2; exit 2 ;; esac
+      case "${2:-}" in
+        unit|ui) lanes="$2" ;;
+        guest) lanes=""; fresh_guest=1 ;;
+        *) echo "--lane takes unit, ui or guest" >&2; exit 2 ;;
+      esac
       shift 2 ;;
     --only) only+=("-only-testing:${2:?--only needs Target, Target/Class or Target/Class/method}"); shift 2 ;;
     --keep-dd) keep_dd=1; shift ;;
@@ -225,7 +230,7 @@ fi
 ci_ios_test="$(gh api "repos/Algorythmos-AI/algominutes/commits/$full_sha/check-runs?check_name=ios-test" \
   --jq '.check_runs[0].conclusion // .check_runs[0].status // "not run"' 2>/dev/null || echo unknown)"
 flags=()
-[ "$lanes" = "unit ui" ] || flags+=("--lane $lanes")
+[ "$lanes" = "unit ui" ] || flags+=("--lane ${lanes:-guest}")
 flags+=(${only[@]+"${only[@]}"})
 [ "$recording" = 0 ] || flags+=(--recording)
 [ "$fresh_guest" = 0 ] || flags+=(--fresh-guest)

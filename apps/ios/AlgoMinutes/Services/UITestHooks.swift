@@ -15,8 +15,8 @@ enum UITestHooks {
         #endif
     }()
 
-    /// `-AMUITestFreshGuest`: sign out whoever is on the phone at launch, so the app starts as a brand-new guest, as
-    /// on a first install (AppEnvironment.signOutForFreshGuest). Passed only by the opt-in fresh-guest test.
+    /// `-AMUITestFreshGuest`: sign out a signed-in account at launch, so the app starts as a brand-new guest, as on a
+    /// first install (AppEnvironment.signOutForFreshGuest). Passed only by the opt-in fresh-guest test.
     static let freshGuestArgument = "-AMUITestFreshGuest"
 
     static let freshGuest: Bool = {
