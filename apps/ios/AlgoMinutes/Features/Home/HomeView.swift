@@ -467,6 +467,7 @@ struct HomeView: View {
         .buttonStyle(CardButtonStyle())
         .appearFade(index: index)
         .accessibilityLabel("\(action.title). \(action.subtitle)")
+        .accessibilityIdentifier("home.action.\(action.id)")
     }
 
     private func chipsRow(_ chips: [String]) -> some View {

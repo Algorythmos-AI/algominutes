@@ -25,11 +25,13 @@ struct UpdateRequiredView: View {
                 if let url = AppConfig.updateURL {
                     Button("Update") { openURL(url) }
                         .buttonStyle(PrimaryButtonStyle())
+                        .accessibilityIdentifier("update.button")
                         .padding(.top, Theme.Spacing.sm)
                 }
             }
             .padding(Theme.Spacing.xxl)
         }
+        .accessibilityIdentifier("update.screen")
         .interactiveDismissDisabled()
     }
 }
