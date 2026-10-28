@@ -116,11 +116,13 @@ default. The entry point and the endpoints both check it. Off, nothing is offere
 - **Withdrawal:** marked at once (no longer shown to reviewers), deleted within 30 days, including backups, on
   the same terms as `docs/DATA-RETENTION.md`.
 - **Note or account deletion:** `improvement.consents.note_id` references `notes(id) ON DELETE CASCADE`, and
-  `improvement.contributions.contribution_id` references `improvement.consents ON DELETE CASCADE`. So the
-  Postgres delete of the note row in `notes-repo` `deleteNote` (the one deletion path, also used by account
-  deletion and the retention job) removes the consent and the snapshot in the same transaction. That's the same
-  pattern by which the transcript, summary, embeddings and shares go today (`001_init.sql`, `004_note_feedback.sql`).
-  Backups age out on `docs/DATA-RETENTION.md`'s window.
+  `improvement.contributions.contribution_id` references `improvement.consents ON DELETE CASCADE`. So whatever
+  deletes the note row removes the consent and the snapshot in the same transaction, by the same pattern that
+  takes the transcript, summary, embeddings and shares today (`001_init.sql`, `004_note_feedback.sql`):
+  `notes-repo` `deleteNote` for a note deleted by hand or by the retention job; and for a deleted account,
+  `account-repo`'s delete of the `users` row, whose workspaces and notes go by cascade. Account deletion also
+  deletes `improvement.consents WHERE uid = $1` outright, as it does `support_requests` and `analytics_events`, so
+  nothing depends on the cascade alone. Backups age out on `docs/DATA-RETENTION.md`'s window.
 - **Idempotent:** sharing twice is one contribution (an upsert on note id); a replayed withdrawal is a no-op.
 - **Logged:** `improvement_shared`, `improvement_withdrawn` and `improvement_deleted`, with traceId, userId,
   noteId and workspaceId, and never content.
