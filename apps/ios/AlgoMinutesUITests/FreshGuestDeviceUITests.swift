@@ -40,6 +40,10 @@ final class FreshGuestDeviceUITests: XCTestCase {
             let status = waitUntilProcessed(app, noteId: noteId, timeout: 600)
             XCTContext.runActivity(named: "outcome: \(status)") { _ in }
             XCTAssertTrue(["Ready", "Couldn’t process"].contains(status), "a guest's note wasn't processed in 10 min: \(status)")
+        } catch RecordingRefused.paywall {
+            // Staging, the beta: a new guest has no minutes (TRIAL_ON_FIRST_USE off, FREE_FLOOR_MINUTES unset), and an
+            // invite code is how they get some. Production gives a new iPhone a 7-day trial, then 120 minutes a month.
+            XCTContext.runActivity(named: "a new guest on staging has no minutes (the beta's invite codes give them)") { _ in }
         } catch {
             XCTFail("a new guest can't record: \(error.localizedDescription)")
             cleanUpRecording(app, before: [])
