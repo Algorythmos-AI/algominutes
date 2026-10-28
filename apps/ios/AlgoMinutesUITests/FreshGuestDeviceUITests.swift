@@ -41,7 +41,7 @@ final class FreshGuestDeviceUITests: XCTestCase {
             XCTContext.runActivity(named: "outcome: \(status)") { _ in }
             XCTAssertTrue(["Ready", "Couldn’t process"].contains(status), "a guest's note wasn't processed in 10 min: \(status)")
         } catch {
-            XCTFail("a new guest can't record: \(error)")
+            XCTFail("a new guest can't record: \(error.localizedDescription)")
             cleanUpRecording(app, before: [])
         }
 
