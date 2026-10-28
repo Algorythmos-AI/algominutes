@@ -15,6 +15,10 @@
 #                   staging, waits for it to be processed and deletes it. They cost staging minutes.
 #   --fresh-guest   also, last and in a lane of its own (guest), FreshGuestDeviceUITests: it SIGNS THE PHONE
 #                   OUT, records as a brand-new guest, then deletes that guest's account. Sign back in after.
+#   --release       the Release build, which talks to PRODUCTION: UI tests only (no unit lane, and not the tests
+#                   that need the Debug-only hooks). Production's GoogleService-Info.plist is swapped in for the
+#                   build and staging's always put back (DEVICE_TESTS_RELEASE_PLIST, default
+#                   ~/Secrets/algominutes-prod/GoogleService-Info.plist).
 #
 # The build goes to DEVICE_TESTS_DERIVED_DATA (default: AlgoMinutes-device-tests in Xcode's DerivedData
 # folder); the results to apps/ios/build/device-tests/<date>-<time>-<commit>/ (git-ignored):
@@ -24,6 +28,8 @@
 set -euo pipefail
 
 ios="$(cd "$(dirname "$0")/.." && pwd)"
+# This file, by absolute path: --help reads its own header after the cd below.
+self="$ios/scripts/$(basename "$0")"
 cd "$ios"
 
 device_id="${DEVICE_ID:-}"
@@ -33,6 +39,7 @@ keep_dd=0
 check_only=0
 recording=0
 fresh_guest=0
+release=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --device) device_id="${2:?--device needs the Identifier of the phone from xcrun devicectl list devices}"; shift 2 ;;
@@ -47,8 +54,9 @@ while [ "$#" -gt 0 ]; do
     --keep-dd) keep_dd=1; shift ;;
     --recording) recording=1; shift ;;
     --fresh-guest) fresh_guest=1; shift ;;
+    --release) release=1; shift ;;
     --check) check_only=1; shift ;;
-    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo/p' "$self" | sed '$d'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -78,6 +86,20 @@ xcode_build="$(printf '%s\n' "$xcode_info" | sed -n 's/^Build version //p')"
 
 [ -f AlgoMinutes/Resources/GoogleService-Info.plist ] \
   || problem "AlgoMinutes/Resources/GoogleService-Info.plist is missing. Fetch staging's (apps/ios/.gitignore says how), or copy it from the main checkout."
+
+# --release builds against production, with production's Firebase configuration. Only its project id is read
+# here, never its keys.
+configuration=Debug
+release_plist="${DEVICE_TESTS_RELEASE_PLIST:-$HOME/Secrets/algominutes-prod/GoogleService-Info.plist}"
+if [ "$release" = 1 ]; then
+  configuration=Release
+  [ "$fresh_guest" = 0 ] || problem "--fresh-guest needs the Debug-only -AMUITestFreshGuest: not with --release."
+  if [ ! -f "$release_plist" ]; then
+    problem "$release_plist is missing: production's GoogleService-Info.plist (DEVICE_TESTS_RELEASE_PLIST)."
+  elif [ "$(/usr/libexec/PlistBuddy -c 'Print :PROJECT_ID' "$release_plist" 2>/dev/null)" != algominutes-production ]; then
+    problem "$release_plist isn't production's (its PROJECT_ID isn't algominutes-production)."
+  fi
+fi
 
 volume="$dd"
 while [ ! -d "$volume" ]; do volume="$(dirname "$volume")"; done
@@ -142,7 +164,11 @@ echo "   - unlocked, with Settings > Display & Brightness > Auto-Lock set to Nev
 echo "   - Settings > Developer > Enable UI Automation on"
 echo "   - a Focus (Do Not Disturb) on, so no notification covers the app"
 echo "   - on the same Wi-Fi as this Mac, or plugged in"
-echo "   The Debug build (staging) replaces the TestFlight app: reinstall it from TestFlight afterwards."
+if [ "$release" = 1 ]; then
+  echo "   The Release build talks to PRODUCTION and replaces the TestFlight app: reinstall it from TestFlight afterwards."
+else
+  echo "   The Debug build (staging) replaces the TestFlight app: reinstall it from TestFlight afterwards."
+fi
 [ "$check_only" = 0 ] || exit 0
 
 # 2. The project, as CI generates it.
@@ -160,13 +186,23 @@ wake_phone() {
     || echo "warning: devicectl could not reach the phone; xcodebuild will wait for it" >&2
 }
 
-# 3. Build for testing once: Debug, automatic signing.
+# 3. Build for testing once, automatic signing. Release: production's plist in place for the build only (staging's
+# is put back however the script ends), no unit tests (they need Debug's testability), and no dSYM upload.
 destination="platform=iOS,id=$udid"
 common=(-project AlgoMinutes.xcodeproj -scheme AlgoMinutes -destination "$destination" -derivedDataPath "$dd")
+build_extra=()
+if [ "$release" = 1 ]; then
+  lanes="ui"
+  build_extra=(-skip-testing:AlgoMinutesTests ALGOMINUTES_SKIP_DSYM_UPLOAD=YES)
+  staging_plist="$(mktemp -t staging-plist)"
+  cp AlgoMinutes/Resources/GoogleService-Info.plist "$staging_plist"
+  trap 'cp "$staging_plist" AlgoMinutes/Resources/GoogleService-Info.plist; rm -f "$staging_plist" "$listing"' EXIT
+  cp "$release_plist" AlgoMinutes/Resources/GoogleService-Info.plist
+fi
 wake_phone
-echo "== Building for testing (Debug) into $dd"
+echo "== Building for testing ($configuration) into $dd"
 set +e
-xcodebuild build-for-testing "${common[@]}" -configuration Debug \
+xcodebuild build-for-testing "${common[@]}" -configuration "$configuration" ${build_extra[@]+"${build_extra[@]}"} \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration > "$out/build.log" 2>&1
 build=$?
 set -e
@@ -216,8 +252,15 @@ run_lane() { # LANE TARGET EXTRA...
 }
 case " $lanes " in *" unit "*) run_lane unit AlgoMinutesTests ;; esac
 case " $lanes " in *" ui "*)
-  run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
-    -retry-tests-on-failure -test-iterations 2 ;;
+  if [ "$release" = 1 ]; then
+    # The tests that need a Debug-only hook (UITestHooks): a Release build ignores the hooks by design.
+    run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
+      -skip-testing:AlgoMinutesUITests/UpdateRequiredUITests/testAnOldVersionGetsTheUpdateScreenFromTheServer \
+      -retry-tests-on-failure -test-iterations 2
+  else
+    run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
+      -retry-tests-on-failure -test-iterations 2
+  fi ;;
 esac
 if [ "$fresh_guest" = 1 ]; then
   lane_env+=(TEST_RUNNER_AM_UITEST_FRESH_GUEST=1)
@@ -234,12 +277,14 @@ flags=()
 flags+=(${only[@]+"${only[@]}"})
 [ "$recording" = 0 ] || flags+=(--recording)
 [ "$fresh_guest" = 0 ] || flags+=(--fresh-guest)
+[ "$release" = 0 ] || flags+=(--release)
 [ "$dirty" = false ] || flags+=(dirty)
 RI_COMMIT="$full_sha" RI_TITLE="$(git log -1 --format=%s)" RI_BRANCH="$(git rev-parse --abbrev-ref HEAD)" \
 RI_DIRTY="$dirty" RI_XCODE="$xcode_version ($xcode_build)" RI_MODEL="$model" RI_OS="$os_version" \
 RI_TRANSPORT="$transport" RI_CI="$ci_ios_test" RI_STARTED="$started_at" RI_SECONDS="$(( $(date +%s) - start_s ))" \
 RI_FLAGS="${flags[*]:-none}" RI_UNIT="$unit_exit" RI_UI="$ui_exit" RI_GUEST="$guest_exit" \
-python3 -I - "$out/run-info.json" "$dd/Build/Products/Debug-iphoneos/AlgoMinutes.app/Info.plist" <<'PY'
+RI_CONFIGURATION="$configuration" \
+python3 -I - "$out/run-info.json" "$dd/Build/Products/$configuration-iphoneos/AlgoMinutes.app/Info.plist" <<'PY'
 import json, os, plistlib, sys
 e = os.environ
 app = plistlib.load(open(sys.argv[2], "rb"))
@@ -252,7 +297,7 @@ json.dump({
     "xcode": e["RI_XCODE"],
     "device": {"model": e["RI_MODEL"], "os_version": e["RI_OS"], "transport": e["RI_TRANSPORT"]},
     "app": {"version": app.get("CFBundleShortVersionString"), "build": app.get("CFBundleVersion"),
-            "configuration": "Debug", "backend": backend},
+            "configuration": e["RI_CONFIGURATION"], "backend": backend},
     "ci_ios_test": e["RI_CI"],
     "started_at": e["RI_STARTED"], "duration_seconds": int(e["RI_SECONDS"]),
     "workflow": "apps/ios/scripts/device-tests.sh",

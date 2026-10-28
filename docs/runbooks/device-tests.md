@@ -50,6 +50,24 @@ fails.
 The phone's identifier and name are never printed or written to `run-info.json`, because this repository
 is public. The xcodebuild logs in the results folder do name the phone, so they stay on the Mac.
 
+## The Release build, against production
+
+`--release` builds the **Release** configuration, the one the App Store gets, which talks to **production**, and
+runs the UI tests on it. Use it before a submission, after the promotion to `main`.
+
+- Production's `GoogleService-Info.plist` is put in place for the build and staging's is **always put back**,
+  however the run ends. It comes from `DEVICE_TESTS_RELEASE_PLIST` (default
+  `~/Secrets/algominutes-prod/GoogleService-Info.plist`); the script reads its `PROJECT_ID` only, and refuses one
+  that isn't `algominutes-production`.
+- UI tests only. The unit tests need Debug's testability, and two tests need a Debug-only hook (`UITestHooks`,
+  which a Release build ignores by design): the update screen from an old version, and the fresh guest.
+  `--fresh-guest` is refused with `--release`.
+- It's signed for development: push comes through APNs' sandbox, and a purchase is a sandbox one. Neither proves
+  the App Store build: TestFlight does.
+- `--release --recording` makes, waits for and deletes a real note **in production**, on the account signed in to
+  this build (production's own sign-in, not staging's).
+- The run is recorded as `configuration: Release`, `backend: production`.
+
 ## Tests that record
 
 Off unless asked for, because they make real notes on staging and cost its minutes. The microphone hears
