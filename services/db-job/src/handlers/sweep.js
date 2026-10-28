@@ -36,7 +36,9 @@
 //                        USAGE_EVENTS_DAYS are pruned; the cap reads 24 hours.
 //   9. mirror_repair     a note Postgres finished 10-40 minutes ago whose doc
 //                        disagrees (a mirror write lost after its commit) is
-//                        brought in line (packages/db mirror-repair.ts).
+//                        brought in line (packages/db mirror-repair.ts). A run
+//                        cut off by its time budget saves where it stopped,
+//                        and the next resumes there after its newest pass.
 //  10. notices           a "ready" or "failed" notice still unsent after
 //                        NOTICE_RETRY_AFTER_S (a crash between its commit and
 //                        the enqueue, or a notify task out of attempts) is
@@ -138,6 +140,7 @@ async function run({
     recordDeadLetter, deleteExpiredUploadSessions, reportStrandedUploads, listIncompleteAccountDeletions,
     finishAccountDeletion, pruneCompletedAccountDeletions, listNotesPastRetention, deleteNote, getStoragePurge,
     expireElapsedTrials, pruneDeletedNotes, pruneUsageEvents, listRecentlyFinishedNotes, repairNoteMirror,
+    getMirrorRepairCursor, advanceMirrorRepairCursor,
     listUnsentNotices, abandonStaleNotices, pruneOldNotices, claimLostSummaries, claimLostEmbeds,
     resumeHeldNotes,
   } = repo;
@@ -331,8 +334,11 @@ async function run({
     // if Postgres says finished and the doc hasn't moved since it was read.
     await step('mirror_repair', async () => {
       // Every note in the window, a page at a time by the (updated_at, id)
-      // watermark (audit Q20). Only the time budget stops it early, and says so:
-      // the rest are the next run's (each note is in two runs' windows).
+      // watermark (audit Q20), newest first. Only the time budget stops it
+      // early, and says so. Where a cut-off run stopped is saved (plan rev 12
+      // S7, migration 042): the next run does its own newest-first pass down to
+      // that cursor, then resumes below it, so the middle of the window is
+      // reached even when every run is cut off.
       const started = Date.now();
       // Seams for tests; production uses the constants.
       const budgetMs = deps.mirrorRepairBudgetMs ?? MIRROR_REPAIR_BUDGET_MS;
@@ -340,32 +346,53 @@ async function run({
       let repaired = 0;
       let failedRepairs = 0;
       let checked = 0;
-      let after = null;
-      do {
-        const page = await listRecentlyFinishedNotes({ settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: pageSize, after });
-        const notes = page.notes;
-        after = page.next;
-        checked += notes.length;
-        for (const n of notes) {
-          const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
-          try {
-            const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
-            if (outcome === 'repaired') {
-              repaired += 1;
-              log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+      const saved = await getMirrorRepairCursor();
+
+      // Pages from `after` (null: the newest) down to `downTo` (null: the end of the window), until the end or
+      // `budget`; a pass always finishes at least one page. Returns where it was cut off, or null at the end.
+      const pass = async ({ after: from, downTo, budget }) => {
+        let after = from;
+        do {
+          const page = await listRecentlyFinishedNotes({
+            settledMs: MIRROR_SETTLED_MS, windowMs: MIRROR_WINDOW_MS, limit: pageSize, after, downTo,
+          });
+          after = page.next;
+          checked += page.notes.length;
+          for (const n of page.notes) {
+            const fields = { noteId: n.noteId, workspaceId: n.workspaceId };
+            try {
+              const outcome = await repairNoteMirror(deps.firestore, n, { settledMs: MIRROR_SETTLED_MS, log });
+              if (outcome === 'repaired') {
+                repaired += 1;
+                log.warn({ ...fields, status: n.status }, 'mirror_repaired');
+              }
+            } catch (err) {
+              failedRepairs += 1;
+              log.error({ err, ...fields }, 'mirror_repair_failed');
             }
-          } catch (err) {
-            failedRepairs += 1;
-            log.error({ err, ...fields }, 'mirror_repair_failed');
           }
-        }
-        // Checked after a page, so a run always finishes at least one: the newest notes (plan rev 12 S7). Where
-        // it stopped, so what was left can be measured: what's left is the oldest, which the last run checked.
-        if (after && Date.now() - started > budgetMs) {
-          log.warn({ checked, budgetMs, reachedUpdatedAt: after.updatedAt }, 'mirror_repair_budget_reached');
-          break;
-        }
-      } while (after);
+          if (after && Date.now() - started > budget) return after;
+        } while (after);
+        return null;
+      };
+
+      // The newest first, as before; with a cursor to resume, down to it, in half the budget, leaving the rest
+      // for the resume.
+      const cutNewest = await pass({ after: null, downTo: saved, budget: saved ? budgetMs / 2 : budgetMs });
+      let cutResumed = null;
+      if (saved) {
+        log.info({ cursor: saved, checked }, 'mirror_repair_resumed');
+        cutResumed = await pass({ after: saved, downTo: null, budget: budgetMs });
+      }
+      // The next run resumes from the oldest point not yet reached: the resume's cut-off, else the newest pass's
+      // (the notes between it and the old cursor), else nothing left.
+      const next = cutResumed ?? cutNewest;
+      if (next) log.warn({ checked, budgetMs, reachedUpdatedAt: next.updatedAt, cursor: next }, 'mirror_repair_budget_reached');
+      if (saved || next) {
+        const moved = !(await advanceMirrorRepairCursor({ from: saved, to: next }));
+        if (moved) log.warn({ from: saved, to: next }, 'mirror_repair_cursor_moved');
+        else if (saved && !next) log.info({ cursor: saved, checked }, 'mirror_repair_resume_finished');
+      }
       if (failedRepairs) throw new Error(`${failedRepairs} mirror repair(s) failed`);
       return repaired;
     });

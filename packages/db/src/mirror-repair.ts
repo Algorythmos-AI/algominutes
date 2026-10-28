@@ -59,6 +59,8 @@ export interface FinishedNotesCursor { updatedAt: string; noteId: string }
  */
 export async function listRecentlyFinishedNotes(input: {
   settledMs: number; windowMs: number; limit: number; after?: FinishedNotesCursor | null;
+  /** Stop above this watermark (exclusive): a newest-first pass that ends where a saved cursor takes over. */
+  downTo?: FinishedNotesCursor | null;
 }): Promise<{ notes: FinishedNote[]; next: FinishedNotesCursor | null }> {
   const { rows } = await getPool().query(
     `SELECT id AS "noteId", workspace_id AS "workspaceId", status, updated_at::text AS "updatedAt" FROM notes
@@ -66,14 +68,63 @@ export async function listRecentlyFinishedNotes(input: {
         AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND updated_at > NOW() - (($1::bigint + $2::bigint) * INTERVAL '1 millisecond')
         AND ($4::timestamptz IS NULL OR (updated_at, id) < ($4::timestamptz, $5::text))
+        AND ($6::timestamptz IS NULL OR (updated_at, id) > ($6::timestamptz, $7::text))
       ORDER BY updated_at DESC, id DESC LIMIT $3`,
-    [input.settledMs, input.windowMs, input.limit, input.after?.updatedAt ?? null, input.after?.noteId ?? ''],
+    [
+      input.settledMs, input.windowMs, input.limit, input.after?.updatedAt ?? null, input.after?.noteId ?? '',
+      input.downTo?.updatedAt ?? null, input.downTo?.noteId ?? '',
+    ],
   );
   const last = rows[rows.length - 1];
   return {
     notes: rows.map(({ noteId, workspaceId, status }) => ({ noteId, workspaceId, status })),
     next: rows.length === input.limit && last ? { updatedAt: last.updatedAt, noteId: last.noteId } : null,
   };
+}
+
+/**
+ * Where the last run cut off by its budget stopped (plan rev 12 S7, migration 042), or null. The next run resumes
+ * below it after its own newest-first pass, so notes in the middle of the window are reached even when every run
+ * is cut off.
+ */
+export async function getMirrorRepairCursor(): Promise<FinishedNotesCursor | null> {
+  const { rows: [row] } = await getPool().query(
+    `SELECT updated_at::text AS "updatedAt", note_id AS "noteId" FROM mirror_repair_cursor WHERE id`,
+  );
+  return row ? { updatedAt: row.updatedAt, noteId: row.noteId } : null;
+}
+
+/**
+ * Moves the cursor from `from` (what this run read at its start) to `to` (null clears it), only if it is still
+ * `from`: a compare-and-set, so a run that overlapped this one and moved it first is never overwritten. Returns
+ * false when it had moved (the caller logs it; the other run's position stands).
+ */
+export async function advanceMirrorRepairCursor(input: {
+  from: FinishedNotesCursor | null; to: FinishedNotesCursor | null;
+}): Promise<boolean> {
+  const { from, to } = input;
+  if (!from && !to) return true;
+  if (!from && to) {
+    const { rowCount } = await getPool().query(
+      `INSERT INTO mirror_repair_cursor (id, updated_at, note_id, saved_at) VALUES (true, $1::timestamptz, $2, NOW())
+       ON CONFLICT (id) DO NOTHING`,
+      [to.updatedAt, to.noteId],
+    );
+    return rowCount === 1;
+  }
+  if (from && !to) {
+    const { rowCount } = await getPool().query(
+      `DELETE FROM mirror_repair_cursor WHERE id AND updated_at = $1::timestamptz AND note_id = $2`,
+      [from.updatedAt, from.noteId],
+    );
+    return rowCount === 1;
+  }
+  const { rowCount } = await getPool().query(
+    `UPDATE mirror_repair_cursor SET updated_at = $3::timestamptz, note_id = $4, saved_at = NOW()
+      WHERE id AND updated_at = $1::timestamptz AND note_id = $2`,
+    [from!.updatedAt, from!.noteId, to!.updatedAt, to!.noteId],
+  );
+  return rowCount === 1;
 }
 
 function clock(ms: number | null): string {
