@@ -29,5 +29,10 @@
     "@firebase/rules-unit-testing": "^6.0.0",
     "typescript": "^6.0.3",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "^1.14.5"
+    }
   }
 }
