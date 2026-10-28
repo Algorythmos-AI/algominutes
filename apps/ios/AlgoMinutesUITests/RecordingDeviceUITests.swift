@@ -15,6 +15,12 @@ final class RecordingDeviceUITests: XCTestCase {
     func testARecordingPausesMinimisesAndBecomesANote() throws {
         try requireOptIn("AM_UITEST_RECORDING", "--recording")
         let app = try launchToTabs()
+        // It records on a signed-in account. This Debug build talks to staging, and keeps its own sign-in: one made
+        // in a TestFlight or App Store build (production) isn't this one's (device run 20261028-154717).
+        app.openTab("Settings")
+        if app.element("settings.account.guest").waitForExistence(timeout: 5) {
+            throw XCTSkip("this build (staging) is on a guest: sign in here, in Settings › Create account, first")
+        }
         app.openTab("Home")
         let before = recentNoteIds(app)
         addTeardownBlock { @MainActor in self.cleanUpRecording(app, before: before) }

@@ -56,7 +56,7 @@ Off unless asked for, because they make real notes on staging and cost its minut
 whatever is in the room, so a quiet room makes a note with little in it: the tests ask only that the note is
 processed (Ready, or Couldn't process), never stuck. Each deletes what it made, whatever the outcome.
 
-- `--recording` (`RecordingDeviceUITests`, on the account the phone is signed in to): a 15-second recording,
+- `--recording` (`RecordingDeviceUITests`, on the account signed in to **this Debug build**, which talks to staging and keeps its own sign-in: one made in a TestFlight or App Store build isn't it. On a guest it skips): a 15-second recording,
   paused and resumed, minimised and opened again from the recording bar, then ended. The note must be
   processed within 10 minutes, then it's deleted from the note's More operations.
 - `--fresh-guest` (`FreshGuestDeviceUITests`, in a lane of its own, `guest`, after the others): the app is
