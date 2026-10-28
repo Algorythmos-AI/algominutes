@@ -3,7 +3,7 @@ import {
   getPool, deleteAccountData, recordTermsAcceptance, registerPushToken, trackEvent,
   createSupportRequest, setRetentionDays, getRetentionDays, admitUser, deleteNote,
 } from '@algominutes/db';
-import { pool, resetDb, count, quietLog } from './helpers';
+import { pool, resetDb, count, quietLog, lockWaiters } from './helpers';
 
 // A brand-new user's first requests are onboarding (accept the terms, register
 // for push, send analytics), long before their first upload. Only the upload
@@ -100,8 +100,11 @@ describe('a brand-new user is admitted by the auth middleware', () => {
       await racer.query('BEGIN');
       await racer.query(`INSERT INTO users (uid, email) VALUES ('racer', 'r@example.test')`);
       const deletion = deleteAccountData({ uid: 'racer' }, quietLog);
-      await new Promise((r) => setTimeout(r, 200));
+      // Queued behind the insert, not a fixed wait: a deletion that only starts after the COMMIT finds the row
+      // anyway, and this would pass without the race it is about.
+      const waiting = await lockWaiters(racer, 1);
       await racer.query('COMMIT'); // the deletion waited for it
+      expect(waiting).toBe(1);
       expect(await deletion).toMatchObject({ deleted: true });
     } finally {
       racer.release();

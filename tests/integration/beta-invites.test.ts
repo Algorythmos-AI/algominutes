@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { createRequire } from 'node:module';
 import * as repo from '@algominutes/db';
 import { RedeemInviteResponse } from '@algominutes/contracts/schemas';
-import { pool, resetDb, seedUser, seedWorkspace, count, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, count, quietLog, lockWaiters } from './helpers';
 
 // Beta invite codes (migration 025, docs/plans/RELEASE.md PR 2) against real
 // Postgres: redeeming gives a time-limited Pro grant (019) and, when the invite
@@ -187,9 +187,12 @@ describe('redeemInvite', () => {
       redeemInvite({ uid: 'alice', code: CODE }),
       redeemInvite({ uid: 'bob', code: CODE }),
     ]);
-    await new Promise((r) => setTimeout(r, 300));
+    // Both queued on the row, not a fixed wait. At a pool of one the second waits for a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(blocker, want);
     await blocker.query('COMMIT');
     blocker.release();
+    expect(waiting).toBe(want);
     const results = await racing;
     // Neither fails (no constraint error), one wins, one is told it's used up.
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
@@ -235,9 +238,11 @@ describe('redeemInvite', () => {
     await owner.query('BEGIN');
     await owner.query(`INSERT INTO entitlement_grants (uid, plan, reason, expires_at) VALUES ('bob', 'pro', 'owner', NULL)`);
     const redeeming = redeemInvite({ uid: 'bob', code: CODE });
-    await new Promise((r) => setTimeout(r, 300));
+    // Queued behind the owner's uncommitted grant, not a fixed wait.
+    const waiting = await lockWaiters(owner, 1);
     await owner.query('COMMIT');
     owner.release();
+    expect(waiting).toBe(1);
     expect(await redeeming).toMatchObject({ kind: 'redeemed', grantEndsAt: null });
     expect(await grantOf('bob')).toEqual({ included_minutes: null, expires_at: null, reason: 'owner' });
   });

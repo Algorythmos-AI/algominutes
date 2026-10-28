@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getPool, settleMeasuredLength, grantEntitlement, resolveEntitlement } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, count } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, lockWaiters } from './helpers';
 
 // The charge follows the measured length (docs/plans/RELEASE.md PR 3b). The
 // kickoff charges the client's claimed length (an iOS import claims none); the
@@ -75,9 +75,13 @@ describe('settleMeasuredLength', () => {
     await blocker.query('BEGIN');
     await blocker.query('LOCK TABLE usage_ledger IN SHARE ROW EXCLUSIVE MODE');
     const both = Promise.allSettled([settle(300), settle(300)]);
-    await new Promise((r) => setTimeout(r, 300));
+    // One queued on the table, the other on its note row, not a fixed wait. At a pool of one the second waits for
+    // a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(blocker, want);
     await blocker.query('COMMIT');
     blocker.release();
+    expect(waiting).toBe(want);
     const results = await both;
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
     const deltas = results.map((r) => (r as PromiseFulfilledResult<{ deltaMinutes: number }>).value.deltaMinutes).sort();
@@ -155,9 +159,12 @@ describe('settleMeasuredLength', () => {
     await blocker.query('BEGIN');
     await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['meter:alice']);
     const both = Promise.all([settle(10 * 60, 'n1'), settle(10 * 60, 'n2')]);
-    await new Promise((r) => setTimeout(r, 300));
+    // Both queued on the meter lock, not a fixed wait. At a pool of one the second waits for a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(blocker, want, 'advisory');
     await blocker.query('COMMIT');
     blocker.release();
+    expect(waiting).toBe(want);
     expect((await both).map((r) => r.kind).sort()).toEqual(['over_quota', 'settled']);
     expect(await resolveEntitlement('alice')).toMatchObject({ usedMinutes: 10 });
   });

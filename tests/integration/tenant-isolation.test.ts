@@ -4,7 +4,7 @@ import {
   getNoteQueueState, IN_FLIGHT_STALE_MS,
 } from '@algominutes/db';
 import { createRequire } from 'node:module';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count, lockWaiters } from './helpers';
 
 const { markNoteFailed } = createRequire(import.meta.url)('@algominutes/db/note-terminal.cjs');
 
@@ -296,9 +296,13 @@ describe('idempotent kickoff: in-flight guard', () => {
       markQueued(fs, queuedInput({ noteId: 'note-race' }), quietLog),
       markQueued(fs, queuedInput({ noteId: 'note-race' }), quietLog),
     ]);
-    await new Promise((r) => setTimeout(r, 400));
+    // Both queued (on the users row, or on the first's note lock), not a fixed wait. At a pool of one the second
+    // waits for a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(holder, want);
     await holder.query('ROLLBACK');
     holder.release();
+    expect(waiting).toBe(want);
     const results = await racing;
     expect(results.filter((r) => r.queued)).toHaveLength(1);
     expect(results.filter((r) => !r.queued)).toEqual([{ queued: false, status: 'queued' }]);

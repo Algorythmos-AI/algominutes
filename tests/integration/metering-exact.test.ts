@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { getPool, grantEntitlement, queueNoteRun, noteChargeStands, ensureTrial, listStuckNotes } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog, lockWaiters } from './helpers';
 
 // POST /v1/process refuses correctly (docs/plans/RELEASE.md PR 3): the quota is
 // checked in the transaction that debits, a retry whose charge stands needs no
@@ -114,9 +114,13 @@ describe('the quota is checked where the minutes are debited', () => {
     await blocker.query('BEGIN');
     await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['meter:alice']);
     const racing = Promise.all([kickoff('n1', 100 * 60), kickoff('n2', 100 * 60)]);
-    await new Promise((r) => setTimeout(r, 300));
+    // Both queued, not a fixed wait: the first on the meter lock, the second behind the users row the first upserted.
+    // At a pool of one the second waits for a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(blocker, want);
     await blocker.query('COMMIT');
     blocker.release();
+    expect(waiting).toBe(want);
     const outs = await racing;
     expect(outs.map((o) => o.status).sort()).toEqual([200, 202]);
     // An uploaded recording over the minutes left is held, not refused (RELEASE.md rev 11, H6c).

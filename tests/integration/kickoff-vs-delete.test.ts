@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { getPool, markQueued, deleteNote } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog, lockWaiters } from './helpers';
 
 // R1: a note deleted while its kickoff is in flight must stay deleted. The
 // route reads the note doc, then spends a while on the size probe, rate limits
@@ -9,11 +9,15 @@ import { pool, resetDb, seedUser, seedWorkspace, seedNote, count, quietLog } fro
 // re-created the doc, and a job was queued.
 const docs = new Map<string, Record<string, unknown>>();
 let gate: Promise<void> | null = null;
+let atGate: (() => void) | null = null;
 function docRef(path: string) {
   return {
     path,
     async get() {
-      if (gate) await gate; // lets a test hold markQueued inside its transaction
+      if (gate) {
+        atGate?.(); // tells the test markQueued is inside its transaction, holding the note lock
+        await gate; // lets a test hold markQueued inside its transaction
+      }
       const d = docs.get(path);
       return { exists: d !== undefined, data: () => d };
     },
@@ -35,6 +39,7 @@ beforeEach(async () => {
   await resetDb();
   docs.clear();
   gate = null;
+  atGate = null;
   await seedUser('alice');
   await seedWorkspace('ws-a', 'alice');
   docs.set(DOC, { authorId: 'alice', status: 'uploading' });
@@ -95,12 +100,23 @@ describe('a kickoff racing the deletion of its note (R1)', () => {
   it('a deletion that arrives while the kickoff transaction is open waits, then deletes what it wrote', async () => {
     let release!: () => void;
     gate = new Promise<void>((r) => { release = r; });
+    const holding = new Promise<void>((r) => { atGate = r; });
     const kickoff = markQueued(fs, input, quietLog); // holds the note lock, blocked in its doc read
-    await new Promise((r) => setTimeout(r, 100));
+    await holding;
     const deletion = deleteNote(fs, { noteId: 'n1', workspaceId: 'ws-a', uid: 'alice' }, quietLog);
-    await new Promise((r) => setTimeout(r, 200));
-    gate = null;
-    release();
+    // Queued on the note lock, not a fixed wait. At a pool of one the kickoff holds the only client, and the
+    // deletion waits for that instead.
+    const want = getPool().options.max > 1 ? 1 : 0;
+    const probe = await pool.connect();
+    let waiting: number;
+    try {
+      waiting = await lockWaiters(probe, want, 'advisory');
+    } finally {
+      probe.release();
+      gate = null;
+      release();
+    }
+    expect(waiting).toBe(want);
     const [queued, deleted] = await Promise.all([kickoff, deletion]);
     expect(deleted).toMatchObject({ allowed: true, deleted: true });
     // Whichever way the mirror write raced the doc delete, the note is gone.

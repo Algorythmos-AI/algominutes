@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { getPool, deleteAccountData, createUploadSession, AccountDeletedError } from '@algominutes/db';
 // @ts-expect-error: plain ESM route module, no type declarations
 import { deleteAccountRoute } from '../../services/api/src/routes/delete-account.js';
-import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, seedNote, quietLog, count, lockWaiters } from './helpers';
 
 // POST /v1/account/delete: Postgres first (with a tombstone), then each note's
 // doc and audio, the account's own docs and storage, and Auth last. 200 only
@@ -77,8 +77,11 @@ describe('deleteAccountData (Postgres, first)', () => {
         uid: 'alice', workspaceId: 'workspace_alice', noteId: 'n9', storagePath: 'recordings/workspace_alice/n9.m4a',
         sessionUri: 'https://storage.googleapis.com/x', totalBytes: 1, expiresAt: new Date(Date.now() + 86_400_000),
       }, quietLog).then(() => 'created', (e) => e);
-      await new Promise((r) => setTimeout(r, 300));
+      // Queued behind the deletion, not a fixed wait: a write that only starts after the COMMIT is refused by the
+      // tombstone (the next test), and this would pass without the race it is about.
+      const waiting = await lockWaiters(del, 1);
       await del.query('COMMIT');
+      expect(waiting).toBe(1);
       expect(await racing).toBeInstanceOf(AccountDeletedError);
     } finally {
       del.release();
