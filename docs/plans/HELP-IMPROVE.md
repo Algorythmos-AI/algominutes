@@ -41,8 +41,10 @@ A **snapshot taken when the person shares**, not a live link to the note:
 - the person's rating and comment, if they add one in the sheet.
 
 **Not shared:** the audio, the person's name or email, other notes, search or chat questions, or anything from the
-device. The snapshot is linked to the account only through the consent record (§7), so it can be withdrawn and
-deleted; the reviewers see a random contribution id, not who sent it.
+device. The snapshot is **pseudonymous, not anonymous**: it's stored under a random contribution id, and the
+account it came from is kept in a separate consent record (§7), so it can be withdrawn and deleted. The review
+tool shows only the contribution id, and only the database can join it to an account. That is access control, not
+anonymity: the account link exists, and §7 limits who can follow it.
 
 Audio (optional, a second tick) is a possible v2, after this has run and legal has looked at voices as biometric
 or sensitive data. It isn't in this design.
@@ -102,17 +104,23 @@ default. The entry point and the endpoints both check it. Off, nothing is offere
 ## 7. Data handling
 
 - **Where:** a separate Postgres schema, `improvement`, in the same Cloud SQL instance (australia-southeast1).
-  Table `improvement.contributions` (contribution id, snapshot, created at, withdrawn at), and
-  `improvement.consents` (contribution id, note id, workspace id, uid, consent-text version, privacy version,
-  app version, both attestations, consented at, withdrawn at). Product services read neither.
+  Table `improvement.consents` (contribution id, note id, workspace id, uid, consent-text version, privacy
+  version, app version, both attestations, consented at, withdrawn at) and `improvement.contributions`
+  (contribution id, snapshot, created at, withdrawn at). Product services read neither. Reviewers' database role
+  can read `contributions` only; joining a snapshot to an account (`consents`) needs the operator role, used for
+  withdrawal and deletion and audit-logged.
 - **Access:** a database role and an IAM group of named reviewers; Data Access audit logs on; no exports, no
   copies to laptops; review happens in an internal admin view that shows the snapshot and its contribution id
   only.
 - **Retention:** 12 months from sharing at most, then deleted by the sweeper (`db-job`), which logs it.
 - **Withdrawal:** marked at once (no longer shown to reviewers), deleted within 30 days, including backups, on
   the same terms as `docs/DATA-RETENTION.md`.
-- **Note or account deletion:** deletes the contribution in the same transaction as the note (a cascade from
-  `notes`), and account deletion deletes all of the account's.
+- **Note or account deletion:** `improvement.consents.note_id` references `notes(id) ON DELETE CASCADE`, and
+  `improvement.contributions.contribution_id` references `improvement.consents ON DELETE CASCADE`. So the
+  Postgres delete of the note row in `notes-repo` `deleteNote` (the one deletion path, also used by account
+  deletion and the retention job) removes the consent and the snapshot in the same transaction. That's the same
+  pattern by which the transcript, summary, embeddings and shares go today (`001_init.sql`, `004_note_feedback.sql`).
+  Backups age out on `docs/DATA-RETENTION.md`'s window.
 - **Idempotent:** sharing twice is one contribution (an upsert on note id); a replayed withdrawal is a no-op.
 - **Logged:** `improvement_shared`, `improvement_withdrawn` and `improvement_deleted`, with traceId, userId,
   noteId and workspaceId, and never content.
