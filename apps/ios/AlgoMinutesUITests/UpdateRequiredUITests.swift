@@ -16,7 +16,7 @@ final class UpdateRequiredUITests: XCTestCase {
 
         let screen = app.element("update.screen")
         try waitPastSignIn(app, for: screen)
-        XCTAssertTrue(app.staticTexts["Update AlgoMinutes"].exists)
+        XCTAssertEqual(screen.label, "Update AlgoMinutes")
         XCTAssertTrue(app.element("update.button").exists, "the screen offers no way to update")
         screenshot(app, "update screen")
 

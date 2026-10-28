@@ -15,9 +15,11 @@ struct UpdateRequiredView: View {
                     .scaledToFit()
                     .frame(height: 72)
                     .accessibilityHidden(true)
+                // Identified here, not on the screen: a container's identifier would replace the button's.
                 Text("Update AlgoMinutes")
                     .font(Typography.title())
                     .foregroundStyle(Theme.heading)
+                    .accessibilityIdentifier("update.screen")
                 Text("This version is no longer supported. Update to keep recording and reading your notes. Your recordings are safe.")
                     .font(Typography.body())
                     .foregroundStyle(Theme.body)
@@ -31,7 +33,6 @@ struct UpdateRequiredView: View {
             }
             .padding(Theme.Spacing.xxl)
         }
-        .accessibilityIdentifier("update.screen")
         .interactiveDismissDisabled()
     }
 }
