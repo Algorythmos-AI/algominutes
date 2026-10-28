@@ -44,6 +44,7 @@ struct SettingsView: View {
                                     .foregroundStyle(Theme.body)
                             }
                             .tint(Theme.heading)
+                            .accessibilityIdentifier("settings.wifiOnly")
                             Text("When on, recordings wait for Wi-Fi instead of using cellular data.")
                                 .font(Typography.body(12))
                                 .foregroundStyle(Theme.muted)
@@ -61,11 +62,13 @@ struct SettingsView: View {
                         } label: {
                             linkRow(label: "Help & Support", icon: "questionmark.circle")
                         }
+                        .accessibilityIdentifier("settings.help")
                     }
 
                     AlgoMinutesCard {
                         VStack(alignment: .leading, spacing: 14) {
                             infoRow(label: "Account", value: env.auth.isAnonymous ? "Guest (not backed up)" : (env.auth.user?.email ?? "Signed in"))
+                                .accessibilityIdentifier(env.auth.isAnonymous ? "settings.account.guest" : "settings.account.signedIn")
                             if let uid = env.auth.user?.uid {
                                 Divider().overlay(Theme.borderSoft)
                                 copyRow(label: "User ID", value: uid)
@@ -91,6 +94,7 @@ struct SettingsView: View {
                                 Text(appVersion)
                                     .font(Typography.body(13))
                                     .foregroundStyle(Theme.tertiary)
+                                    .accessibilityIdentifier("settings.version")
                             }
                         }
                     }
@@ -135,6 +139,7 @@ struct SettingsView: View {
                                     .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.border))
                             )
                     }
+                    .accessibilityIdentifier("settings.signOut")
 
                     Button {
                         showDeleteSheet = true
@@ -146,6 +151,7 @@ struct SettingsView: View {
                             .padding(.vertical, 14)
                             .background(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.tertiary))
                     }
+                    .accessibilityIdentifier("settings.deleteAccount")
                 }
                 .padding(20)
             }
@@ -519,6 +525,7 @@ struct DeleteAccountSheet: View {
                 isChecked: $acknowledged,
                 text: "I understand this is permanent and I have exported anything I want to keep."
             )
+            .accessibilityIdentifier("deleteAccount.acknowledge")
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Type DELETE to confirm:")
@@ -529,6 +536,7 @@ struct DeleteAccountSheet: View {
                     .foregroundStyle(Theme.body)
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
+                    .accessibilityIdentifier("deleteAccount.confirmText")
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
@@ -560,6 +568,7 @@ struct DeleteAccountSheet: View {
             }
             .disabled(!canDelete)
             .opacity(canDelete ? 1 : 0.5)
+            .accessibilityIdentifier("deleteAccount.delete")
 
             // Only after Apple couldn't confirm the revocation (plan rev 12 S6): the account can always be deleted.
             if revocationFailed {
@@ -572,6 +581,7 @@ struct DeleteAccountSheet: View {
             Button("Cancel") { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(isDeleting)
+                .accessibilityIdentifier("deleteAccount.cancel")
         }
         .padding(24)
         .background(Theme.surface)
