@@ -56,7 +56,10 @@ struct RootView: View {
         // Support Dynamic Type broadly, but clamp the largest accessibility
         // sizes so the fixed-layout recording screen doesn't overflow.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
-        .onChange(of: env.auth.user?.uid) { _, uid in
+        // `initial`: the account restored at launch starts its session too. AuthService has had it from its first
+        // moment since #334, so the uid never changes on such a launch, and without `initial` nothing started the
+        // notes listener: no notes, and a recording ended in "Could not create the note" (device run 2026-10-28).
+        .onChange(of: env.auth.user?.uid, initial: true) { _, uid in
             if uid != nil {
                 env.startSession()
             } else {
