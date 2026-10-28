@@ -23,6 +23,7 @@ final class StoreBuildTests: XCTestCase {
     }
 
     func testTheStoreBuildSellsProAndTakesNoInviteCodes() throws {
+        try skipOnDevice()
         XCTAssertEqual(try setting("PAYWALL_ENABLED", in: "Release"), "YES")
         XCTAssertEqual(try setting("INVITE_CODES_ENABLED", in: "Release"), "NO")
         // The beta, on staging and in development, keeps both.
@@ -86,5 +87,15 @@ final class StoreBuildTests: XCTestCase {
         let none = AccountUpgradeSheet.message(trialing: false)
         XCTAssertFalse(none.contains("trial"))
         XCTAssertTrue(none.hasPrefix("Create a free account"))
+    }
+}
+
+extension XCTestCase {
+    /// Tests that read project.yml from the Mac's checkout (`#filePath`) skip on a phone, which has no such file
+    /// (device test runs, 2026-10-28). On the simulator a missing file still fails.
+    func skipOnDevice() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("reads project.yml from the Mac's checkout, which a phone doesn't have")
+        #endif
     }
 }
