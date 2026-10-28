@@ -66,6 +66,10 @@ final class AppEnvironment {
     private(set) var updateRequired = false
     private var updateRequiredObserver: NSObjectProtocol?
 
+    /// Recordings without a note already tried quietly in this launch (resumePendingUploads): one try each, never a
+    /// loop. One that couldn't be made into a note waits in "Not yet uploaded".
+    @ObservationIgnored private var quietRecoveryTried = Set<String>()
+
     /// Guards against a double-fired retry for the same note.
     private var retryInFlight = Set<String>()
     /// Guards against re-resuming an upload that is already being resumed.
@@ -338,6 +342,34 @@ final class AppEnvironment {
             }
             resumeInFlight.remove(noteId)
         }
+
+        // A recording that never got a note (the app was killed, or making the note failed) is made into one, once per
+        // launch and without asking: the user chose to record it. Home used to ask with an alert on every visit until
+        // answered (device run 2026-10-28). One that can't be (damaged, no network) waits in "Not yet uploaded", whose
+        // banner is the only signal.
+        for orphan in Self.quietlyRecoverable(
+            recordingStore.allPending(), inFlight: recorder.currentFileURL?.lastPathComponent,
+            isRecording: recorder.isRecording, alreadyTried: quietRecoveryTried
+        ) {
+            quietRecoveryTried.insert(orphan.fileName)
+            AppLog.info("recovering_unfinished_recording file=\(orphan.fileName)")
+            if case .blocked(let message) = await recoverRecording(orphan, quietly: true) {
+                AppLog.error("recover_unfinished_recording_blocked file=\(orphan.fileName): \(message)")
+            }
+        }
+    }
+
+    /// The recordings to make into notes without asking: never associated with one (no note, no project: the app
+    /// stopped before making it), not the file being recorded, not while recording, and not tried yet this launch.
+    /// A recording moved here from the other build's backend has a project and waits for Upload in "Not yet
+    /// uploaded": it may be another account's.
+    static func quietlyRecoverable(
+        _ pending: [RecordingStore.PendingRecording], inFlight: String?, isRecording: Bool, alreadyTried: Set<String>
+    ) -> [RecordingStore.PendingRecording] {
+        guard !isRecording else { return [] }
+        return pending.filter {
+            $0.noteId == nil && $0.projectId == nil && $0.fileName != inFlight && !alreadyTried.contains($0.fileName)
+        }
     }
 
     // MARK: - Capture orchestration (parity with uploadAndProcess in App.tsx)
@@ -575,7 +607,8 @@ final class AppEnvironment {
     /// on 2026-10-27 an Upload there sent nothing and showed nothing.
     @discardableResult
     func recoverRecording(
-        _ pending: RecordingStore.PendingRecording, onNoteCreated: @MainActor (String) -> Void = { _ in }
+        _ pending: RecordingStore.PendingRecording, quietly: Bool = false,
+        onNoteCreated: @MainActor (String) -> Void = { _ in }
     ) async -> NotesRepository.RetryOutcome {
         let fileURL = recordingStore.audioURL(for: pending)
         let plan = RecoveryPlan.decide(
@@ -598,7 +631,7 @@ final class AppEnvironment {
         let verdict = await RecordingValidator.validate(fileURL)
         guard verdict.isPlayable else {
             AppLog.error("recording_recovery_rejected file=\(pending.fileName)")
-            alertMessage = RecordingValidator.damagedMessage
+            if !quietly { alertMessage = RecordingValidator.damagedMessage }
             return .blocked(message: RecordingValidator.damagedMessage)
         }
 
@@ -633,6 +666,8 @@ final class AppEnvironment {
             // uploadAndProcess reports a failure through alertMessage only.
             if let message = alertMessage, message != alertBefore {
                 AppLog.error("recording_recovery_blocked file=\(pending.fileName): \(message)")
+                // Quietly: said by the "Not yet uploaded" list, not an alert nobody asked for.
+                if quietly { alertMessage = alertBefore }
                 return .blocked(message: message)
             }
             return .queued

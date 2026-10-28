@@ -50,8 +50,6 @@ struct HomeView: View {
     // The example note, until there's a real one: the same switch Files uses, so hiding it there hides it here.
     @State private var showingSample = false
     @AppStorage("sample_note_hidden") private var sampleHidden = false
-    @State private var orphanRecording: RecordingStore.PendingRecording?
-    @State private var pendingDeletion: RecordingStore.PendingRecording?
     @State private var showPendingRecordings = false
     @State private var pendingCount = 0
 
@@ -141,51 +139,12 @@ struct HomeView: View {
             activeSheet = nil
             recorderFlow.isRecordingScreenPresented = true
         }
-        .onAppear { checkForOrphan(); refreshPendingCount() }
+        .onAppear { refreshPendingCount() }
         .sheet(isPresented: $showPendingRecordings, onDismiss: refreshPendingCount) {
             PendingRecordingsView { noteId in
                 showPendingRecordings = false
                 selectedNoteId = noteId
             }
-        }
-        .alert(
-            "Unfinished recording found",
-            isPresented: Binding(
-                get: { orphanRecording != nil },
-                set: { if !$0 { orphanRecording = nil } }
-            )
-        ) {
-            Button("Upload it") { recoverOrphan() }
-            // "Later" is the safe default and must exist. This alert used to
-            // offer only Upload and Delete, so a user who wanted neither had
-            // no way out except destroying a recording.
-            Button("Later", role: .cancel) { orphanRecording = nil }
-            Button("Delete", role: .destructive) {
-                pendingDeletion = orphanRecording
-                orphanRecording = nil
-            }
-        } message: {
-            Text(orphanMessage)
-        }
-        // Deletion is unrecoverable and the audio may be the only copy of a
-        // recording, so it takes a second, explicit confirmation that names
-        // what is about to be lost.
-        .alert(
-            "Delete this recording?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }
-            )
-        ) {
-            Button("Keep it", role: .cancel) { pendingDeletion = nil }
-            Button("Delete", role: .destructive) {
-                if let doomed = pendingDeletion {
-                    env.recordingStore.remove(fileName: doomed.fileName)
-                }
-                pendingDeletion = nil
-            }
-        } message: {
-            Text(deletionMessage)
         }
     }
 
@@ -220,24 +179,6 @@ struct HomeView: View {
 
     private func refreshPendingCount() {
         pendingCount = env.recordingStore.allPending().count
-    }
-
-    private var orphanMessage: String {
-        guard let orphan = orphanRecording else { return "" }
-        let when = orphan.createdAt.formatted(date: .abbreviated, time: .shortened)
-        return "A recording from \(when) didn't finish uploading. Upload it now?"
-    }
-
-    private var deletionMessage: String {
-        guard let doomed = pendingDeletion else { return "" }
-        let when = doomed.createdAt.formatted(date: .abbreviated, time: .shortened)
-        // Duration is unknown for recordings the app never got to finalise, so
-        // the copy has to work without it rather than print "0 minutes".
-        if let seconds = doomed.durationSeconds, seconds > 0 {
-            let minutes = max(1, Int((Double(seconds) / 60).rounded()))
-            return "The recording from \(when) is about \(minutes) minute\(minutes == 1 ? "" : "s") long and has not been uploaded. This permanently deletes it from this device."
-        }
-        return "The recording from \(when) has not been uploaded. This permanently deletes it from this device."
     }
 
     // MARK: - Header
@@ -490,23 +431,6 @@ struct HomeView: View {
         }
     }
 
-    private func checkForOrphan() {
-        guard !env.recorder.isRecording else { return }
-        guard pendingDeletion == nil else { return }
-        // Recordings still linked to a note resume automatically
-        // (env.resumePendingUploads). Only prompt for genuine orphans — audio
-        // captured before any note existed (app died mid-capture).
-        //
-        // The file the recorder is holding is excluded explicitly. Dismissing
-        // the recording screen re-fires onAppear, and there is a window between
-        // the note being created and the sidecar being written where the file
-        // that is currently uploading still looks like an orphan. Offering it
-        // here is how a user ends up tapping Delete on a live upload.
-        let inFlight = env.recorder.currentFileURL?.lastPathComponent
-        orphanRecording = env.recordingStore.allPending()
-            .first { $0.noteId == nil && $0.fileName != inFlight }
-    }
-
     /// Open a deep-linked note and clear the router so it fires once.
     private func consumeDeepLink(_ noteId: String?) {
         guard let noteId, !noteId.isEmpty else { return }
@@ -514,13 +438,6 @@ struct HomeView: View {
         deepLinkRouter.pendingNoteId = nil
     }
 
-    private func recoverOrphan() {
-        guard let orphan = orphanRecording else { return }
-        orphanRecording = nil
-        Task {
-            await env.recoverRecording(orphan) { noteId in selectedNoteId = noteId }
-        }
-    }
 }
 
 // MARK: - Hero waveform (signature moment — the one thing animated at rest)
