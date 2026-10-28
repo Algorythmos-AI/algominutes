@@ -47,6 +47,18 @@ extension XCTestCase {
         return element.exists && element.isHittable
     }
 
+    /// Closes a confirmation dialog without choosing anything. Where iOS shows Cancel, that; from iOS 26 the dialog
+    /// is a popover with no Cancel (device run 20261028-153742), closed by a tap outside it.
+    @MainActor
+    func dismissDialog(_ app: XCUIApplication) {
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists {
+            cancel.tap()
+        } else {
+            app.otherElements["PopoverDismissRegion"].firstMatch.tap()
+        }
+    }
+
     @MainActor
     func screenshot(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
