@@ -387,6 +387,7 @@ final class AppEnvironment {
             if let durationSeconds { fields["duration"] = durationSeconds }
             noteId = try notes.createNote(fields: fields)
         } catch {
+            AppLog.error("note_create_refused: \(error.localizedDescription)")
             alertMessage = "Could not create the note. Please try again."
             return
         }
