@@ -61,8 +61,26 @@ final class BroadcastHandoff {
         defaults?.string(forKey: "state") == "finished" && defaults?.string(forKey: "completedBroadcastFile") != nil
     }
 
-    /// A finished capture is waiting to be claimed: the latest, or an earlier one a later broadcast kept.
-    var hasFinishedCapture: Bool { !unclaimed.isEmpty || hasLatestFinished }
+    /// The capture an extension that died mid-way left (no heartbeat, never finished): its file is fragmented
+    /// (BroadcastShared/BroadcastCaptureWriter), so it's readable up to the last fragment and is claimed like a
+    /// finished one (I3, N4). It used to be deleted, and the call with it.
+    private var killedCapturePath: String? {
+        guard defaults?.bool(forKey: "isBroadcasting") == true, heartbeatStale,
+              let path = defaults?.string(forKey: "activeBroadcastFile"),
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return path
+    }
+
+    /// Forget the extension's live capture (it died): the app has taken its file, or found none.
+    private func clearKilledCapture() {
+        defaults?.set(false, forKey: "isBroadcasting")
+        defaults?.set("claimed", forKey: "state")
+        defaults?.removeObject(forKey: "activeBroadcastFile")
+    }
+
+    /// A finished capture is waiting to be claimed: the latest, an earlier one a later broadcast kept, or one
+    /// whose extension was killed before it could finish it. Each waits for the switch and consent alike.
+    var hasFinishedCapture: Bool { !unclaimed.isEmpty || hasLatestFinished || killedCapturePath != nil }
 
     /// Throws away a finished capture without making a note (the user declined
     /// to confirm they had permission to record it). One at a time, the same one `claim()` would take.
@@ -71,6 +89,12 @@ final class BroadcastHandoff {
         if let earlier = takeUnclaimed() {
             try? FileManager.default.removeItem(atPath: earlier)
             AppLog.info("broadcast_discarded earlier=true")
+            return
+        }
+        if let killed = killedCapturePath {
+            try? FileManager.default.removeItem(atPath: killed)
+            clearKilledCapture()
+            AppLog.info("broadcast_discarded killed=true")
             return
         }
         if let path = d.string(forKey: "completedBroadcastFile") {
@@ -137,16 +161,17 @@ final class BroadcastHandoff {
             d.removeObject(forKey: "errorMessage")
             return .failed(message: message)
         default:
-            // The extension said it was capturing, then went silent: killed before
-            // it could finish the file, which is unreadable without its index.
+            // The extension said it was capturing, then went silent: killed before it could finish the file.
+            // The file is fragmented, so what it wrote until then is claimed (I3); taken off before any work, so
+            // no other call picks it up meanwhile.
+            if let path = killedCapturePath {
+                clearKilledCapture()
+                AppLog.error("broadcast_extension_died claiming_partial=true")
+                return await pickUp(path: path)
+            }
             if d.bool(forKey: "isBroadcasting"), heartbeatStale {
-                if let path = d.string(forKey: "activeBroadcastFile") {
-                    try? FileManager.default.removeItem(atPath: path)
-                }
-                d.set(false, forKey: "isBroadcasting")
-                d.set("claimed", forKey: "state")
-                d.removeObject(forKey: "activeBroadcastFile")
-                AppLog.error("broadcast_extension_died")
+                clearKilledCapture()
+                AppLog.error("broadcast_extension_died file_missing=true")
                 return .failed(message: "The capture stopped unexpectedly and couldn't be saved.")
             }
             return .none
@@ -170,6 +195,14 @@ final class BroadcastHandoff {
             // Keep the capture rather than lose it: move it as recorded (one
             // track may go untranscribed, which beats no note at all).
             AppLog.error("broadcast_mix_failed: \(error.localizedDescription)")
+            // A file with no audio to read (an extension killed before its first fragment, a writer that failed
+            // at once) is reported, not uploaded as an empty note.
+            let readable = ((try? await AVURLAsset(url: source).loadTracks(withMediaType: .audio)) ?? []).isEmpty == false
+            guard readable else {
+                AppLog.error("broadcast_file_unreadable")
+                try? FileManager.default.removeItem(at: source)
+                return .failed(message: "The capture stopped unexpectedly and couldn't be saved.")
+            }
             do {
                 try FileManager.default.moveItem(at: source, to: destination)
                 let seconds = Int((try? await AVURLAsset(url: destination).load(.duration).seconds) ?? 0)
