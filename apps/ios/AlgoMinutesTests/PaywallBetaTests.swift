@@ -76,6 +76,7 @@ final class PaywallBetaTests: XCTestCase {
     }
 
     func testTheStagingAndStoreBuildsSellPro() throws {
+        try skipOnDevice()
         // project.yml's PAYWALL_ENABLED, as the Info.plist carries it.
         let yml = try String(contentsOfFile: #filePath.replacingOccurrences(of: "AlgoMinutesTests/PaywallBetaTests.swift", with: "project.yml"), encoding: .utf8)
         func flag(_ config: String) -> String? {
