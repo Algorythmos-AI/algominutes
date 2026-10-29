@@ -23,6 +23,8 @@ import os
 ///                            these first, oldest first: RELEASE.md rev 11, N4)
 ///   recordingSize          : Int    (bytes, set on completion)
 ///   errorMessage           : String? (only on error)
+///   lastWriterError        : String  (compact JSON when the writer fails: BroadcastWriterDiagnostics. Counts and
+///                            formats only; kept until the next failure)
 class SampleHandler: RPBroadcastSampleHandler {
 
     private static let logger = Logger(subsystem: "com.algorythmos.algominutes", category: "broadcast.extension")
@@ -41,6 +43,8 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var finishing = false
     /// Buffers dropped because the writer wasn't ready (real-time input): logged at the finish, never silent.
     private var droppedBuffers = 0
+    /// Formats and counts for `lastWriterError`.
+    private let diagnostics = BroadcastWriterDiagnostics()
 
     /// The longest capture, as a recording's (4 hours).
     static let maxCaptureSeconds: TimeInterval = 4 * 60 * 60
@@ -97,6 +101,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         guard writer?.startWriting() == true else {
             let err = writer?.error?.localizedDescription ?? "unknown"
             Self.logger.error("startWriting failed: \(err, privacy: .public)")
+            recordWriterDiagnostic(stage: "start")
             recordError("Could not begin recording: \(err)")
             return
         }
@@ -169,6 +174,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             let status = writer?.status.rawValue ?? -1
             let reason = writer?.error?.localizedDescription ?? "unknown"
             Self.logger.error("Writer stopped before the finish (status \(status, privacy: .public)): \(reason, privacy: .public)")
+            recordWriterDiagnostic(stage: "finish")
             updateDefaultsOnFinish(success: true)
             then?()
             return
@@ -187,6 +193,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             if self.writer?.status != .completed {
                 let reason = self.writer?.error?.localizedDescription ?? "unknown"
                 Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
+                self.recordWriterDiagnostic(stage: "finish")
             }
             self.updateDefaultsOnFinish(success: true)
             then?()
@@ -232,9 +239,12 @@ class SampleHandler: RPBroadcastSampleHandler {
             Self.logger.info("Session started, first PTS=\(pts.seconds, privacy: .public)")
         }
 
+        let track: BroadcastWriterDiagnostics.Track = sampleBufferType == .audioApp ? .app : .mic
+        diagnostics.saw(sampleBuffer, on: track)
         guard let input = (sampleBufferType == .audioApp) ? appAudioInput : micAudioInput else { return }
         guard input.isReadyForMoreMediaData else {
             droppedBuffers += 1
+            diagnostics.dropped(on: track)
             return
         }
         guard input.append(sampleBuffer) else {
@@ -243,6 +253,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             let status = writer?.status.rawValue ?? -1
             let reason = writer?.error?.localizedDescription ?? "unknown"
             Self.logger.error("append failed (status \(status, privacy: .public)): \(reason, privacy: .public)")
+            recordWriterDiagnostic(stage: "append", failed: track)
             finishFile { [weak self] in
                 self?.finishBroadcastWithError(NSError(domain: "BroadcastExtension", code: 4, userInfo: [
                     NSLocalizedDescriptionKey: "The capture stopped because of an error. What was captured until then becomes a note when you open AlgoMinutes.",
@@ -250,9 +261,19 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             return
         }
+        diagnostics.appended(on: track)
     }
 
     // MARK: - Private helpers
+
+    /// What the writer was doing when it failed, for the app group: os_log can't be read off the phone, the
+    /// group's defaults can (`devicectl device copy from --domain-type appGroupDataContainer`).
+    private func recordWriterDiagnostic(stage: String, failed track: BroadcastWriterDiagnostics.Track? = nil) {
+        let diagnostic = diagnostics.json(stage: stage, writer: writer, failed: track)
+        Self.logger.error("writer diagnostic: \(diagnostic, privacy: .public)")
+        defaults?.set(diagnostic, forKey: "lastWriterError")
+        defaults?.synchronize()
+    }
 
     private func recordError(_ message: String) {
         Self.logger.error("recordError: \(message, privacy: .public)")
