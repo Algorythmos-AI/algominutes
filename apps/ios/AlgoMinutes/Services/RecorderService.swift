@@ -380,7 +380,7 @@ final class RecorderService: NSObject, AVAudioRecorderDelegate {
     /// created and the file associated — the durable copy must survive.
     func deleteCurrentFile() {
         if let url = currentFileURL {
-            store.remove(fileURL: url)
+            store.remove(fileURL: url, reason: .nothingCaptured)
         }
         currentFileURL = nil
     }
