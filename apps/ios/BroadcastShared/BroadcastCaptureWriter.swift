@@ -77,6 +77,71 @@ final class BroadcastCaptureWriter {
         return BroadcastCaptureWriter(writer: writer, appInput: try input(), micInput: try input())
     }
 
+    /// Where in the App Group container a capture is written, tried in order (relative paths; "" is the container
+    /// root, where captures went until 2026-10-29). A real broadcast's writer couldn't start at the root on iOS 27
+    /// (NSURLErrorDomain -1100 < OSStatus -17508, file not found) while the app's tests, writing to their own
+    /// temporary directory, could: the capture goes to a directory it creates first, under Library, like the app's
+    /// own RecordingStore. The app claims by the absolute path the extension reports, so any of these is claimed.
+    static let captureDirectories = ["Library/Application Support/Broadcasts", "Library/Caches/Broadcasts", ""]
+
+    /// What one location gave, for the diagnostic: `<dir>:d<mkdir>,f<plain file write>,w<startWriting>`, each `0`
+    /// for success or the error chain's codes, e.g. `root:d0,f0,w-1100<-17508`.
+    private(set) var locationAttempts: [String] = []
+
+    /// A started writer for `fileName` at the first of `directories` (in `container`) where the directory can be
+    /// created and `startWriting` succeeds, then at `fallback` (outside the container: the extension's own
+    /// temporary directory, recorded as "tmp"), with every attempt recorded; nil and the attempts if none worked.
+    static func open(inContainer container: URL, fileName: String, directories: [String] = captureDirectories,
+                     fallback: URL? = nil) -> (capture: BroadcastCaptureWriter?, url: URL?, attempts: [String]) {
+        var attempts: [String] = []
+        let fm = FileManager.default
+        func codes(_ error: Error?) -> String {
+            let chain = BroadcastWriterDiagnostics.errorChain(error).compactMap { $0.split(separator: "/").last.map(String.init) }
+            return chain.isEmpty ? "?" : chain.joined(separator: "<")
+        }
+        var locations: [(name: String, dir: URL)] = directories.map { relative in
+            let name = relative.isEmpty ? "root" : relative.replacingOccurrences(of: "Library/", with: "")
+                .replacingOccurrences(of: "Application Support", with: "AS")
+            return (name, relative.isEmpty ? container : container.appendingPathComponent(relative, isDirectory: true))
+        }
+        if let fallback { locations.append(("tmp", fallback)) }
+        for (name, dir) in locations {
+            var record = "\(name):"
+            do {
+                // Readable after the first unlock, so a broadcast started or running while the phone is locked can write.
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true,
+                                       attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+                record += "d0,"
+            } catch {
+                attempts.append(record + "d" + codes(error))
+                continue
+            }
+            // A plain file write tells "this process can't write here" from "the writer can't".
+            let probe = dir.appendingPathComponent(".probe-\(UUID().uuidString)")
+            do {
+                try Data([0]).write(to: probe)
+                try fm.removeItem(at: probe)
+                record += "f0,"
+            } catch {
+                record += "f" + codes(error) + ","
+            }
+            let url = dir.appendingPathComponent(fileName, isDirectory: false)
+            do {
+                let capture = try make(url: url)
+                if capture.start() {
+                    attempts.append(record + "w0")
+                    capture.locationAttempts = attempts
+                    return (capture, url, attempts)
+                }
+                attempts.append(record + "w" + codes(capture.writer.error))
+                capture.writer.cancelWriting()
+            } catch {
+                attempts.append(record + "m" + codes(error))
+            }
+        }
+        return (nil, nil, attempts)
+    }
+
     private init(writer: AVAssetWriter, appInput: AVAssetWriterInput, micInput: AVAssetWriterInput) {
         self.writer = writer
         self.appInput = appInput
@@ -295,7 +360,8 @@ final class BroadcastCaptureWriter {
     func diagnostic(stage: String) -> String {
         lock.withLock {
             let downmix = normalizers.map(\.downmixStatus).first { $0 != noErr }
-            return diagnostics.json(stage: stage, writer: writer, failed: failedTrack?.rawValue, downmix: downmix)
+            return diagnostics.json(stage: stage, writer: writer, failed: failedTrack?.rawValue, downmix: downmix,
+                                    locations: locationAttempts)
         }
     }
 }
@@ -506,7 +572,8 @@ final class BroadcastWriterDiagnostics {
     /// error chain and the outermost and innermost descriptions, the track that failed, and per track [app, mic]:
     /// buffers appended (n), dropped (drop), unconvertible (bad), seconds of silence filled (fill), the first source
     /// format seen (fmt) and whether a later one differed (chg), and the converter's last error (conv, if any).
-    func json(stage: String, writer: AVAssetWriter?, failed track: Int? = nil, downmix: OSStatus? = nil) -> String {
+    func json(stage: String, writer: AVAssetWriter?, failed track: Int? = nil, downmix: OSStatus? = nil,
+              locations: [String] = []) -> String {
         let error = writer?.error.map { $0 as NSError }
         var deepest = error
         while let next = deepest?.userInfo[NSUnderlyingErrorKey] as? NSError { deepest = next }
@@ -528,6 +595,7 @@ final class BroadcastWriterDiagnostics {
         if let track { info["input"] = track == 0 ? "app" : "mic" }
         if converterStatus.contains(where: { $0 != noErr }) { info["conv"] = converterStatus.map { Int($0) } }
         if bufferFailures > 0 { info["mk"] = [bufferFailures, Int(bufferStatus)] }
+        if !locations.isEmpty { info["loc"] = locations }
         if let downmix, downmix != noErr { info["dmix"] = Int(downmix) }
         guard let data = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "{\"at\":\"\(stage)\"}" }

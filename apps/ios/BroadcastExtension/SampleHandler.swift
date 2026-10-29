@@ -22,6 +22,9 @@ import os
 ///   unclaimedBroadcastFiles: [String] (finished captures a later broadcast found unclaimed; the app claims
 ///                            these first, oldest first: RELEASE.md rev 11, N4)
 ///   recordingSize          : Int    (bytes, set on completion)
+///   lastCaptureLocation    : String (where the last capture was opened, and what each location tried gave:
+///                            BroadcastCaptureWriter.open)
+///   lastCaptureMove        : String (only if a capture written outside the container couldn't be moved into it)
 ///   errorMessage           : String? (only on error)
 ///   lastWriterError        : String  (compact JSON, written when the writer fails or a buffer can't be converted:
 ///                            BroadcastCaptureWriter.diagnostic. Counts, formats, error codes; kept until the next one)
@@ -84,35 +87,39 @@ class SampleHandler: RPBroadcastSampleHandler {
         // UUID-based filename avoids collisions with prior runs and avoids
         // race conditions if main app is reading an older completed file.
         let fileName = "broadcast_\(UUID().uuidString).m4a"
-        let fileURL = containerURL.appendingPathComponent(fileName)
 
-        // Two AAC tracks (app audio, microphone), configured in BroadcastShared/BroadcastCaptureWriter.
-        do {
-            capture = try BroadcastCaptureWriter.make(url: fileURL)
-        } catch {
-            Self.logger.error("Failed to create AVAssetWriter: \(error.localizedDescription, privacy: .public)")
-            recordError("Failed to create recording file")
-            finishBroadcastWithError(error as NSError)
+        // Two AAC tracks (app audio, microphone), configured in BroadcastShared/BroadcastCaptureWriter, in the first
+        // directory of the container where the writer starts (BroadcastCaptureWriter.captureDirectories).
+        // Last resort, the extension's own temporary directory: not readable by the app, so the finished file is
+        // moved into the container (handOverToContainer). A kill there loses the capture; a capture beats none.
+        let opened = BroadcastCaptureWriter.open(inContainer: containerURL, fileName: fileName,
+                                                 fallback: FileManager.default.temporaryDirectory)
+        let attempts = opened.attempts.joined(separator: " ")
+        defaults?.set(attempts, forKey: "lastCaptureLocation")
+        guard let capture = opened.capture, let fileURL = opened.url else {
+            // Nothing can be written: say so and end the broadcast now. It used to carry on, and its first buffer's
+            // append failure overwrote this reason with a generic one.
+            Self.logger.error("No location in the App Group container could be written: \(attempts, privacy: .public)")
+            let diagnostic = BroadcastWriterDiagnostics().json(stage: "start", writer: nil, locations: opened.attempts)
+            defaults?.set(diagnostic, forKey: "lastWriterError")
+            let message = "AlgoMinutes couldn't create the capture file on this iPhone. Please try again, or restart the iPhone if it keeps happening."
+            recordError(message)
+            finishBroadcastWithError(NSError(domain: "BroadcastExtension", code: 5, userInfo: [NSLocalizedDescriptionKey: message]))
             return
         }
+        self.capture = capture
+        Self.logger.info("Capturing to \(attempts, privacy: .public)")
 
-        guard let capture, capture.start() else {
-            let err = capture?.writer.error?.localizedDescription ?? "unknown"
-            Self.logger.error("startWriting failed: \(err, privacy: .public)")
-            recordWriterDiagnostic(stage: "start")
-            recordError("Could not begin recording: \(err)")
-            return
-        }
-
+        // Read before "starting" overwrites it: a capture that finished and hasn't been claimed yet (the app wasn't
+        // opened in between) is kept, and joins the list the app claims from. Clearing its pointer orphaned the file.
+        let previousState = defaults?.string(forKey: "state")
         let now = Date().timeIntervalSince1970
         defaults?.set("starting", forKey: "state")
         defaults?.set(true, forKey: "isBroadcasting")
         defaults?.set(now, forKey: "startedAt")
         defaults?.set(now, forKey: "lastHeartbeatAt")
         defaults?.set(fileURL.path, forKey: "activeBroadcastFile")
-        // A capture that finished and hasn't been claimed yet (the app wasn't opened in between) is kept: it
-        // joins the list the app claims from. Clearing its pointer here orphaned the file, and the meeting.
-        if defaults?.string(forKey: "state") == "finished", let waiting = defaults?.string(forKey: "completedBroadcastFile") {
+        if previousState == "finished", let waiting = defaults?.string(forKey: "completedBroadcastFile") {
             var unclaimed = defaults?.stringArray(forKey: "unclaimedBroadcastFiles") ?? []
             if !unclaimed.contains(waiting) { unclaimed.append(waiting) }
             defaults?.set(unclaimed, forKey: "unclaimedBroadcastFiles")
@@ -178,6 +185,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             let reason = capture.writer.error?.localizedDescription ?? "unknown"
             Self.logger.error("Writer stopped before the finish (status \(status, privacy: .public)): \(reason, privacy: .public)")
             recordWriterDiagnostic(stage: "finish")
+            handOverToContainer()
             updateDefaultsOnFinish(success: true)
             then?()
             return
@@ -195,6 +203,7 @@ class SampleHandler: RPBroadcastSampleHandler {
                 Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
                 self.recordWriterDiagnostic(stage: "finish")
             }
+            self.handOverToContainer()
             self.updateDefaultsOnFinish(success: true)
             then?()
         }
@@ -260,6 +269,31 @@ class SampleHandler: RPBroadcastSampleHandler {
     }
 
     // MARK: - Private helpers
+
+    /// A capture written outside the App Group container (BroadcastCaptureWriter.open's last resort) is moved into
+    /// it before it's reported, so the app can claim it. A move that fails is recorded and the file left where it
+    /// is: the app then reports the capture as not found.
+    private func handOverToContainer() {
+        guard let path = defaults?.string(forKey: "activeBroadcastFile"), let container = sharedContainerURL,
+              !path.hasPrefix(container.standardizedFileURL.path), !path.hasPrefix(container.path) else { return }
+        let source = URL(fileURLWithPath: path)
+        let candidates = BroadcastCaptureWriter.captureDirectories.map {
+            $0.isEmpty ? container : container.appendingPathComponent($0, isDirectory: true)
+        }
+        for dir in candidates {
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let destination = dir.appendingPathComponent(source.lastPathComponent)
+                try FileManager.default.moveItem(at: source, to: destination)
+                defaults?.set(destination.path, forKey: "activeBroadcastFile")
+                Self.logger.info("Moved the capture into the App Group container")
+                return
+            } catch {
+                Self.logger.error("Couldn't move the capture into the App Group container: \(BroadcastWriterDiagnostics.errorChain(error).joined(separator: "<"), privacy: .public)")
+                defaults?.set("move:" + BroadcastWriterDiagnostics.errorChain(error).joined(separator: "<"), forKey: "lastCaptureMove")
+            }
+        }
+    }
 
     /// What the writer was doing when it failed (BroadcastCaptureWriter.diagnostic), for the app group: os_log
     /// can't be read off the phone, the group's defaults can (`devicectl device copy from`).
