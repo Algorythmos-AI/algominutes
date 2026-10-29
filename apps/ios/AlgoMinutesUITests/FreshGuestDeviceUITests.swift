@@ -1,8 +1,9 @@
 import XCTest
 
 /// A first install, on a real phone: a brand-new guest records a note without signing in, then deletes their
-/// account (App Review's path, and 5.1.1(v)). Opt-in, and last (device-tests.sh --fresh-guest): the launch SIGNS
-/// A SIGNED-IN ACCOUNT OUT (-AMUITestFreshGuest), so whoever uses the phone signs in again afterwards. A guest
+/// account (App Review's path, and 5.1.1(v)), then carries on as a new guest. Opt-in, and last (device-tests.sh --fresh-guest): the launch SIGNS
+/// A SIGNED-IN ACCOUNT OUT (-AMUITestFreshGuest), so whoever uses the phone signs in again afterwards (it's left
+/// on a new, empty guest). A guest
 /// already on the phone is used as it is, and only while it has no notes: a guest with notes is never deleted.
 final class FreshGuestDeviceUITests: XCTestCase {
     override func setUp() {
@@ -51,6 +52,20 @@ final class FreshGuestDeviceUITests: XCTestCase {
 
         try deleteAccount(app, of: guest)
         XCTAssertTrue(app.buttons["Sign in with Apple"].waitForExistence(timeout: 60), "deleting the account didn't sign out")
+
+        // 5.1.1(v): no account was needed a minute ago, and none is needed now. Deleting lands on sign-in (a new
+        // account is never made by itself), which offers to carry on as a new guest, with nothing of the old one.
+        let carryOn = app.buttons["login.guest"]
+        XCTAssertTrue(carryOn.waitForExistence(timeout: 10), "sign-in after deleting the account has no way on without one")
+        screenshot(app, "after deleting the account")
+        carryOn.tap()
+        XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 60), "Continue without an account didn't reach the tabs")
+        app.openTab("Settings")
+        XCTAssertTrue(app.element("settings.account.guest").waitForExistence(timeout: 10), "not a guest after carrying on")
+        XCTAssertNotEqual(try userId(app), guest, "carrying on brought back the deleted guest")
+        app.openTab("Home")
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(recentNoteIds(app).isEmpty, "the new guest has notes")
     }
 
     /// The User ID Settings shows.
