@@ -9,6 +9,19 @@ Rev 12 leads `docs/plans/RELEASE.md`: the App-Review readiness check of 2026-10-
 I1–I9, O1–O9), and the five stages to a submission that passes. Each bug closes here under its id, with a
 failing-then-passing test and staging evidence. Rev 11's entries follow, then rev 10's.
 
+- **2026-10-29: proof 5, call capture, on an iPhone 11 (iOS 27.0.1).** Recorded in the private test-history
+  repository.
+  - [x] Proof 5 (I3, O10), with the fixed extension (#553), during a WhatsApp call: **call audio not available
+    to ReplayKit; feature removed from 1.0.** Capture statistics: microphone 0 buffers received in 57 s; app
+    audio 2,400 buffers, all -99 dBFS (digital silence); no drops, no conversion failures. iOS keeps call
+    audio out of screen broadcasts (FaceTime and phone calls the same). Decision: DECISIONS.md 2026-10-29.
+    - #555: the App Store build ships without call capture (no extension in Release, no call wording in the
+      microphone text; Staging and Debug keep it).
+    - #556: production `broadcast_capture` "off", and the api treats an unset switch as off. The owner applies
+      the plan, then redeploys.
+    - Still to prove: a `--release` device run with #555; `GET /v1/config` on production after #556 answers
+      `"broadcastCapture": false`; RC1's archive has no `BroadcastExtension.appex`.
+
 - **2026-10-29: device proofs on an iPhone 11 Pro Max (iOS 27.0.1).** Each run is recorded in the private
   test-history repository.
   - [x] #516, kill recovery, on staging at 77d820ba (integration + #545/#547/#548):
@@ -83,6 +96,8 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     and a recording is stamped with its Firebase project (#508).
   - [ ] I12 (P2): What to Test empty on builds 75 and 76; #507 writes en-AU too (proof: the next build shows it).
   - [ ] O10 (P1): production `broadcast_capture` is "on" (live env `BROADCAST_CAPTURE=on`) while I3 is open.
+    - 2026-10-29: call capture is out of 1.0 (proof 5, above); #556 sets it "off". Closes when production's
+      `GET /v1/config` answers `"broadcastCapture": false`.
   - [ ] O11 (P2): production `admin_uids` unset.
   - Docs corrected: the review notes said "Free trial? Not in 1.0" while production runs one.
     `apps/site/src/components/LegalNotice.astro` still says "AlgoMinutes is in beta" on Terms and Privacy

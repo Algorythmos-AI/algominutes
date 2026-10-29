@@ -11,10 +11,10 @@ Status words: **pass** = the repo shows it. **not verified** = needs a device, a
 
 ## Owner decisions
 
-- **"Record a call" in 1.0** (RELEASE.md status decision 3, R12.5 Stage 5). **Pending proof 5, due 11-05.** The
-  binary on `main` embeds the Broadcast Upload Extension and production's `broadcast_capture` is "on", so §1.1
-  variant A matches the build as it is. Default: **off unless proof 5 passes, and "off" means the extension is
-  removed from the 1.0 binary**, not just switched off (§6); then paste variant B.
+- **"Record a call" in 1.0: decided 2026-10-29, out of 1.0** (owner; DECISIONS.md 2026-10-29). Proof 5 ran on
+  10-29 and showed iOS gives a ReplayKit broadcast no call audio (§6). **Paste §1.1 variant B.** It is true of
+  the binary once #555 (no extension in the Release build, no call wording in the microphone text) is in RC1,
+  and of production once #556 (`broadcast_capture` "off") is applied and redeployed.
 - **Demo account.** Default: **none**; the app starts as a guest with free minutes (§2).
 - **App name.** `AlgoMinutes: AI Meeting Notes` (STORE-LISTING §1.3) or `AlgoMinutes` (the runbook's table).
   Default: **the longer name**, which carries search weight.
@@ -33,8 +33,8 @@ as one character each (App Store Connect's limit for Notes is 4,000).
 until the free-floor gate in `Entitlement.swift` is fixed, or the reviewer meets the paywall on the second
 recording.
 
-**Variant A: call capture stays in 1.0** (proof 5 passed; the extension embedded, production `broadcast_capture`
-"on"). This is the binary on `main` today. **3,885 characters.**
+**Variant A: call capture stays in 1.0. Not used** (proof 5 failed, 2026-10-29; §6). Kept for a later version
+that brings call capture back. **3,885 characters.**
 
 ```
 AlgoMinutes records a meeting on iPhone and turns it into a transcript and a summary.
@@ -74,10 +74,10 @@ CONTACT
 Settings > Help & Support > Contact support, or the contact details in this App Review Information.
 ```
 
-**Variant B: call capture removed from 1.0** (proof 5 failed or not run by 11-05). Paste it only after §6's
-changes are in the build: the `BroadcastExtension` dependency out of the `AlgoMinutes` Release target
-(`apps/ios/project.yml`, `embed: true` today), the call clause out of `NSMicrophoneUsageDescription`, and
-production `broadcast_capture` "off" (reviewed plan and apply, then redeploy). **3,344 characters.**
+**Variant B: call capture removed from 1.0. The one to paste** (proof 5 failed, 2026-10-29; §6). It matches a
+Release build with #555 (no `BroadcastExtension.appex`, `CALL_CAPTURE_ENABLED "NO"`, no call wording in
+`NSMicrophoneUsageDescription`) and production with #556 applied (`broadcast_capture` "off", then a redeploy).
+**3,344 characters.**
 
 ```
 AlgoMinutes records a meeting on iPhone and turns it into a transcript and a summary.
@@ -180,7 +180,7 @@ needs a review screenshot of the paywall, status Ready to Submit, attached to ve
 | Masking before Gemini | `@algominutes/ai/redaction.cjs` | pass in code |
 | Go Pro, Restore (paywall and Settings), Redeem, Manage Subscription | `Features/Settings/SettingsView.swift`, `Features/Paywall/PaywallView.swift`; Release `PAYWALL_ENABLED "YES"`, `INVITE_CODES_ENABLED "NO"` | pass |
 | Delete my account, DELETE, Delete forever, Apple revocation | `SettingsView.swift`; #451 | pass in code; **not verified on prod** (A8) |
-| Call capture: two ways in, "Turn your capture into a note?", audio only | `RecorderFlow.swift` (`callTitle`), `RootView.swift` (the confirmation dialog), `AppEnvironment.claimBroadcastCapture`, `BroadcastHandoff.decide` (agreement, then permission), `BroadcastExtension/SampleHandler.swift` (video buffers ignored) | pass in code; proof 5 open |
+| No call capture in the App Store build (variant B) | `project.yml`: Release `CALL_CAPTURE_ENABLED "NO"` and `EXCLUDED_SOURCE_FILE_NAMES` (the extension not embedded; a build phase checks it); `AppSwitches.broadcastCapture` off whatever the server says; `BroadcastHandoff.decide` → `.leave`; `BroadcastPickerView` compiled out (#555) | pass in code, from #555; an unsigned Release archive had no `.appex` (#555). Check RC1's archive too |
 | Contact support | `Features/Settings/HelpSupportView.swift` | pass |
 
 ## 2. Demo account
@@ -281,7 +281,7 @@ START FREE depends on the free-floor fix (Drift); until then drop its second sen
 |---|---|---|
 | "Instant summaries … in seconds" | S17: 19 minutes for 23 s on prod | "Summaries in minutes" (fixed in `STORE-LISTING.md`, with "instant" dropped from the Play copy) |
 | "who's doing what" / "owner + task" | Action items are plain strings | "the next steps" |
-| "Record … the audio of a call" | Call capture out of 1.0 by default (§6) | Mic, import, scan |
+| "Record … the audio of a call" | Call capture is out of 1.0 (§6, decided 2026-10-29) | Mic, import, scan |
 | "New: meeting templates" | Nothing is new in a 1.0 | Rewritten |
 | "Everyone's kept in the loop" | The app tells no one | "Consent built in" |
 | "Searchable, accurate transcript" | An accuracy claim the Terms disclaim | "Searchable transcript" (fixed in `STORE-LISTING.md`) |
@@ -301,7 +301,7 @@ START FREE depends on the free-floor fix (Drift); until then drop its second sen
 | 2.1 | IAP products Ready to Submit and attached | **not verified** | owner, App Store Connect |
 | 2.1 | A sandbox purchase reconciled on prod billing | **not verified** | S18 |
 | 2.3 | Listing claims match the app | pass after §4.3 | |
-| 2.3.1 | No hidden or dormant features | **not verified** | prod `broadcast_capture` "on" (O10) and the extension embedded while proof 5 is open; §6 and §1.1's two variants. Notetaker: `notetaker_surfaces` defaults to "" in prod; confirm `GET /v1/config` on prod shows it off |
+| 2.3.1 | No hidden or dormant features | **not verified** | Call capture: no extension in the Release build and the switch can't show it (#555); prod `broadcast_capture` "off" once #556 is applied (O10); confirm on RC1's archive and `GET /v1/config` on prod. Notetaker: `notetaker_surfaces` defaults to "" in prod; confirm `GET /v1/config` on prod shows it off |
 | 3.1.1 | Pro only through StoreKit; no invite codes in the store build; offer codes for free time; Restore reachable | pass | `PaywallView.swift`, `INVITE_CODES_ENABLED "NO"`, `.offerCodeRedemption`, #472, #473 |
 | 3.1.3(b) | Web Pro honoured, no link out to buy | pass | `PaywallView.swift` |
 | 3.1.2 | Paywall: name, period, price, auto-renew terms, Terms and Privacy links; Manage Subscription | pass | `PaywallView.swift`, `SettingsView.swift` |
@@ -311,7 +311,7 @@ START FREE depends on the free-floor fix (Drift); until then drop its second sen
 | 4.0 | "iPhone apps on Apple silicon Macs" off | **not verified** | owner |
 | 4.0 | Largest text size | pass in tests | #515 |
 | 4.8 | Sign in with Apple alongside Google | pass | R12.1 |
-| 5.1.1 | Purpose strings say what, why, where | pass | `Info.plist`. **If call capture is removed, the microphone string must drop "or your side of a call in another app that you choose to capture"** (and STORE-COMPLIANCE §4.2) |
+| 5.1.1 | Purpose strings say what, why, where | pass | `Info.plist` and `project.yml`: the Release microphone text (`MICROPHONE_USAGE_DESCRIPTION`) has no call clause (#555), quoted in STORE-COMPLIANCE §4.2 |
 | 5.1.1 | Legal sign-off, or a dated decision to launch on drafts | **not verified** | `APP-STORE-LEGAL.md`; the site still says "in beta" (`LegalNotice.astro`) |
 | 5.1.1 | Age rating 13+ answered honestly; share links off on prod | **not verified** | owner; `switches.shareLinks` |
 | 5.1.1(v) | In-app deletion; server data, Postgres first; Apple token revoked; cancel-subscription note | pass in code | `SettingsView.swift`, `services/api/src/routes/delete-account.js`, #451 |
@@ -321,32 +321,38 @@ START FREE depends on the free-floor fix (Drift); until then drop its second sen
 | 5.1.2(i) | Data sent to third-party AI disclosed, with explicit permission | pass in code (#537, on `main` 24adcde7); in a build from RC1 | A one-time "Send your recordings to Google Cloud AI?" agreement, separate from the permission tick, before the first upload on every path; withdrawn in Settings › Google Cloud AI (CONSENT §2.2) |
 | 5.1.2 | Summaries labelled as AI-written | pass in code | #535 on `main` 24adcde7 (DOCX deployed to production; iOS from RC1); the example note unlabelled (#539); `APP-STORE-AI-LABEL.md` |
 
-## 6. Call capture at review: remove it from the 1.0 binary
+## 6. Call capture at review: removed from the 1.0 binary
 
-**Recommendation:** take the Broadcast Upload Extension out of the 1.0 Release build and set production's
-`broadcast_capture` to "off", unless proof 5 passes by 11-05. This is R12.5 Stage 5's "otherwise removed from
-1.0", made concrete.
+**Decided 2026-10-29 (owner): "Record a call" is out of 1.0** (DECISIONS.md, 2026-10-29). Paste §1.1 variant B.
 
-1. **Proof 5 isn't there.** A real broadcast killed mid-call, picked up and processed, has not been run. I3's
-   fix (fragmented MP4, **#532**) is merged and on `main`; its evidence is an in-process kill test on the iPhone 11 (unit lane
-   437 executed, 0 failures), and it says proof 5 is still manual.
-2. **Switched off is still dormant.** The extension stays installed; a reviewer can start it from Control
-   Center, and the app says capture is "turned off right now" (`AppEnvironment.swift`). That invites 2.3.1.
-3. **It draws the most questions** (ReplayKit, other apps' calls, other people's consent), and mic, import and
-   scan cover the core use. Call capture can ship in 1.1 with proof 5 and §1.1.
+**Proof 5's result (2026-10-29).** An iPhone 11 (iOS 27.0.1) with the fixed extension (#553), broadcasting
+during a WhatsApp call. The extension's capture statistics for the run:
+- microphone: **0 buffers received in 57 s** (no microphone audio reached the extension at all);
+- app audio: **2,400 buffers, every one at -99 dBFS** (digital silence);
+- no dropped buffers and no conversion failures, so the writer did its job: there was nothing to write.
 
-Removing it is a code change, so it restarts the 7-day soak: do it before RC1.
-- `apps/ios/project.yml`: drop the `BroadcastExtension` dependency and its entries from the `AlgoMinutes`
-  scheme for Release; keep the target for Staging if testers use it. Check the device lane's
-  `AlgoMinutes-ReleaseUITests` scheme (#528) at the same time.
-- `Info.plist`: drop the call-capture clause from `NSMicrophoneUsageDescription`, and in STORE-COMPLIANCE §4.2.
-- Check whether the App Group is still needed without the extension; change the manifest and docs together
-  (the privacy-answers test will say).
-- Production: `TF_VAR_broadcast_capture=off` through the owner's reviewed plan and apply; a saved plan resets
-  Cloud Run images, so redeploy after.
+iOS keeps call audio out of screen broadcasts: FaceTime and phone calls behave the same as WhatsApp. So the
+feature can't do what it says, and #553's fixes don't change that. The run is recorded in the private
+test-history repository.
 
-If proof 5 passes on a device before 11-05: keep it, leave the switch on, paste §1.1 variant A. Otherwise make
-the changes above and paste variant B.
+**What changed for 1.0:**
+- **#555, the App Store build.** The Release configuration has `CALL_CAPTURE_ENABLED "NO"`:
+  - The copy phase leaves `BroadcastExtension.appex` out (`EXCLUDED_SOURCE_FILE_NAMES`), and a build phase fails
+    any build whose embedding disagrees with the flag. CI builds Release and checks for it.
+  - `BroadcastPickerView`, the only code that names the extension, is compiled out.
+  - "Record a call" can't show, whatever the server says.
+  - A capture a staging build left on the same iPhone is left alone: nothing is claimed or shown.
+  - The microphone text has no call clause.
+  - An unsigned Release archive had no `.appex` anywhere.
+- **#556, production.** `broadcast_capture` defaults to "off" in `envs/prod` and in the module, and the api
+  treats an unset `BROADCAST_CAPTURE` as off. The owner applies it with a reviewed plan, then redeploys (a saved
+  plan resets Cloud Run images). The same switch hides the web app's call in another tab on production.
+- **Staging and development keep it**, behind the server switch, for experiments. The App Group stays, so the
+  app's manifest keeps `1C8F.1` (STORE-COMPLIANCE §4.1).
+
+It can only come back if iOS gives a broadcast the call's audio (proof 5 would have to pass again), or if
+there's another route Apple allows. Then: `CALL_CAPTURE_ENABLED "YES"` for Release, the call clause back in the
+Release microphone text, `broadcast_capture` "on" in prod, and §1.1 variant A in a later version.
 
 ## Drift
 

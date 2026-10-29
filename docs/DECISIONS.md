@@ -3,6 +3,41 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## "Record a call" is out of 1.0 (2026-10-29)
+
+**Decision (owner, 2026-10-29):** 1.0 ships without call capture. The App Store build (Release) has no
+Broadcast Upload Extension, no "Record a call" entry and no call wording in its microphone text. Production's
+`broadcast_capture` switch is "off". This is variant B in APP-STORE-REVIEW-PACKAGE §6 and APP-STORE-OWNER-PACK
+§3.6.
+
+**Evidence:** proof 5 on an iPhone 11 (iOS 27.0.1), with the fixed extension (#553), during a WhatsApp call.
+The extension received no microphone buffers in 57 s. Its app-audio track was 2,400 buffers, all at -99 dBFS
+(digital silence), with no drops and no conversion failures. iOS keeps call audio out of screen broadcasts, and
+FaceTime and phone calls are the same, so "Record a call" can't do what it says. The run is recorded in the
+private test-history repository and in BLOCKERS §0.
+
+**How:**
+- #555: `CALL_CAPTURE_ENABLED` is set per configuration (`NO` for Release):
+  - Release's copy phase leaves the extension out (`EXCLUDED_SOURCE_FILE_NAMES`), and a build phase fails a
+    build that disagrees with the flag.
+  - `BroadcastPickerView` is compiled out.
+  - `AppSwitches.broadcastCapture` is off whatever the server says.
+  - A capture an earlier build left is left alone (`BroadcastHandoff.decide` → `.leave`).
+  - `NSMicrophoneUsageDescription` comes from `MICROPHONE_USAGE_DESCRIPTION`.
+- #556: production `broadcast_capture` defaults to "off" (and so does the module's default), and the api treats
+  an unset `BROADCAST_CAPTURE` as off. The owner applies the plan, then redeploys.
+
+**What stays:** the extension target, its code and tests (BroadcastShared, #532, #553), and the feature in
+Debug and Staging builds, behind staging's `broadcast_capture` "on", for experiments. The App Group stays in the
+app (the manifest's `1C8F.1`). The server switch and `/v1/config broadcastCapture` stay in the contract. The
+same switch gates the web app's call in another tab, which goes off on production with #556 unless the owner
+splits the switch.
+
+**How it could come back:** only if iOS lets a broadcast hear the call (a new proof 5 on a current iOS
+passes), or through another route Apple allows. Then: `CALL_CAPTURE_ENABLED "YES"` for Release, the call clause
+back in Release's `MICROPHONE_USAGE_DESCRIPTION` and STORE-COMPLIANCE §4.2, production `broadcast_capture` "on",
+REVIEW-PACKAGE §1.1 variant A, and a new version through App Review.
+
 ## The corrected Terms and Privacy go live before counsel's sign-off (2026-10-29)
 
 **Decision (owner, 2026-10-29):** merge #549 now. The Terms and Privacy pages no longer say the app is in beta
