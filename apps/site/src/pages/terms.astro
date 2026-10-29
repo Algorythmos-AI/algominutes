@@ -1,7 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import LegalNotice from '../components/LegalNotice.astro';
-import { TERMS_VERSION, longDate, operator } from '../lib/site';
+import { TERMS_VERSION, TRIAL_DAYS, longDate, operator } from '../lib/site';
 ---
 <Base title="Terms of Service" description="The terms for using AlgoMinutes, the AI meeting-notes app from Algorythmos Pty Ltd.">
   <article class="prose">
@@ -16,10 +16,10 @@ import { TERMS_VERSION, longDate, operator } from '../lib/site';
       records which versions you accepted.
     </p>
 
-    <h2 id="beta">1. The beta</h2>
+    <h2 id="service">1. The service</h2>
     <p>
-      AlgoMinutes is in beta. Features may change, be limited, or stop working while we improve them, and we may end
-      the beta. Keep your own copy of anything you can't afford to lose.
+      We keep improving AlgoMinutes, so features may change or be limited, as section 9 describes. Keep your own copy
+      of anything you can't afford to lose.
     </p>
 
     <h2 id="eligibility">2. Who can use AlgoMinutes</h2>
@@ -64,11 +64,29 @@ import { TERMS_VERSION, longDate, operator } from '../lib/site';
       <li>copy, resell or reverse engineer the service, except where the law allows it.</li>
     </ul>
 
-    <h2 id="fees">8. Fees</h2>
+    <h2 id="fees">8. Free minutes and AlgoMinutes Pro</h2>
     <p>
-      AlgoMinutes is free during the beta, with usage limits shown in the app. If we introduce paid plans, we'll show
-      the price before you buy. Subscriptions bought in the App Store are also governed by Apple's terms, and you
-      manage or cancel them in your Apple account.
+      <strong>Free minutes.</strong> Every account gets a number of free recording minutes each month, shown in the
+      app. A new account on an iPhone that hasn't had one before may also get a free trial: more minutes for {TRIAL_DAYS} days,
+      after which the account goes back to its free minutes. We allow one trial per iPhone, and use
+      Apple's DeviceCheck to check that, as our <a href="/privacy#trial">Privacy Policy</a> explains. The free minutes
+      and the trial aren't a trial of a subscription: they don't need payment details, nothing is charged, and they
+      never turn into a paid subscription.
+    </p>
+    <p>
+      <strong>AlgoMinutes Pro</strong> is an auto-renewing subscription that gives you more minutes. You buy it in the
+      AlgoMinutes app through the App Store. Before you buy, the app shows the price and how often you'll be billed;
+      payment is charged to your Apple Account when you confirm the purchase.
+    </p>
+    <ul>
+      <li><strong>Renewal.</strong> Pro renews automatically at the end of each period, and Apple charges your Apple Account for the next period within the 24 hours before it begins, unless you cancel at least 24 hours before the current period ends.</li>
+      <li><strong>Managing and cancelling.</strong> Manage or cancel Pro in your Apple account settings: on your iPhone, Settings, your name, then Subscriptions (or from the app's Settings). Cancelling stops the next renewal; you keep Pro until the end of the period you've paid for. Deleting your AlgoMinutes account doesn't cancel an App Store subscription.</li>
+      <li><strong>Refunds.</strong> Apple handles payment for App Store purchases, so refunds are requested from Apple under its policies.</li>
+      <li><strong>Price changes.</strong> If we change Pro's price, Apple tells you before the new price applies, as its rules require.</li>
+    </ul>
+    <p>
+      Purchases in the App Store are also governed by Apple's terms. Nothing in this section limits your rights under
+      the Australian Consumer Law or your local consumer laws, as section 11 explains.
     </p>
 
     <h2 id="changes-service">9. Changes and availability</h2>
@@ -91,7 +109,7 @@ import { TERMS_VERSION, longDate, operator } from '../lib/site';
       under the Australian Consumer Law.
     </p>
     <p>
-      Apart from those rights, and to the extent the law allows: AlgoMinutes is provided "as is" during the beta; we
+      Apart from those rights, and to the extent the law allows: AlgoMinutes is provided "as is"; we
       aren't liable for indirect or consequential loss, or for loss of data you could have kept a copy of; and our
       total liability to you is limited to the amount you paid us in the 12 months before the claim (or, where the
       Australian Consumer Law applies, to supplying the service again or paying for it to be supplied again).
