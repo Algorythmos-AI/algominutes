@@ -3,6 +3,24 @@
 One line of reasoning per decision. Newest first within each phase. This file is the durable record of
 choices made during the automated A2/A3 run so they are auditable from the git log.
 
+## The corrected Terms and Privacy go live before counsel's sign-off (2026-10-29)
+
+**Decision (owner, 2026-10-29):** merge #549 now. The Terms and Privacy pages no longer say the app is in beta
+or that nothing is sold; they describe free minutes, the free-minutes trial (one per iPhone, checked with Apple
+DeviceCheck) and AlgoMinutes Pro (price shown before purchase, auto-renewal, cancelling, refunds through Apple).
+
+**Why:** the iPhone paywall links these pages. Pages that said nothing is sold, next to a live App Store
+subscription, are a likely rejection under App Review 3.1.2 and 2.3, and wrong for any user who buys Pro.
+The corrected drafts are closer to the truth than the old ones; counsel still reviews them.
+
+**What stays open:**
+- Counsel reviews the text (owner pack §1). Terms §11's "as is" clause lost "during the beta", which changes its
+  scope: counsel looks at that first.
+- `TERMS_VERSION` / `PRIVACY_VERSION` and the pages' "last updated" date are not bumped. A bump is a three-client
+  contract change (contracts, the iOS `ComplianceContract`, the site-facts test) that asks every user to accept
+  again, so it happens at sign-off (APP-STORE-LEGAL.md §5), with any changes counsel asks for.
+- The banner on both pages says the documents await final legal review until then.
+
 ## A production deploy takes one approval, not one per job (2026-10-26)
 
 - **Context.** Every job in `deploy-production.yml` named the `production` Environment, whose required reviewer
