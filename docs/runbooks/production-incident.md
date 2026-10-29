@@ -404,7 +404,7 @@ there is no cache.
 
 | Switch (Terraform variable, `envs/prod/main.tf`) | api env | Off means |
 |---|---|---|
-| `broadcast_capture` (`on`/`off`, default `off`: production runs it off, DECISIONS.md 2026-10-29) | `BROADCAST_CAPTURE` (unset means off) | "Record a call" hidden: the broadcast extension in staging builds (the App Store build has none) and the web's call in another tab |
+| `broadcast_capture` (`on`/`off`, default `on`) | `BROADCAST_CAPTURE` (unset means off) | the web's call in another tab hidden (the iPhone App Store build has no call capture; staging builds hide "Record a call") |
 | `notetaker_surfaces` (default empty = off) | `NOTETAKER` | the notetaker hidden; new requests answer 503 (`docs/runbooks/meetings.md`) |
 | `share_links` (module default `off`; prod doesn't expose it) | `SHARE_LINKS` | share links hidden |
 
@@ -426,7 +426,7 @@ export TF_VAR_billing_account=$(gcloud billing projects describe algominutes-pro
 export TF_VAR_alert_emails='[...]'
 export TF_VAR_admin_uids='[...]'
 export TF_VAR_notetaker_surfaces='...'
-export TF_VAR_broadcast_capture=off          # the change (production's default since 2026-10-29; never "on" there)
+export TF_VAR_broadcast_capture=off          # the change
 terraform init
 SHA=$(git rev-parse --short HEAD)
 terraform plan -lock=false -var-file=terraform.tfvars -out "reviewed-$SHA.tfplan"   # read it: only the api's env should change
