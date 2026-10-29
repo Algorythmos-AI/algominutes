@@ -159,3 +159,29 @@ jobs:
             echo "error: BroadcastExtensionSetupUI is embedded again"
             exit 1
           fi
+      # The App Store build (Release) ships without call capture (DECISIONS.md, 2026-10-29): no broadcast extension
+      # in the app, and a microphone text that says nothing of calls. Built unsigned with the fake plist above.
+      - name: Release build (unsigned) has no call capture
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -scheme AlgoMinutes \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/release \
+            -clonedSourcePackagesDirPath "$HOME/spm-packages" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO \
+            ALGOMINUTES_SKIP_DSYM_UPLOAD=YES
+          APP=build/release/Build/Products/Release-iphonesimulator/AlgoMinutes.app
+          if [ -e "$APP/PlugIns/BroadcastExtension.appex" ]; then
+            echo "error: the Release build embeds BroadcastExtension.appex"
+            exit 1
+          fi
+          MIC=$(/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$APP/Info.plist")
+          if printf '%s' "$MIC" | grep -qiE 'call|another app'; then
+            echo "error: the Release build's microphone text mentions calls: $MIC"
+            exit 1
+          fi
+          test "$(/usr/libexec/PlistBuddy -c "Print :AlgoMinutesCallCaptureEnabled" "$APP/Info.plist")" = NO

@@ -560,6 +560,12 @@ final class AppEnvironment {
             consented: await consentGate.satisfied(for: .appAudio)
         )
         switch decision {
+        case .leave:
+            if broadcast.hasFinishedCapture, !broadcastHoldNoticeShown {
+                broadcastHoldNoticeShown = true
+                AppLog.info("broadcast_left_build_has_no_call_capture")
+            }
+            return
         case .hold:
             AppLog.info("broadcast_held_by_switch")
             if !broadcastHoldNoticeShown {

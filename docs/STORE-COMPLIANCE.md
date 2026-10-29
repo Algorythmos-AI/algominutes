@@ -136,10 +136,15 @@ Replace the current strings with these (specific about what is recorded, why, an
 leaves the device):
 
 - **`NSMicrophoneUsageDescription`**
-  > "AlgoMinutes uses your microphone only while you record: a meeting or note in the app,
-  > or your side of a call in another app that you choose to capture. The audio is uploaded
-  > to your AlgoMinutes account to be transcribed and summarised, and is kept there until
-  > you delete it. Recording never starts on its own."
+  > "AlgoMinutes uses your microphone only while you record a meeting or note in the app.
+  > The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and
+  > is kept there until you delete it. Recording never starts on its own."
+
+  The App Store build's text: `MICROPHONE_USAGE_DESCRIPTION` for Release in `apps/ios/project.yml` (1.0 has
+  no call capture, DECISIONS.md 2026-10-29). Staging and development builds, which keep "Record a call", add
+  the call to the first sentence:
+  "…while you record: a meeting or note in the app, or your side of a call in another app that
+  you choose to capture."
 
 - **`NSCameraUsageDescription`**
   > "AlgoMinutes uses the camera only when you choose to scan text from a document. The

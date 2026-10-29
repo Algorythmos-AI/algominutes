@@ -8,11 +8,16 @@ import Observation
 /// extension: the top App Review risk, and the one feature most likely to need
 /// hiding in a hurry. The last answer is kept, so an offline launch shows what
 /// the server last said; before any answer it's hidden, so a build the switch
-/// was meant to cover never shows it by default.
+/// was meant to cover never shows it by default. A build without call capture
+/// (the App Store build, `AppConfig.callCaptureEnabled`) never shows it, whatever
+/// the server says.
 @MainActor
 @Observable
 final class AppSwitches {
-    private(set) var broadcastCapture: Bool
+    /// The server's answer, and this build has call capture.
+    var broadcastCapture: Bool { buildHasCallCapture && serverBroadcastCapture }
+    private var serverBroadcastCapture: Bool
+    @ObservationIgnored private let buildHasCallCapture: Bool
     /// Sending the notetaker from a pasted link (`notetaker.bot`): on only for
     /// the users the server allows (beta testers, until the legal opinion).
     private(set) var notetakerBot: Bool
@@ -25,9 +30,10 @@ final class AppSwitches {
     private static let notetakerBotKey = "appSwitches.notetakerBot"
     private static let shareLinksKey = "appSwitches.shareLinks"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, buildHasCallCapture: Bool = AppConfig.callCaptureEnabled) {
         self.defaults = defaults
-        broadcastCapture = defaults.object(forKey: Self.broadcastKey) as? Bool ?? false
+        self.buildHasCallCapture = buildHasCallCapture
+        serverBroadcastCapture = defaults.object(forKey: Self.broadcastKey) as? Bool ?? false
         notetakerBot = defaults.object(forKey: Self.notetakerBotKey) as? Bool ?? false
         shareLinks = defaults.object(forKey: Self.shareLinksKey) as? Bool ?? false
     }
@@ -36,7 +42,7 @@ final class AppSwitches {
     func refresh(fetch: () async throws -> AppConfigResponse) async {
         do {
             let config = try await fetch()
-            broadcastCapture = config.broadcastCapture
+            serverBroadcastCapture = config.broadcastCapture
             defaults.set(config.broadcastCapture, forKey: Self.broadcastKey)
             // Absent (an older server) means off.
             notetakerBot = config.notetaker?.bot ?? false
