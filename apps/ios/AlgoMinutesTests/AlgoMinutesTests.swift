@@ -993,7 +993,7 @@ final class RecordingStoreTests: XCTestCase {
         store.associate(fileURL: url, noteId: "note-2", mimeType: "audio/mp4", ext: "m4a", durationSeconds: nil)
         XCTAssertNotNil(store.pendingRecording(forNoteId: "note-2"))
 
-        store.remove(fileURL: url)
+        store.remove(fileURL: url, reason: .processed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
         XCTAssertNil(store.pendingRecording(forNoteId: "note-2"))
         XCTAssertTrue(store.allPending().isEmpty)
