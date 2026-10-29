@@ -35,8 +35,8 @@ final class BroadcastCaptureRunTests: XCTestCase {
         return (capture, url)
     }
 
-    /// Appends `seconds` of ReplayKit-shaped audio from `time`, app and microphone interleaved, about 20 times
-    /// faster than real time (as fast as the encoders keep up with: faster only measures their backlog). The mic
+    /// Appends `seconds` of ReplayKit-shaped audio from `time`, app and microphone interleaved, at most about 10
+    /// times faster than real time (faster, an iPhone 11's encoders fall behind and memory measures their backlog). The mic
     /// is at `micAmplitude` (0: digital silence). Returns where it stopped.
     nonisolated private static func feed(_ capture: BroadcastCaptureWriter, from time: Double, seconds: Double,
                                          micAmplitude: Double = 0.25) throws -> Double {
@@ -53,23 +53,47 @@ final class BroadcastCaptureRunTests: XCTestCase {
                     micTime += 1_024.0 / 48_000
                 }
             }
-            usleep(1_100) // 23 ms of audio per ~1 ms
+            usleep(2_300) // 23 ms of audio per ~2.3 ms: about 10x real time
         }
         return t
     }
 
-    /// Five minutes of a call through the capture: the process's footprint after the first minute doesn't grow
-    /// with the call (the extension's limit is ~50 MB; nothing here may scale with its length).
+    /// Waits until the writer has caught up with what it was given (the file stops growing for half a second, at
+    /// most 5 s), so a measurement after it counts what the capture keeps, not the encoders' backlog.
+    nonisolated private static func drain(_ url: URL) {
+        func size() -> Int { ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int) ?? 0 }
+        var last = size()
+        var stableSince = Date()
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            usleep(100_000)
+            let now = size()
+            if now != last { last = now; stableSince = Date() } else if Date().timeIntervalSince(stableSince) >= 0.5 { return }
+        }
+    }
+
+    /// Five minutes of a call through the capture, in 30-second stretches each followed by a drain: after a minute of
+    /// warm-up the footprint doesn't grow with the call (the extension's limit is ~50 MB). Measured after draining
+    /// because the feed outruns real time: on the iPhone 11 an undrained feed measured the AAC encoders' backlog
+    /// (33 to 44 MB at up to 20x), which a real-time capture never builds; a per-buffer leak still grows here, stretch
+    /// after stretch.
     func testMinutesOfBuffersKeepMemoryBounded() async throws {
         let (capture, url) = try newCapture()
-        let measured: (Double, Double) = try await Task.detached {
-            var t = try Self.feed(capture, from: 0, seconds: 60)
-            let afterOneMinute = BroadcastCaptureWriter.footprintMB()
-            t = try Self.feed(capture, from: t, seconds: 240)
-            return (afterOneMinute, BroadcastCaptureWriter.footprintMB())
+        let footprints: [Double] = try await Task.detached {
+            var t = 0.0
+            var measured: [Double] = []
+            for _ in 0..<10 {
+                t = try Self.feed(capture, from: t, seconds: 30)
+                Self.drain(url)
+                measured.append(BroadcastCaptureWriter.footprintMB())
+            }
+            return measured
         }.value
-        XCTAssertGreaterThan(measured.0, 0, "phys_footprint unavailable")
-        XCTAssertLessThan(measured.1 - measured.0, 8, "footprint grew from \(measured.0) MB to \(measured.1) MB over 4 minutes")
+        let trace = footprints.map { String(format: "%.1f", $0) }.joined(separator: " ")
+        XCTAssertGreaterThan(footprints[0], 0, "phys_footprint unavailable")
+        // After the first minute (stretch 2) to the fifth (stretch 10): 4 minutes of a call.
+        let growth = footprints[9] - footprints[1]
+        XCTAssertLessThan(growth, 3, "footprint grew \(growth) MB over 4 minutes after warm-up, every 30 s: \(trace)")
         XCTAssertEqual(capture.writer.status, .writing, capture.diagnostic(stage: "test"))
         let completed = await withCheckedContinuation { done in capture.finish { done.resume(returning: $0) } }
         XCTAssertTrue(completed)

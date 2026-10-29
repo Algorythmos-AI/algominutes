@@ -242,7 +242,8 @@ class SampleHandler: RPBroadcastSampleHandler {
         // The writer's session starts on the FIRST buffer of either type (in the capture), so an early stream of
         // the other type isn't dropped.
         let wasStarted = capture.sessionStarted
-        let appended = capture.append(sampleBuffer, to: sampleBufferType == .audioApp ? .app : .mic)
+        // ReplayKit's thread drains no autorelease pool per buffer: whatever the writer autoreleases goes with each one.
+        let appended = autoreleasepool { capture.append(sampleBuffer, to: sampleBufferType == .audioApp ? .app : .mic) }
         if !wasStarted, capture.sessionStarted {
             defaults?.set("recording", forKey: "state")
             defaults?.synchronize()
