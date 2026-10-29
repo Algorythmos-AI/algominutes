@@ -66,6 +66,8 @@ final class AppEnvironment {
     var isBroadcastAISharingPending = false
     /// The kill switch held a finished capture back; said once per session.
     @ObservationIgnored private var broadcastHoldNoticeShown = false
+    /// Looks for a finished capture on a session's start and on every return, switches first (BroadcastClaimScheduler).
+    @ObservationIgnored private var broadcastClaims: BroadcastClaimScheduler?
 
     /// The api answered 426: this build is below its minimum. RootView covers
     /// the app with the update screen; nothing else works until the update.
@@ -227,7 +229,20 @@ final class AppEnvironment {
         Task { await billing.bootstrap() }
         // A10 #3: capture Terms + Privacy acceptance at account creation.
         Task { await recordTermsAcceptanceIfNeeded() }
-        Task { await refreshSwitches() }
+        // The switches, then a capture the extension finished: a cold launch starts already in the foreground, so
+        // this is the only moment it would be looked for.
+        scheduleBroadcastClaim(.sessionStarted)
+    }
+
+    /// Refresh the server's switches, then claim a capture the broadcast extension finished, if there is one.
+    @discardableResult
+    func scheduleBroadcastClaim(_ trigger: BroadcastClaimScheduler.Trigger) -> Task<Void, Never> {
+        let scheduler = broadcastClaims ?? BroadcastClaimScheduler(
+            refreshSwitches: { [weak self] in await self?.refreshSwitches() },
+            claim: { [weak self] in await self?.claimBroadcastCapture() }
+        )
+        broadcastClaims = scheduler
+        return scheduler.trigger(trigger)
     }
 
     /// Re-read the server-side switches (launch, sign-in, foreground).
