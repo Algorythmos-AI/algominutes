@@ -61,6 +61,21 @@ struct LoginView: View {
                 }
                 .disabled(env.auth.isSigningIn)
 
+                // 5.1.1(v): no account is needed to use the app. A first launch makes a guest by itself; after signing
+                // out or deleting the account, this is the way back to that (AuthService.continueWithoutAccount).
+                Button {
+                    Task { await env.auth.continueWithoutAccount() }
+                } label: {
+                    Text("Continue without an account")
+                        .font(Typography.label(15))
+                        .foregroundStyle(Theme.heading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .disabled(env.auth.isSigningIn)
+                .accessibilityIdentifier("login.guest")
+                .accessibilityHint("Use AlgoMinutes as a guest. You can create an account later.")
+
                 if let error = env.auth.authError {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(Typography.body(13))
