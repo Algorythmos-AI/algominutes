@@ -21,21 +21,21 @@ enum SampleNote {
         updatedAt: "2026-09-21T23:31:00.000Z",
         lastProgressAt: nil,
         summary: Summary(
-            gist: "The team agreed to ship the new onboarding to beta testers on Friday, moved the pricing page to next sprint, and asked Priya to confirm the support rota before launch.",
+            gist: "The team agreed to ship the new onboarding to the pilot customers on Friday, moved the pricing page to next sprint, and asked Priya to confirm the support rota before launch.",
             actionItems: [
                 "Priya: confirm the weekend support rota by Wednesday",
                 "Tom: finish the onboarding copy and share it for review",
-                "Alex: book the beta testers' kickoff call",
+                "Alex: book the pilot customers' kickoff call",
             ],
             keyDecisions: [
-                "Ship the new onboarding to beta testers on Friday",
+                "Ship the new onboarding to the pilot customers on Friday",
                 "Move the pricing page to next sprint",
             ],
             keyPoints: nil,
             chapters: [
-                SummaryChapter(startMs: 0, title: "Where the beta stands", summary: "Onboarding is ready apart from its copy; two bugs from last week are fixed."),
+                SummaryChapter(startMs: 0, title: "Where onboarding stands", summary: "Onboarding is ready apart from its copy; two bugs from last week are fixed."),
                 SummaryChapter(startMs: 540_000, title: "Pricing page", summary: "Not ready: waiting on the cost figures, so it moves to next sprint."),
-                SummaryChapter(startMs: 1_260_000, title: "Launch support", summary: "Weekend cover is needed for the first beta weekend."),
+                SummaryChapter(startMs: 1_260_000, title: "Launch support", summary: "Weekend cover is needed for the first launch weekend."),
             ]
         ),
         transcript: lines,
@@ -51,12 +51,12 @@ enum SampleNote {
     )
 
     private static let script: [(String, String, String)] = [
-        ("Alex", "0:04", "Morning, everyone. Let's start with where the beta stands."),
+        ("Alex", "0:04", "Morning, everyone. Let's start with where onboarding stands."),
         ("Tom", "0:11", "Onboarding is done apart from the copy. Both bugs from last week are fixed."),
-        ("Alex", "0:24", "Great. Can we get it to testers this week?"),
+        ("Alex", "0:24", "Great. Can we get it to the pilot customers this week?"),
         ("Tom", "0:29", "If the copy's reviewed by Thursday, Friday works."),
         ("Priya", "0:37", "I can review it Thursday morning."),
-        ("Alex", "0:43", "Then let's ship to beta testers on Friday."),
+        ("Alex", "0:43", "Then let's ship to the pilot customers on Friday."),
         ("Alex", "9:02", "Next, the pricing page."),
         ("Priya", "9:08", "We're still waiting on the cost figures, so it isn't ready."),
         ("Alex", "9:21", "Let's move it to next sprint rather than rush it."),
@@ -64,7 +64,7 @@ enum SampleNote {
         ("Alex", "21:05", "Last thing: support for the launch weekend."),
         ("Priya", "21:12", "We need someone on call Saturday and Sunday."),
         ("Priya", "21:20", "I'll confirm the rota by Wednesday."),
-        ("Alex", "21:31", "And I'll book the kickoff call with the beta testers."),
+        ("Alex", "21:31", "And I'll book the kickoff call with the pilot customers."),
         ("Alex", "30:48", "Thanks, all. Same time next week."),
     ]
 

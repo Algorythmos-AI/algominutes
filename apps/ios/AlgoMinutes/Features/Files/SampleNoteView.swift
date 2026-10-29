@@ -28,7 +28,8 @@ struct SampleNoteView: View {
                 .pickerStyle(.segmented)
                 switch tab {
                 case .summary:
-                    SummaryPane(summary: note.summary)
+                    // Made up, not written by Algorythmos AI: the banner above says it's an example.
+                    SummaryPane(summary: note.summary, aiNotice: nil)
                 case .transcript:
                     TranscriptPane(lines: SampleNote.lines, rawText: nil)
                 }
