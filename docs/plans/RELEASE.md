@@ -253,6 +253,7 @@ P0 pauses the phased release; only fixes merge in the first week; the wow featur
 - [APP-STORE-REVIEW-PACKAGE.md](APP-STORE-REVIEW-PACKAGE.md): review notes, screenshots, listing, the checklist, call capture.
 - [APP-STORE-AI-LABEL.md](APP-STORE-AI-LABEL.md): the "written by AI" label (status decision 5).
 - [APP-STORE-DEVICE-LAB.md](APP-STORE-DEVICE-LAB.md): the always-on iPhone 11 lab.
+- [APP-STORE-OWNER-PACK.md](APP-STORE-OWNER-PACK.md): the owner's steps in one place (counsel e-mail, the Gemini order, proof 5, external TestFlight, the checklist).
 
 ### R12.6 Decisions for the owner (defaults in bold)
 
