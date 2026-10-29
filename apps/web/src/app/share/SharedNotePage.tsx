@@ -5,6 +5,7 @@ import { ApiError } from '../../lib/api/errors';
 import { displayTitle, formatClock, formatDate } from '../../lib/notes/format';
 import { useApi } from '../ApiContext';
 import { SITE_URL } from '../site';
+import { AI_MACHINE_MARK, AI_SHARED_NOTICE } from '../../lib/notes/aiLabel';
 
 type Load = { status: 'loading' } | { status: 'ready'; data: SharedNoteResponse } | { status: 'gone' } | { status: 'error' };
 
@@ -34,6 +35,7 @@ export function SharedNotePage() {
     <main id="main" className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-10">
       {/* The URL holds the share's token: nothing this page loads or links to is told it (React puts this in <head>). */}
       <meta name="referrer" content="no-referrer" />
+      <meta name="generator" content={AI_MACHINE_MARK} />
       <p className="text-sm text-muted">Shared from <a href={SITE_URL} rel="noreferrer">AlgoMinutes</a></p>
       {children}
     </main>
@@ -56,6 +58,7 @@ export function SharedNotePage() {
       <header>
         <h1 id="sh-title" className="text-3xl font-bold text-heading">{displayTitle(note.title)}</h1>
         <p className="mt-1 text-muted">{formatDate(note.createdAt)} · shared until {formatDate(expiresAt)}</p>
+        <p className="mt-2 text-sm text-muted">{AI_SHARED_NOTICE}</p>
       </header>
       {summary?.gist && (
         <section aria-labelledby="sh-sum">

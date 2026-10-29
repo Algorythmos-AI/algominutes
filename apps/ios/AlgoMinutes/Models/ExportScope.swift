@@ -12,7 +12,7 @@ enum ExportScope: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .summary: return "Summary"
         case .transcript: return "Transcript"
-        case .both: return "AI Summary & Transcription"
+        case .both: return "Summary & transcript"
         }
     }
 
@@ -45,6 +45,30 @@ enum NoteExport {
     static let redactionNotice =
         "Detected card numbers, IDs and contact details are masked. AlgoMinutes never stored the originals."
 
+    /// Who wrote what, said wherever a note is read or leaves the app. A
+    /// colleague reading a forwarded PDF never saw the app or its Terms, so
+    /// the label travels with the file and comes before the content.
+    /// Mirrored in `services/api/src/routes/export-note.cjs` and the web app.
+    static let aiSummaryNotice = "Summary, action items and decisions written by Algorythmos AI. May contain errors."
+    static let aiTranscriptNotice = "Transcribed automatically by Algorythmos AI. Words and speaker names may be wrong."
+    static let inAppNotice = "Written by Algorythmos AI from your recording. Check anything important."
+    static let emailNotice = "These notes were written by Algorythmos AI from a recording. Check before relying."
+    static let askAINotice = "Algorythmos AI answers can be wrong. Check the transcript."
+    /// Machine-readable mark (EU AI Act Art. 50(2)): PDF Keywords and Creator,
+    /// DOCX core properties, the shared page's generator meta. Names the
+    /// models behind Algorythmos AI.
+    static let machineMark = "AI-generated (Algorythmos AI: Google Gemini and Speech-to-Text)"
+
+    static func aiNotices(for scope: ExportScope) -> [String] {
+        switch scope {
+        case .summary: return [aiSummaryNotice]
+        case .transcript: return [aiTranscriptNotice]
+        case .both: return [aiSummaryNotice, aiTranscriptNotice]
+        }
+    }
+
+    static let emailBody = emailNotice + "\n\n" + redactionNotice
+
     static func fileNameStem(for note: Note) -> String {
         var sanitized = note.title.map { ch -> Character in
             (ch.isLetter || ch.isNumber || ch == "-" || ch == "_") ? ch : "_"
@@ -73,7 +97,9 @@ enum NoteExport {
     /// Plain text in the same section order as the PDF, so the two exports of
     /// one note read the same.
     static func plainText(note: Note, scope: ExportScope, lines: [TranscriptLine]) -> String {
-        var out: [String] = [note.title, ""]
+        var out: [String] = [note.title]
+        out.append(contentsOf: aiNotices(for: scope))
+        out.append("")
 
         if scope.includesSummary, let summary = note.summary {
             out.append("EXECUTIVE SUMMARY")

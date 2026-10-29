@@ -15,6 +15,7 @@ import { Modal } from '../Modal';
 import type { NoteDoc } from '../../lib/notes/notesFeed';
 import { useNotes } from './NotesContext';
 import { NoteTools } from './NoteTools';
+import { AI_IN_APP_NOTICE } from '../../lib/notes/aiLabel';
 
 type Load = { status: 'loading' } | { status: 'ready'; data: NoteReadResponse } | { status: 'gone' } | { status: 'error'; message: string };
 
@@ -282,6 +283,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
           <section aria-labelledby="sum-title">
             <h2 id="sum-title" className="mb-2 text-xl font-bold text-heading">Summary</h2>
             <p className="whitespace-pre-line text-body">{data.summary.gist}</p>
+            <p className="mt-2 text-sm text-muted">{AI_IN_APP_NOTICE}</p>
           </section>
           {data.summary.actionItems.length > 0 && (
             <section aria-labelledby="ai-title">
@@ -408,6 +410,7 @@ function DocView({ note }: { note: NoteDoc }) {
         <section aria-labelledby="dsum-title">
           <h2 id="dsum-title" className="mb-2 text-xl font-bold text-heading">Summary</h2>
           <p className="whitespace-pre-line text-body">{sum.gist}</p>
+          <p className="mt-2 text-sm text-muted">{AI_IN_APP_NOTICE}</p>
         </section>
       )}
       {!!sum?.actionItems.length && (

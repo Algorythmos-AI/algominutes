@@ -25,6 +25,11 @@ describe('a shared note', () => {
     expect(screen.getByText('Send minutes')).toBeTruthy();
     expect(screen.getByText('Welcome.')).toBeTruthy();
     expect(screen.getByText('The transcript is long, so only its beginning is shown.')).toBeTruthy();
+    // A reader of a shared link never saw the app: it says who wrote it, for people and for machines.
+    expect(screen.getByText('Written by Algorythmos AI from a recording. It may contain mistakes.')).toBeTruthy();
+    expect(document.querySelector('meta[name="generator"]')?.getAttribute('content')).toBe(
+      'AI-generated (Algorythmos AI: Google Gemini and Speech-to-Text)',
+    );
     expect(sent).toEqual([{ url: 'https://api.example.test/v1/shares/read', auth: null, body: { token: 'tok_123' } }]);
   });
 
