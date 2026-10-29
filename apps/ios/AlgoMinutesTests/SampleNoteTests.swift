@@ -14,6 +14,17 @@ final class SampleNoteTests: XCTestCase {
         XCTAssertNotEqual(note.transcriptTruncated, true)
     }
 
+    func testItNeverSaysBeta() {
+        // A reviewer sees it on first launch (Guideline 2.2): the made-up meeting mustn't read like a beta app.
+        let summary = SampleNote.note.summary
+        let text = ([SampleNote.note.title, summary?.gist ?? ""]
+            + (summary?.actionItems ?? []) + (summary?.keyDecisions ?? [])
+            + (summary?.chapters.flatMap { [$0.title, $0.summary] } ?? [])
+            + SampleNote.lines.map(\.text)).joined(separator: " ").lowercased()
+        XCTAssertFalse(text.contains("beta"), "the example note says beta")
+        XCTAssertFalse(text.contains("tester"), "the example note says tester")
+    }
+
     func testItHasNothingToPlayOrFetch() {
         XCTAssertNil(SampleNote.note.storagePath)
         XCTAssertEqual(SampleNote.note.workspaceId, "")

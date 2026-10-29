@@ -14,6 +14,8 @@ struct SummaryPane: View {
     /// The action items as the server holds them; nil until read, and then they show as plain bullets.
     var ticks: [ActionItemTick]? = nil
     var onTick: ((ActionItemTick, Bool) -> Void)? = nil
+    /// Who wrote it, under the gist. Nil for the example note, which no model wrote.
+    var aiNotice: String? = NoteExport.inAppNotice
 
     var body: some View {
         if let summary {
@@ -24,8 +26,10 @@ struct SummaryPane: View {
                         .font(Typography.body(15))
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
-                    AIWrittenNote(NoteExport.inAppNotice)
-                        .accessibilityIdentifier("summary.aiNotice")
+                    if let aiNotice {
+                        AIWrittenNote(aiNotice)
+                            .accessibilityIdentifier("summary.aiNotice")
+                    }
                 }
             }
             if !summary.chapters.isEmpty {
