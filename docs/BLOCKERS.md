@@ -17,10 +17,10 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     audio out of screen broadcasts (FaceTime and phone calls the same). Decision: DECISIONS.md 2026-10-29.
     - #555: the App Store build ships without call capture (no extension in Release, no call wording in the
       microphone text; Staging and Debug keep it).
-    - #556: production `broadcast_capture` "off", and the api treats an unset switch as off. The owner applies
-      the plan, then redeploys.
-    - Still to prove: a `--release` device run with #555; `GET /v1/config` on production after #556 answers
-      `"broadcastCapture": false`; RC1's archive has no `BroadcastExtension.appex`.
+    - Production's `broadcast_capture` stays "on" (owner, 2026-10-29): it keeps the web app's call in another
+      tab, and the App Store build ignores it. #556 only makes an unset switch mean off; nothing to apply.
+    - Still to prove: a `--release` device run with #555, and that RC1's archive has no
+      `BroadcastExtension.appex`.
 
 - **2026-10-29: device proofs on an iPhone 11 Pro Max (iOS 27.0.1).** Each run is recorded in the private
   test-history repository.
@@ -96,8 +96,10 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     and a recording is stamped with its Firebase project (#508).
   - [ ] I12 (P2): What to Test empty on builds 75 and 76; #507 writes en-AU too (proof: the next build shows it).
   - [ ] O10 (P1): production `broadcast_capture` is "on" (live env `BROADCAST_CAPTURE=on`) while I3 is open.
-    - 2026-10-29: call capture is out of 1.0 (proof 5, above); #556 sets it "off". Closes when production's
-      `GET /v1/config` answers `"broadcastCapture": false`.
+    - 2026-10-29: call capture is out of the iPhone's 1.0 (proof 5, above). The App Store build has no extension
+      and can't show "Record a call" whatever the switch says (#555), so production's "on" now serves only the
+      web app's call in another tab, which stays (owner). Closes with #555 in RC1 and a `--release` run that
+      shows no "Record a call".
   - [ ] O11 (P2): production `admin_uids` unset.
   - Docs corrected: the review notes said "Free trial? Not in 1.0" while production runs one.
     `apps/site/src/components/LegalNotice.astro` still says "AlgoMinutes is in beta" on Terms and Privacy

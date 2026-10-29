@@ -6,9 +6,10 @@ choices made during the automated A2/A3 run so they are auditable from the git l
 ## "Record a call" is out of 1.0 (2026-10-29)
 
 **Decision (owner, 2026-10-29):** 1.0 ships without call capture. The App Store build (Release) has no
-Broadcast Upload Extension, no "Record a call" entry and no call wording in its microphone text. Production's
-`broadcast_capture` switch is "off". This is variant B in APP-STORE-REVIEW-PACKAGE §6 and APP-STORE-OWNER-PACK
-§3.6.
+Broadcast Upload Extension, no "Record a call" entry and no call wording in its microphone text. That comes
+from a build flag (#555), not the server switch. **Production's `broadcast_capture` stays "on"** (owner,
+2026-10-29), because it also gates the web app's call in another tab, which works and stays. Nothing for the
+owner to apply. This is variant B in APP-STORE-REVIEW-PACKAGE §6 and APP-STORE-OWNER-PACK §3.6.
 
 **Evidence:** proof 5 on an iPhone 11 (iOS 27.0.1), with the fixed extension (#553), during a WhatsApp call.
 The extension received no microphone buffers in 57 s. Its app-audio track was 2,400 buffers, all at -99 dBFS
@@ -24,19 +25,19 @@ private test-history repository and in BLOCKERS §0.
   - `AppSwitches.broadcastCapture` is off whatever the server says.
   - A capture an earlier build left is left alone (`BroadcastHandoff.decide` → `.leave`).
   - `NSMicrophoneUsageDescription` comes from `MICROPHONE_USAGE_DESCRIPTION`.
-- #556: production `broadcast_capture` defaults to "off" (and so does the module's default), and the api treats
-  an unset `BROADCAST_CAPTURE` as off. The owner applies the plan, then redeploys.
+- #556: call capture is off unless an environment asks for it. The module's default is "off", and the api treats
+  an unset `BROADCAST_CAPTURE` as off. Production and staging both set "on", so no plan changes and there is
+  nothing to apply. On production, "on" serves the web app; the App Store build ignores it.
 
 **What stays:** the extension target, its code and tests (BroadcastShared, #532, #553), and the feature in
 Debug and Staging builds, behind staging's `broadcast_capture` "on", for experiments. The App Group stays in the
-app (the manifest's `1C8F.1`). The server switch and `/v1/config broadcastCapture` stay in the contract. The
-same switch gates the web app's call in another tab, which goes off on production with #556 unless the owner
-splits the switch.
+app (the manifest's `1C8F.1`). The server switch and `/v1/config broadcastCapture` stay in the contract, and
+on production they keep the web app's call in another tab on (desktop Chromium's tab audio, not ReplayKit).
 
 **How it could come back:** only if iOS lets a broadcast hear the call (a new proof 5 on a current iOS
 passes), or through another route Apple allows. Then: `CALL_CAPTURE_ENABLED "YES"` for Release, the call clause
-back in Release's `MICROPHONE_USAGE_DESCRIPTION` and STORE-COMPLIANCE §4.2, production `broadcast_capture` "on",
-REVIEW-PACKAGE §1.1 variant A, and a new version through App Review.
+back in Release's `MICROPHONE_USAGE_DESCRIPTION` and STORE-COMPLIANCE §4.2, REVIEW-PACKAGE §1.1 variant A, and
+a new version through App Review. Production's switch is already "on".
 
 ## The corrected Terms and Privacy go live before counsel's sign-off (2026-10-29)
 

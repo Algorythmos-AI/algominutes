@@ -35,9 +35,8 @@ Tick in order where you can; the dates are the deadlines that keep submission on
       DECISIONS.md 2026-10-29).
   - [ ] #555 merged: no extension in the Release build, no call wording in the microphone text. Then a
         `--release` device run ([§3.7](#37-the-result-2026-10-29)).
-  - [ ] #556 merged, and production's plan applied (`broadcast_capture` "off"), then the redeploy. Check that
-        `GET /v1/config` on production answers `"broadcastCapture": false`.
-  - [ ] Both promoted to `main` before RC1.
+  - [ ] #555 promoted to `main` before RC1. Production's `broadcast_capture` stays "on" for the web app's call
+        in another tab; nothing to apply (#556 only makes an unset switch mean off).
 - [x] Promotion `integration` → `main` merged (#541, 24adcde7), `deploy-production` green (run 40907715339,
       2026-10-29) ([XCODE-CLOUD-RELEASE §1](APP-STORE-XCODE-CLOUD-RELEASE.md#1-prerequisites-owner)). If
       proof 5 fails, the extension's removal needs one more promotion before RC1.
@@ -380,7 +379,8 @@ Deadline: **Thu 11-05** (RELEASE status decision 3). If it fails, or isn't run b
 applies, all before RC1:
 1. Remove the Broadcast Upload Extension from the Release build (`apps/ios/project.yml`; keep it for Staging).
 2. Set production `broadcast_capture` to "off" through a reviewed plan and apply; redeploy after (a saved plan
-   resets Cloud Run images).
+   resets Cloud Run images). (Superseded 10-29: the build flag does this for the iPhone and the switch stays on
+   for the web; §3.7.)
 3. Drop "or your side of a call in another app that you choose to capture" from `NSMicrophoneUsageDescription`
    and from STORE-COMPLIANCE §4.2.
 4. Paste REVIEW-PACKAGE §1.1 variant B (CALL CAPTURE: "no call capture").
@@ -402,8 +402,8 @@ capture. The run is in the private test-history repository.
 The §3.6 steps:
 1. The extension is out of the Release build: **#555** (`CALL_CAPTURE_ENABLED "NO"`; the copy phase leaves it
    out, a build phase checks it; Staging and Debug keep it).
-2. Production `broadcast_capture` "off": **#556**, for your reviewed plan and apply, then the redeploy. It
-   also hides the web app's call in another tab on production; #556 says how to keep that if you want it.
+2. Not needed: production's `broadcast_capture` **stays "on"** (your decision, 10-29). It keeps the web app's
+   call in another tab; the App Store build has no call capture whatever it says (#555). Nothing to apply.
 3. The microphone text's call clause is gone from Release, and from STORE-COMPLIANCE §4.2: **#555**.
 4. REVIEW-PACKAGE §1.1 **variant B** is the one to paste.
 
@@ -466,8 +466,8 @@ before the soak starts.
 | Date | Step | Owner |
 |---|---|---|
 | Thu 10-29 | E-mail to counsel; Gemini order placed | Owner |
-| Thu 10-29 | Proof 5 run: failed; call capture out of 1.0 (#555, #556) | Owner + one person |
-| Mon 11-02 | The free-floor fix and #555 merged, #556 applied and redeployed; #535, #537 done 10-29 | Owner merges |
+| Thu 10-29 | Proof 5 run: failed; call capture out of the iPhone's 1.0 (#555) | Owner + one person |
+| Mon 11-02 | The free-floor fix and #555 merged; #535, #537 done 10-29 | Owner merges |
 | Tue 11-03 | Promotion to `main` green, prod deploy; Xcode Cloud RC1 build; archive checks; Beta App Review submitted | Owner |
 | Wed 11-04 | Beta App Review approves; testers install; Gemini order Active; soak day 1 | Apple, Google |
 | Thu 11-05 | Phase B deadline: proof 5 decided, ≥ 20 testers | Owner |

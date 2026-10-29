@@ -13,8 +13,9 @@ Status words: **pass** = the repo shows it. **not verified** = needs a device, a
 
 - **"Record a call" in 1.0: decided 2026-10-29, out of 1.0** (owner; DECISIONS.md 2026-10-29). Proof 5 ran on
   10-29 and showed iOS gives a ReplayKit broadcast no call audio (§6). **Paste §1.1 variant B.** It is true of
-  the binary once #555 (no extension in the Release build, no call wording in the microphone text) is in RC1,
-  and of production once #556 (`broadcast_capture` "off") is applied and redeployed.
+  the binary once #555 (no extension in the Release build, no call wording in the microphone text) is in RC1.
+  Production's `broadcast_capture` stays "on" for the web app's call in another tab; the App Store build ignores
+  it.
 - **Demo account.** Default: **none**; the app starts as a guest with free minutes (§2).
 - **App name.** `AlgoMinutes: AI Meeting Notes` (STORE-LISTING §1.3) or `AlgoMinutes` (the runbook's table).
   Default: **the longer name**, which carries search weight.
@@ -76,7 +77,8 @@ Settings > Help & Support > Contact support, or the contact details in this App 
 
 **Variant B: call capture removed from 1.0. The one to paste** (proof 5 failed, 2026-10-29; §6). It matches a
 Release build with #555 (no `BroadcastExtension.appex`, `CALL_CAPTURE_ENABLED "NO"`, no call wording in
-`NSMicrophoneUsageDescription`) and production with #556 applied (`broadcast_capture` "off", then a redeploy).
+`NSMicrophoneUsageDescription`). That's the only precondition: the build. Production's `broadcast_capture`
+stays "on" (it serves the web app), and the App Store build can't show call capture whatever it says.
 **3,344 characters.**
 
 ```
@@ -301,7 +303,7 @@ START FREE depends on the free-floor fix (Drift); until then drop its second sen
 | 2.1 | IAP products Ready to Submit and attached | **not verified** | owner, App Store Connect |
 | 2.1 | A sandbox purchase reconciled on prod billing | **not verified** | S18 |
 | 2.3 | Listing claims match the app | pass after §4.3 | |
-| 2.3.1 | No hidden or dormant features | **not verified** | Call capture: no extension in the Release build and the switch can't show it (#555); prod `broadcast_capture` "off" once #556 is applied (O10); confirm on RC1's archive and `GET /v1/config` on prod. Notetaker: `notetaker_surfaces` defaults to "" in prod; confirm `GET /v1/config` on prod shows it off |
+| 2.3.1 | No hidden or dormant features | **not verified** | Call capture: no extension in the Release build, and the build flag keeps "Record a call" hidden whatever prod's `broadcast_capture` says (#555; prod stays "on" for the web app, O10); confirm on RC1's archive and with a `--release` run. Notetaker: `notetaker_surfaces` defaults to "" in prod; confirm `GET /v1/config` on prod shows it off |
 | 3.1.1 | Pro only through StoreKit; no invite codes in the store build; offer codes for free time; Restore reachable | pass | `PaywallView.swift`, `INVITE_CODES_ENABLED "NO"`, `.offerCodeRedemption`, #472, #473 |
 | 3.1.3(b) | Web Pro honoured, no link out to buy | pass | `PaywallView.swift` |
 | 3.1.2 | Paywall: name, period, price, auto-renew terms, Terms and Privacy links; Manage Subscription | pass | `PaywallView.swift`, `SettingsView.swift` |
@@ -344,15 +346,15 @@ test-history repository.
   - A capture a staging build left on the same iPhone is left alone: nothing is claimed or shown.
   - The microphone text has no call clause.
   - An unsigned Release archive had no `.appex` anywhere.
-- **#556, production.** `broadcast_capture` defaults to "off" in `envs/prod` and in the module, and the api
-  treats an unset `BROADCAST_CAPTURE` as off. The owner applies it with a reviewed plan, then redeploys (a saved
-  plan resets Cloud Run images). The same switch hides the web app's call in another tab on production.
+- **Production's switch stays "on"** (owner, 2026-10-29). `broadcast_capture` also gates the web app's call in
+  another tab, which works and stays; the App Store build ignores it. #556 only makes an unset
+  `BROADCAST_CAPTURE` mean off (the module's default is "off"). Nothing to apply.
 - **Staging and development keep it**, behind the server switch, for experiments. The App Group stays, so the
   app's manifest keeps `1C8F.1` (STORE-COMPLIANCE §4.1).
 
 It can only come back if iOS gives a broadcast the call's audio (proof 5 would have to pass again), or if
 there's another route Apple allows. Then: `CALL_CAPTURE_ENABLED "YES"` for Release, the call clause back in the
-Release microphone text, `broadcast_capture` "on" in prod, and §1.1 variant A in a later version.
+Release microphone text, and §1.1 variant A in a later version.
 
 ## Drift
 
