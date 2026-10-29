@@ -261,6 +261,7 @@ case " $lanes " in *" ui "*)
     # The tests that need a Debug-only hook (UITestHooks): a Release build ignores the hooks by design.
     run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
       -skip-testing:AlgoMinutesUITests/UpdateRequiredUITests/testAnOldVersionGetsTheUpdateScreenFromTheServer \
+      -skip-testing:AlgoMinutesUITests/AISharingConsentUITests \
       -retry-tests-on-failure -test-iterations 2
   else
     run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
