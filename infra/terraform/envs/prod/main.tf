@@ -60,11 +60,13 @@ variable "admin_uids" {
   default = []
 }
 
-# Broadcast capture's server-side kill switch (GET /v1/config). To turn it off
-# without an app build: plan with TF_VAR_broadcast_capture=off and apply.
+# "Record a call" (GET /v1/config broadcastCapture): OFF in production. 1.0 ships
+# without call capture (DECISIONS.md, 2026-10-29): iOS gives a screen broadcast no
+# call audio, and the App Store build has no broadcast extension. It also hides
+# the web app's "call in another tab" on production. Staging keeps it on.
 variable "broadcast_capture" {
   type    = string
-  default = "on"
+  default = "off"
 }
 
 # The online-meeting notetaker's surfaces (GET /v1/config). Off unless named;
