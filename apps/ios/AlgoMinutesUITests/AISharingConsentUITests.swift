@@ -1,8 +1,8 @@
 import XCTest
 
 /// The Google Cloud AI agreement (App Store 5.1.2(i)), from a phone that hasn't given it: asked before a recording
-/// starts, "Not now" sends nothing and leaves Home as it was, Agree carries on to the recording sheet, and Settings
-/// shows it and can withdraw it. Nothing is recorded or uploaded. The launch forgets the agreement
+/// starts, "Not now" sends nothing and leaves Home as it was, Agree carries on to the recording sheet (needs an
+/// account with minutes); and, on any account, Settings asks it, shows it and can withdraw it. Nothing is recorded or uploaded. The launch forgets the agreement
 /// (-AMUITestAISharingReset, Debug only); the test ends with it given again, as it found the phone.
 final class AISharingConsentUITests: XCTestCase {
     override func setUp() {
@@ -49,8 +49,41 @@ final class AISharingConsentUITests: XCTestCase {
         XCTAssertTrue(app.element("recorder.consent.acknowledge").exists, "the permission tick is gone")
         app.buttons["recorder.consent.cancel"].tap()
 
-        // Settings shows it, and withdrawing it says what happens.
+        // Given again, as the test found the phone (Settings is proven on its own below).
         app.openTab("Settings")
+        XCTAssertTrue(scrollTo(app.element("settings.aiSharing.on"), in: app), "Settings didn't say it's on")
+    }
+
+    /// Needs no minutes, so it runs on any account: the sheet itself, Not now, Agree, and withdrawing in Settings.
+    @MainActor
+    func testSettingsAsksTheAgreementAndCanWithdrawIt() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-AMUITestAISharingReset"]
+        _ = try launchToTabs(app)
+
+        app.openTab("Settings")
+        XCTAssertTrue(scrollTo(app.element("settings.aiSharing.off"), in: app), "Settings didn't say it's off on a fresh phone")
+        let turnOn = app.buttons["settings.aiSharing.agree"]
+        XCTAssertTrue(scrollTo(turnOn, in: app), "Settings doesn't offer to turn it on")
+
+        // The sheet names Google Cloud and what is sent; Not now leaves it off.
+        turnOn.tap()
+        let agree = app.buttons["aiSharing.agree"]
+        XCTAssertTrue(agree.waitForExistence(timeout: 10), "turning it on didn't show the agreement")
+        XCTAssertEqual(app.element("aiSharing.title").label, "Send your recordings to Google Cloud AI?")
+        XCTAssertTrue(app.element("aiSharing.body").label.contains("Google Cloud"))
+        screenshot(app, "Google Cloud AI agreement from Settings")
+        app.buttons["aiSharing.notNow"].tap()
+        XCTAssertTrue(app.element("settings.aiSharing.off").waitForExistence(timeout: 5), "Not now turned it on")
+
+        // Agree turns it on.
+        XCTAssertTrue(scrollTo(turnOn, in: app))
+        turnOn.tap()
+        XCTAssertTrue(agree.waitForExistence(timeout: 10))
+        agree.tap()
+        XCTAssertTrue(app.element("settings.aiSharing.on").waitForExistence(timeout: 5), "Settings didn't say it's on")
+
+        // Withdrawing asks first and says it's off.
         let withdraw = app.buttons["settings.aiSharing.withdraw"]
         XCTAssertTrue(scrollTo(withdraw, in: app), "Settings doesn't offer to stop sending")
         withdraw.tap()
@@ -61,11 +94,10 @@ final class AISharingConsentUITests: XCTestCase {
         screenshot(app, "Google Cloud AI off")
 
         // Given again, as the test found the phone.
-        let turnOn = app.buttons["settings.aiSharing.agree"]
         XCTAssertTrue(scrollTo(turnOn, in: app))
         turnOn.tap()
-        XCTAssertTrue(agree.waitForExistence(timeout: 10), "turning it on didn't show the agreement")
+        XCTAssertTrue(agree.waitForExistence(timeout: 10))
         agree.tap()
-        XCTAssertTrue(app.element("settings.aiSharing.on").waitForExistence(timeout: 5), "Settings didn't say it's on")
+        XCTAssertTrue(app.element("settings.aiSharing.on").waitForExistence(timeout: 5))
     }
 }
