@@ -246,6 +246,15 @@ release; the 426 floor tested against the shipped build; the rollback rehearsed.
 **After launch, 14 days:** the dashboard, dead letters, `gemini_*`, crash-free and the support inbox daily; a
 P0 pauses the phased release; only fixes merge in the first week; the wow features start after.
 
+**App Store readiness plans (drafts, 2026-10-29):**
+- [APP-STORE-XCODE-CLOUD-RELEASE.md](APP-STORE-XCODE-CLOUD-RELEASE.md): the Release workflow, the next build, the archive checks.
+- [APP-STORE-LEGAL.md](APP-STORE-LEGAL.md): the package for counsel, every `TODO(legal)` as a question.
+- [APP-STORE-GEMINI-CAPACITY.md](APP-STORE-GEMINI-CAPACITY.md): the S2/S17 capacity request for Sydney.
+- [APP-STORE-REVIEW-PACKAGE.md](APP-STORE-REVIEW-PACKAGE.md): review notes, screenshots, listing, the checklist, call capture.
+- [APP-STORE-AI-LABEL.md](APP-STORE-AI-LABEL.md): the "written by AI" label (status decision 5).
+- [APP-STORE-DEVICE-LAB.md](APP-STORE-DEVICE-LAB.md): the always-on iPhone 11 lab.
+- [APP-STORE-OWNER-PACK.md](APP-STORE-OWNER-PACK.md): the owner's steps in one place (counsel e-mail, the Gemini order, proof 5, external TestFlight, the checklist).
+
 ### R12.6 Decisions for the owner (defaults in bold)
 
 1. **A free floor for every new account in 1.0** (120 minutes), the DeviceCheck trial on top.

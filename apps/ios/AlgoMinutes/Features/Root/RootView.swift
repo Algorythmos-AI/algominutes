@@ -83,6 +83,25 @@ struct RootView: View {
                 Task { await env.refreshSwitches() }
             }
         }
+        // A finished capture of another app, and no Google Cloud AI agreement on this iPhone yet: asked before
+        // anything is uploaded. "Not now" keeps the capture here, for the next time the app opens.
+        .sheet(isPresented: Binding(
+            get: { env.isBroadcastAISharingPending },
+            set: { if !$0 { env.isBroadcastAISharingPending = false } }
+        ), onDismiss: {
+            // Agreed: carry on with the capture now the sheet has gone, so the permission question isn't
+            // presented over a closing sheet.
+            if env.aiSharing.isAgreed { Task { await env.claimBroadcastCapture() } }
+        }) {
+            AISharingConsentSheet(
+                onAgree: { env.agreeToAISharingForBroadcast() },
+                onNotNow: {
+                    AppLog.info("ai_sharing_declined path=\(AISharingPath.callCapture.rawValue)")
+                    env.isBroadcastAISharingPending = false
+                }
+            )
+            .algoMinutesSheet([.medium, .large])
+        }
         // A capture started from Control Center skipped the app's consent step:
         // it isn't uploaded until the user confirms, the same as in the app.
         .confirmationDialog(

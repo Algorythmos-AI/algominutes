@@ -6,7 +6,8 @@ import UIKit
 /// Extracted Text (if any) → Action Items → Key Decisions, and now an
 /// optional transcript.
 ///
-/// Every export ends with the redaction notice. Transcript text is redacted
+/// Every export says under its title that Algorythmos AI wrote it (and says
+/// so in the PDF's Keywords and Creator), and ends with the redaction notice. Transcript text is redacted
 /// before it is stored, so the `<<REDACTED:…>>` markers in this document are
 /// permanent — the user should learn that here rather than from a colleague
 /// reading a forwarded copy.
@@ -28,12 +29,22 @@ enum PDFExporter {
         scope: ExportScope = .summary,
         transcript: [TranscriptLine] = []
     ) -> Data {
-        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let format = UIGraphicsPDFRendererFormat()
+        format.documentInfo = [
+            kCGPDFContextTitle as String: note.title,
+            kCGPDFContextCreator as String: NoteExport.machineMark,
+            kCGPDFContextKeywords as String: NoteExport.machineMark,
+        ]
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: format)
         return renderer.pdfData { ctx in
             var cursor = Cursor(ctx: ctx)
             cursor.begin()
 
             cursor.draw(text: note.title, font: .boldSystemFont(ofSize: 20), lineSpacing: 4)
+            cursor.space(2 * mm)
+            for notice in NoteExport.aiNotices(for: scope) {
+                cursor.draw(text: notice, font: .italicSystemFont(ofSize: 9), lineSpacing: 2)
+            }
             cursor.space(6 * mm)
 
             if scope.includesSummary {

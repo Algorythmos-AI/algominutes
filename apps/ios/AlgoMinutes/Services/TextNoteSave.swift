@@ -43,9 +43,13 @@ enum TextNoteSave {
         case saved(noteId: String)
         /// The message to show, and the note Try again sends.
         case failed(message: String, retry: PendingTextNote)
+        /// Not sent: the Google Cloud AI agreement (App Store 5.1.2(i)) hasn't been given on this device.
+        case notAgreed
     }
 
-    static func save(_ note: PendingTextNote, api: APIClient) async -> Outcome {
+    /// `aiSharingAgreed`: whether the Google Cloud AI agreement is in place; without it nothing is sent.
+    static func save(_ note: PendingTextNote, api: APIClient, aiSharingAgreed: Bool) async -> Outcome {
+        guard aiSharingAgreed else { return .notAgreed }
         do {
             let saved = try await api.createTextNote(
                 noteId: note.noteId,

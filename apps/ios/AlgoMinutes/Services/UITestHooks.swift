@@ -27,6 +27,18 @@ enum UITestHooks {
         #endif
     }()
 
+    /// `-AMUITestAISharingReset`: forget the Google Cloud AI agreement at launch (AISharingConsent), so a test sees
+    /// the agreement as on a first install. The other tests answer it the way a person would (Agree and continue).
+    static let resetAISharingArgument = "-AMUITestAISharingReset"
+
+    static let resetAISharing: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains(resetAISharingArgument)
+        #else
+        return false
+        #endif
+    }()
+
     /// The value after `-AMUITestClientVersion`, when there is one.
     static func clientVersion(arguments: [String]) -> String? {
         guard let flag = arguments.firstIndex(of: clientVersionArgument), flag + 1 < arguments.count else { return nil }

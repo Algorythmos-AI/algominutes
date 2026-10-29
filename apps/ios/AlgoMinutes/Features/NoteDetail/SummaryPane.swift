@@ -14,6 +14,8 @@ struct SummaryPane: View {
     /// The action items as the server holds them; nil until read, and then they show as plain bullets.
     var ticks: [ActionItemTick]? = nil
     var onTick: ((ActionItemTick, Bool) -> Void)? = nil
+    /// Who wrote it, under the gist. Nil for the example note, which no model wrote.
+    var aiNotice: String? = NoteExport.inAppNotice
 
     var body: some View {
         if let summary {
@@ -24,6 +26,10 @@ struct SummaryPane: View {
                         .font(Typography.body(15))
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let aiNotice {
+                        AIWrittenNote(aiNotice)
+                            .accessibilityIdentifier("summary.aiNotice")
+                    }
                 }
             }
             if !summary.chapters.isEmpty {
@@ -172,5 +178,27 @@ private struct ChaptersCard: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The small "written by Algorythmos AI" line: plain words, never icon-only.
+struct AIWrittenNote: View {
+    private let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.tertiary)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(Typography.body(12))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
     }
 }

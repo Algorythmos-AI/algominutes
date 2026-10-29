@@ -189,16 +189,19 @@ wake_phone() {
 # 3. Build for testing once, automatic signing. Release: production's plist in place for the build only (staging's
 # is put back however the script ends), no unit tests (they need Debug's testability), and no dSYM upload.
 destination="platform=iOS,id=$udid"
-common=(-project AlgoMinutes.xcodeproj -scheme AlgoMinutes -destination "$destination" -derivedDataPath "$dd")
+scheme=AlgoMinutes
 build_extra=()
 if [ "$release" = 1 ]; then
   lanes="ui"
-  build_extra=(-skip-testing:AlgoMinutesTests ALGOMINUTES_SKIP_DSYM_UPLOAD=YES)
+  # Xcode builds every test target in a scheme (-skip-testing doesn't stop it), so Release has a scheme of its own.
+  scheme=AlgoMinutes-ReleaseUITests
+  build_extra=(ALGOMINUTES_SKIP_DSYM_UPLOAD=YES)
   staging_plist="$(mktemp -t staging-plist)"
   cp AlgoMinutes/Resources/GoogleService-Info.plist "$staging_plist"
   trap 'cp "$staging_plist" AlgoMinutes/Resources/GoogleService-Info.plist; rm -f "$staging_plist" "$listing"' EXIT
   cp "$release_plist" AlgoMinutes/Resources/GoogleService-Info.plist
 fi
+common=(-project AlgoMinutes.xcodeproj -scheme "$scheme" -destination "$destination" -derivedDataPath "$dd")
 wake_phone
 echo "== Building for testing ($configuration) into $dd"
 set +e
@@ -209,7 +212,9 @@ set -e
 if [ "$build" != 0 ]; then
   echo "The build for testing failed ($build). Its errors (all of it in $out/build.log):" >&2
   grep -E 'error:' "$out/build.log" | sort -u | head -20 >&2 || true
-  echo "A signing error: check that Xcode > Settings > Accounts is signed in to the team." >&2
+  if grep -qiE "No Accounts|provisioning profile|code ?sign|Signing for" "$out/build.log"; then
+    echo "A signing error: check that Xcode > Settings > Accounts is signed in to the team." >&2
+  fi
   exit 1
 fi
 if ! git diff --quiet -- "$resolved"; then
@@ -256,6 +261,7 @@ case " $lanes " in *" ui "*)
     # The tests that need a Debug-only hook (UITestHooks): a Release build ignores the hooks by design.
     run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
       -skip-testing:AlgoMinutesUITests/UpdateRequiredUITests/testAnOldVersionGetsTheUpdateScreenFromTheServer \
+      -skip-testing:AlgoMinutesUITests/AISharingConsentUITests \
       -retry-tests-on-failure -test-iterations 2
   else
     run_lane ui AlgoMinutesUITests -skip-testing:AlgoMinutesUITests/FreshGuestDeviceUITests \
