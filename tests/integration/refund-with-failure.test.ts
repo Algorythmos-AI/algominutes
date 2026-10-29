@@ -118,7 +118,19 @@ describe('markNoteFailed with a refund', () => {
     await kickoff.connect();
     try {
       const failing = fail();
-      await new Promise((r) => setTimeout(r, 150));
+      // Wait until the failure is writing its refund, not a fixed time: it has updated the note by then, and holds
+      // the row until it commits. A kickoff that got there first would see the note before the failure.
+      // pg_locks, not pg_stat_activity: the latter is snapshotted per transaction.
+      let writing = 0;
+      for (let i = 0; i < 1000 && !writing; i++) {
+        const { rows } = await kickoff.query(
+          `SELECT count(*)::int AS n FROM pg_locks
+            WHERE relation = 'usage_ledger'::regclass AND mode = 'RowExclusiveLock' AND granted AND pid <> pg_backend_pid()`,
+        );
+        writing = rows[0].n;
+        if (!writing) await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(writing).toBe(1);
       await kickoff.query('BEGIN');
       await kickoff.query(`SELECT 1 FROM notes WHERE id = 'n1' FOR UPDATE`);
       const seen = (await kickoff.query(

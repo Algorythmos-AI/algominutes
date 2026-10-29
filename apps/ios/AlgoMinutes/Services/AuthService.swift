@@ -1,6 +1,7 @@
 import AuthenticationServices
 import CryptoKit
 import FirebaseAuth
+import FirebaseCore
 import FirebaseFirestore
 import Foundation
 import GoogleSignIn
@@ -14,6 +15,10 @@ final class AuthService: NSObject {
     private(set) var user: User?
     private(set) var isSigningIn = false
     var authError: String?
+
+    /// The Firebase project this build talks to (its GoogleService-Info.plist): the backend a recording is made
+    /// for. Staging and Release share a bundle id, so a recording on disk may have been made for the other one.
+    nonisolated static var firebaseProjectId: String? { FirebaseApp.app()?.options.projectID }
 
     var workspaceId: String? { user.map { AlgoMinutes.workspaceId(forUid: $0.uid) } }
 
@@ -313,6 +318,9 @@ final class AuthService: NSObject {
     func signOut() {
         do {
             try Auth.auth().signOut()
+            // Signed out now, not a moment later when the listener says so: a sign-out at launch (the fresh-guest UI
+            // test) never shows the previous user's tabs.
+            user = nil
             // Also clear the Google session so the next sign-in starts fresh.
             GIDSignIn.sharedInstance.signOut()
         } catch {

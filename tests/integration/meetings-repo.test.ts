@@ -11,7 +11,7 @@ import {
   WorkspaceBoundaryError, deleteAccountData, listStuckNotes,
   listStaleRequestedBots, listStalledNotetakers, listQuietLiveBots, withRecallPurgeLock,
 } from '@algominutes/db';
-import { pool, resetDb, seedUser, seedWorkspace, count, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, count, quietLog, lockWaiters } from './helpers';
 
 // The notetaker's data layer (migration 023, meetings-repo.ts, createServerNote,
 // advanceNotetaker) against real Postgres. The rules under test: one bot gives
@@ -318,12 +318,15 @@ describe('the notetaker\'s note', () => {
       await other.query('BEGIN');
       await other.query('SELECT 1 FROM meeting_bots WHERE id = $1 FOR UPDATE', [botId]);
       const deletion = deleteAccountData({ uid: 'alice', traceId: 't' }, quietLog);
-      await new Promise((r) => setTimeout(r, 300));
+      // Queued behind the bot row, not a fixed wait: the deadlock this guards against needs the deletion already
+      // waiting when the purge row is written.
+      const waiting = await lockWaiters(other, 1);
       await other.query(
         `INSERT INTO recall_purges (recall_bot_id, reason, leave_call) VALUES ('recall-race', 'failed', TRUE)
          ON CONFLICT (recall_bot_id) DO UPDATE SET leave_call = TRUE`,
       );
       await other.query('COMMIT');
+      expect(waiting).toBe(1);
       await expect(deletion).resolves.toMatchObject({ recallPurges: 1 });
     } finally {
       other.release();

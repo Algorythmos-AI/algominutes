@@ -78,7 +78,8 @@ final class APIClient: Sendable {
     /// without it and 426 below its minimum (services/api client-version.js).
     static let clientHeader = "X-AlgoMinutes-Client"
     static var clientHeaderValue: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let version = UITestHooks.clientVersion
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         return "ios/\(version)"
     }
 

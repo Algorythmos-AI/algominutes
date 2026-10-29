@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { createRequire } from 'node:module';
 import * as repo from '@algominutes/db';
 import { RedeemInviteResponse } from '@algominutes/contracts/schemas';
-import { pool, resetDb, seedUser, seedWorkspace, count, quietLog } from './helpers';
+import { pool, resetDb, seedUser, seedWorkspace, count, quietLog, lockWaiters } from './helpers';
 
 // Beta invite codes (migration 025, docs/plans/RELEASE.md PR 2) against real
 // Postgres: redeeming gives a time-limited Pro grant (019) and, when the invite
@@ -187,9 +187,12 @@ describe('redeemInvite', () => {
       redeemInvite({ uid: 'alice', code: CODE }),
       redeemInvite({ uid: 'bob', code: CODE }),
     ]);
-    await new Promise((r) => setTimeout(r, 300));
+    // Both queued on the row, not a fixed wait. At a pool of one the second waits for a client instead.
+    const want = Math.min(2, getPool().options.max);
+    const waiting = await lockWaiters(blocker, want);
     await blocker.query('COMMIT');
     blocker.release();
+    expect(waiting).toBe(want);
     const results = await racing;
     // Neither fails (no constraint error), one wins, one is told it's used up.
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
@@ -235,9 +238,11 @@ describe('redeemInvite', () => {
     await owner.query('BEGIN');
     await owner.query(`INSERT INTO entitlement_grants (uid, plan, reason, expires_at) VALUES ('bob', 'pro', 'owner', NULL)`);
     const redeeming = redeemInvite({ uid: 'bob', code: CODE });
-    await new Promise((r) => setTimeout(r, 300));
+    // Queued behind the owner's uncommitted grant, not a fixed wait.
+    const waiting = await lockWaiters(owner, 1);
     await owner.query('COMMIT');
     owner.release();
+    expect(waiting).toBe(1);
     expect(await redeeming).toMatchObject({ kind: 'redeemed', grantEndsAt: null });
     expect(await grantOf('bob')).toEqual({ included_minutes: null, expires_at: null, reason: 'owner' });
   });
@@ -457,6 +462,116 @@ describe('trial switched off (TRIAL_ON_FIRST_USE=off)', () => {
     await ensureTrial('dan', { platform: 'ios', device: appleDevice(false, { markFails: true }).device, log });
     expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
     expect(lines).toEqual([expect.objectContaining({ level: 'error', m: 'trial_device_mark_failed', userId: 'dan' })]);
+  });
+
+  // Plan rev 12 S8: an iPhone kickoff without a DeviceCheck token wrote the account onto the free floor for good,
+  // so the next kickoff, token and all, never got the trial. Without a token the trial is only deferred.
+  it('a kickoff without a token defers the trial: the next one with an unused device starts it, once', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    await ensureTrial('dan', { platform: 'ios', log: logLines().log });
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'free_floor' });
+
+    const fresh = appleDevice(false);
+    await ensureTrial('dan', { platform: 'ios', device: fresh.device, log: logLines().log });
+    expect(fresh.calls).toEqual(['check', 'mark']);
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+    const { rows: [trial] } = await pool.query(`SELECT entitlement_state, trial_started_at, trial_end FROM subscriptions WHERE uid = 'dan'`);
+    expect(trial.entitlement_state).toBe('trialing');
+    expect(trial.trial_end.getTime() - trial.trial_started_at.getTime()).toBe(7 * DAY);
+
+    // A replayed kickoff neither asks Apple again, nor marks the device twice, nor restarts the clock.
+    const replay = appleDevice(false);
+    await ensureTrial('dan', { platform: 'ios', device: replay.device });
+    expect(replay.calls).toEqual([]);
+    expect((await pool.query(`SELECT trial_end FROM subscriptions WHERE uid = 'dan'`)).rows[0].trial_end).toEqual(trial.trial_end);
+  });
+
+  it('a kickoff without a token, then one from a device that has had its trial, stays on the free floor for good', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('erin');
+    await ensureTrial('erin', { platform: 'ios', log: logLines().log });
+    const used = appleDevice(true);
+    await ensureTrial('erin', { platform: 'ios', device: used.device });
+    expect(used.calls).toEqual(['check']);
+    expect((await pool.query(`SELECT entitlement_state, trial_end FROM subscriptions WHERE uid = 'erin'`)).rows[0])
+      .toEqual({ entitlement_state: 'free_floor', trial_end: null });
+    // Settled: a later device isn't asked about.
+    const later = appleDevice(false);
+    await ensureTrial('erin', { platform: 'ios', device: later.device });
+    expect(later.calls).toEqual([]);
+    expect(await resolveEntitlement('erin')).toMatchObject({ state: 'free_floor' });
+  });
+
+  it('two kickoffs with a token racing on a deferred account start one trial and mark the device once', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('dan');
+    await ensureTrial('dan', { platform: 'ios', log: logLines().log });
+    const a = appleDevice(false);
+    const b = appleDevice(false);
+    await Promise.all([
+      ensureTrial('dan', { platform: 'ios', device: a.device }),
+      ensureTrial('dan', { platform: 'ios', device: b.device }),
+    ]);
+    expect([...a.calls, ...b.calls].filter((c) => c === 'mark')).toHaveLength(1);
+    expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+  });
+
+  it('only a missing token defers: Android, the trial switched off, or a paid account are never upgraded', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('erin');
+    await ensureTrial('erin', { platform: 'android' });
+    const later = appleDevice(false);
+    await ensureTrial('erin', { platform: 'ios', device: later.device });
+    expect(later.calls).toEqual([]);
+    expect(await resolveEntitlement('erin')).toMatchObject({ state: 'free_floor' });
+
+    await seedUser('frank');
+    process.env.TRIAL_ON_FIRST_USE = 'off';
+    await ensureTrial('frank', { platform: 'ios', log: logLines().log });
+    delete process.env.TRIAL_ON_FIRST_USE;
+    const frankDevice = appleDevice(false);
+    await ensureTrial('frank', { platform: 'ios', device: frankDevice.device });
+    expect(frankDevice.calls).toEqual([]);
+
+    await seedUser('gina');
+    await ensureTrial('gina', { platform: 'ios', log: logLines().log });
+    await repo.activateSubscription({
+      uid: 'gina', rail: 'apple_storekit', plan: 'pro' as any, currentPeriodEnd: new Date(Date.now() + 30 * DAY).toISOString(),
+      appleOriginalTransactionId: 'otx-gina',
+    });
+    const ginaDevice = appleDevice(false);
+    await ensureTrial('gina', { platform: 'ios', device: ginaDevice.device });
+    expect(ginaDevice.calls).toEqual([]);
+    expect((await pool.query(`SELECT trial_end FROM subscriptions WHERE uid = 'gina'`)).rows[0].trial_end).toBeNull();
+  });
+
+  it('a deferred account deleted since is refused before Apple is asked', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    await seedUser('gone');
+    await ensureTrial('gone', { platform: 'ios', log: logLines().log });
+    await pool.query(`INSERT INTO account_deletions (uid) VALUES ('gone')`);
+    const down = appleDevice(false, { checkFails: true });
+    await expect(ensureTrial('gone', { platform: 'ios', device: down.device })).rejects.toMatchObject({ code: 'ACCOUNT_DELETED' });
+    expect(down.calls).toEqual([]);
+  });
+
+  it('the kickoff route: a first recording without a token, then one with, starts the trial', async () => {
+    delete process.env.TRIAL_ON_FIRST_USE;
+    const asked: any[] = [];
+    setTrialDevicesForTests(({ token, platform }: { token: string; platform?: string }) =>
+      platform === 'ios' && token ? { trialUsed: async () => { asked.push('check'); return false; }, markTrialUsed: async () => { asked.push('marked'); } } : undefined);
+    try {
+      await seedUser('dan');
+      await seedWorkspace('workspace_dan', 'dan');
+      expect(await kickoff('dan', 'n1')).toMatchObject({ status: 202, body: { held: true } });
+      expect(await resolveEntitlement('dan')).toMatchObject({ state: 'free_floor' });
+      expect(await kickoff('dan', 'n2', { 'x-device-attestation': 'dc-token' })).toMatchObject({ status: 200, body: { status: 'queued' } });
+      expect(asked).toEqual(['check', 'marked']);
+      expect(await resolveEntitlement('dan')).toMatchObject({ state: 'trialing' });
+    } finally {
+      setTrialDevicesForTests(null);
+    }
   });
 
   it('a user who already has a row is never asked about again', async () => {

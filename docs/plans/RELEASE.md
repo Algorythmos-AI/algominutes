@@ -6,6 +6,68 @@
 > 10 the detail of each wave; where they disagree, rev 12 wins. Update this file in the PR that changes the
 > plan. Evidence for each step goes into `docs/BLOCKERS.md` §0.
 
+## Status, 2026-10-27: production runs end to end; four phases to submission
+
+Rev 12's stages 0–3 are done or in flight, and the schedule below replaces R12.7. Where R12.1 says production
+doesn't exist, that was true on 2026-10-24 and isn't now. Evidence is in BLOCKERS §0 under 2026-10-27.
+
+**Where we are.**
+
+- **Production is up.** `algominutes-production` runs `main` c354fe12 on all 9 services: deploy run 40508312951,
+  migrate and authenticated smoke green.
+- **Promotions deploy themselves.** A promotion now deploys what it changed (#501); before, it deployed nothing.
+- **Apple keys live.** The reverse trial is on, and the DeviceCheck and App Store Server API keys are live (#498).
+- **Annual price.** A$149.99 (#497).
+- **First Release build.** Xcode Cloud "Release → App Store" built 1.0.0 (76), and it is Ready to Submit.
+- **It processed a real note on production.** The first note on a real iPhone found a P0: DeviceCheck's live
+  "Failed to find bit state" answer failed every new iPhone's first note (#503). After the fix, the note reached
+  `ready` and the trial started.
+
+**New ids.** P0 or P1 unless marked.
+
+| Id | Pri | What |
+|---|---|---|
+| S17 | P0 | Gemini 429 `RESOURCE_EXHAUSTED` in australia-southeast1 on production: 4 task attempts, 19 minutes for a 23 s note (S2 proven on prod). #505 backs off longer; #506 adds an inert location fallback; Provisioned Throughput is the owner's. |
+| S18 | P1 | Apple accepting the In-App Purchase key is unproven until a sandbox purchase is reconciled. The sandbox notification URL points at staging, and the reviewer buys against production. |
+| I10 | P1 | No push token registered on production (`notify_no_tokens`). |
+| I11 | P1 | Upload on a recording left by the staging build sent nothing and said nothing. Recovery now never ends quietly, and a recording made for the other backend becomes a new note (#508). |
+| I12 | P2 | TestFlight's What to Test is empty on every build. It is now also written for en-AU, the app's primary language (#507). |
+| O10 | P1 | `broadcast_capture` is "on" in production while I3 and proof 5 are open. |
+| O11 | P2 | Production has no `admin_uids`, so the dead-letter page can't be used. |
+
+**Phases.** Each step names its proof; owners in brackets.
+
+- **A, to Fri 10-31: fix what build 76 found.**
+  - The 429 backoff and the inert fallback; the Melbourne probe; Provisioned Throughput (owner).
+  - Push (I10); recovery (I11); What to Test (I12).
+  - A sandbox purchase reconciled (S18, owner).
+  - These docs; legal in flight (owner); device pass 1.
+  - **Gate:** no P0; S17 mitigated or accepted in writing with capacity on order; I10 and I11 in a new build;
+    S18 proven; device pass 1 recorded.
+- **B, to Fri 11-06: proofs and the package.**
+  - Load (≈A$22); chaos on staging; two-account tenancy on prod; the prod restore drill.
+  - One prod apply: paging, `admin_uids`, `session_check = "on"`, and `broadcast_capture` per proof 5 (I3),
+    decided by 11-05.
+  - The listing (owner).
+  - RC1 checked (entitlements, linked frameworks, Privacy Report); external TestFlight, ≥20 testers, in Beta
+    App Review by 11-05.
+- **C, 11-06 → 11-13: soak.**
+  - 7 days crash-free (≥99.5%) and 7 green nights. A code change to the release candidate restarts the 7 days.
+  - Legal signed, or a dated decision to launch on the drafts; the site's "in beta" notice removed.
+- **D: submit with a phased release.** Best case Mon 11-16, likely 11-23. What moves it: legal, Gemini
+  capacity, Beta App Review, an RC respin.
+
+**Decisions open for the owner** (defaults in bold):
+1. Gemini: **request Sydney capacity and land the fallback off.** Turn it on only with `processing.json`, the
+   Privacy Policy and a DECISIONS entry, Melbourne first if it serves the model.
+2. **Keep the reverse trial in 1.0.**
+3. **"Record a call" off unless proof 5 passes by 11-05.**
+4. **Sandbox notifications to production billing from RC1.**
+5. **A "written by AI" label on summaries.**
+6. **Legal cut-off 11-13.**
+7. **All storefronts except mainland China.**
+8. **Phased release, released manually.**
+
 ## Rev 12 (2026-10-24): robust, bug-free, and through App Review
 
 > Built on a read-only check at integration `6ce9c3f0` (the last merge, 2026-10-07): the docs and BLOCKERS,

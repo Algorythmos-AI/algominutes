@@ -64,3 +64,25 @@ export async function noticeKinds(noteId: string): Promise<string[]> {
   const { rows } = await pool.query<{ kind: string }>('SELECT kind FROM note_notices WHERE note_id = $1 ORDER BY id', [noteId]);
   return rows.map((r) => r.kind);
 }
+
+/**
+ * Waits until `want` backends are queued on a lock (pg_locks, NOT granted), polling for up to ~10 s, and returns how
+ * many are. A fixed sleep loses this race under CI load (process-kickoff.test.ts, 2026-10-27). Assert the count, since
+ * a race test proves nothing unless the racers really queued, but only once the lock is let go, so a miss fails the
+ * test rather than hanging the next reset. Run it on the blocker's connection. pg_locks, not pg_stat_activity: the
+ * latter is snapshotted per transaction, so a poll inside the blocker's would never move. At PG_POOL_MAX=1 a second
+ * caller waits for a pool client, not the lock: size `want` to the code's pool.
+ */
+export async function lockWaiters(client: pg.ClientBase, want: number, locktype?: string): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < 1000; i++) {
+    const { rows } = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND ($1::text IS NULL OR locktype = $1)`,
+      [locktype ?? null],
+    );
+    n = rows[0]!.n;
+    if (n >= want) break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return n;
+}

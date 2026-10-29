@@ -123,6 +123,27 @@ describe('listRecentlyFinishedNotes, paged', () => {
   });
 });
 
+// Plan rev 12 S7: the resume cursor moves only from the value a run read, so two overlapping runs can't clobber
+// each other's position.
+describe('the mirror repair cursor', () => {
+  it('is set, moved and cleared only from the value the run read', async () => {
+    const a = { updatedAt: '2026-10-28 10:00:00.123456+00', noteId: 'a' };
+    const b = { updatedAt: '2026-10-28 09:00:00.654321+00', noteId: 'b' };
+    expect(await repo.getMirrorRepairCursor()).toBeNull();
+    expect(await repo.advanceMirrorRepairCursor({ from: null, to: a })).toBe(true);
+    // A second run that also read "none" doesn't overwrite it.
+    expect(await repo.advanceMirrorRepairCursor({ from: null, to: b })).toBe(false);
+    const read = await repo.getMirrorRepairCursor();
+    expect(read?.noteId).toBe('a');
+    expect(await repo.advanceMirrorRepairCursor({ from: read, to: b })).toBe(true);
+    // A run still holding the old value neither moves nor clears it.
+    expect(await repo.advanceMirrorRepairCursor({ from: read, to: null })).toBe(false);
+    expect((await repo.getMirrorRepairCursor())?.noteId).toBe('b');
+    expect(await repo.advanceMirrorRepairCursor({ from: await repo.getMirrorRepairCursor(), to: null })).toBe(true);
+    expect(await repo.getMirrorRepairCursor()).toBeNull();
+  });
+});
+
 describe('repairNoteMirror', () => {
   it("a ready note whose doc stayed at 'chunking' (the fast path's mirror failed): status, summary and transcript", async () => {
     await readyInPostgres();
@@ -283,6 +304,54 @@ describe('the sweep step', () => {
     expect(warned).toContain('mirror_repair_budget_reached');
     expect(counts.mirror_repair).toBe(1);
     expect(doc().status).toBe('error');
+  });
+
+  // Plan rev 12 S7: a cut-off run's position is carried into the next run, so the notes in the middle, which a
+  // newest-first pass that is cut every run never reaches, are checked by a later run.
+  it('runs cut off by their budget resume where the last one stopped: a middle note is repaired, then the cursor is cleared', async () => {
+    // 30 finished notes whose docs are fine (bulk-30 the newest), and n1 behind in the third page of 10.
+    await pool.query(
+      `INSERT INTO notes (id, workspace_id, author_uid, status, source_type, updated_at)
+       SELECT 'bulk-' || g, 'ws', 'u', 'ready', 'recording', NOW() - INTERVAL '30 minutes' + g * INTERVAL '1 second'
+         FROM generate_series(1, 30) g`,
+    );
+    for (let g = 1; g <= 30; g += 1) docs.set(`workspaces/ws/notes/bulk-${g}`, { data: { status: 'ready' }, updateTime: ts(Date.now() - 20 * MIN) });
+    // Between bulk-5 and bulk-6: 25 notes are newer, so it's the sixth note of the third page.
+    await pool.query(
+      `UPDATE notes SET status = 'error', error_message = 'x', updated_at = NOW() - INTERVAL '30 minutes' + INTERVAL '5500 milliseconds' WHERE id = 'n1'`,
+    );
+    setDoc({ status: 'transcribing' });
+    const lines: { msg: string; fields: any }[] = [];
+    const record = (fields: any, msg: string) => lines.push({ msg, fields });
+    const log: any = { info: record, warn: record, error: record, child: () => log };
+    const deps = { firestore, auth: { deleteUser: async () => {} }, bucket: { getFiles: async () => [[]] }, mirrorRepairBudgetMs: 0, mirrorRepairPage: 10 };
+    const runOnce = async (budgetMs = 0) => {
+      lines.length = 0;
+      return sweep.run({ log, env: {}, traceId: 't', deps: { ...deps, mirrorRepairBudgetMs: budgetMs }, repo, noteTerminal });
+    };
+
+    // Two runs in a row, each cut off: n1 isn't reached yet.
+    await runOnce();
+    expect(lines.map((l) => l.msg)).toContain('mirror_repair_budget_reached');
+    await runOnce();
+    expect(lines.map((l) => l.msg)).toContain('mirror_repair_budget_reached');
+    expect(doc().status).toBe('transcribing');
+
+    // The third resumes from the second's position: n1 is repaired.
+    const third = await runOnce();
+    expect(third.mirror_repair).toBe(1);
+    expect(doc().status).toBe('error');
+    const resumed = lines.find((l) => l.msg === 'mirror_repair_resumed');
+    expect(resumed?.fields.cursor).toMatchObject({ noteId: expect.any(String), updatedAt: expect.any(String) });
+
+    // The fourth, with time to spare, reaches the end of the window: the cursor is cleared, and the run says so.
+    await runOnce(5 * MIN);
+    expect(lines.map((l) => l.msg)).not.toContain('mirror_repair_budget_reached');
+    expect(lines.map((l) => l.msg)).toContain('mirror_repair_resume_finished');
+    expect((await pool.query('SELECT count(*)::int AS n FROM mirror_repair_cursor')).rows[0].n).toBe(0);
+    // And the next run starts afresh, with nothing to resume.
+    await runOnce();
+    expect(lines.map((l) => l.msg)).not.toContain('mirror_repair_resumed');
   });
 
   it('checks every note in the window, past a page of 200 (audit Q20)', async () => {

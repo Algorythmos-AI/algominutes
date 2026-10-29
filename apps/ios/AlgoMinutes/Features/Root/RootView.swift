@@ -3,30 +3,34 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
-    /// A6.3: whether we've tried to establish the default anonymous identity, so
-    /// the login fallback only appears if that genuinely failed.
-    @State private var didAttemptGuest = false
+    /// A6.3: whether launch has settled who is here: someone was already signed in, or the attempt to make a
+    /// guest finished. Until then the splash shows; after it, nobody signed in means the sign-in screen. It used
+    /// to be set only by a guest attempt, so a launch with someone signed in left it unset, and signing out or
+    /// deleting the account then left the splash up for good (device run 2026-10-28).
+    @State private var launchSettled = false
 
     var body: some View {
         @Bindable var env = env
         @Bindable var billing = env.billing
         Group {
-            if env.auth.user != nil {
+            switch Self.screen(hasUser: env.auth.user != nil, launchSettled: launchSettled,
+                               isSigningIn: env.auth.isSigningIn) {
+            case .tabs:
                 MainTabView()
-            } else if !didAttemptGuest || env.auth.isSigningIn {
+            case .splash:
                 // A6.3: bring up the anonymous guest identity before showing any
                 // account UI, so the very first session can record + summarize
                 // with no sign-in. LoginView is only the fallback if anon fails.
                 BootstrapSplash()
-            } else {
+            case .signIn:
                 LoginView()
             }
         }
         .task {
-            if env.auth.user == nil, !didAttemptGuest {
+            if env.auth.user == nil, !launchSettled {
                 await env.auth.ensureAnonymousIdentity()
-                didAttemptGuest = true
             }
+            launchSettled = true
         }
         // A9.5 paywall — presented from billing state (quota hit, metered gate,
         // trial banner, Settings), never at launch.
@@ -56,7 +60,10 @@ struct RootView: View {
         // Support Dynamic Type broadly, but clamp the largest accessibility
         // sizes so the fixed-layout recording screen doesn't overflow.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
-        .onChange(of: env.auth.user?.uid) { _, uid in
+        // `initial`: the account restored at launch starts its session too. AuthService has had it from its first
+        // moment since #334, so the uid never changes on such a launch, and without `initial` nothing started the
+        // notes listener: no notes, and a recording ended in "Could not create the note" (device run 2026-10-28).
+        .onChange(of: env.auth.user?.uid, initial: true) { _, uid in
             if uid != nil {
                 env.startSession()
             } else {
@@ -112,6 +119,18 @@ struct RootView: View {
         } message: {
             Text(env.alertMessage ?? "")
         }
+    }
+}
+
+extension RootView {
+    enum Screen: Equatable { case tabs, splash, signIn }
+
+    /// What the root shows. The splash only while launch settles who is here (or a sign-in is under way); once it
+    /// has, nobody signed in is the sign-in screen, whether the guest couldn't be made or someone signed out.
+    static func screen(hasUser: Bool, launchSettled: Bool, isSigningIn: Bool) -> Screen {
+        if hasUser { return .tabs }
+        if !launchSettled || isSigningIn { return .splash }
+        return .signIn
     }
 }
 

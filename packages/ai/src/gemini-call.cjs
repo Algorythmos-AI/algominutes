@@ -40,6 +40,26 @@ function isModelUnavailable(status) {
   return status === 404;
 }
 
+// A quota refusal (429 RESOURCE_EXHAUSTED) is Vertex's shared capacity saying "not now", not an outage. Asked
+// again 2–4 s later it refused again for minutes (production, 2026-10-27: four task attempts, 19 minutes for a
+// 23 s note). So it gets more attempts on the rung, further apart: 2, 4, 8, 16 s plus up to 1 s of jitter, about
+// 30 s in all, and never past the ladder's budget. Other transient errors keep 3 quick attempts.
+const ATTEMPTS = 3;
+const RATE_LIMITED_ATTEMPTS = 5;
+const isRateLimited = (err) => /\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '');
+const rateLimitBackoffMs = (attempt) => Math.min(2_000 * 2 ** attempt, 16_000) + Math.floor(Math.random() * 1_000);
+
+// Where else Gemini may be asked when the primary location ends on a quota refusal: VERTEX_FALLBACK_LOCATIONS,
+// comma-separated, in order, and EMPTY by default. A location here is a place users' transcripts and audio are
+// sent, so it must be in the Privacy Policy's processor table first (apps/site/src/data/processing.json;
+// tests/vertex-locations-policy.test.ts holds Terraform to it). 'global' is Vertex's global endpoint, whose host
+// has no region prefix.
+const hostFor = (loc) => (loc === 'global' ? 'aiplatform.googleapis.com' : `${loc}-aiplatform.googleapis.com`);
+function fallbackLocationsFrom(value, primary) {
+  const list = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(list.map((l) => String(l).trim()).filter(Boolean))].filter((l) => l !== primary);
+}
+
 function extractText(data) {
   // Vertex AI generateContent returns:
   //   { candidates: [ { content: { parts: [{ text }] }, finishReason } ] }
@@ -67,6 +87,8 @@ async function callGeminiWithLadder({
   thinking,
   project,
   location,
+  // Asked in order when `location` ends on a 429 (default: VERTEX_FALLBACK_LOCATIONS, empty unless set).
+  fallbackLocations,
   // Injection points for tests; production uses ADC, global fetch and real sleeps.
   tokenProvider,
   fetchImpl = globalThis.fetch,
@@ -84,6 +106,7 @@ async function callGeminiWithLadder({
     });
   }
   const loc = location || process.env.AIPLATFORM_LOCATION || 'us-central1';
+  const fallbacks = fallbackLocationsFrom(fallbackLocations ?? process.env.VERTEX_FALLBACK_LOCATIONS, loc);
   if (!proj) {
     return { rawText: null, model: null, error: new Error('callGeminiWithLadder: project not resolvable') };
   }
@@ -102,11 +125,14 @@ async function callGeminiWithLadder({
   });
 
   let lastErr = null;
+  // Whether every rung so far ended on a quota refusal (the location fallback's condition, below).
+  let everyRungRateLimited = true;
   for (const modelName of ladder) {
-    const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
+    const url = `https://${hostFor(loc)}/v1/projects/${proj}/locations/${loc}/publishers/google/models/${modelName}:generateContent`;
     // Dropped for this rung if Vertex refuses the cap itself: an answer with uncapped thinking beats no answer.
     let withThinking = true;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let attempts = ATTEMPTS;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       if (Date.now() > deadline) {
         lastErr = new Error('TIME_BUDGET');
         return { rawText: null, model: null, error: lastErr };
@@ -204,17 +230,34 @@ async function callGeminiWithLadder({
           log.error({ err, model: modelName }, 'gemini_non_retryable');
           return { rawText: null, model: null, error: err };
         }
-        const backoff = backoffMs(attempt);
+        const rateLimited = isRateLimited(err);
+        if (rateLimited) attempts = RATE_LIMITED_ATTEMPTS;
+        const backoff = rateLimited ? rateLimitBackoffMs(attempt) : backoffMs(attempt);
         log.warn({ err, model: modelName, attempt: attempt + 1, backoff }, 'gemini_transient');
         // A quota refusal, told apart from an outage (503): the case for more quota or provisioned throughput
-        // (plan rev 12 S2). It's still a gemini_transient, and retried the same way.
-        if (/\b429\b|RESOURCE_EXHAUSTED/.test((err && err.message) || '')) {
+        // (plan rev 12 S2). It's still a gemini_transient, retried with the longer backoff above.
+        if (rateLimited) {
           log.warn({ model: modelName, attempt: attempt + 1, location: loc }, 'gemini_rate_limited');
         }
+        if (attempt + 1 >= attempts) break;
+        // A wait that would end past the budget can't be followed by an attempt: the next rung gets what's left.
+        if (Date.now() + backoff > deadline) break;
         await sleepFn(backoff);
       }
     }
+    if (!isRateLimited(lastErr)) everyRungRateLimited = false;
     log.warn({ model: modelName }, 'gemini_model_exhausted');
+  }
+  // Every rung here ended on a quota refusal: ask the next location, with what's left of the budget. Any other
+  // failure on any rung (an outage, a bad request, a model not served) isn't this location's capacity, and
+  // another location wouldn't fix it.
+  if (fallbacks.length && everyRungRateLimited && isRateLimited(lastErr) && Date.now() < deadline) {
+    const [next, ...rest] = fallbacks;
+    log.warn({ from: loc, to: next }, 'gemini_location_fallback');
+    return callGeminiWithLadder({
+      parts, deadlineMs: deadline - Date.now(), attemptTimeoutMs, log, modelLadder: ladder, generationConfig, thinking,
+      project: proj, location: next, fallbackLocations: rest, tokenProvider: getToken, fetchImpl, sleepFn,
+    });
   }
   return { rawText: null, model: null, error: lastErr || new Error('All Gemini models overloaded') };
 }

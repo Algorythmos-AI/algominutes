@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // A7.3: FirebaseMessaging turns the APNs token into the FCM token the
         // notifier sends to, and tells us each time it changes.
         Messaging.messaging().delegate = self
+        PushTokenRegistrar.shared.fetchDeviceToken = { try await Messaging.messaging().token() }
         PushTokenRegistrar.shared.deleteDeviceToken = {
             try await Messaging.messaging().deleteToken()
             // A fresh token for whoever signs in next; it waits for them.
@@ -45,6 +46,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // messaging(_:didReceiveRegistrationToken:). The raw APNs token used to
         // be registered here; FCM rejects it, so no push could arrive.
         Messaging.messaging().apnsToken = deviceToken
+        // And asks for it outright: the delegate alone never hears of this project's token on a device that holds
+        // another project's (PushTokenRegistrar.apnsTokenArrived).
+        Task { @MainActor in
+            await PushTokenRegistrar.shared.apnsTokenArrived()
+        }
     }
 
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {

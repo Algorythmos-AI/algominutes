@@ -17,6 +17,11 @@ cd "${CI_PRIMARY_REPOSITORY_PATH:?not running in Xcode Cloud}/apps/ios"
 
 if ! sh ci_scripts/what-to-test.sh TestFlight/WhatToTest.en-US.txt; then
   echo "warning: What to Test could not be written; this build uploads without notes"
+else
+  # Xcode Cloud attaches only the languages the app's test information has, and the app's primary language is
+  # English (Australia): with en-US alone, builds 75 and 76 showed no notes.
+  cp TestFlight/WhatToTest.en-US.txt TestFlight/WhatToTest.en-AU.txt ||
+    echo "warning: What to Test could not be copied for en-AU"
 fi
 
 PLIST=AlgoMinutes/Resources/GoogleService-Info.plist
