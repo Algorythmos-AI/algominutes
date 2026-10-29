@@ -62,6 +62,13 @@ mirrored by the web `InstantRecorderConsent` component:
   The "Start recording" button is **disabled until the box is ticked** ("Tick the box to
   start"). This is the shipped consent affirmation.
 
+- **Google Cloud AI agreement (iOS, App Store 5.1.2(i)).** Separate from the tick above, which
+  is about other people's permission: once per device, before the first upload from any path
+  (recording, import, capture of another app, scan, notetaker, Ask AI, search, retry), the app
+  asks "Send your recordings to Google Cloud AI?" ("Agree and continue" / "Not now"). "Not now"
+  sends nothing. Stored with a version (`AISharingConsent`), so changed words ask again;
+  withdrawn in Settings › Google Cloud AI, which stops every new upload until agreed again.
+
 **Why this wording is defensible as a v1.0 floor:** it (a) discloses capture, purpose, and
 storage in plain English; (b) makes the user affirm they have the right to record the
 other participants; and (c) does so before every capture, not once. It is a

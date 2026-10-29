@@ -9,6 +9,7 @@ final class RecoveryStatesTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
         let vm = ChatViewModel()
+        vm.aiSharingAllowed = { true }
         vm.attach(api: APIClient(session: URLSession(configuration: config), idToken: { "test-token" }))
         return vm
     }

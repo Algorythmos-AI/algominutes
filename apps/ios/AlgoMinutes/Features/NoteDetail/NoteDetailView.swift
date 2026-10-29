@@ -31,6 +31,8 @@ struct NoteDetailView: View {
     /// The speaker being renamed (their tag), and the name being typed.
     @State private var renamingTag: Int?
     @State private var renameText = ""
+    /// A retry waiting on the Google Cloud AI agreement (App Store 5.1.2(i)).
+    @State private var aiSharingRequest: AISharingRequest?
 
     /// Re-derived every render rather than captured. The Firestore listener is
     /// the source of truth for the screen, so a mirror write — a status change,
@@ -185,6 +187,7 @@ struct NoteDetailView: View {
             ) { viewModel.mailDraft = nil }
         }
         .modifier(OverwriteSummaryDialog(viewModel: viewModel, onConfirm: regenerateConfirmed))
+        .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
         .confirmationDialog(
             "Delete this note?",
             isPresented: $viewModel.confirmingDelete,
@@ -545,10 +548,13 @@ struct NoteDetailView: View {
     }
 
     private func retry(_ note: Note) {
-        Task {
-            let outcome = await env.retry(note: note)
-            if case .blocked(let message) = outcome {
-                viewModel.alertMessage = message
+        // A retry sends the recording or its transcript to Google Cloud AI again: the agreement first.
+        aiSharingRequest = env.aiSharing.gate(.retry) {
+            Task {
+                let outcome = await env.retry(note: note)
+                if case .blocked(let message) = outcome {
+                    viewModel.alertMessage = message
+                }
             }
         }
     }

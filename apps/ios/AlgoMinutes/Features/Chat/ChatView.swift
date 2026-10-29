@@ -9,6 +9,8 @@ struct ChatView: View {
     // @State keeps a stable identity across re-presentations.
     @State private var viewModel: ChatViewModel
     @State private var selectedNoteId: String?
+    /// A question waiting on the Google Cloud AI agreement (App Store 5.1.2(i)).
+    @State private var aiSharingRequest: AISharingRequest?
 
     @MainActor
     init(viewModel: ChatViewModel? = nil) {
@@ -32,7 +34,7 @@ struct ChatView: View {
                                     ForEach(Self.starterQuestions, id: \.self) { question in
                                         Button {
                                             viewModel.draft = question
-                                            viewModel.send()
+                                            ask { viewModel.send() }
                                         } label: {
                                             Text(question)
                                                 .font(Typography.body(15))
@@ -82,7 +84,13 @@ struct ChatView: View {
             }
             .onAppear { viewModel.attach(api: env.api) }
             .onDisappear { viewModel.cancelStreaming() }
+            .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
         }
+    }
+
+    /// A question goes to Google Cloud AI: the agreement first, the first time. "Not now" keeps the draft.
+    private func ask(_ send: @escaping @MainActor () -> Void) {
+        aiSharingRequest = env.aiSharing.gate(.askAI, send)
     }
 
     // MARK: - Starters and usable answers (RELEASE.md rev 11, UX9)
@@ -170,7 +178,7 @@ struct ChatView: View {
                 }
                 if message.failedQuery != nil, !viewModel.isStreaming {
                     Button {
-                        viewModel.retry(messageId: message.id)
+                        ask { viewModel.retry(messageId: message.id) }
                     } label: {
                         Label("Try again", systemImage: "arrow.clockwise")
                             .font(Typography.label(14))
@@ -277,7 +285,7 @@ struct ChatView: View {
                 )
 
             Button {
-                viewModel.send()
+                ask { viewModel.send() }
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
@@ -310,6 +318,9 @@ final class ChatViewModel {
 
     private var api: APIClient?
     private var streamTask: Task<Void, Never>?
+    /// Whether the Google Cloud AI agreement (App Store 5.1.2(i)) is in place. The views ask for it first; this
+    /// is the backstop, so no question is sent without it. Injectable for tests.
+    @ObservationIgnored var aiSharingAllowed: @MainActor () -> Bool = { AISharingConsent.shared.allows(.askAI) }
     /// When set, retrieval is scoped to this note. The workspace-wide chat
     /// leaves it nil.
     private var noteId: String?
@@ -322,6 +333,8 @@ final class ChatViewModel {
     func send() {
         let query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, !isStreaming, api != nil else { return }
+        // Not sent, and the draft is kept for when it is.
+        guard aiSharingAllowed() else { return }
         draft = ""
 
         messages.append(ChatMessage(role: .user, content: query))
@@ -334,6 +347,7 @@ final class ChatViewModel {
     func retry(messageId: String) {
         guard !isStreaming, let index = messages.firstIndex(where: { $0.id == messageId }),
               let query = messages[index].failedQuery else { return }
+        guard aiSharingAllowed() else { return }
         messages[index] = ChatMessage(id: messageId, role: .assistant, content: "")
         ask(query, into: index)
     }

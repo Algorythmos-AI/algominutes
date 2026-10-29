@@ -20,6 +20,8 @@ struct ScanSheet: View {
     @State private var shareItem: ShareItem?
     /// The text of a save that failed, kept so Try again sends the same note (no offline queue in 1.0).
     @State private var pendingSave: PendingTextNote?
+    /// A save waiting on the Google Cloud AI agreement (App Store 5.1.2(i)). "Not now" keeps the text here.
+    @State private var aiSharingRequest: AISharingRequest?
 
     var body: some View {
         ScrollView {
@@ -76,16 +78,19 @@ struct ScanSheet: View {
                         Text("Your text is kept here until you close this.")
                             .font(Typography.body(12))
                             .foregroundStyle(Theme.muted)
-                        Button("Try again") {
+                        // No error: it's waiting on the Google Cloud AI agreement, not a failed save.
+                        Button(errorMessage == nil ? "Save as a note" : "Try again") {
                             Task { await save(pending) }
                         }
                         .font(Typography.heading(15, weight: .bold))
+                        .accessibilityIdentifier("scan.saveAgain")
                     }
                 }
             }
             .padding(24)
         }
         .background(Theme.surface)
+        .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
         .fullScreenCover(item: Binding(
             get: { cameraMode.map { CameraSession(mode: $0) } },
             set: { if $0 == nil { cameraMode = nil } }
@@ -240,13 +245,22 @@ struct ScanSheet: View {
     }
 
     private func save(_ note: PendingTextNote) async {
+        // The text goes to Google Cloud AI to be summarised: asked first. Until then it's kept here, unsent.
+        guard env.aiSharing.isAgreed else {
+            errorMessage = nil
+            pendingSave = note
+            aiSharingRequest = env.aiSharing.gate(.scan) { Task { await save(note) } }
+            return
+        }
         busyLabel = "Saving…"
         errorMessage = nil
         defer { busyLabel = nil }
-        switch await TextNoteSave.save(note, api: env.api) {
+        switch await TextNoteSave.save(note, api: env.api, aiSharingAgreed: env.aiSharing.allows(.scan)) {
         case .saved(let noteId):
             pendingSave = nil
             onDone(noteId)
+        case .notAgreed:
+            pendingSave = note
         case .failed(let message, let retry):
             AppLog.error("text_note_save_failed: \(message)")
             errorMessage = message

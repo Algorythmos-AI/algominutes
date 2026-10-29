@@ -230,7 +230,7 @@ Privacy Policy: https://algominutes.algorythmos.com/privacy
 | 5.1.1(v) | A deletion proven on prod | **not verified** | A8 |
 | 5.1.2 | App Privacy answers = the privacy manifest; no tracking SDK | pass | `tests/app-privacy-answers.test.ts`, `tests/ios-linked-sdks.test.ts` |
 | 5.1.2 | Privacy Report of the candidate matches | **not verified** | `APP-STORE-XCODE-CLOUD-RELEASE.md` §4 |
-| 5.1.2(i) | Data sent to third-party AI disclosed, with explicit permission | **not verified (risk)** | The first-run sheet names Google Cloud; the tick is about other people's permission, and later sheets drop the Google Cloud sentence. Owner decision above |
+| 5.1.2(i) | Data sent to third-party AI disclosed, with explicit permission | pass in code (PR #537); device run pending | A one-time "Send your recordings to Google Cloud AI?" agreement, separate from the permission tick, before the first upload on every path; withdrawn in Settings › Google Cloud AI (CONSENT §2.2) |
 | 5.1.2 | Summaries labelled as AI-written | pass in code | #535 (merge pending); `APP-STORE-AI-LABEL.md` |
 
 ## 6. Call capture at review: remove it from the 1.0 binary

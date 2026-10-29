@@ -6,10 +6,13 @@ import SwiftUI
 /// into other meetings — which is the difference between this and the
 /// workspace-wide chat in the Files tab.
 struct AskAIComposer: View {
+    @Environment(AppEnvironment.self) private var env
     @Bindable var model: ChatViewModel
     let onOpenConversation: () -> Void
 
     @FocusState private var focused: Bool
+    /// A question waiting on the Google Cloud AI agreement (App Store 5.1.2(i)).
+    @State private var aiSharingRequest: AISharingRequest?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,11 +86,13 @@ struct AskAIComposer: View {
                     )
             )
         }
+        .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
     }
 
     private func send() {
         guard !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         focused = false
-        model.send()
+        // A question goes to Google Cloud AI: the agreement first, the first time. "Not now" keeps the draft.
+        aiSharingRequest = env.aiSharing.gate(.askAI) { model.send() }
     }
 }
