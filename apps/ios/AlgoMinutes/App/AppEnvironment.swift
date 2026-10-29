@@ -16,6 +16,9 @@ final class AppEnvironment {
     /// (`RecorderConsentFlow` calls `acknowledge()`) and the recorder (which
     /// evaluates it in `RecorderService.start()`). See `docs/CONSENT.md`.
     let consentGate: SessionConsentGate
+    /// The one-time agreement to send recordings and their text to Google Cloud AI (App Store 5.1.2(i)). Every
+    /// path that uploads or asks the AI checks it; see `AISharingPath`.
+    let aiSharing: AISharingConsent
     let audioSession: AudioSessionCoordinator
     let player: AudioPlayerService
     let transcripts: TranscriptRepository
@@ -58,6 +61,9 @@ final class AppEnvironment {
     /// notice (it was started from Control Center). RootView asks the user to
     /// confirm they had permission before it becomes a note.
     var isBroadcastConsentPending = false
+    /// A finished capture of another app waits for the Google Cloud AI agreement before it's uploaded (RootView
+    /// asks). "Not now" keeps it on this iPhone.
+    var isBroadcastAISharingPending = false
     /// The kill switch held a finished capture back; said once per session.
     @ObservationIgnored private var broadcastHoldNoticeShown = false
 
@@ -84,6 +90,8 @@ final class AppEnvironment {
         self.recordingStore = store
         let consentGate = SessionConsentGate()
         self.consentGate = consentGate
+        self.aiSharing = AISharingConsent.shared
+        if UITestHooks.resetAISharing { AISharingConsent.shared.withdraw() }
         self.recorder = RecorderService(store: store, consentGate: consentGate)
         let session = AudioSessionCoordinator()
         self.audioSession = session
@@ -333,6 +341,9 @@ final class AppEnvironment {
     /// stuck in `processing` forever.
     func resumePendingUploads() async {
         guard auth.workspaceId != nil else { return }
+        // Without the Google Cloud AI agreement nothing is uploaded: the recordings wait on this iPhone, in
+        // "Not yet uploaded", until it's given.
+        guard aiSharing.allows(.pendingUploads) else { return }
         // Snapshot up front — `reupload` mutates the store as it removes files.
         let resumable = recordingStore.allPending().filter { $0.noteId != nil }
         for pending in resumable {
@@ -404,6 +415,12 @@ final class AppEnvironment {
         onNoteCreated: @MainActor (String) -> Void = { _ in }
     ) async {
         guard let wsId = auth.workspaceId else { return }
+        // Asked before every path gets here (AISharingPath); this is the backstop, so nothing is uploaded
+        // without it. A recording stays on this iPhone, in "Not yet uploaded", with no note made.
+        guard aiSharing.allows(type == .recording ? .recording : .importAudio) else {
+            alertMessage = kind == .recording ? AISharingCopy.recordingHeld : AISharingCopy.blocked
+            return
+        }
 
         let dateStamp = Self.dateStamp()
         let placeholder = title ?? (type == .recording ? "Session_\(dateStamp)" : "Import_\(dateStamp)")
@@ -537,6 +554,7 @@ final class AppEnvironment {
         let decision = BroadcastHandoff.decide(
             hasFinishedCapture: broadcast.hasFinishedCapture,
             switchOn: switches.broadcastCapture,
+            aiSharingAgreed: aiSharing.isAgreed,
             consented: await consentGate.satisfied(for: .appAudio)
         )
         switch decision {
@@ -546,6 +564,10 @@ final class AppEnvironment {
                 broadcastHoldNoticeShown = true
                 alertMessage = "Capturing audio from another app is turned off right now, so your capture hasn't been uploaded. It stays on this iPhone and becomes a note when the feature is back."
             }
+            return
+        case .askAISharing:
+            AppLog.info("ai_sharing_blocked path=\(AISharingPath.callCapture.rawValue) agreedVersion=\(aiSharing.agreedVersion)")
+            isBroadcastAISharingPending = true
             return
         case .askConsent:
             isBroadcastConsentPending = true
@@ -585,6 +607,13 @@ final class AppEnvironment {
         await claimBroadcastCapture()
     }
 
+    /// The user agreed to send recordings to Google Cloud AI from the prompt for a waiting capture. RootView
+    /// claims it once the prompt has gone (the permission question comes next if this capture still needs it).
+    func agreeToAISharingForBroadcast() {
+        aiSharing.agree()
+        isBroadcastAISharingPending = false
+    }
+
     /// The user declined: the capture is thrown away, never uploaded.
     func discardBroadcastCapture() {
         isBroadcastConsentPending = false
@@ -599,6 +628,8 @@ final class AppEnvironment {
     /// written. Otherwise fall back to the storage-path retry.
     @discardableResult
     func retry(note: Note) async -> NotesRepository.RetryOutcome {
+        // A retry sends the recording, or its transcript, to Google Cloud AI again.
+        guard aiSharing.allows(.retry) else { return .blocked(message: AISharingCopy.blocked) }
         if note.type == .recording,
            let pending = recordingStore.pendingRecording(forNoteId: note.id),
            FileManager.default.fileExists(atPath: recordingStore.audioURL(for: pending).path) {
@@ -695,6 +726,9 @@ final class AppEnvironment {
     private func reupload(
         noteId: String, type: NoteType, pending: RecordingStore.PendingRecording, retryAttempt: Int?
     ) async -> NotesRepository.RetryOutcome {
+        // Every re-upload (resume, retry, recovery) passes here: nothing is uploaded without the agreement, and
+        // the recording stays as it was.
+        guard aiSharing.allows(.pendingUploads) else { return .blocked(message: AISharingCopy.recordingHeld) }
         guard let wsId = auth.workspaceId else {
             // Kept on the recording: this used to leave it on "Waiting to upload" with nothing said.
             let message = "Please sign in to do that."

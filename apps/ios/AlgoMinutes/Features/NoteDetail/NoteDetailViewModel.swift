@@ -14,6 +14,9 @@ import SwiftUI
 @Observable
 @MainActor
 final class NoteDetailViewModel {
+    /// Whether the Google Cloud AI agreement (App Store 5.1.2(i)) is in place: a rewrite sends the transcript
+    /// there again. Withdrawn in Settings, nothing is sent. Injectable for tests.
+    @ObservationIgnored var aiSharingAllowed: @MainActor () -> Bool = { AISharingConsent.shared.allows(.regenerateSummary) }
     enum Tab: String, CaseIterable {
         case summary = "Summary"
         case transcript = "Transcript"
@@ -314,6 +317,10 @@ final class NoteDetailViewModel {
         onFailure: @escaping (String) -> Void
     ) {
         guard !isRegenerating else { return }
+        guard aiSharingAllowed() else {
+            onFailure(AISharingCopy.blocked)
+            return
+        }
         template = chosen
         isRegenerating = true
         Task {

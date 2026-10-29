@@ -39,9 +39,16 @@ final class SendNotetakerModel {
     /// the same notetaker, never a second.
     @ObservationIgnored private var request: (link: String, id: String)?
     @ObservationIgnored private let makeId: () -> String
+    /// Whether the Google Cloud AI agreement (App Store 5.1.2(i)) is in place: the meeting is transcribed and
+    /// summarised there. The sheet asks first; this is the backstop, so nothing is sent without it.
+    @ObservationIgnored private let aiSharingAllowed: @MainActor () -> Bool
 
-    init(makeId: @escaping () -> String = { UUID().uuidString.lowercased() }) {
+    init(
+        makeId: @escaping () -> String = { UUID().uuidString.lowercased() },
+        aiSharingAllowed: @escaping @MainActor () -> Bool = { AISharingConsent.shared.allows(.notetaker) }
+    ) {
         self.makeId = makeId
+        self.aiSharingAllowed = aiSharingAllowed
     }
 
     var meetingURL: String? { NotetakerLink.meetingURL(from: link) }
@@ -51,6 +58,7 @@ final class SendNotetakerModel {
     /// Send it; the note to open, or nil (the error says why).
     func send(create: (String, String?, String) async throws -> APIClient.MeetingBotResult) async -> String? {
         guard canSend, let meetingURL else { return nil }
+        guard aiSharingAllowed() else { return nil }
         busy = true
         error = nil
         defer { busy = false }
@@ -78,6 +86,8 @@ struct SendNotetakerSheet: View {
     /// Opens the note once it's sent (or the one already on its way).
     let onSent: (String) -> Void
     @State private var model = SendNotetakerModel()
+    /// The send waiting on the Google Cloud AI agreement.
+    @State private var aiSharingRequest: AISharingRequest?
 
     var body: some View {
         NavigationStack {
@@ -110,21 +120,27 @@ struct SendNotetakerSheet: View {
                 }
                 Section {
                     Button(model.busy ? "Sending…" : "Send the notetaker") {
-                        Task {
-                            let api = env.api
-                            if let noteId = await model.send(create: { try await api.createMeetingBot(meetingUrl: $0, title: $1, requestId: $2) }) {
-                                dismiss()
-                                onSent(noteId)
-                            }
-                        }
+                        // The meeting is transcribed and summarised by Google Cloud AI: the agreement first.
+                        aiSharingRequest = env.aiSharing.gate(.notetaker) { send() }
                     }
                     .disabled(!model.canSend)
                 }
             }
+            .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
             .navigationTitle("Send the notetaker")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+    }
+
+    private func send() {
+        Task {
+            let api = env.api
+            if let noteId = await model.send(create: { try await api.createMeetingBot(meetingUrl: $0, title: $1, requestId: $2) }) {
+                dismiss()
+                onSent(noteId)
             }
         }
     }

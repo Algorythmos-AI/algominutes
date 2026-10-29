@@ -18,7 +18,7 @@ final class SendNotetakerTests: XCTestCase {
     }
 
     func testNothingIsSentUntilTheAffirmationIsTicked() async {
-        let model = SendNotetakerModel(makeId: { "id-1" })
+        let model = SendNotetakerModel(makeId: { "id-1" }, aiSharingAllowed: { true })
         model.link = "meet.google.com/abc-defg-hij"
         XCTAssertFalse(model.canSend)
         var calls = 0
@@ -34,7 +34,7 @@ final class SendNotetakerTests: XCTestCase {
 
     func testSendsTheLinkTitleAndId_thenOpensTheNote() async {
         var ids = ["id-1", "id-2"]
-        let model = SendNotetakerModel(makeId: { ids.removeFirst() })
+        let model = SendNotetakerModel(makeId: { ids.removeFirst() }, aiSharingAllowed: { true })
         model.link = "meet.google.com/abc-defg-hij"
         model.title = "  Weekly sync "
         model.agreed = true
@@ -48,7 +48,7 @@ final class SendNotetakerTests: XCTestCase {
 
     func testARetryReusesItsId_anotherMeetingGetsANewOne_andOneOnItsWayOpensItsNote() async {
         var n = 0
-        let model = SendNotetakerModel(makeId: { n += 1; return "id-\(n)" })
+        let model = SendNotetakerModel(makeId: { n += 1; return "id-\(n)" }, aiSharingAllowed: { true })
         model.link = "https://meet.google.com/abc-defg-hij"
         model.agreed = true
         var ids: [String] = []
@@ -62,7 +62,7 @@ final class SendNotetakerTests: XCTestCase {
     }
 
     func testARefusalWithoutASentence_orNoConnection_saysSoPlainly() async {
-        let model = SendNotetakerModel(makeId: { "id" })
+        let model = SendNotetakerModel(makeId: { "id" }, aiSharingAllowed: { true })
         model.link = "https://meet.google.com/abc-defg-hij"
         model.agreed = true
         _ = await model.send { _, _, _ in throw APIError.http(status: 500, message: "internal") }

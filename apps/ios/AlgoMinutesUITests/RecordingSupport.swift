@@ -24,6 +24,9 @@ extension XCTestCase {
         let record = app.element("home.action.recording")
         XCTAssertTrue(record.waitForExistence(timeout: 10), "no Instant Recorder on Home", file: file, line: line)
         record.tap()
+        // On a phone that hasn't agreed to send recordings to Google Cloud AI yet (a fresh install), that's asked
+        // first, once: answered the way a person would.
+        agreeToAISharingIfAsked(app)
 
         let start = app.buttons["recorder.consent.start"]
         guard start.waitForExistence(timeout: 10) else {
@@ -44,6 +47,16 @@ extension XCTestCase {
 
         XCTAssertTrue(app.element("recording.timer").waitForExistence(timeout: 15), "the recording screen didn't open",
                       file: file, line: line)
+    }
+
+    /// Answers the Google Cloud AI agreement (App Store 5.1.2(i)) with Agree and continue, when it's shown.
+    @MainActor
+    func agreeToAISharingIfAsked(_ app: XCUIApplication, timeout: TimeInterval = 3) {
+        let agree = app.buttons["aiSharing.agree"]
+        guard agree.waitForExistence(timeout: timeout) else { return }
+        XCTContext.runActivity(named: "asked to send recordings to Google Cloud AI: agreed") { _ in }
+        screenshot(app, "Google Cloud AI agreement")
+        agree.tap()
     }
 
     /// Seconds on the recording screen's timer ("01:05" is 65), or nil when it can't be read.

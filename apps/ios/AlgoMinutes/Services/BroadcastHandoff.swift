@@ -116,14 +116,21 @@ final class BroadcastHandoff {
         /// A capture started from Control Center, with no pre-recording
         /// notice acknowledged this session: ask before uploading it.
         case askConsent
+        /// The Google Cloud AI agreement (App Store 5.1.2(i)) hasn't been given on this device: ask for it first.
+        /// "Not now" leaves the capture where it is, on this iPhone.
+        case askAISharing
     }
 
     /// The broadcast extension can be started from Control Center, outside the
     /// app's consent step and whatever the kill switch says. Nothing it
-    /// captured is uploaded without both.
-    nonisolated static func decide(hasFinishedCapture: Bool, switchOn: Bool, consented: Bool) -> ClaimDecision {
+    /// captured is uploaded without all three: the switch, the Google Cloud AI
+    /// agreement, and the permission.
+    nonisolated static func decide(
+        hasFinishedCapture: Bool, switchOn: Bool, aiSharingAgreed: Bool, consented: Bool
+    ) -> ClaimDecision {
         guard hasFinishedCapture else { return .claim }
         if !switchOn { return .hold }
+        if !aiSharingAgreed { return .askAISharing }
         return consented ? .claim : .askConsent
     }
 
