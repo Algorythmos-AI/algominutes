@@ -64,8 +64,12 @@ final class SettingsUITests: XCTestCase {
         XCTAssertFalse(delete.isEnabled, "Delete forever is enabled without the acknowledgement")
         screenshot(app, "delete sheet, typed but not acknowledged")
 
+        // Return ends editing: the keyboard covers Cancel, and a tap on it while it's up can land on a key.
+        field.typeText("\n")
+        _ = app.keyboards.firstMatch.waitForNonExistence(timeout: 5)
         let cancel = app.buttons["deleteAccount.cancel"]
         if !cancel.isHittable { app.swipeUp() }
+        XCTAssertTrue(cancel.isHittable, "Cancel is hidden on the delete sheet")
         cancel.tap()
         XCTAssertTrue(delete.waitForNonExistence(timeout: 5), "Cancel didn't close the delete sheet")
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
