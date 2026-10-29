@@ -404,7 +404,7 @@ there is no cache.
 
 | Switch (Terraform variable, `envs/prod/main.tf`) | api env | Off means |
 |---|---|---|
-| `broadcast_capture` (`on`/`off`, default `on`) | `BROADCAST_CAPTURE` | "Record a call" (the broadcast extension) hidden |
+| `broadcast_capture` (`on`/`off`, default `on`) | `BROADCAST_CAPTURE` (unset means off) | the web's call in another tab hidden (the iPhone App Store build has no call capture; staging builds hide "Record a call") |
 | `notetaker_surfaces` (default empty = off) | `NOTETAKER` | the notetaker hidden; new requests answer 503 (`docs/runbooks/meetings.md`) |
 | `share_links` (module default `off`; prod doesn't expose it) | `SHARE_LINKS` | share links hidden |
 
