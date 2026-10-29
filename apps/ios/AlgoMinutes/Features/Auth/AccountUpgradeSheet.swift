@@ -120,6 +120,6 @@ struct AccountUpgradeSheet: View {
     /// off (until DeviceCheck is set up there), and a reviewer must never be promised one.
     static func message(trialing: Bool) -> String {
         let save = "Create a free account so your recordings and summaries are backed up and available on your other devices."
-        return trialing ? save + " Your 7-day trial keeps going — nothing is lost." : save + " Nothing is lost."
+        return trialing ? save + " Your 7 days of free Pro minutes keep going — nothing is lost." : save + " Nothing is lost."
     }
 }
