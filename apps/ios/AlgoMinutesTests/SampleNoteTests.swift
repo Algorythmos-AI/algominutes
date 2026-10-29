@@ -17,10 +17,14 @@ final class SampleNoteTests: XCTestCase {
     func testItNeverSaysBeta() {
         // A reviewer sees it on first launch (Guideline 2.2): the made-up meeting mustn't read like a beta app.
         let summary = SampleNote.note.summary
-        let text = ([SampleNote.note.title, summary?.gist ?? ""]
-            + (summary?.actionItems ?? []) + (summary?.keyDecisions ?? [])
-            + (summary?.chapters.flatMap { [$0.title, $0.summary] } ?? [])
-            + SampleNote.lines.map(\.text)).joined(separator: " ").lowercased()
+        var parts: [String] = [SampleNote.note.title, summary?.gist ?? ""]
+        parts += summary?.actionItems ?? []
+        parts += summary?.keyDecisions ?? []
+        for chapter in summary?.chapters ?? [] {
+            parts += [chapter.title, chapter.summary]
+        }
+        parts += SampleNote.lines.map(\.text)
+        let text = parts.joined(separator: " ").lowercased()
         XCTAssertFalse(text.contains("beta"), "the example note says beta")
         XCTAssertFalse(text.contains("tester"), "the example note says tester")
     }
