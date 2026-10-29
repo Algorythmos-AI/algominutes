@@ -37,7 +37,10 @@ struct AskAIComposer: View {
                     )
                 }
                 .buttonStyle(CardButtonStyle())
-                .padding(.bottom, Theme.Spacing.sm)
+                .padding(.bottom, Theme.Spacing.xs)
+                AIWrittenNote(NoteExport.askAINotice)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, Theme.Spacing.sm)
             }
 
             HStack(spacing: Theme.Spacing.sm) {

@@ -24,6 +24,8 @@ struct SummaryPane: View {
                         .font(Typography.body(15))
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
+                    AIWrittenNote(NoteExport.inAppNotice)
+                        .accessibilityIdentifier("summary.aiNotice")
                 }
             }
             if !summary.chapters.isEmpty {
@@ -172,5 +174,27 @@ private struct ChaptersCard: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The small "written by Algorythmos AI" line: plain words, never icon-only.
+struct AIWrittenNote: View {
+    private let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.tertiary)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(Typography.body(12))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
     }
 }

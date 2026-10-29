@@ -190,6 +190,7 @@ describe('a note', () => {
     renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, feed);
     expect(await screen.findByRole('heading', { level: 1, name: 'Weekly sync' })).toBeTruthy();
     expect(screen.getByText('We agreed the launch plan.')).toBeTruthy();
+    expect(screen.getByText('Written by Algorythmos AI from your recording. Check anything important.')).toBeTruthy();
     expect(screen.getByText('Ship the site')).toBeTruthy();
     expect(screen.getByText('Launch on Monday')).toBeTruthy();
     expect(screen.getByText('Budget')).toBeTruthy();
@@ -253,6 +254,7 @@ describe('a note', () => {
     renderApp('/app/notes/n1', fakeAuth(PERMANENT).adapter, s.fetchImpl, fakeFeed([note('n1', { summary: { gist: 'From the doc.', actionItems: ['Doc action'], keyDecisions: [] } })]).feed);
     expect(await screen.findByText('From the doc.')).toBeTruthy();
     expect(screen.getByText('Doc action')).toBeTruthy();
+    expect(screen.getByText('Written by Algorythmos AI from your recording. Check anything important.')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: "This note isn't available" })).toBeNull();
   });
 

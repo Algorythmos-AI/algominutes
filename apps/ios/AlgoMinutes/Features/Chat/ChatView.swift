@@ -57,6 +57,13 @@ struct ChatView: View {
                             }
                         }
                         .padding(20)
+                        if !viewModel.messages.isEmpty {
+                            AIWrittenNote(NoteExport.askAINotice)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 20)
+                                .padding(.bottom, 12)
+                                .accessibilityIdentifier("chat.aiNotice")
+                        }
                     }
                     .onChange(of: viewModel.messages.last?.content) { _, _ in
                         if let last = viewModel.messages.last {
@@ -103,6 +110,11 @@ struct ChatView: View {
         return tidy.isEmpty ? nil : tidy
     }
 
+    /// An answer leaving the app says who wrote it: whoever it is pasted to never saw this screen.
+    static func labelledAnswer(_ answer: String) -> String {
+        answer + "\n\n" + NoteExport.askAINotice
+    }
+
     // MARK: - Message rendering
 
     @ViewBuilder
@@ -138,7 +150,7 @@ struct ChatView: View {
                                                   streaming: viewModel.isStreaming && message.id == viewModel.messages.last?.id) {
                     HStack(spacing: 18) {
                         Button {
-                            UIPasteboard.general.string = answer
+                            UIPasteboard.general.string = Self.labelledAnswer(answer)
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")
                                 .font(Typography.label(13))
@@ -147,7 +159,7 @@ struct ChatView: View {
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Copy answer")
-                        ShareLink(item: answer) {
+                        ShareLink(item: Self.labelledAnswer(answer)) {
                             Label("Share", systemImage: "square.and.arrow.up")
                                 .font(Typography.label(13))
                                 .foregroundStyle(Theme.muted)

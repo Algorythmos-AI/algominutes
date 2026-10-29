@@ -17,7 +17,9 @@
  *
  * Everything here is already PII-redacted — the transcoder redacts transcript
  * text before storage — so the document carries <<REDACTED:…>> markers and
- * there is no clean copy. The rendered file says so on its last page.
+ * there is no clean copy. The rendered file says so on its last page, and says
+ * under its title that Algorythmos AI wrote it (with a machine-readable mark in
+ * the core properties).
  *
  * Consolidated into services/api (BUILD-PLAN §3.1) from functions/export-note.cjs.
  * The ONLY change from the source is the shared-lib import path: pg-query comes
@@ -41,6 +43,22 @@ const SCOPES = new Set(['summary', 'transcript', 'both']);
 
 const REDACTION_NOTICE =
   'Detected card numbers, IDs and contact details are masked. AlgoMinutes never stored the originals.';
+
+// Who wrote what, said under the title of every export: whoever opens a
+// forwarded file never saw the app or its Terms. Mirrors the iOS copy in
+// apps/ios/AlgoMinutes/Models/ExportScope.swift (NoteExport).
+const AI_SUMMARY_NOTICE =
+  'Summary, action items and decisions written by Algorythmos AI. May contain errors.';
+const AI_TRANSCRIPT_NOTICE =
+  'Transcribed automatically by Algorythmos AI. Words and speaker names may be wrong.';
+// Machine-readable mark (EU AI Act Art. 50(2)), in the DOCX core properties.
+const AI_MACHINE_MARK = 'AI-generated (Algorythmos AI: Google Gemini and Speech-to-Text)';
+
+function aiNotices(scope) {
+  if (scope === 'summary') return [AI_SUMMARY_NOTICE];
+  if (scope === 'transcript') return [AI_TRANSCRIPT_NOTICE];
+  return [AI_SUMMARY_NOTICE, AI_TRANSCRIPT_NOTICE];
+}
 
 // ── data ──────────────────────────────────────────────────────────────
 
@@ -170,6 +188,9 @@ async function renderDocx(data, scope) {
   const children = [];
 
   children.push(new Paragraph({ text: data.note.title, heading: HeadingLevel.TITLE }));
+  for (const notice of aiNotices(scope)) {
+    children.push(new Paragraph({ children: [new TextRun({ text: notice, italics: true, size: 18 })] }));
+  }
 
   if (scope !== 'transcript') {
     children.push(new Paragraph({ text: 'Executive Summary', heading: HeadingLevel.HEADING_1 }));
@@ -208,7 +229,13 @@ async function renderDocx(data, scope) {
     children: [new TextRun({ text: REDACTION_NOTICE, italics: true, size: 16 })],
   }));
 
-  return Packer.toBuffer(new Document({ sections: [{ children }] }));
+  return Packer.toBuffer(new Document({
+    title: data.note.title,
+    creator: AI_MACHINE_MARK,
+    description: AI_MACHINE_MARK,
+    keywords: AI_MACHINE_MARK,
+    sections: [{ children }],
+  }));
 }
 
 function safeFileName(title, scope) {
@@ -281,4 +308,7 @@ async function handleExportNote({ uid, body, log }) {
   }
 }
 
-module.exports = { handleExportNote, speakerAndText, safeFileName, MAX_LINES, REDACTION_NOTICE };
+module.exports = {
+  handleExportNote, speakerAndText, safeFileName, renderDocx, aiNotices,
+  MAX_LINES, REDACTION_NOTICE, AI_SUMMARY_NOTICE, AI_TRANSCRIPT_NOTICE, AI_MACHINE_MARK,
+};

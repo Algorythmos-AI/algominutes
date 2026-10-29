@@ -1,4 +1,5 @@
 import XCTest
+import PDFKit
 import UIKit
 import AVFoundation
 import AuthenticationServices
@@ -204,6 +205,59 @@ final class ExportScopeTests: XCTestCase {
             let text = NoteExport.plainText(note: note(summary: summary), scope: scope, lines: lines)
             XCTAssertTrue(text.contains(NoteExport.redactionNotice), "\(scope) dropped the notice")
         }
+    }
+
+    func testEveryExportSaysAlgorythmosAIWroteItAtTheTop() {
+        // A colleague reading a forwarded file never saw the app; the label
+        // has to travel with the file, before the content it describes.
+        for scope in ExportScope.allCases {
+            let text = NoteExport.plainText(note: note(summary: summary), scope: scope, lines: lines)
+            let head = text.components(separatedBy: "\n").prefix(4).joined(separator: "\n")
+            for notice in NoteExport.aiNotices(for: scope) {
+                XCTAssertTrue(head.contains(notice), "\(scope) lacks \(notice) under the title")
+            }
+            XCTAssertTrue(text.contains(NoteExport.redactionNotice), "\(scope) dropped the redaction notice")
+        }
+    }
+
+    func testTheAINoticeMatchesWhatTheExportCarries() {
+        XCTAssertEqual(NoteExport.aiNotices(for: .summary), [NoteExport.aiSummaryNotice])
+        XCTAssertEqual(NoteExport.aiNotices(for: .transcript), [NoteExport.aiTranscriptNotice])
+        XCTAssertEqual(NoteExport.aiNotices(for: .both), [NoteExport.aiSummaryNotice, NoteExport.aiTranscriptNotice])
+        for notice in [NoteExport.aiSummaryNotice, NoteExport.aiTranscriptNotice, NoteExport.inAppNotice,
+                       NoteExport.emailNotice, NoteExport.askAINotice] {
+            XCTAssertTrue(notice.contains("Algorythmos AI"), notice)
+            XCTAssertLessThanOrEqual(notice.split(separator: " ").count, 14, "too long: \(notice)")
+        }
+    }
+
+    func testThePDFCarriesTheMachineReadableMarkAndTheLabel() throws {
+        let data = PDFExporter.export(note: note(summary: summary), scope: .both, transcript: lines)
+        let doc = try XCTUnwrap(PDFDocument(data: data))
+        let attrs = doc.documentAttributes ?? [:]
+        let keywords = (attrs[PDFDocumentAttribute.keywordsAttribute] as? [String])?.joined(separator: " ")
+            ?? (attrs[PDFDocumentAttribute.keywordsAttribute] as? String) ?? ""
+        XCTAssertTrue(keywords.contains(NoteExport.machineMark), "keywords: \(keywords)")
+        XCTAssertEqual(attrs[PDFDocumentAttribute.creatorAttribute] as? String, NoteExport.machineMark)
+        let text = doc.string ?? ""
+        XCTAssertTrue(text.contains("Algorythmos AI"), "the label is not drawn")
+    }
+
+    func testACopiedOrSharedChatAnswerSaysAlgorythmosAIWroteIt() {
+        let shared = ChatView.labelledAnswer("We agreed to ship Friday.")
+        XCTAssertTrue(shared.hasPrefix("We agreed to ship Friday."))
+        XCTAssertTrue(shared.hasSuffix(NoteExport.askAINotice))
+    }
+
+    func testTheBothScopeIsNamedLikeTheOtherTwo() {
+        XCTAssertEqual(ExportScope.both.label, "Summary & transcript")
+    }
+
+    func testTheEmailBodySaysAlgorythmosAIWroteItAboveTheRedactionNotice() {
+        let body = NoteExport.emailBody
+        let ai = try! XCTUnwrap(body.range(of: NoteExport.emailNotice))
+        let redaction = try! XCTUnwrap(body.range(of: NoteExport.redactionNotice))
+        XCTAssertLessThan(ai.lowerBound, redaction.lowerBound)
     }
 
     func testLinesWithoutSpeakerOrTimeStillExport() {

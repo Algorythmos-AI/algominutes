@@ -189,7 +189,7 @@ final class NoteDetailViewModel {
             }
             mailDraft = MailDraft(
                 subject: note.title,
-                body: NoteExport.redactionNotice,
+                body: NoteExport.emailBody,
                 attachment: data,
                 fileName: NoteExport.fileName(for: note, scope: scope, ext: format.ext),
                 mimeType: format.mimeType
