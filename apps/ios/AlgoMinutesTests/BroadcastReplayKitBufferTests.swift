@@ -46,10 +46,10 @@ final class BroadcastReplayKitBufferTests: XCTestCase {
     }
 
     /// A host-clock time base, as ReplayKit's timestamps are (seconds since boot, nanosecond timescale).
-    private static let hostBase = 345_678.912_345
+    nonisolated private static let hostBase = 345_678.912_345
 
     /// `frames` of a 440 Hz tone in `shape`, at host time `hostBase + seconds`.
-    static func buffer(_ shape: Shape, frames: Int, startFrame: Int, at seconds: Double) throws -> CMSampleBuffer {
+    nonisolated static func buffer(_ shape: Shape, frames: Int, startFrame: Int, at seconds: Double, amplitude: Double = 0.25) throws -> CMSampleBuffer {
         let sampleBytes: UInt32 = shape.float ? 4 : 2
         var flags: AudioFormatFlags = kAudioFormatFlagIsPacked
         flags |= shape.float ? kAudioFormatFlagIsFloat : kAudioFormatFlagIsSignedInteger
@@ -70,7 +70,7 @@ final class BroadcastReplayKitBufferTests: XCTestCase {
         var bytes = [UInt8](repeating: 0, count: length)
         let step: Double = 2 * Double.pi * 440 / shape.rate
         for i in 0..<frames {
-            let value: Double = sin(step * Double(startFrame + i)) * 0.25
+            let value: Double = sin(step * Double(startFrame + i)) * amplitude
             for c in 0..<channels {
                 let index = shape.nonInterleaved ? c * frames + i : i * channels + c
                 if shape.float {

@@ -1,5 +1,6 @@
 import AVFoundation
 import AudioToolbox
+import Darwin
 
 /// The writer the broadcast extension captures into (BroadcastExtension/SampleHandler): one fragmented AAC `.m4a`,
 /// app audio and microphone on two tracks. Compiled into the extension and the unit tests (project.yml), so the
@@ -14,7 +15,9 @@ import AudioToolbox
 ///
 /// Not thread-safe by itself for the writer's own sake: every entry point takes `lock`, so ReplayKit's sample
 /// callback and the system's finish can't interleave.
-final class BroadcastCaptureWriter {
+/// `@unchecked Sendable`: every entry point that touches its state takes `lock`, and ReplayKit, the heartbeat timer
+/// and the system's finish call it from different threads.
+final class BroadcastCaptureWriter: @unchecked Sendable {
     enum Track: Int, CaseIterable {
         case app = 0, mic = 1
         var name: String { self == .app ? "app" : "mic" }
@@ -272,6 +275,7 @@ final class BroadcastCaptureWriter {
         }
         if count > 0 {
             let bytes = normalizers[i].output.advanced(by: offset * Int(Self.trackFormat.mBytesPerFrame))
+            diagnostics.measure(bytes.assumingMemoryBound(to: Int16.self), count: count, on: i)
             guard appendFrames(track, bytes: UnsafeRawPointer(bytes), count: count, real: true) else { return false }
         }
         let other: Track = track == .app ? .mic : .app
@@ -363,6 +367,25 @@ final class BroadcastCaptureWriter {
             return diagnostics.json(stage: stage, writer: writer, failed: failedTrack?.rawValue, downmix: downmix,
                                     locations: locationAttempts)
         }
+    }
+
+    /// How the capture is going, for the app group's defaults (`captureStats`) at every heartbeat: so a capture that
+    /// works but records silence can be told from one whose buffers fail. BroadcastWriterDiagnostics.stats.
+    func stats() -> String {
+        lock.withLock { diagnostics.stats(status: writer.status.rawValue, footprintMB: Self.footprintMB()) }
+    }
+
+    /// This process's physical footprint (what jetsam counts against the extension's ~50 MB), in MB; -1 if unknown.
+    static func footprintMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { return -1 }
+        return Double(info.phys_footprint) / 1_048_576
     }
 }
 
@@ -511,10 +534,18 @@ final class BroadcastWriterDiagnostics {
     private var silenceFrames: [Int64] = [0, 0]
     private var bufferFailures = 0
     private var bufferStatus: OSStatus = noErr
+    private var received: [Int] = [0, 0]
+    // The level of each track's real audio over its last full second (silence filled in isn't measured).
+    private var windowFrames: [Int] = [0, 0]
+    private var windowPeak: [Int32] = [0, 0]
+    private var windowSquares: [Double] = [0, 0]
+    private var lastPeak: [Int32] = [-1, -1]
+    private var lastRMS: [Double] = [-1, -1]
 
     /// The source format of a buffer about to be appended to track `i` (0 app, 1 mic): the first one is kept, a
     /// later different one noted.
     func saw(_ sampleBuffer: CMSampleBuffer, on i: Int) {
+        received[i] += 1
         guard let description = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else { return }
         if let last = lastFormat[i] {
@@ -526,6 +557,61 @@ final class BroadcastWriterDiagnostics {
     }
 
     func appended(on i: Int) { appended[i] += 1 }
+
+    /// The level of `count` frames of track `i`'s converted audio; a full second's peak and RMS are kept.
+    func measure(_ samples: UnsafePointer<Int16>, count: Int, on i: Int) {
+        var peak = windowPeak[i]
+        var squares = windowSquares[i]
+        for n in 0..<count {
+            let v = Int32(samples[n])
+            peak = max(peak, abs(v))
+            squares += Double(v) * Double(v)
+        }
+        windowPeak[i] = peak
+        windowSquares[i] = squares
+        windowFrames[i] += count
+        if windowFrames[i] >= BroadcastCaptureWriter.sampleRate {
+            lastPeak[i] = peak
+            lastRMS[i] = (squares / Double(windowFrames[i])).squareRoot()
+            windowFrames[i] = 0
+            windowPeak[i] = 0
+            windowSquares[i] = 0
+        }
+    }
+
+    /// dBFS of a 16-bit level, rounded; -99 for digital silence, nil before a full second was measured.
+    private static func dbfs(_ level: Double) -> Int? {
+        guard level >= 0 else { return nil }
+        guard level > 0 else { return -99 }
+        return Int((20 * log10(level / 32_768)).rounded())
+    }
+
+    /// Compact JSON (about 300 bytes) of a capture in progress, per track [app, mic]: buffers received (rx),
+    /// appended (n), dropped (drop), unconvertible (bad) and the converter's last error (conv), seconds of silence
+    /// filled (fill), the last second's peak and RMS in dBFS (pk, rms; null before a second of audio, -99 for digital
+    /// silence), the first and current source formats (fmt, cur) and whether it changed (chg); the writer's status
+    /// and the process's physical footprint in MB (mb).
+    func stats(status: Int, footprintMB: Double) -> String {
+        let info: [String: Any] = [
+            "t": Int(Date().timeIntervalSince1970),
+            "status": status,
+            "rx": received,
+            "n": appended,
+            "drop": dropped,
+            "bad": unconvertible,
+            "conv": converterStatus.map { Int($0) },
+            "fill": silenceFrames.map { Int($0 / Int64(BroadcastCaptureWriter.sampleRate)) },
+            "pk": lastPeak.map { Self.dbfs(Double($0)) ?? NSNull() as Any },
+            "rms": lastRMS.map { Self.dbfs($0) ?? NSNull() as Any },
+            "fmt": firstFormat.map { $0 ?? "-" },
+            "cur": lastFormat.map { $0.map(Self.describe) ?? "-" },
+            "chg": formatChanged,
+            "mb": Int(footprintMB.rounded()),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
+    }
     func dropped(on i: Int) { dropped[i] += 1 }
     /// A buffer that couldn't be converted, and the converter's status (0 if it wasn't the converter: not PCM).
     func unconvertible(on i: Int, status: OSStatus) {
@@ -600,5 +686,46 @@ final class BroadcastWriterDiagnostics {
         guard let data = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "{\"at\":\"\(stage)\"}" }
         return json
+    }
+}
+
+/// What the extension records in the app group's defaults when a broadcast starts (BroadcastExtension/SampleHandler),
+/// shared with the tests. An earlier capture the app hasn't claimed is never orphaned by the new one: a finished one
+/// (`completedBroadcastFile`) and one whose extension died before finishing it (state still recording or starting,
+/// its `activeBroadcastFile` still on disk; fragmented, so readable up to its last fragment) both join
+/// `unclaimedBroadcastFiles`, which the app claims first, oldest first (BroadcastHandoff).
+enum BroadcastStartRecord {
+    static let unclaimedKey = "unclaimedBroadcastFiles"
+
+    /// Records a capture starting at `path`, at `now`. Returns the earlier captures it kept for the app.
+    @discardableResult
+    static func begin(path: String, defaults: UserDefaults?, now: TimeInterval,
+                      fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
+        guard let defaults else { return [] }
+        // Read before anything below overwrites them.
+        let previousState = defaults.string(forKey: "state")
+        var waiting: [String] = []
+        if previousState == "finished", let finished = defaults.string(forKey: "completedBroadcastFile") {
+            waiting.append(finished)
+        }
+        if previousState == "recording" || previousState == "starting",
+           let orphan = defaults.string(forKey: "activeBroadcastFile"), orphan != path, fileExists(orphan) {
+            waiting.append(orphan)
+        }
+        var unclaimed = defaults.stringArray(forKey: unclaimedKey) ?? []
+        for file in waiting where !unclaimed.contains(file) { unclaimed.append(file) }
+        if !waiting.isEmpty { defaults.set(unclaimed, forKey: unclaimedKey) }
+
+        defaults.set("starting", forKey: "state")
+        defaults.set(true, forKey: "isBroadcasting")
+        defaults.set(now, forKey: "startedAt")
+        defaults.set(now, forKey: "lastHeartbeatAt")
+        defaults.set(path, forKey: "activeBroadcastFile")
+        defaults.removeObject(forKey: "completedBroadcastFile")
+        defaults.removeObject(forKey: "errorMessage")
+        defaults.removeObject(forKey: "recordingSize")
+        defaults.removeObject(forKey: "captureStats")
+        defaults.synchronize()
+        return waiting
     }
 }

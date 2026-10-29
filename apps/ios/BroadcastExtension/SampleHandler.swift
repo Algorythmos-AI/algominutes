@@ -110,31 +110,21 @@ class SampleHandler: RPBroadcastSampleHandler {
         self.capture = capture
         Self.logger.info("Capturing to \(attempts, privacy: .public)")
 
-        // Read before "starting" overwrites it: a capture that finished and hasn't been claimed yet (the app wasn't
-        // opened in between) is kept, and joins the list the app claims from. Clearing its pointer orphaned the file.
-        let previousState = defaults?.string(forKey: "state")
+        // An earlier capture the app hasn't claimed (finished, or left by an extension that died) is kept for it.
         let now = Date().timeIntervalSince1970
-        defaults?.set("starting", forKey: "state")
-        defaults?.set(true, forKey: "isBroadcasting")
-        defaults?.set(now, forKey: "startedAt")
-        defaults?.set(now, forKey: "lastHeartbeatAt")
-        defaults?.set(fileURL.path, forKey: "activeBroadcastFile")
-        if previousState == "finished", let waiting = defaults?.string(forKey: "completedBroadcastFile") {
-            var unclaimed = defaults?.stringArray(forKey: "unclaimedBroadcastFiles") ?? []
-            if !unclaimed.contains(waiting) { unclaimed.append(waiting) }
-            defaults?.set(unclaimed, forKey: "unclaimedBroadcastFiles")
-            Self.logger.info("Kept an unclaimed capture for the app (\(unclaimed.count, privacy: .public) waiting)")
+        let kept = BroadcastStartRecord.begin(path: fileURL.path, defaults: defaults, now: now)
+        if !kept.isEmpty {
+            Self.logger.info("Kept \(kept.count, privacy: .public) unclaimed capture(s) for the app")
         }
-        defaults?.removeObject(forKey: "completedBroadcastFile")
-        defaults?.removeObject(forKey: "errorMessage")
-        defaults?.removeObject(forKey: "recordingSize")
-        defaults?.synchronize()
 
         startedAt = now
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + 3, repeating: 3)
         timer.setEventHandler { [weak self] in
-            self?.defaults?.set(Date().timeIntervalSince1970, forKey: "lastHeartbeatAt")
+            guard let self else { return }
+            self.defaults?.set(Date().timeIntervalSince1970, forKey: "lastHeartbeatAt")
+            // How the capture is going (counts, levels, formats, memory), readable off the phone while it runs.
+            if let stats = self.capture?.stats() { self.defaults?.set(stats, forKey: "captureStats") }
         }
         timer.resume()
         heartbeatTimer = timer
@@ -191,23 +181,33 @@ class SampleHandler: RPBroadcastSampleHandler {
             return
         }
 
-        // Async finalize (the shorter track is filled to the longer's end, both inputs marked finished). iOS gives
-        // the extension ~3s to clean up after broadcastFinished returns; finishWriting completes well within that
-        // for short files. NO blocking semaphore — that risks force-kill before completion.
-        capture.finish { [weak self] completed in
-            guard let self else { return }
-            // The completion runs whether or not the file was finished. One that wasn't is still handed to the
-            // app: its fragments are readable up to the failure, and the app reports it if nothing is.
-            if !completed {
-                let reason = capture.writer.error?.localizedDescription ?? "unknown"
-                Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
-                self.recordWriterDiagnostic(stage: "finish")
-            }
-            self.handOverToContainer()
-            self.updateDefaultsOnFinish(success: true)
-            then?()
+        // Finalize, and WAIT for it (bounded). iOS ends the extension's process soon after broadcastFinished
+        // returns: the asynchronous finish this used to start never got to report, on every device run of
+        // 2026-10-29 (state left "recording", no completedBroadcastFile, no process). The report is made here,
+        // before returning, whether finishWriting completed or ran out of time: the file is fragmented, so what it
+        // holds is readable up to its last fragment either way, and the app reports it only if nothing is.
+        let done = DispatchSemaphore(value: 0)
+        let completedBox = CompletionBox()
+        capture.finish { completed in
+            completedBox.set(completed)
+            done.signal()
         }
+        let timedOut = done.wait(timeout: .now() + Self.finishWait) == .timedOut
+        if timedOut {
+            Self.logger.error("finishWriting didn't complete within \(Self.finishWait, privacy: .public) s: handing over the fragments written")
+        } else if completedBox.value != true {
+            let reason = capture.writer.error?.localizedDescription ?? "unknown"
+            Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
+            recordWriterDiagnostic(stage: "finish")
+        }
+        defaults?.set(capture.stats(), forKey: "captureStats")
+        handOverToContainer()
+        updateDefaultsOnFinish(success: true)
+        then?()
     }
+
+    /// How long the finish waits for finishWriting before reporting anyway (a short file takes well under a second).
+    static let finishWait: TimeInterval = 2.5
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
         // Capture both system audio AND mic. Video is intentionally ignored.
@@ -337,4 +337,12 @@ class SampleHandler: RPBroadcastSampleHandler {
         defaults?.removeObject(forKey: "activeBroadcastFile")
         defaults?.synchronize()
     }
+}
+
+/// The finish's result, set on the writer's queue and read after the wait.
+private final class CompletionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed: Bool?
+    func set(_ value: Bool) { lock.withLock { completed = value } }
+    var value: Bool? { lock.withLock { completed } }
 }
