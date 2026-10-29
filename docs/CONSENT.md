@@ -47,26 +47,34 @@ behind a single recorder **seam** (§5) so it can be added later without reworki
 
 ### 2.2 The prominent, plain-English pre-recording notice (as shipped)
 
-iOS presents a **two-step sheet** (`apps/ios/AlgoMinutes/Features/Recorder/RecorderFlow.swift`),
-mirrored by the web `InstantRecorderConsent` component:
+iOS presents **one sheet**, "Before you record" (`apps/ios/AlgoMinutes/Features/Recorder/RecorderFlow.swift`;
+the earlier "Ready to record?" step was folded into it in rev 11, H13/UX2), mirrored by the web
+`InstantRecorderConsent` component:
 
-- **Step 1 — "Ready to record?"** Plain-English statement of what happens:
-  > "AlgoMinutes records audio from this device for as long as you're recording.
-  > Afterwards it's transcribed and summarised for you. You can stop at any time."
+- **What happens.** The first time, in full:
+  > "AlgoMinutes records audio from this device for as long as you're recording. The audio is uploaded,
+  > then transcribed and summarised by Google Cloud's speech and AI services, and kept in your account
+  > until you delete it. You can stop at any time."
 
-- **Step 2 — "Before you record"** A first-run explainer of where the audio goes and how
-  long it is kept, plus a checkbox that is **mandatory every session**:
+  After that, the short form: "…Afterwards it's transcribed and summarised for you. You can stop at any time."
+
+- **The permission tick**, **mandatory every time the sheet opens**:
   > "I have permission from anyone whose voice may be captured. If others are present,
   > I'll let them know the meeting is being recorded."
 
   The "Start recording" button is **disabled until the box is ticked** ("Tick the box to
-  start"). This is the shipped consent affirmation.
+  start"). This is the shipped consent affirmation. The same tick covers one capture of another app
+  ("Record a call"); a capture started from Control Center skipped it, so the app asks "Turn your capture into
+  a note?" ("I have permission" / "Discard the capture" / "Not now") before anything is uploaded.
 
-- **Google Cloud AI agreement (iOS, App Store 5.1.2(i)).** Separate from the tick above, which
+- **Google Cloud AI agreement (iOS, App Store 5.1.2(i), #537).** Separate from the tick above, which
   is about other people's permission: once per device, before the first upload from any path
   (recording, import, capture of another app, scan, notetaker, Ask AI, search, retry), the app
-  asks "Send your recordings to Google Cloud AI?" ("Agree and continue" / "Not now"). "Not now"
-  sends nothing. Stored with a version (`AISharingConsent`), so changed words ask again;
+  asks "Send your recordings to Google Cloud AI?" ("Agree and continue" / "Not now"). For a recording or an
+  import it comes **before** "Before you record" or the file picker; a scan asks when it saves; a capture of
+  another app asks before the permission question. "Not now" sends nothing and leaves the user where they
+  were; a finished capture of another app stays on the iPhone until agreed, and a recording already on the
+  iPhone waits in "Not yet uploaded". Stored with a version (`AISharingConsent`), so changed words ask again;
   withdrawn in Settings › Google Cloud AI, which stops every new upload until agreed again.
 
 **Why this wording is defensible as a v1.0 floor:** it (a) discloses capture, purpose, and

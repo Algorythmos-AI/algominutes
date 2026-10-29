@@ -278,9 +278,9 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 - **Timestamped acceptance of Terms of Service + Privacy Policy at signup is required** and
   must be stored server-side (uid, doc version, timestamp). Applies to email, Google, and
   **guest→permanent** upgrade paths.
-- `TODO(legal):` Terms + Privacy Policy documents themselves (drafting/review) — not yet
-  commissioned. Must exist and be linked from both store listings and the consent sheet
-  before launch.
+- `TODO(legal):` Terms + Privacy Policy: drafts are live at `/terms` and `/privacy` on the site and linked from
+  the paywall and the Google Cloud AI agreement; counsel's sign-off is pending (`docs/plans/APP-STORE-LEGAL.md`).
+  They must be linked from both store listings before launch.
 
 ---
 
@@ -288,7 +288,7 @@ Both stores require an in-app account-deletion path; Play additionally requires 
 
 | Item | Type |
 |---|---|
-| Terms of Service + Privacy Policy drafting/review (§8) | `TODO(legal)` — **blocking** |
+| Terms of Service + Privacy Policy review and sign-off (§8; drafts live) | `TODO(legal)` — **blocking** |
 | UGC/moderation applicability + final age rating (§7) | `TODO(legal)` — blocking rating submission |
 | MediaProjection justification vs current Play policy (§5) | `TODO(legal)` |
 | ~~Add OtherUserContent / DeviceID / CrashData to `.xcprivacy` (§4.1)~~ | ✅ Declared in `PrivacyInfo.xcprivacy` |

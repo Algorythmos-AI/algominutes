@@ -19,6 +19,11 @@ doesn't exist, that was true on 2026-10-24 and isn't now. Evidence is in BLOCKER
 - **Apple keys live.** The reverse trial is on, and the DeviceCheck and App Store Server API keys are live (#498).
 - **Annual price.** A$149.99 (#497).
 - **First Release build.** Xcode Cloud "Release → App Store" built 1.0.0 (76), and it is Ready to Submit.
+- **Update, 2026-10-29.** `main` is 24adcde7 (promotion #541: #532 kill-safe call capture, #535 the "Written by
+  Algorythmos AI" label, #537 the one-time Google Cloud AI agreement, #539 the example note); its
+  `deploy-production` run is green (migrate, api rollout, smoke). Status decision 5 (the AI label) is done. The
+  iOS side reaches testers with the next Release build (RC1). The App Review notes are paste-ready in
+  APP-STORE-REVIEW-PACKAGE §1, blocked on the app paywalling the free floor (its Drift).
 - **It processed a real note on production.** The first note on a real iPhone found a P0: DeviceCheck's live
   "Failed to find bit state" answer failed every new iPhone's first note (#503). After the fix, the note reached
   `ready` and the trial started.
