@@ -1,9 +1,9 @@
 // The site's shared facts: the document versions come from @algominutes/contracts
 // (the apps record the version the user accepted), the operator from processing.json.
-import { PRIVACY_VERSION, RETENTION_OPTIONS_DAYS, TERMS_VERSION } from '@algominutes/contracts';
+import { PRIVACY_VERSION, RETENTION_OPTIONS_DAYS, TERMS_VERSION, TRIAL_DAYS } from '@algominutes/contracts';
 import processing from '../data/processing.json';
 
-export { PRIVACY_VERSION, TERMS_VERSION, RETENTION_OPTIONS_DAYS };
+export { PRIVACY_VERSION, TERMS_VERSION, RETENTION_OPTIONS_DAYS, TRIAL_DAYS };
 export const operator = processing.operator;
 export const processors = processing.processors;
 export const facts = {
