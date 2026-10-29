@@ -180,7 +180,7 @@ jobs:
             exit 1
           fi
           MIC=$(/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$APP/Info.plist")
-          if printf '%s' "$MIC" | grep -qiE 'call|another app'; then
+          if grep -qiE 'call|another app' <<<"$MIC"; then
             echo "error: the Release build's microphone text mentions calls: $MIC"
             exit 1
           fi
