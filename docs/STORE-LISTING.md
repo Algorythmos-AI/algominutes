@@ -46,7 +46,7 @@ targeting), and "free" as a keyword (weak, and interacts with the reverse-trial 
   Apple already indexes those, so repeating them wastes the field.
 - **Play title (≤30):** `AlgoMinutes: AI Meeting Notes` (28)
 - **Play short description (≤80):**
-  `Record meetings, get instant AI transcripts, summaries and action items.` (73)
+  `Record meetings, get AI transcripts, summaries and action items.` (64)
 - `TODO(brand):` Confirm the brand lockup / whether the subtitle should carry a tagline vs
   pure keywords. Copy above optimises for search; brand may want one word of personality.
 - `TODO(legal):` Confirm "AI Meeting Notes" and any "record calls" phrasing are safe given
@@ -71,7 +71,7 @@ All imagery `TODO(brand)`; captions below are the copy.
    Close-up of extracted action items (owner + task). Caption: **"Turn talk into a
    to-do list, automatically."**
 
-3. **Searchable, accurate transcript.**
+3. **Searchable transcript.**
    The full transcript view with a search highlight. Caption: **"A full transcript you can
    search — find any moment in seconds."**
 
@@ -146,7 +146,7 @@ footage/VO.
 > list. No more scrambling to take notes while trying to stay in the conversation.
 >
 > **What you get**
-> - **Instant summaries** — the gist of any meeting, in seconds.
+> - **Summaries in minutes** — the gist of any meeting, written for you.
 > - **Action items, extracted** — who's doing what, pulled out for you.
 > - **Key decisions, captured** — the calls that were made, in one place.
 > - **A searchable transcript** — find any moment without scrubbing audio.
@@ -169,7 +169,7 @@ footage/VO.
 ## 6. Google Play description
 
 ### 6.1 Short description (≤80)
-> Record meetings, get instant AI transcripts, summaries and action items.
+> Record meetings, get AI transcripts, summaries and action items.
 
 ### 6.2 Long description (≤4000)
 > **AlgoMinutes records your meetings and gives you back the part that matters: a summary,
@@ -179,7 +179,7 @@ footage/VO.
 > conversation, and pull out who agreed to do what.
 >
 > **Why people use AlgoMinutes**
-> - ⚡ **Instant AI summaries** of any meeting or voice note.
+> - ⚡ **AI summaries** of any meeting or voice note.
 > - ✅ **Automatic action items** — turn talk into a to-do list.
 > - 📌 **Key decisions** captured in one place.
 > - 🔎 **Searchable transcripts** — jump to any moment.

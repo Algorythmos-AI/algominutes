@@ -1,5 +1,9 @@
 # Decision memo: a "written by AI" label
 
+> **Decided, 2026-10-29: option C**, with the owner's wording **"Written by Algorythmos AI"** in place of the
+> draft copy in §4. Implemented in #535 (in-app, every export and share, and a machine-readable mark in
+> exported files). The memo below is kept as written.
+
 **Draft for the owner, 2026-10-29.** Checked against `origin/integration` at aa7a8e38. A plan, not legal
 advice. It answers RELEASE.md "Status, 2026-10-27" decision 5 (default: **a "written by AI" label on
 summaries**).
