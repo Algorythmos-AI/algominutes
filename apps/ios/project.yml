@@ -181,6 +181,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: AlgoMinutesTests
+      # The broadcast extension's capture writer, compiled here too so its kill-safety is tested (I3).
+      - path: BroadcastShared
       # The contract's /v1 fixtures (packages/contracts/fixtures), which ContractFixturesTests decodes with the
       # app's own models: a folder in the test bundle, never in the app.
       - path: ../../packages/contracts/fixtures/v1
@@ -210,6 +212,8 @@ targets:
     platform: iOS
     sources:
       - path: BroadcastExtension
+      # The capture writer's configuration, shared with AlgoMinutesTests so the tests write what ships (I3).
+      - path: BroadcastShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.algorythmos.algominutes.BroadcastExtension
@@ -241,6 +245,18 @@ schemes:
         - AlgoMinutesUITests
     archive:
       config: Release
+  # The Release build's UI tests on a phone (device-tests.sh --release). Its own scheme because Xcode builds
+  # every test target in a scheme, and the unit tests need Debug's testability: they can't build in Release.
+  AlgoMinutes-ReleaseUITests:
+    build:
+      targets:
+        AlgoMinutes: all
+        AlgoMinutesUITests: [test]
+        BroadcastExtension: all
+    test:
+      config: Release
+      targets:
+        - AlgoMinutesUITests
   # Internal TestFlight against staging (Xcode Cloud, plan PR-30).
   AlgoMinutes-Staging:
     build:

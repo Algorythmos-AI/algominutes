@@ -16,6 +16,9 @@ import os
 ///   lastHeartbeatAt        : Double (UNIX seconds, refreshed every ~3s in processSampleBuffer)
 ///   activeBroadcastFile    : String (full path while recording)
 ///   completedBroadcastFile : String (set in finishWriting completion)
+///   The file is a fragmented MP4 (BroadcastShared/BroadcastCaptureWriter): an extension killed before it
+///   finishes the file leaves it readable up to the last fragment, and the app claims it from
+///   activeBroadcastFile (I3, N4).
 ///   unclaimedBroadcastFiles: [String] (finished captures a later broadcast found unclaimed; the app claims
 ///                            these first, oldest first: RELEASE.md rev 11, N4)
 ///   recordingSize          : Int    (bytes, set on completion)
@@ -36,6 +39,8 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var startedAt: TimeInterval = 0
     /// Set once the file is being finished, so the cap and the system's own finish don't both do it.
     private var finishing = false
+    /// Buffers dropped because the writer wasn't ready (real-time input): logged at the finish, never silent.
+    private var droppedBuffers = 0
 
     /// The longest capture, as a recording's (4 hours).
     static let maxCaptureSeconds: TimeInterval = 4 * 60 * 60
@@ -76,41 +81,17 @@ class SampleHandler: RPBroadcastSampleHandler {
         let fileName = "broadcast_\(UUID().uuidString).m4a"
         let fileURL = containerURL.appendingPathComponent(fileName)
 
+        // Two AAC tracks (app audio, microphone), configured in BroadcastShared/BroadcastCaptureWriter.
         do {
-            writer = try AVAssetWriter(outputURL: fileURL, fileType: .m4a)
+            let capture = try BroadcastCaptureWriter.make(url: fileURL)
+            writer = capture.writer
+            appAudioInput = capture.appInput
+            micAudioInput = capture.micInput
         } catch {
             Self.logger.error("Failed to create AVAssetWriter: \(error.localizedDescription, privacy: .public)")
             recordError("Failed to create recording file")
             finishBroadcastWithError(error as NSError)
             return
-        }
-
-        // Two separate audio tracks. Each AVAssetWriterInput maintains its own
-        // monotonic timeline; mixing app+mic into ONE input causes PTS regressions
-        // and produces an unplayable file.
-        //
-        // Output settings: AAC, 44.1kHz, mono, 64kbps. Source format may differ
-        // (app audio is typically 48kHz stereo, mic is 16kHz mono) — AVAssetWriterInput
-        // converts on append.
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 64_000,
-        ]
-
-        let appInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-        appInput.expectsMediaDataInRealTime = true
-        if writer?.canAdd(appInput) == true {
-            writer?.add(appInput)
-            appAudioInput = appInput
-        }
-
-        let micInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-        micInput.expectsMediaDataInRealTime = true
-        if writer?.canAdd(micInput) == true {
-            writer?.add(micInput)
-            micAudioInput = micInput
         }
 
         guard writer?.startWriting() == true else {
@@ -177,6 +158,22 @@ class SampleHandler: RPBroadcastSampleHandler {
             return
         }
 
+        if droppedBuffers > 0 {
+            Self.logger.warning("Dropped \(self.droppedBuffers, privacy: .public) buffers the writer wasn't ready for")
+        }
+
+        // A writer that failed mid-capture (a full disk, a bad append) can't be finished. The file is fragmented
+        // (BroadcastCaptureWriter.fragmentInterval): what it wrote before the failure is readable, so it's handed
+        // to the app, which reads what there is and reports the capture lost only if there's nothing.
+        guard writer?.status == .writing else {
+            let status = writer?.status.rawValue ?? -1
+            let reason = writer?.error?.localizedDescription ?? "unknown"
+            Self.logger.error("Writer stopped before the finish (status \(status, privacy: .public)): \(reason, privacy: .public)")
+            updateDefaultsOnFinish(success: true)
+            then?()
+            return
+        }
+
         appAudioInput?.markAsFinished()
         micAudioInput?.markAsFinished()
 
@@ -185,15 +182,13 @@ class SampleHandler: RPBroadcastSampleHandler {
         // files. NO blocking semaphore — that risks force-kill before completion.
         writer?.finishWriting { [weak self] in
             guard let self else { return }
-            // The completion runs whether or not the file was written: a failed writer (a full disk, a bad
-            // append) used to be reported as a finished capture, and the app then found a file it couldn't read.
-            let completed = self.writer?.status == .completed
-            if !completed {
+            // The completion runs whether or not the file was finished. One that wasn't is still handed to the
+            // app: its fragments are readable up to the failure, and the app reports it if nothing is.
+            if self.writer?.status != .completed {
                 let reason = self.writer?.error?.localizedDescription ?? "unknown"
-                Self.logger.error("finishWriting did not complete: \(reason, privacy: .public)")
-                self.recordError("The capture couldn't be saved.")
+                Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
             }
-            self.updateDefaultsOnFinish(success: completed)
+            self.updateDefaultsOnFinish(success: true)
             then?()
         }
     }
@@ -237,9 +232,23 @@ class SampleHandler: RPBroadcastSampleHandler {
             Self.logger.info("Session started, first PTS=\(pts.seconds, privacy: .public)")
         }
 
-        let input = (sampleBufferType == .audioApp) ? appAudioInput : micAudioInput
-        if input?.isReadyForMoreMediaData == true {
-            input?.append(sampleBuffer)
+        guard let input = (sampleBufferType == .audioApp) ? appAudioInput : micAudioInput else { return }
+        guard input.isReadyForMoreMediaData else {
+            droppedBuffers += 1
+            return
+        }
+        guard input.append(sampleBuffer) else {
+            // The writer failed (a full disk, an encoder error): nothing more can be written. End the capture with
+            // what's on disk rather than keep a broadcast running that records nothing.
+            let status = writer?.status.rawValue ?? -1
+            let reason = writer?.error?.localizedDescription ?? "unknown"
+            Self.logger.error("append failed (status \(status, privacy: .public)): \(reason, privacy: .public)")
+            finishFile { [weak self] in
+                self?.finishBroadcastWithError(NSError(domain: "BroadcastExtension", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: "The capture stopped because of an error. What was captured until then becomes a note when you open AlgoMinutes.",
+                ]))
+            }
+            return
         }
     }
 
