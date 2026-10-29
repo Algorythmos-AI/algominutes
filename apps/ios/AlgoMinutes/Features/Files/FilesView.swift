@@ -499,6 +499,14 @@ struct FilesView: View {
     private func runTranscriptSearch() async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // The search words are matched by Google Cloud AI: without the agreement (App Store 5.1.2(i)) only
+        // titles are searched, on the phone, and nothing is sent.
+        guard env.aiSharing.allows(.search) else {
+            transcriptHits = []
+            searchedQuery = trimmed
+            searchError = AISharingCopy.searchNeedsAgreement
+            return
+        }
         isSearching = true
         searchError = nil
         defer { isSearching = false }

@@ -22,6 +22,8 @@ struct PendingRecordingsView: View {
     @State private var pendingDeletion: RecordingStore.PendingRecording?
     /// Why the last Upload didn't go ahead. Shown here: the app's alert can't show over this sheet.
     @State private var notice: String?
+    /// An upload waiting on the Google Cloud AI agreement (App Store 5.1.2(i)).
+    @State private var aiSharingRequest: AISharingRequest?
 
     var body: some View {
         NavigationStack {
@@ -45,6 +47,7 @@ struct PendingRecordingsView: View {
             }
         }
         .task { await refresh() }
+        .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
         .alert(
             "Delete this recording?",
             isPresented: Binding(
@@ -114,7 +117,9 @@ struct PendingRecordingsView: View {
                     // A failed upload gets an explicit "Try again"; a never-attempted
                     // one gets "Upload". Both route through recoverRecording.
                     Button(item.state == .failed ? "Try again" : "Upload") {
-                        Task { await upload(item) }
+                        // Uploading sends the recording to Google Cloud AI: the agreement first. "Not now"
+                        // keeps it here.
+                        aiSharingRequest = env.aiSharing.gate(.pendingUploads) { Task { await upload(item) } }
                     }
                     .font(Typography.body(13))
                 }

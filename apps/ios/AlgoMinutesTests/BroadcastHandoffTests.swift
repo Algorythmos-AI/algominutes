@@ -202,13 +202,13 @@ final class BroadcastHandoffTests: XCTestCase {
     /// Nothing captured outside the app is uploaded without the pre-recording
     /// consent and the server's switch; failures are still reported.
     func testAFinishedCaptureNeedsTheSwitchAndConsent() {
-        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, consented: true), .claim)
-        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, consented: false), .askConsent)
-        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, consented: true), .hold)
-        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, consented: false), .hold)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, aiSharingAgreed: true, consented: true), .claim)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, aiSharingAgreed: true, consented: false), .askConsent)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, aiSharingAgreed: true, consented: true), .hold)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: false, aiSharingAgreed: true, consented: false), .hold)
         // No finished capture: claim, so a failed or dead capture is still reported.
         for (on, ok) in [(true, true), (false, false), (false, true), (true, false)] {
-            XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: false, switchOn: on, consented: ok), .claim)
+            XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: false, switchOn: on, aiSharingAgreed: ok, consented: ok), .claim)
         }
     }
 
@@ -219,7 +219,7 @@ final class BroadcastHandoffTests: XCTestCase {
         let h = handoff()
         XCTAssertTrue(h.hasFinishedCapture)
         // Deciding to hold (or to ask) claims nothing: the capture is still there.
-        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: h.hasFinishedCapture, switchOn: false, consented: true), .hold)
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: h.hasFinishedCapture, switchOn: false, aiSharingAgreed: true, consented: true), .hold)
         XCTAssertTrue(h.hasFinishedCapture)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
     }

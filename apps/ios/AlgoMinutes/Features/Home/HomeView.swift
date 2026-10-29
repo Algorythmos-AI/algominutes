@@ -5,6 +5,16 @@ enum CaptureAction: String, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
+    /// What the Google Cloud AI agreement is asked for before the sheet opens; nil asks later (Scan Text asks
+    /// when it saves a note, since its PDF never leaves the phone).
+    var aiSharingPath: AISharingPath? {
+        switch self {
+        case .recording: return .recording
+        case .importFiles: return .importAudio
+        case .scanText: return nil
+        }
+    }
+
     var title: String {
         switch self {
         case .recording: return "Instant Recorder"
@@ -45,6 +55,8 @@ struct HomeView: View {
     @Environment(DeepLinkRouter.self) private var deepLinkRouter
 
     @State private var activeSheet: CaptureAction?
+    /// A capture waiting on the Google Cloud AI agreement (App Store 5.1.2(i)).
+    @State private var aiSharingRequest: AISharingRequest?
     @State private var recorderFlow = RecorderFlowState()
     @State private var selectedNoteId: String?
     // The example note, until there's a real one: the same switch Files uses, so hiding it there hides it here.
@@ -127,6 +139,7 @@ struct HomeView: View {
                 .algoMinutesSheet()
             }
         }
+        .aiSharingGate($aiSharingRequest, consent: env.aiSharing)
         .fullScreenCover(isPresented: $recorderFlow.isRecordingScreenPresented) {
             RecordingView { noteId in
                 if let noteId { selectedNoteId = noteId }
@@ -364,7 +377,14 @@ struct HomeView: View {
                 return
             }
             guard env.billing.guardMeteredAction() else { return }
-            activeSheet = action
+            // Recording and importing send audio to Google Cloud AI: the agreement comes first, before the
+            // recording starts or a file is picked; "Not now" leaves Home as it was. Scan Text asks when it
+            // saves, since making a PDF from a scan stays on the phone.
+            guard let path = action.aiSharingPath else {
+                activeSheet = action
+                return
+            }
+            aiSharingRequest = env.aiSharing.gate(path) { activeSheet = action }
         } label: {
             AlgoMinutesCard(style: style) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {

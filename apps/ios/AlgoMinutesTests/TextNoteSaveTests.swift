@@ -25,7 +25,7 @@ final class TextNoteSaveTests: XCTestCase {
     }
 
     func testSavesThroughTheServerWithTheContractBody() async throws {
-        let outcome = await TextNoteSave.save(pending(), api: api)
+        let outcome = await TextNoteSave.save(pending(), api: api, aiSharingAgreed: true)
         XCTAssertEqual(outcome, .saved(noteId: "n1"))
         let last = try XCTUnwrap(StubURLProtocol.recorded.last)
         XCTAssertEqual(last.method, "POST")
@@ -39,7 +39,7 @@ final class TextNoteSaveTests: XCTestCase {
     }
 
     func testNoTitleIsLeftOut() async throws {
-        _ = await TextNoteSave.save(pending(title: nil), api: api)
+        _ = await TextNoteSave.save(pending(title: nil), api: api, aiSharingAgreed: true)
         XCTAssertNil(StubURLProtocol.recorded.last?.body?["title"])
     }
 
@@ -47,7 +47,7 @@ final class TextNoteSaveTests: XCTestCase {
     // already saved answers ready, not a second note).
     func testAFailureKeepsTheTextAndTryAgainIsTheSameNote() async {
         respond(503, #"{"error":"Saving is unavailable right now. Please try again shortly."}"#)
-        let outcome = await TextNoteSave.save(pending(), api: api)
+        let outcome = await TextNoteSave.save(pending(), api: api, aiSharingAgreed: true)
         guard case .failed(let message, let retry) = outcome else { return XCTFail("expected a failure, got \(outcome)") }
         XCTAssertEqual(message, "Saving is unavailable right now. Please try again shortly.")
         XCTAssertEqual(retry, pending())
@@ -57,7 +57,7 @@ final class TextNoteSaveTests: XCTestCase {
     func testADeletedOrTakenIdIsRetriedUnderANewOne() async {
         for status in [404, 409] {
             respond(status, #"{"error":"text_note_conflict"}"#)
-            let outcome = await TextNoteSave.save(pending(), api: api)
+            let outcome = await TextNoteSave.save(pending(), api: api, aiSharingAgreed: true)
             guard case .failed(_, let retry) = outcome else { return XCTFail("\(status): expected a failure") }
             XCTAssertNotEqual(retry.noteId, "n1", "\(status)")
             XCTAssertEqual(retry.text, pending().text, "\(status)")

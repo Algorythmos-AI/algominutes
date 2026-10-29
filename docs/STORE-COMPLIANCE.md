@@ -26,6 +26,7 @@
 | 5 | **Diagnostic context** (structured server logs: traceId, uid, noteId, workspaceId, error events; client crash/error state) | Reliability, debugging, abuse prevention | Server logs (Cloud Logging) — **not** an analytics product | Yes (uid present in log lines) | No | Log retention window (see DATA-RETENTION §logs) |
 | 6 | **Billing/subscription state** | Manage paid plan / reverse trial | Stripe (web rail) / App Store / Play Billing + Postgres | Yes | No | Per payment-processor + tax record rules |
 | 7 | **Consent affirmation (per-session checkbox)** | Record that the pre-recording notice was accepted | Client state (`instant_recorder_consent_shown`) today; a durable per-participant log is `TODO(legal)` (see CONSENT §4.3) | Device-local today | No | n/a today |
+| 8 | **Google Cloud AI agreement (iOS, App Store 5.1.2(i))** | Explicit permission, once per device, before audio or text is sent to Google Cloud's speech and AI services (CONSENT §2.2) | Client state (`ai_sharing_consent.version`, `.agreed_at`); withdrawn in Settings › Google Cloud AI | Device-local | No | Until withdrawn or the app is deleted |
 
 Notes:
 - **No advertising identifiers, no third-party analytics/ad SDKs, no cross-app/site

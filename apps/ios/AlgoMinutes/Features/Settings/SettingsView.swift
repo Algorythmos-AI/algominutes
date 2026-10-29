@@ -52,6 +52,9 @@ struct SettingsView: View {
                         }
                     }
 
+                    // App Store 5.1.2(i): whether recordings go to Google Cloud AI, and the way to stop it.
+                    AISharingSettingsCard()
+
                     // A10 #5: automatic note-retention window.
                     RetentionSettingsCard()
 
