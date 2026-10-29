@@ -71,19 +71,18 @@ final class BroadcastKillSafeCaptureTests: XCTestCase {
     private func killedCapture(seconds: Double) async throws -> URL {
         let url = dir.appendingPathComponent("broadcast_\(UUID().uuidString).m4a")
         let capture = try BroadcastCaptureWriter.make(url: url)
-        XCTAssertTrue(capture.writer.startWriting(), "startWriting: \(String(describing: capture.writer.error))")
-        capture.writer.startSession(atSourceTime: .zero)
+        XCTAssertTrue(capture.start(), "startWriting: \(capture.diagnostic(stage: "start"))")
         let rate = 48_000, chunk = 1_024, total = Int(Double(rate) * seconds)
         var frame = 0
         while frame < total {
-            for input in [capture.appInput, capture.micInput] {
+            for (input, track) in [(capture.appInput, BroadcastCaptureWriter.Track.app), (capture.micInput, .mic)] {
                 var waits = 0
                 while !input.isReadyForMoreMediaData, waits < 1_000 {
                     try await Task.sleep(nanoseconds: 2_000_000)
                     waits += 1
                 }
-                guard input.append(try Self.tone(startFrame: frame, frames: chunk, rate: rate)) else {
-                    throw SampleError(what: "append failed: status \(capture.writer.status.rawValue), \(String(describing: capture.writer.error))")
+                guard capture.append(try Self.tone(startFrame: frame, frames: chunk, rate: rate), to: track) else {
+                    throw SampleError(what: "append failed: \(capture.diagnostic(stage: "append"))")
                 }
             }
             frame += chunk

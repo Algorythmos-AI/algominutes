@@ -23,28 +23,29 @@ import os
 ///                            these first, oldest first: RELEASE.md rev 11, N4)
 ///   recordingSize          : Int    (bytes, set on completion)
 ///   errorMessage           : String? (only on error)
-///   lastWriterError        : String  (compact JSON when the writer fails: BroadcastWriterDiagnostics. Counts and
-///                            formats only; kept until the next failure)
+///   lastWriterError        : String  (compact JSON, written when the writer fails or a buffer can't be converted:
+///                            BroadcastCaptureWriter.diagnostic. Counts, formats, error codes; kept until the next one)
 class SampleHandler: RPBroadcastSampleHandler {
 
     private static let logger = Logger(subsystem: "com.algorythmos.algominutes", category: "broadcast.extension")
     private let appGroupID = "group.com.algorythmos.algominutes"
 
-    private var writer: AVAssetWriter?
-    private var appAudioInput: AVAssetWriterInput?
-    private var micAudioInput: AVAssetWriterInput?
-    private var sessionStarted = false
+    /// The capture (BroadcastShared/BroadcastCaptureWriter): converts every buffer to one format per track and
+    /// writes both tracks to one fragmented `.m4a`.
+    private var capture: BroadcastCaptureWriter?
     private var lastHeartbeatTimestamp: TimeInterval = 0
     /// Refreshes the heartbeat on a clock (RELEASE.md rev 11, N4). It used to ride on the samples alone, so a
     /// quiet stretch (a muted call, a paused broadcast) looked to the app like a dead extension.
     private var heartbeatTimer: DispatchSourceTimer?
     private var startedAt: TimeInterval = 0
     /// Set once the file is being finished, so the cap and the system's own finish don't both do it.
+    ///
+    /// Taken under `finishLock`: ReplayKit may deliver app audio and microphone buffers on different threads, and
+    /// two failed appends racing into an unguarded finish would run it twice, the second finding the file already
+    /// handed over and overwriting the report with "Broadcast ended without recording any audio" (the likeliest
+    /// reading of the 2026-10-29 device evidence: state "error", that message, after the append-failed alert).
     private var finishing = false
-    /// Buffers dropped because the writer wasn't ready (real-time input): logged at the finish, never silent.
-    private var droppedBuffers = 0
-    /// Formats and counts for `lastWriterError`.
-    private let diagnostics = BroadcastWriterDiagnostics()
+    private let finishLock = NSLock()
 
     /// The longest capture, as a recording's (4 hours).
     static let maxCaptureSeconds: TimeInterval = 4 * 60 * 60
@@ -87,10 +88,7 @@ class SampleHandler: RPBroadcastSampleHandler {
 
         // Two AAC tracks (app audio, microphone), configured in BroadcastShared/BroadcastCaptureWriter.
         do {
-            let capture = try BroadcastCaptureWriter.make(url: fileURL)
-            writer = capture.writer
-            appAudioInput = capture.appInput
-            micAudioInput = capture.micInput
+            capture = try BroadcastCaptureWriter.make(url: fileURL)
         } catch {
             Self.logger.error("Failed to create AVAssetWriter: \(error.localizedDescription, privacy: .public)")
             recordError("Failed to create recording file")
@@ -98,8 +96,8 @@ class SampleHandler: RPBroadcastSampleHandler {
             return
         }
 
-        guard writer?.startWriting() == true else {
-            let err = writer?.error?.localizedDescription ?? "unknown"
+        guard let capture, capture.start() else {
+            let err = capture?.writer.error?.localizedDescription ?? "unknown"
             Self.logger.error("startWriting failed: \(err, privacy: .public)")
             recordWriterDiagnostic(stage: "start")
             recordError("Could not begin recording: \(err)")
@@ -150,29 +148,34 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     /// Finish the file and report it, once. `then` runs after the report (the cap ends the broadcast there).
     private func finishFile(then: (() -> Void)?) {
-        guard !finishing else { return }
-        finishing = true
+        let first: Bool = finishLock.withLock {
+            guard !finishing else { return false }
+            finishing = true
+            return true
+        }
+        guard first else { return }
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
 
-        guard sessionStarted else {
+        guard let capture, capture.sessionStarted else {
             // Never received a sample; nothing to flush.
-            writer?.cancelWriting()
+            self.capture?.writer.cancelWriting()
             updateDefaultsOnFinish(success: false)
             then?()
             return
         }
 
-        if droppedBuffers > 0 {
-            Self.logger.warning("Dropped \(self.droppedBuffers, privacy: .public) buffers the writer wasn't ready for")
+        let dropped = capture.droppedBuffers
+        if dropped > 0 {
+            Self.logger.warning("Dropped \(dropped, privacy: .public) buffers (input not ready, or unconvertible)")
         }
 
         // A writer that failed mid-capture (a full disk, a bad append) can't be finished. The file is fragmented
         // (BroadcastCaptureWriter.fragmentInterval): what it wrote before the failure is readable, so it's handed
         // to the app, which reads what there is and reports the capture lost only if there's nothing.
-        guard writer?.status == .writing else {
-            let status = writer?.status.rawValue ?? -1
-            let reason = writer?.error?.localizedDescription ?? "unknown"
+        guard capture.writer.status == .writing else {
+            let status = capture.writer.status.rawValue
+            let reason = capture.writer.error?.localizedDescription ?? "unknown"
             Self.logger.error("Writer stopped before the finish (status \(status, privacy: .public)): \(reason, privacy: .public)")
             recordWriterDiagnostic(stage: "finish")
             updateDefaultsOnFinish(success: true)
@@ -180,18 +183,15 @@ class SampleHandler: RPBroadcastSampleHandler {
             return
         }
 
-        appAudioInput?.markAsFinished()
-        micAudioInput?.markAsFinished()
-
-        // Async finalize. iOS gives extension ~3s to clean up after broadcastFinished
-        // returns; AVAssetWriter.finishWriting completes well within that for short
-        // files. NO blocking semaphore — that risks force-kill before completion.
-        writer?.finishWriting { [weak self] in
+        // Async finalize (the shorter track is filled to the longer's end, both inputs marked finished). iOS gives
+        // the extension ~3s to clean up after broadcastFinished returns; finishWriting completes well within that
+        // for short files. NO blocking semaphore — that risks force-kill before completion.
+        capture.finish { [weak self] completed in
             guard let self else { return }
             // The completion runs whether or not the file was finished. One that wasn't is still handed to the
             // app: its fragments are readable up to the failure, and the app reports it if nothing is.
-            if self.writer?.status != .completed {
-                let reason = self.writer?.error?.localizedDescription ?? "unknown"
+            if !completed {
+                let reason = capture.writer.error?.localizedDescription ?? "unknown"
                 Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
                 self.recordWriterDiagnostic(stage: "finish")
             }
@@ -216,7 +216,7 @@ class SampleHandler: RPBroadcastSampleHandler {
 
         // The same cap as a recording. The file is finished and reported first, then the broadcast is ended
         // with the reason: iOS shows it, and the app makes the note when it's next opened.
-        if !finishing, startedAt > 0, now - startedAt >= Self.maxCaptureSeconds {
+        if !finishLock.withLock({ finishing }), startedAt > 0, now - startedAt >= Self.maxCaptureSeconds {
             Self.logger.info("Capture reached the cap")
             finishFile { [weak self] in
                 self?.finishBroadcastWithError(NSError(domain: "BroadcastExtension", code: 3, userInfo: [
@@ -225,35 +225,31 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             return
         }
-        guard !finishing else { return }
+        guard !finishLock.withLock({ finishing }) else { return }
 
-        // Start the writer session on the FIRST buffer of any accepted type.
-        // If we waited for a specific type, an early stream of the other type
-        // would be silently dropped.
-        if !sessionStarted {
-            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            writer?.startSession(atSourceTime: pts)
-            sessionStarted = true
+        guard let capture else { return }
+        // The writer's session starts on the FIRST buffer of either type (in the capture), so an early stream of
+        // the other type isn't dropped.
+        let wasStarted = capture.sessionStarted
+        let appended = capture.append(sampleBuffer, to: sampleBufferType == .audioApp ? .app : .mic)
+        if !wasStarted, capture.sessionStarted {
             defaults?.set("recording", forKey: "state")
             defaults?.synchronize()
-            Self.logger.info("Session started, first PTS=\(pts.seconds, privacy: .public)")
+            Self.logger.info("Session started on \(sampleBufferType == .audioApp ? "app" : "mic", privacy: .public) audio")
         }
-
-        let track: BroadcastWriterDiagnostics.Track = sampleBufferType == .audioApp ? .app : .mic
-        diagnostics.saw(sampleBuffer, on: track)
-        guard let input = (sampleBufferType == .audioApp) ? appAudioInput : micAudioInput else { return }
-        guard input.isReadyForMoreMediaData else {
-            droppedBuffers += 1
-            diagnostics.dropped(on: track)
-            return
+        if capture.takeConversionFailure() {
+            // Not fatal (the buffer is dropped, the capture goes on), but a format ReplayKit sent that couldn't be
+            // converted is what the next fix needs to know.
+            Self.logger.error("A buffer couldn't be converted")
+            recordWriterDiagnostic(stage: "convert")
         }
-        guard input.append(sampleBuffer) else {
+        guard appended else {
             // The writer failed (a full disk, an encoder error): nothing more can be written. End the capture with
             // what's on disk rather than keep a broadcast running that records nothing.
-            let status = writer?.status.rawValue ?? -1
-            let reason = writer?.error?.localizedDescription ?? "unknown"
+            let status = capture.writer.status.rawValue
+            let reason = capture.writer.error?.localizedDescription ?? "unknown"
             Self.logger.error("append failed (status \(status, privacy: .public)): \(reason, privacy: .public)")
-            recordWriterDiagnostic(stage: "append", failed: track)
+            recordWriterDiagnostic(stage: "append")
             finishFile { [weak self] in
                 self?.finishBroadcastWithError(NSError(domain: "BroadcastExtension", code: 4, userInfo: [
                     NSLocalizedDescriptionKey: "The capture stopped because of an error. What was captured until then becomes a note when you open AlgoMinutes.",
@@ -261,15 +257,15 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             return
         }
-        diagnostics.appended(on: track)
     }
 
     // MARK: - Private helpers
 
-    /// What the writer was doing when it failed, for the app group: os_log can't be read off the phone, the
-    /// group's defaults can (`devicectl device copy from --domain-type appGroupDataContainer`).
-    private func recordWriterDiagnostic(stage: String, failed track: BroadcastWriterDiagnostics.Track? = nil) {
-        let diagnostic = diagnostics.json(stage: stage, writer: writer, failed: track)
+    /// What the writer was doing when it failed (BroadcastCaptureWriter.diagnostic), for the app group: os_log
+    /// can't be read off the phone, the group's defaults can (`devicectl device copy from`).
+    private func recordWriterDiagnostic(stage: String) {
+        guard let capture else { return }
+        let diagnostic = capture.diagnostic(stage: stage)
         Self.logger.error("writer diagnostic: \(diagnostic, privacy: .public)")
         defaults?.set(diagnostic, forKey: "lastWriterError")
         defaults?.synchronize()
@@ -301,7 +297,7 @@ class SampleHandler: RPBroadcastSampleHandler {
                 defaults?.set("error", forKey: "state")
                 defaults?.set("Broadcast ended without recording any audio", forKey: "errorMessage")
             }
-            Self.logger.warning("Recording did not finalize (sessionStarted=\(self.sessionStarted))")
+            Self.logger.warning("Recording did not finalize (sessionStarted=\(self.capture?.sessionStarted ?? false))")
         }
 
         defaults?.removeObject(forKey: "activeBroadcastFile")
