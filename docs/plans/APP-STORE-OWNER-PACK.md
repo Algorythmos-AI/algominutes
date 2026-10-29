@@ -24,6 +24,9 @@ Tick in order where you can; the dates are the deadlines that keep submission on
       ([§2.6](#26-the-decisions-entry)).
 - [x] #535 and #537 merged (10-29) and promoted to `main` in #541. Their device runs aren't recorded here; check
       the private test-history repository before RC1.
+- [x] Release build against production on the iPhone 11 Pro Max, 10-29: the full UI lane 7 passed, 0 failed, 4
+      expected skips; a recording reached Ready in 74 s with a push sent (I10 closed). Runs are in the private
+      test-history repository; BLOCKERS §0, 10-29.
 - [ ] Run proof 5 on the iPhone 11 with a second person ([§3](#3-proof-5-script)); record it in BLOCKERS §0.
 
 **By Thu 11-05**
@@ -39,10 +42,15 @@ Tick in order where you can; the dates are the deadlines that keep submission on
 - [ ] Sandbox notification URL → production billing
       (`https://billing-43914754953.australia-southeast1.run.app/webhooks/apple`; RELEASE status decision 4,
       S18), then one sandbox purchase reconciled on prod.
+      - 2026-10-29: a sandbox purchase and restore verified on production with the Release build (BLOCKERS §0,
+        10-29); no reconcile has checked it yet, and no notification has reached production billing. The
+        route accepts Sandbox notifications: set the same URL for Production and Sandbox.
 
 **App Store Connect (any time before submission)**
 - [ ] Screenshots: 6.9" (1320 × 2868) required; 6.5" (1284 × 2778) optional, scaled from 6.9" if absent
       ([REVIEW-PACKAGE §3](APP-STORE-REVIEW-PACKAGE.md#3-screenshots)).
+      - 2026-10-29: 4 screenshots at 1242 × 2688 (6.5") from the iPhone 11 Pro Max by `StoreScreenshotsUITests`
+        (#551, in the merge queue). None at 6.9" yet.
 - [ ] Listing fields, description, URLs, category, EULA
       ([REVIEW-PACKAGE §4](APP-STORE-REVIEW-PACKAGE.md#4-listing-copy)).
 - [ ] App Review Information: notes (variant A or B by proof 5), contact (typed into ASC only), sign-in not
@@ -462,5 +470,6 @@ What moves it:
   shows when it does. That the Debug app stays installed after `device-tests.sh`.
 - Whether FaceTime and WhatsApp audio reach the extension.
 - Beta App Review turnaround; Crashlytics' exact labels for crash-free users and sessions.
-- That production billing accepts sandbox notifications (S18).
+- That a sandbox notification reaches production billing (S18). The code accepts one (`webhooks/apple.js` checks
+  no environment); none has arrived yet.
 - That `pro.monthly` and `pro.annual` have their review screenshots and are Ready to Submit.
