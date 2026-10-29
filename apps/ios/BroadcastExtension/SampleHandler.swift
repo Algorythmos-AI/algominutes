@@ -121,7 +121,8 @@ class SampleHandler: RPBroadcastSampleHandler {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + 3, repeating: 3)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            // A tick already running when the finish cancels the timer mustn't overwrite the final stats.
+            guard let self, !self.finishLock.withLock({ self.finishing }) else { return }
             self.defaults?.set(Date().timeIntervalSince1970, forKey: "lastHeartbeatAt")
             // How the capture is going (counts, levels, formats, memory), readable off the phone while it runs.
             if let stats = self.capture?.stats() { self.defaults?.set(stats, forKey: "captureStats") }
@@ -195,6 +196,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         let timedOut = done.wait(timeout: .now() + Self.finishWait) == .timedOut
         if timedOut {
             Self.logger.error("finishWriting didn't complete within \(Self.finishWait, privacy: .public) s: handing over the fragments written")
+            recordWriterDiagnostic(stage: "finish-timeout")
         } else if completedBox.value != true {
             let reason = capture.writer.error?.localizedDescription ?? "unknown"
             Self.logger.error("finishWriting did not complete, handing over the fragments written: \(reason, privacy: .public)")
