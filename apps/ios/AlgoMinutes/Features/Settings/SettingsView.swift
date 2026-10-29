@@ -382,9 +382,11 @@ struct SettingsView: View {
         case .active?: return entitlement?.isGrant == true && beta ? "Pro · beta minutes" : "Pro"
         case .trialing?:
             if let days = trialDaysRemaining {
-                return "Free trial · \(days) day\(days == 1 ? "" : "s") left"
+                return "Free Pro minutes · \(days) day\(days == 1 ? "" : "s") left"
             }
-            return "Free trial"
+            // Free Pro minutes, never "Free trial": no payment is taken, and it isn't a trial of the subscription
+            // (guideline 3.1.2). The same words as the trial banner and the account prompt.
+            return "Free Pro minutes"
         case .expired?, .freeFloor?: return "Free"
         case .none: return "Free"
         }
