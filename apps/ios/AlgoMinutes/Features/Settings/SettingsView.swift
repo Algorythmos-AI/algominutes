@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var copiedUserID = false
     @State private var redeemingOfferCode = false
+    @State private var isRestoring = false
+    /// How the last Restore ended, shown in an alert.
+    @State private var restoreOutcome: RestoreOutcome?
     // A7.2 (P1) stub: read by BackgroundUploadService via UploadPreferences.
     @AppStorage(UploadPreferences.wifiOnlyKey) private var wifiOnlyUploads = false
 
@@ -269,10 +272,26 @@ struct SettingsView: View {
                 if AppConfig.paywallEnabled {
                     Divider().overlay(Theme.borderSoft)
                     Button("Restore Purchases") {
-                        Task { await env.billing.store.restore(); await env.billing.refresh() }
+                        Task {
+                            isRestoring = true
+                            let outcome = await env.billing.store.restore()
+                            await env.billing.refresh()
+                            isRestoring = false
+                            restoreOutcome = outcome
+                        }
                     }
                     .font(Typography.body(15))
                     .foregroundStyle(Theme.body)
+                    .disabled(isRestoring)
+                    .alert(
+                        "Restore Purchases",
+                        isPresented: Binding(get: { restoreOutcome != nil }, set: { if !$0 { restoreOutcome = nil } }),
+                        presenting: restoreOutcome
+                    ) { _ in
+                        Button("OK") {}
+                    } message: { outcome in
+                        Text(outcome.message)
+                    }
                     if Self.offersOfferCode(paywallEnabled: AppConfig.paywallEnabled, entitlement: env.billing.entitlement) {
                         Divider().overlay(Theme.borderSoft)
                         Button("Redeem an offer code") { redeemingOfferCode = true }
