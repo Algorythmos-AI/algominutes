@@ -41,8 +41,11 @@ final class BroadcastKillSafeCaptureTests: XCTestCase {
         guard CMAudioFormatDescriptionCreate(allocator: nil, asbd: &asbd, layoutSize: 0, layout: nil, magicCookieSize: 0,
                                              magicCookie: nil, extensions: nil, formatDescriptionOut: &format) == noErr,
               let format else { throw SampleError(what: "format") }
-        let samples: [Int16] = (0..<frames).map { i in
-            Int16(sin(2 * .pi * 440 * Double(startFrame + i) / Double(rate)) * 8_000)
+        // Split into typed steps: one expression was too much for CI's type checker.
+        let step: Double = 2 * Double.pi * 440 / Double(rate)
+        let samples: [Int16] = (0..<frames).map { (i: Int) -> Int16 in
+            let phase: Double = step * Double(startFrame + i)
+            return Int16(sin(phase) * 8_000)
         }
         let length = frames * 2
         var block: CMBlockBuffer?
