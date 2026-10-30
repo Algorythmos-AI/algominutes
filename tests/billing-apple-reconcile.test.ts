@@ -108,6 +108,17 @@ describe("a subscription's status, from Apple", () => {
     expect(await client(fakeApple({}).fetchImpl).subscriptionStatus(OTID)).toBeNull();
   });
 
+  it('asks Sandbox when Production refuses with a 401, and throws the 401 only if Sandbox can\'t answer', async () => {
+    const sandbox = { status: 200, body: answer('Sandbox') };
+    const apple = fakeApple({ Production: { status: 401 }, Sandbox: sandbox });
+    expect(await client(apple.fetchImpl).subscriptionStatus(OTID)).toMatchObject({ environment: 'Sandbox', status: 'active' });
+    expect(apple.calls).toHaveLength(2);
+    const unknown = await thrown(client(fakeApple({ Production: { status: 401 } }).fetchImpl).subscriptionStatus(OTID));
+    expect(unknown.status).toBe(401);
+    const both = await thrown(client(fakeApple({ Production: { status: 401 }, Sandbox: { status: 401 } }).fetchImpl).subscriptionStatus(OTID));
+    expect(both.status).toBe(401);
+  });
+
   it('reads a grace period, a billing retry, an expiry and a refund', async () => {
     const status = async (last: Record<string, unknown>) => client(fakeApple({ Production: { status: 200, body: answer('Production', last) } }).fetchImpl).subscriptionStatus(OTID);
     const grace = Date.parse('2099-01-17T00:00:00Z');
@@ -136,8 +147,8 @@ describe("a subscription's status, from Apple", () => {
     expect((await thrown(status(answer('Production', { signedTransactionInfo: undefined })))).message).toMatch(/no transaction info/);
   });
 
-  it('says why Apple could not be asked, and never tries the sandbox after a refusal or an outage', async () => {
-    for (const [reply, unauthorized] of [[{ status: 401 }, true], [{ status: 403, body: { errorCode: 4030000 } }, true], [{ status: 429, body: { errorCode: 4290000 } }, false], [{ status: 500, body: { errorCode: 5000000 } }, false]] as const) {
+  it('says why Apple could not be asked, and never tries the sandbox after a 403 or an outage', async () => {
+    for (const [reply, unauthorized] of [[{ status: 403, body: { errorCode: 4030000 } }, true], [{ status: 429, body: { errorCode: 4290000 } }, false], [{ status: 500, body: { errorCode: 5000000 } }, false]] as const) {
       const apple = fakeApple({ Production: reply, Sandbox: { status: 200, body: answer('Sandbox') } });
       const err = await thrown(client(apple.fetchImpl).subscriptionStatus(OTID));
       expect(err).toBeInstanceOf(AppStoreServerError);
