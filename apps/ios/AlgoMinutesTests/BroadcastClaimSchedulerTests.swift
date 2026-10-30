@@ -96,22 +96,47 @@ final class BroadcastClaimSchedulerTests: XCTestCase {
         XCTAssertEqual(recorder.decisions, [.hold])
     }
 
-    /// A cold launch fires both the session's start and the return to the foreground: never two passes at once,
-    /// and the trigger that came during a pass gets one more pass after it.
+    /// Holds the first refresh until the test opens it, so triggers land while a pass is running.
+    private final class Gate {
+        private var waiter: CheckedContinuation<Void, Never>?
+        private(set) var isOpen = false
+        var onFirstWait: (() -> Void)?
+        func wait() async {
+            guard !isOpen else { return }
+            onFirstWait?()
+            await withCheckedContinuation { waiter = $0 }
+        }
+        func open() {
+            isOpen = true
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
+    /// A cold launch fires both the session's start and the return to the foreground: never two passes at once, and
+    /// triggers that come while a pass is running get exactly one more pass after it. (Triggers that come before a
+    /// pass has begun are covered by that pass: it hasn't read anything yet.)
     func testTriggersDuringAPassAreCoalescedNotRunTwiceAtOnce() async {
         let switches = AppSwitches(defaults: defaults)
         let recorder = Recorder()
+        let gate = Gate()
+        let inPass = expectation(description: "the first pass is refreshing")
+        gate.onFirstWait = { inPass.fulfill() }
         let claims = scheduler(switches, recorder, fetch: {
-            try await Task.sleep(nanoseconds: 200_000_000)
+            await gate.wait()
             return AppConfigResponse(broadcastCapture: true)
         })
         let first = claims.trigger(.sessionStarted)
+        await fulfillment(of: [inPass], timeout: 5)
+        XCTAssertEqual(recorder.events, ["refresh"])
         let second = claims.trigger(.becameActive)
         let third = claims.trigger(.becameActive)
+        gate.open()
         await first.value
         await second.value
         await third.value
         XCTAssertEqual(recorder.events, ["refresh", "claim", "refresh", "claim"])
+        XCTAssertEqual(recorder.decisions, [.askConsent, .askConsent])
         // A later trigger starts a new pass.
         await claims.trigger(.becameActive).value
         XCTAssertEqual(recorder.events.count, 6)

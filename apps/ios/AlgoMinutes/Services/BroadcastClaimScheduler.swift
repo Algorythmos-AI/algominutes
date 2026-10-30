@@ -37,6 +37,8 @@ final class BroadcastClaimScheduler {
         }
         // Holds the scheduler until the pass ends (a weak reference let a scheduler nobody else kept skip the pass).
         let task = Task {
+            // `again` is cleared as a pass begins: a trigger before that is covered by the pass; one after it (during
+            // the refresh or the claim) gets one more pass.
             repeat {
                 self.again = false
                 await self.refreshSwitches()
