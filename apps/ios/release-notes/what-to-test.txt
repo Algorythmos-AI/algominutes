@@ -1,20 +1,10 @@
-# What testers should try in the next build: plain text, shown at the top of
-# TestFlight's What to Test. Lines starting with # are left out. Update it in
-# the PR that goes into the build; keep it short. The recent changes and the
-# commit are added automatically (ci_scripts/what-to-test.sh).
-Thanks for testing AlgoMinutes. First, open the app (you start as a guest, no
-sign-up), go to Settings, tap Enter an invite code, and enter the code from
-your invitation. It adds your recording minutes.
+# Written by hand for each build that needs it (ci_scripts/what-to-test.sh).
+AlgoMinutes turns recordings into summaries, decisions and action items.
 
-Then please try:
-1. Record a meeting of a minute or two, stop, and wait for the note. You can
-   leave the app; a notification says when the note is ready.
-2. Open the note: read the summary, the action items and the transcript.
-3. Search for a word you said, and ask the note a question in chat.
-4. Settings, then Create account, to keep your notes with Apple or Google.
-5. Settings, then Go Pro. If plans show, buy one: TestFlight purchases are
-   Apple's test purchases, and you're never charged. Then Restore Purchases.
-
-Your notes are kept for the whole beta, and backed up. The public release
-starts fresh: you'll be told before then, with time to export your notes.
-Record only people who agreed, and nothing confidential.
+- Start without an account and record a short meeting
+- Agree to the Google Cloud AI sheet the first time
+- Open the note: summary, transcript, Ask AI, export
+- Import an audio file and scan a document
+- Lock the phone after stopping and check the notification
+- Sign in, sign out, and delete an account
+- Go Pro and Restore Purchases (no real charge in TestFlight)

@@ -55,8 +55,7 @@ fi
 
 TAIL="
 Found a problem? Take a screenshot in the app and tap Share Beta Feedback, or
-send feedback from the TestFlight app. To ask for more minutes, include your
-User ID from Settings."
+send feedback from the TestFlight app."
 
 # feat/fix/perf commits that touched the app or its extension, subject only:
 # "feat(ios): a thing (#12)" becomes "- A thing".
