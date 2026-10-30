@@ -35,8 +35,8 @@ final class BroadcastClaimScheduler {
             again = true
             return running
         }
-        let task = Task { [weak self] in
-            guard let self else { return }
+        // Holds the scheduler until the pass ends (a weak reference let a scheduler nobody else kept skip the pass).
+        let task = Task {
             repeat {
                 self.again = false
                 await self.refreshSwitches()
