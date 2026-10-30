@@ -97,7 +97,12 @@ final class BroadcastCaptureRunTests: XCTestCase {
         // median.
         let lastThree = footprints.suffix(3).sorted()
         let growth = lastThree[1] - footprints[1]
-        XCTAssertLessThan(growth, 3, "footprint grew \(growth) MB over 4 minutes after warm-up, every 30 s: \(trace)")
+        // AVAssetWriter itself grows in steps (its sample tables reallocating: about +4 MB once, around half an hour of
+        // audio on macOS, the same with raw appends that skip this capture's conversion, one track or two, fragmented
+        // or not) and creeps about 1.5 MB an hour: over a 4-hour capture, 7 to 13 MB on macOS. A step can land inside
+        // this test (device run 20261030-003532: 25.2 to 30.9 MB); a leak in the conversion path at the rate once
+        // feared (2.6 MB a minute) would be ~10 MB here. 6 MB tells them apart.
+        XCTAssertLessThan(growth, 6, "footprint grew \(growth) MB over 4 minutes after warm-up, every 30 s: \(trace)")
         XCTAssertEqual(capture.writer.status, .writing, capture.diagnostic(stage: "test"))
         let completed = await withCheckedContinuation { done in capture.finish { done.resume(returning: $0) } }
         XCTAssertTrue(completed)
