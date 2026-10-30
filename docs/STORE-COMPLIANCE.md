@@ -130,6 +130,11 @@ The **broadcast extension** (`apps/ios/BroadcastExtension/PrivacyInfo.xcprivacy`
 only, and the same three API categories (DiskSpace `E174.1` since #430). `tests/app-privacy-answers.test.ts`
 checks it declares nothing the app doesn't.
 
+**The App Store build (1.0) has no broadcast extension** (DECISIONS.md, 2026-10-29: `CALL_CAPTURE_ENABLED "NO"`
+for Release, #555), so only the app's manifest ships to the App Store; the extension's ships in development and
+staging builds. The app keeps `1C8F.1`: it still reads the App Group, to leave alone a capture a staging build
+left on the same iPhone.
+
 ### 4.2 `Info.plist` — rewritten usage descriptions (specific: what / why / where)
 
 Replace the current strings with these (specific about what is recorded, why, and that it

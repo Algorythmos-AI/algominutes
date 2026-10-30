@@ -2,6 +2,9 @@ import SwiftUI
 
 /// A10 #4: static Help/FAQ + a "Contact support" action.
 ///
+/// Every answer names the app's real labels and says only what's true (guidelines 2.3, 5.1.1): recordings and
+/// transcripts are kept in the user's account on Google Cloud (Sydney), so nothing here says we can't reach them.
+///
 /// The FAQ is intentionally static (no network) so it works offline and can't
 /// become a dead end. "Contact support" opens a composer that attaches only
 /// diagnostic context — app version, device, and an optional note reference —
@@ -22,11 +25,11 @@ struct HelpSupportView: View {
     private let faqs: [FAQItem] = [
         .init(
             q: "How do I record a meeting?",
-            a: "Tap Record on the Home tab. You'll see a short notice about recording consent, then tap Start. Recording never begins on its own."
+            a: "Tap Instant Recorder on the Home tab. The first time, you're asked to agree to send recordings to Google Cloud AI to transcribe and summarise them. Then tick the box to confirm you have everyone's permission and tap Start recording. Recording never begins on its own."
         ),
         .init(
             q: "Where do my recordings go?",
-            a: "Audio is uploaded to your AlgoMinutes account to be transcribed and summarised, then kept there until you delete it. The on-device copy is removed once the upload is confirmed."
+            a: "Audio is uploaded to your AlgoMinutes account on Google Cloud (Sydney) and transcribed and summarised by Google Cloud's speech and AI services. It's kept until you delete it; the copy on your phone is removed once the upload is confirmed."
         ),
         .init(
             q: "Is it legal to record?",
@@ -38,11 +41,11 @@ struct HelpSupportView: View {
         ),
         .init(
             q: "The transcript looks wrong. What can I do?",
-            a: "Open the note, go to Transcriptions, and use “Report a problem with this transcript”. That sends us the note reference (never the audio) so we can look into it."
+            a: "Open the note, go to Transcript, and tap “Report a problem with this transcript”. That sends us the note's reference, not the audio, and asks us to look at that transcript."
         ),
         .init(
             q: "How do I delete my account?",
-            a: "Settings → Delete my account. This permanently removes your recordings, transcripts, summaries, and account."
+            a: "Settings → Delete my account. This permanently removes your recordings, transcripts, summaries and account."
         ),
     ]
 
@@ -77,7 +80,7 @@ struct HelpSupportView: View {
                         .background(RoundedRectangle(cornerRadius: 16).fill(Theme.inverse))
                 }
 
-                Text("We only receive your message, app version, device model, and — if you opened this from a note — that note's reference. Never your audio or transcript.")
+                Text("Support receives only your message, the app version, device model and — if you opened this from a note — that note's reference. Your audio and transcript aren't attached.")
                     .font(Typography.body(12))
                     .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -128,7 +131,7 @@ struct SupportComposerView: View {
                     Label("Thanks — we've got it", systemImage: "checkmark.circle.fill")
                         .font(Typography.heading(16, weight: .bold))
                         .foregroundStyle(Theme.heading)
-                    Text("Our team will take a look. We don't have access to your audio or transcript — just the details you sent.")
+                    Text("Our team will take a look. We only look at a recording or transcript when you ask us to, and you can delete any of them at any time.")
                         .font(Typography.body(14))
                         .foregroundStyle(Theme.body)
                         .fixedSize(horizontal: false, vertical: true)
@@ -137,7 +140,7 @@ struct SupportComposerView: View {
                         .buttonStyle(PrimaryButtonStyle())
                 }
             } else {
-                Text("Tell us what's going on. Please don't include anything sensitive — we can't see your recordings.")
+                Text("Tell us what's going on. Please don't include anything sensitive. Support doesn't look at your recordings unless you ask.")
                     .font(Typography.body(14))
                     .foregroundStyle(Theme.body)
                     .fixedSize(horizontal: false, vertical: true)

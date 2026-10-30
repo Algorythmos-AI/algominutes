@@ -383,12 +383,10 @@ struct TrialBanner: View {
                 HStack(spacing: Theme.Spacing.md) {
                     Image(systemName: "sparkles").foregroundStyle(Theme.heading)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(days <= 0
-                             ? "Your trial ends today"
-                             : "\(days) day\(days == 1 ? "" : "s") left in your trial")
+                        Text(Self.headline(daysLeft: days))
                             .font(Typography.headline())
                             .foregroundStyle(Theme.heading)
-                        Text("Tap to see Pro plans")
+                        Text(Self.subtitle)
                             .font(Typography.body(12))
                             .foregroundStyle(Theme.muted)
                     }
@@ -406,4 +404,12 @@ struct TrialBanner: View {
             .buttonStyle(.plain)
         }
     }
+
+    /// Free Pro minutes, with nothing to pay: never "trial", which reads as a free trial of the subscription
+    /// (guideline 3.1.2). The same words as Settings' plan (SettingsView.planLabel) and the account prompt.
+    static func headline(daysLeft days: Int) -> String {
+        days <= 0 ? "Your free Pro minutes end today" : "\(days) day\(days == 1 ? "" : "s") left of free Pro minutes"
+    }
+
+    static let subtitle = "Nothing to pay. Tap to see Pro plans"
 }

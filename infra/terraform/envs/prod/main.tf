@@ -60,8 +60,10 @@ variable "admin_uids" {
   default = []
 }
 
-# Broadcast capture's server-side kill switch (GET /v1/config). To turn it off
-# without an app build: plan with TF_VAR_broadcast_capture=off and apply.
+# The server-side switch for call capture (GET /v1/config broadcastCapture). On in
+# production for the web app's "call in another tab"; the iPhone App Store build has
+# no call capture whatever this says (CALL_CAPTURE_ENABLED, DECISIONS.md 2026-10-29).
+# To turn it off without a build: plan with TF_VAR_broadcast_capture=off and apply.
 variable "broadcast_capture" {
   type    = string
   default = "on"

@@ -31,7 +31,7 @@
 | **audio to text / speech to text** | Utility phrasing some users default to. |
 | **note taker / notetaker** | "AI notetaker" is a recognised product category now. |
 | **interview / lecture / standup** | Use-case long-tails matching the shipped templates (A6.1). |
-| **record calls / call recorder** | High intent — but `TODO(legal)`: only use if consent/policy posture supports promoting call recording; may attract store scrutiny. |
+| ~~record calls / call recorder~~ | **Not used.** 1.0 has no call capture (DECISIONS.md, 2026-10-29): iOS gives the app no call audio, so the keyword would promise something the app can't do (2.3). |
 
 **Deliberately NOT chasing:** competitor brand names (Apple/Play both reject brand-term
 targeting), and "free" as a keyword (weak, and interacts with the reverse-trial messaging).
@@ -49,8 +49,8 @@ targeting), and "free" as a keyword (weak, and interacts with the reverse-trial 
   `Record meetings, get AI transcripts, summaries and action items.` (64)
 - `TODO(brand):` Confirm the brand lockup / whether the subtitle should carry a tagline vs
   pure keywords. Copy above optimises for search; brand may want one word of personality.
-- `TODO(legal):` Confirm "AI Meeting Notes" and any "record calls" phrasing are safe given
-  the consent posture (CONSENT.md) — avoid implying unattended/covert recording.
+- `TODO(legal):` Confirm "AI Meeting Notes" is safe given the consent posture (CONSENT.md) —
+  avoid implying unattended/covert recording. No "record calls" phrasing: 1.0 has no call capture.
 
 ---
 
@@ -102,8 +102,8 @@ footage/VO.
 
 - **0–3s — Hook (the result):** Full-screen finished summary with action items sliding in.
   On-screen text: *"Your meetings, summarised."*
-- **3–8s — The problem it kills:** Quick shot of someone in a call; text: *"Stop taking
-  notes."*
+- **3–8s — The problem it kills:** Quick shot of someone in a meeting, taking notes by hand; text: *"Stop taking
+  notes."* (Not a phone or video call: 1.0 doesn't record calls.)
 - **8–15s — One-tap capture + consent:** Tap record → the consent sheet → recording
   indicator. Text: *"Record in a tap, with consent built in."*
 - **15–23s — The magic:** Processing → transcript appears → summary + decisions + action
@@ -138,8 +138,8 @@ footage/VO.
 The Apple copy that goes into App Store Connect is `docs/plans/APP-STORE-REVIEW-PACKAGE.md`: §1.3 the
 promotional text, §4.1 the fields, §4.2 the description (with the Terms and Privacy links 3.1.2 needs). The
 earlier draft here promised "New: meeting templates" (nothing is new in a 1.0), "who's doing what" (action
-items have no owner) and "the audio of a call" (call capture waits on proof 5), so it was retired rather than
-kept in two places.
+items have no owner) and "the audio of a call" (1.0 has no call capture: proof 5 failed, DECISIONS.md
+2026-10-29), so it was retired rather than kept in two places.
 
 ---
 
@@ -162,7 +162,7 @@ kept in two places.
 > - 🔎 **Searchable transcripts** — jump to any moment.
 > - 🎛️ **Meeting templates** — standups, interviews, sales calls, lectures, one-on-ones,
 >   board meetings and more.
-> - 🎙️ **Flexible recording** — your microphone, or the audio from a call.
+> - 🎙️ **Flexible capture** — record with your microphone, or import an audio file.
 > - 💻 **Record on mobile, review on the web** — your notes follow you.
 >
 > **Private by design**
@@ -185,6 +185,6 @@ kept in two places.
 |---|---|
 | All screenshots, feature graphic, icon, app preview video, device frames (§2, §3) | `TODO(brand)` — blocking listing |
 | Final title/subtitle personality vs pure-keyword (§1.3) | `TODO(brand)` |
-| "AI Meeting Notes" / "record calls" phrasing vs consent posture (§1) | `TODO(legal)` |
+| "AI Meeting Notes" phrasing vs consent posture (§1); no "record calls" (1.0 has no call capture) | `TODO(legal)` |
 | Terms + Privacy links, deletion URL in descriptions (§5, §6) | `TODO(legal)` |
 | Ratings-prompt client hook at summary-`ready` (§4) | Eng |

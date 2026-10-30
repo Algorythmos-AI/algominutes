@@ -55,10 +55,39 @@ final class BillingSurfacesTests: XCTestCase {
         XCTAssertNil(SettingsView.minutesLine(nil))
     }
 
-    func testTheAccountPromptMentionsTheTrialOnlyDuringOne() {
-        XCTAssertTrue(AccountUpgradeSheet.message(trialing: true).contains("7-day trial"))
+    func testTheAccountPromptMentionsTheFreeProMinutesOnlyDuringThem() {
+        XCTAssertTrue(AccountUpgradeSheet.message(trialing: true).contains("7 days of free Pro minutes"))
         let off = AccountUpgradeSheet.message(trialing: false)
+        XCTAssertFalse(off.contains("Pro minutes"))
         XCTAssertFalse(off.contains("trial"))
         XCTAssertTrue(off.hasPrefix("Create a free account"))
+    }
+
+    /// Guideline 3.1.2: the reverse trial is free Pro minutes with nothing to pay, not a StoreKit free trial of
+    /// the subscription. No surface that shows it says "trial", and they all say it the same way.
+    @MainActor
+    func testTheFreeProMinutesAreNeverCalledATrial() {
+        let trialing = EntitlementResponse(state: .trialing, plan: "pro", billingPeriod: "2026-10", includedMinutes: 600,
+                                           usedMinutes: 0, remainingMinutes: 600, overQuota: false, trialEndsAt: nil,
+                                           source: "trial")
+        let words = [
+            SettingsView.planLabel(trialing, trialDaysRemaining: 3),
+            SettingsView.planLabel(trialing, trialDaysRemaining: 1),
+            SettingsView.planLabel(trialing, trialDaysRemaining: nil),
+            TrialBanner.headline(daysLeft: 3),
+            TrialBanner.headline(daysLeft: 1),
+            TrialBanner.headline(daysLeft: 0),
+            TrialBanner.subtitle,
+            AccountUpgradeSheet.message(trialing: true),
+        ]
+        for line in words {
+            XCTAssertFalse(line.lowercased().contains("trial"), line)
+        }
+        XCTAssertEqual(SettingsView.planLabel(trialing, trialDaysRemaining: 1), "Free Pro minutes · 1 day left")
+        XCTAssertEqual(SettingsView.planLabel(trialing, trialDaysRemaining: nil), "Free Pro minutes")
+        XCTAssertEqual(TrialBanner.headline(daysLeft: 3), "3 days left of free Pro minutes")
+        XCTAssertEqual(TrialBanner.headline(daysLeft: 1), "1 day left of free Pro minutes")
+        XCTAssertEqual(TrialBanner.headline(daysLeft: 0), "Your free Pro minutes end today")
+        XCTAssertTrue(TrialBanner.subtitle.contains("Nothing to pay"))
     }
 }

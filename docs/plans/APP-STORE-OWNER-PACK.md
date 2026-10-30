@@ -24,11 +24,19 @@ Tick in order where you can; the dates are the deadlines that keep submission on
       ([§2.6](#26-the-decisions-entry)).
 - [x] #535 and #537 merged (10-29) and promoted to `main` in #541. Their device runs aren't recorded here; check
       the private test-history repository before RC1.
-- [ ] Run proof 5 on the iPhone 11 with a second person ([§3](#3-proof-5-script)); record it in BLOCKERS §0.
+- [x] Release build against production on the iPhone 11 Pro Max, 10-29: the full UI lane 7 passed, 0 failed, 4
+      expected skips; a recording reached Ready in 74 s with a push sent (I10 closed). Runs are in the private
+      test-history repository; BLOCKERS §0, 10-29.
+- [x] Run proof 5 on the iPhone 11 with a second person ([§3](#3-proof-5-script)); recorded in BLOCKERS §0.
+      2026-10-29: failed. iOS gives the broadcast no call audio ([§3.7](#37-the-result-2026-10-29)).
 
 **By Thu 11-05**
-- [ ] Proof 5 decided. If it failed: the extension out of the Release build, prod `broadcast_capture` off, the
-      microphone string's call clause gone ([§3.6](#36-if-it-fails)).
+- [x] Proof 5 decided (owner, 2026-10-29): "Record a call" is out of 1.0 ([§3.6](#36-if-it-fails),
+      DECISIONS.md 2026-10-29).
+  - [ ] #555 merged: no extension in the Release build, no call wording in the microphone text. Then a
+        `--release` device run ([§3.7](#37-the-result-2026-10-29)).
+  - [ ] #555 promoted to `main` before RC1. Production's `broadcast_capture` stays "on" for the web app's call
+        in another tab; nothing to apply (#556 only makes an unset switch mean off).
 - [x] Promotion `integration` → `main` merged (#541, 24adcde7), `deploy-production` green (run 40907715339,
       2026-10-29) ([XCODE-CLOUD-RELEASE §1](APP-STORE-XCODE-CLOUD-RELEASE.md#1-prerequisites-owner)). If
       proof 5 fails, the extension's removal needs one more promotion before RC1.
@@ -39,13 +47,18 @@ Tick in order where you can; the dates are the deadlines that keep submission on
 - [ ] Sandbox notification URL → production billing
       (`https://billing-43914754953.australia-southeast1.run.app/webhooks/apple`; RELEASE status decision 4,
       S18), then one sandbox purchase reconciled on prod.
+      - 2026-10-29: a sandbox purchase and restore verified on production with the Release build (BLOCKERS §0,
+        10-29); no reconcile has checked it yet, and no notification has reached production billing. The
+        route accepts Sandbox notifications: set the same URL for Production and Sandbox.
 
 **App Store Connect (any time before submission)**
 - [ ] Screenshots: 6.9" (1320 × 2868) required; 6.5" (1284 × 2778) optional, scaled from 6.9" if absent
       ([REVIEW-PACKAGE §3](APP-STORE-REVIEW-PACKAGE.md#3-screenshots)).
+      - 2026-10-29: 4 screenshots at 1242 × 2688 (6.5") from the iPhone 11 Pro Max by `StoreScreenshotsUITests`
+        (#551, in the merge queue). None at 6.9" yet.
 - [ ] Listing fields, description, URLs, category, EULA
       ([REVIEW-PACKAGE §4](APP-STORE-REVIEW-PACKAGE.md#4-listing-copy)).
-- [ ] App Review Information: notes (variant A or B by proof 5), contact (typed into ASC only), sign-in not
+- [ ] App Review Information: notes (**variant B**: proof 5 failed), contact (typed into ASC only), sign-in not
       required ([REVIEW-PACKAGE §1](APP-STORE-REVIEW-PACKAGE.md#1-paste-ready-for-app-store-connect)). Blocked
       until the app stops paywalling the free floor (REVIEW-PACKAGE, Drift).
 - [ ] Promotional text (REVIEW-PACKAGE §1.3). No What's New for 1.0 (§1.2).
@@ -366,12 +379,43 @@ Deadline: **Thu 11-05** (RELEASE status decision 3). If it fails, or isn't run b
 applies, all before RC1:
 1. Remove the Broadcast Upload Extension from the Release build (`apps/ios/project.yml`; keep it for Staging).
 2. Set production `broadcast_capture` to "off" through a reviewed plan and apply; redeploy after (a saved plan
-   resets Cloud Run images).
+   resets Cloud Run images). (Superseded 10-29: the build flag does this for the iPhone and the switch stays on
+   for the web; §3.7.)
 3. Drop "or your side of a call in another app that you choose to capture" from `NSMicrophoneUsageDescription`
    and from STORE-COMPLIANCE §4.2.
 4. Paste REVIEW-PACKAGE §1.1 variant B (CALL CAPTURE: "no call capture").
 
 If it passes: leave the switch on, paste REVIEW-PACKAGE §1.1 variant A.
+
+### 3.7 The result (2026-10-29)
+
+**Failed. "Record a call" is out of 1.0** (owner decision, DECISIONS.md 2026-10-29). The run used the iPhone
+11 (iOS 27.0.1) with the fixed extension (#553), broadcasting during a WhatsApp call. The extension's capture
+statistics:
+- microphone: 0 buffers in 57 s;
+- app audio: 2,400 buffers, all at -99 dBFS (digital silence);
+- no drops and no conversion failures.
+
+iOS keeps call audio out of screen broadcasts (FaceTime and phone calls the same), so there was nothing to
+capture. The run is in the private test-history repository.
+
+The §3.6 steps:
+1. The extension is out of the Release build: **#555** (`CALL_CAPTURE_ENABLED "NO"`; the copy phase leaves it
+   out, a build phase checks it; Staging and Debug keep it).
+2. Not needed: production's `broadcast_capture` **stays "on"** (your decision, 10-29). It keeps the web app's
+   call in another tab; the App Store build has no call capture whatever it says (#555). Nothing to apply.
+3. The microphone text's call clause is gone from Release, and from STORE-COMPLIANCE §4.2: **#555**.
+4. REVIEW-PACKAGE §1.1 **variant B** is the one to paste.
+
+Device runs to do after #555 merges, from the repository root on the Mac:
+```bash
+apps/ios/scripts/device-tests.sh --check
+apps/ios/scripts/device-tests.sh --lane unit --only AlgoMinutesTests/StoreBuildTests --only AlgoMinutesTests/AppSwitchesTests --only AlgoMinutesTests/BroadcastHandoffTests
+apps/ios/scripts/device-tests.sh --release
+```
+After the `--release` run, look at the Release app installed on the phone. "Before you record" has no "Record
+a call" button. Control Center › Screen Recording lists no AlgoMinutes. iOS's microphone prompt, on a fresh
+install, doesn't mention calls.
 
 ## 4. External TestFlight and the earliest honest submit date
 
@@ -422,8 +466,8 @@ before the soak starts.
 | Date | Step | Owner |
 |---|---|---|
 | Thu 10-29 | E-mail to counsel; Gemini order placed | Owner |
-| Fri 10-30 | Proof 5 run | Owner + one person |
-| Mon 11-02 | The free-floor fix merged (and the extension removal if proof 5 failed); #535, #537 done 10-29 | Owner merges |
+| Thu 10-29 | Proof 5 run: failed; call capture out of the iPhone's 1.0 (#555) | Owner + one person |
+| Mon 11-02 | The free-floor fix and #555 merged; #535, #537 done 10-29 | Owner merges |
 | Tue 11-03 | Promotion to `main` green, prod deploy; Xcode Cloud RC1 build; archive checks; Beta App Review submitted | Owner |
 | Wed 11-04 | Beta App Review approves; testers install; Gemini order Active; soak day 1 | Apple, Google |
 | Thu 11-05 | Phase B deadline: proof 5 decided, ≥ 20 testers | Owner |
@@ -435,7 +479,7 @@ before the soak starts.
 
 **Earliest: Mon 16 November**, if all of these hold:
 - the Gemini order is Active by 11-04 and production notes finish in minutes (S17 closed);
-- proof 5 is decided before RC1, so RC1 doesn't change;
+- #555 is in RC1 (proof 5 is decided: call capture is out), so RC1 doesn't change for it;
 - Beta App Review approves within a day;
 - RC1 has no crash fix in the 7 days;
 - counsel answers by 11-06 **and** what they ask for needs no app change, or you decide before the soak that
@@ -449,7 +493,7 @@ What moves it:
 - **Legal.** Answers after 11-06, or changes to the app's text, mean RC2 and a new 7 days: about 11-23. A
   missed 11-13 cut-off needs a dated decision to launch on the drafts.
 - **Gemini capacity.** Without an Active order, S17 stays open and you shouldn't submit.
-- **Proof 5 after RC1.** Removing the extension is a code change: RC2, new soak.
+- **#555 missing RC1.** Removing the extension is a code change: if RC1 is cut without it, RC2 and a new soak.
 - **Any crash or code fix in RC1**: RC2, new soak.
 - **Beta App Review** taking several days, or rejecting the production Test Information.
 - **The free-floor fix** slipping past 11-02: RC1 waits for it, day for day (#535 and #537 are already on `main`).
@@ -462,5 +506,6 @@ What moves it:
   shows when it does. That the Debug app stays installed after `device-tests.sh`.
 - Whether FaceTime and WhatsApp audio reach the extension.
 - Beta App Review turnaround; Crashlytics' exact labels for crash-free users and sessions.
-- That production billing accepts sandbox notifications (S18).
+- That a sandbox notification reaches production billing (S18). The code accepts one (`webhooks/apple.js` checks
+  no environment); none has arrived yet.
 - That `pro.monthly` and `pro.annual` have their review screenshots and are Ready to Submit.
