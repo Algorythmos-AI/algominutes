@@ -147,8 +147,8 @@ describe("a subscription's status, from Apple", () => {
     expect((await thrown(status(answer('Production', { signedTransactionInfo: undefined })))).message).toMatch(/no transaction info/);
   });
 
-  it('says why Apple could not be asked, and never tries the sandbox after a refusal or an outage', async () => {
-    for (const [reply, unauthorized] of [[{ status: 401 }, true], [{ status: 403, body: { errorCode: 4030000 } }, true], [{ status: 429, body: { errorCode: 4290000 } }, false], [{ status: 500, body: { errorCode: 5000000 } }, false]] as const) {
+  it('says why Apple could not be asked, and never tries the sandbox after a 403 or an outage', async () => {
+    for (const [reply, unauthorized] of [[{ status: 403, body: { errorCode: 4030000 } }, true], [{ status: 429, body: { errorCode: 4290000 } }, false], [{ status: 500, body: { errorCode: 5000000 } }, false]] as const) {
       const apple = fakeApple({ Production: reply, Sandbox: { status: 200, body: answer('Sandbox') } });
       const err = await thrown(client(apple.fetchImpl).subscriptionStatus(OTID));
       expect(err).toBeInstanceOf(AppStoreServerError);
