@@ -5,13 +5,16 @@ import { appConfig, notetakerSwitches, notetakerFor, NOTETAKER_BUILT, shareLinks
 import siteUrl from '../packages/ai/src/site-url.cjs';
 import { createMeetingBotRoute, cancelMeetingBotRoute } from '../services/api/src/routes/meetings.js';
 
-// GET /v1/config: broadcast capture's kill switch. BROADCAST_CAPTURE=off
-// hides the entry point; anything else, or unset, leaves it on. The body is
-// the AppConfigResponse contract.
+// GET /v1/config: broadcast capture's kill switch. Off unless BROADCAST_CAPTURE=on: an api with the env var
+// missing (production's, if Terraform ever dropped it) never offers "Record a call". The body is the
+// AppConfigResponse contract.
 describe('app config', () => {
-  it('broadcast capture is on unless the env says off', async () => {
-    expect((await appConfig({})).broadcastCapture).toBe(true);
+  it('broadcast capture is off unless the env says on', async () => {
+    expect((await appConfig({})).broadcastCapture).toBe(false);
+    expect((await appConfig({ BROADCAST_CAPTURE: '' })).broadcastCapture).toBe(false);
+    expect((await appConfig({ BROADCAST_CAPTURE: 'yes please' })).broadcastCapture).toBe(false);
     expect((await appConfig({ BROADCAST_CAPTURE: 'on' })).broadcastCapture).toBe(true);
+    expect((await appConfig({ BROADCAST_CAPTURE: ' ON ' })).broadcastCapture).toBe(true);
     expect((await appConfig({ BROADCAST_CAPTURE: 'off' })).broadcastCapture).toBe(false);
     expect((await appConfig({ BROADCAST_CAPTURE: ' OFF ' })).broadcastCapture).toBe(false);
   });
