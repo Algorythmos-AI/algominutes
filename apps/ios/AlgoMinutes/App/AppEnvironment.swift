@@ -56,6 +56,8 @@ final class AppEnvironment {
     var isNotificationPrePromptPending = false
     /// Once per launch: "Not now" isn't asked again until the next launch.
     private var notificationPrePromptShown = false
+    /// A build without call capture found a capture an earlier build left; logged once per session.
+    @ObservationIgnored private var broadcastLeftLogged = false
 
     /// A capture of another app finished without this session's pre-recording
     /// notice (it was started from Control Center). RootView asks the user to
@@ -560,6 +562,12 @@ final class AppEnvironment {
             consented: await consentGate.satisfied(for: .appAudio)
         )
         switch decision {
+        case .leave:
+            if broadcast.hasFinishedCapture, !broadcastLeftLogged {
+                broadcastLeftLogged = true
+                AppLog.info("broadcast_left_build_has_no_call_capture")
+            }
+            return
         case .hold:
             AppLog.info("broadcast_held_by_switch")
             if !broadcastHoldNoticeShown {

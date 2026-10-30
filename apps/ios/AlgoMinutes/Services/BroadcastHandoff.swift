@@ -119,6 +119,9 @@ final class BroadcastHandoff {
         /// The Google Cloud AI agreement (App Store 5.1.2(i)) hasn't been given on this device: ask for it first.
         /// "Not now" leaves the capture where it is, on this iPhone.
         case askAISharing
+        /// This build has no call capture (the App Store build): nothing is claimed, held, asked or shown. A
+        /// capture an earlier build (staging) left in the App Group stays where it is, untouched.
+        case leave
     }
 
     /// The broadcast extension can be started from Control Center, outside the
@@ -126,8 +129,10 @@ final class BroadcastHandoff {
     /// captured is uploaded without all three: the switch, the Google Cloud AI
     /// agreement, and the permission.
     nonisolated static func decide(
-        hasFinishedCapture: Bool, switchOn: Bool, aiSharingAgreed: Bool, consented: Bool
+        hasFinishedCapture: Bool, switchOn: Bool, aiSharingAgreed: Bool, consented: Bool,
+        buildHasCallCapture: Bool = AppConfig.callCaptureEnabled
     ) -> ClaimDecision {
+        guard buildHasCallCapture else { return .leave }
         guard hasFinishedCapture else { return .claim }
         if !switchOn { return .hold }
         if !aiSharingAgreed { return .askAISharing }

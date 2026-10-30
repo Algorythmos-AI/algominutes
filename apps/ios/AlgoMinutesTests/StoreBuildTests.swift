@@ -32,6 +32,56 @@ final class StoreBuildTests: XCTestCase {
         XCTAssertEqual(try setting("PAYWALL_ENABLED", in: "Staging"), "YES")
     }
 
+    // 1.0 ships without call capture (DECISIONS.md, 2026-10-29): iOS gives a screen broadcast no call audio
+    // (device proof 5), so "Record a call" couldn't do what it says. Development and staging keep it.
+    func testTheStoreBuildHasNoCallCapture() throws {
+        try skipOnDevice()
+        XCTAssertEqual(try setting("CALL_CAPTURE_ENABLED", in: "Release"), "NO")
+        XCTAssertEqual(try setting("CALL_CAPTURE_ENABLED", in: "Staging"), "YES")
+        XCTAssertEqual(try setting("CALL_CAPTURE_ENABLED", in: "Debug"), "YES")
+    }
+
+    func testTheStoreBuildsMicrophoneTextDoesNotMentionCalls() throws {
+        try skipOnDevice()
+        let store = try XCTUnwrap(try setting("MICROPHONE_USAGE_DESCRIPTION", in: "Release"))
+        for word in ["call", "another app", "capture"] {
+            XCTAssertFalse(store.localizedCaseInsensitiveContains(word), "the App Store microphone text says \"\(word)\"")
+        }
+        XCTAssertTrue(store.contains("Recording never starts on its own."))
+        // Staging still captures calls, and says so.
+        XCTAssertTrue(try XCTUnwrap(try setting("MICROPHONE_USAGE_DESCRIPTION", in: "Staging")).contains("your side of a call"))
+    }
+
+    func testTheCallCaptureFlagIsOnOnlyWhenSet() {
+        XCTAssertTrue(AppConfig.callCaptureEnabled(info: ["AlgoMinutesCallCaptureEnabled": "YES"]))
+        XCTAssertFalse(AppConfig.callCaptureEnabled(info: ["AlgoMinutesCallCaptureEnabled": "NO"]))
+        XCTAssertFalse(AppConfig.callCaptureEnabled(info: ["AlgoMinutesCallCaptureEnabled": "$(CALL_CAPTURE_ENABLED)"]))
+        XCTAssertFalse(AppConfig.callCaptureEnabled(info: nil))
+    }
+
+    /// The server's switch can't bring "Record a call" back in a build without it.
+    func testWithoutCallCaptureTheServerSwitchShowsNothing() async {
+        let defaults = UserDefaults(suiteName: "StoreBuildTests.callCapture")!
+        defaults.removePersistentDomain(forName: "StoreBuildTests.callCapture")
+        let store = AppSwitches(defaults: defaults, buildHasCallCapture: false)
+        await store.refresh { AppConfigResponse(broadcastCapture: true) }
+        XCTAssertFalse(store.broadcastCapture)
+        XCTAssertFalse(AppSwitches(defaults: defaults, buildHasCallCapture: false).broadcastCapture)
+        XCTAssertTrue(AppSwitches(defaults: defaults, buildHasCallCapture: true).broadcastCapture)
+    }
+
+    /// A capture a staging build left on the phone is neither claimed, held (with its notice), nor asked about.
+    func testWithoutCallCaptureALeftoverCaptureIsLeftAlone() {
+        for switchOn in [true, false] {
+            for finished in [true, false] {
+                XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: finished, switchOn: switchOn, aiSharingAgreed: true,
+                                                       consented: true, buildHasCallCapture: false), .leave)
+            }
+        }
+        XCTAssertEqual(BroadcastHandoff.decide(hasFinishedCapture: true, switchOn: true, aiSharingAgreed: true,
+                                               consented: true, buildHasCallCapture: true), .claim)
+    }
+
     func testTheInviteCodeFlagIsOnOnlyWhenSet() {
         XCTAssertTrue(AppConfig.inviteCodesEnabled(info: ["AlgoMinutesInviteCodesEnabled": "YES"]))
         XCTAssertFalse(AppConfig.inviteCodesEnabled(info: ["AlgoMinutesInviteCodesEnabled": "NO"]))

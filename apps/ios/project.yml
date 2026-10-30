@@ -49,6 +49,8 @@ settings:
       UPDATE_URL: itms-beta://
       PAYWALL_ENABLED: "YES"
       INVITE_CODES_ENABLED: "YES"
+      CALL_CAPTURE_ENABLED: "YES"
+      MICROPHONE_USAGE_DESCRIPTION: "AlgoMinutes uses your microphone only while you record: a meeting or note in the app, or your side of a call in another app that you choose to capture. The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and is kept there until you delete it. Recording never starts on its own."
     Staging:
       API_BASE_URL: https://api-627101926311.australia-southeast1.run.app
       BILLING_BASE_URL: https://billing-627101926311.australia-southeast1.run.app
@@ -59,6 +61,10 @@ settings:
       PAYWALL_ENABLED: "YES"
       # The beta's way to minutes (BETA-XXXXX-... codes, RELEASE.md rev 10).
       INVITE_CODES_ENABLED: "YES"
+      # "Record a call" (the ReplayKit broadcast extension) stays in development and on staging only, behind the
+      # server's broadcast_capture switch. The App Store build has none of it (DECISIONS.md, 2026-10-29).
+      CALL_CAPTURE_ENABLED: "YES"
+      MICROPHONE_USAGE_DESCRIPTION: "AlgoMinutes uses your microphone only while you record: a meeting or note in the app, or your side of a call in another app that you choose to capture. The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and is kept there until you delete it. Recording never starts on its own."
     Release:
       # Production's Cloud Run origins (algominutes-production, project number
       # 43914754953). The "Backend origins are set" phase still fails a build
@@ -73,6 +79,11 @@ settings:
       # first, so this sells nothing until they exist.
       PAYWALL_ENABLED: "YES"
       INVITE_CODES_ENABLED: "NO"
+      # No call capture in 1.0 (DECISIONS.md, 2026-10-29): iOS gives a screen broadcast no call audio (device
+      # proof 5), so "Record a call" couldn't do what it says. The extension isn't embedded (the "Call capture
+      # only where the build has it" phase), nothing shows it, and the microphone text doesn't mention calls.
+      CALL_CAPTURE_ENABLED: "NO"
+      MICROPHONE_USAGE_DESCRIPTION: "AlgoMinutes uses your microphone only while you record a meeting or note in the app. The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and is kept there until you delete it. Recording never starts on its own."
 
 targets:
   AlgoMinutes:
@@ -90,7 +101,18 @@ targets:
         # DEVELOPMENT_TEAM (NY9MS8GSBK) is set globally in settings.base.
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
+        # CALL_CAPTURE_YES or CALL_CAPTURE_NO: the code that names the broadcast extension (BroadcastPickerView)
+        # is compiled only into a build that has call capture.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) CALL_CAPTURE_$(CALL_CAPTURE_ENABLED)"
+      configs:
+        # The App Store build has no call capture (CALL_CAPTURE_ENABLED=NO): the "Embed Foundation Extensions"
+        # copy phase leaves the broadcast extension out, so the app has no PlugIns/BroadcastExtension.appex.
+        # A copy phase can't differ per configuration; EXCLUDED_SOURCE_FILE_NAMES, which can, also applies to it.
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: BroadcastExtension.appex
     dependencies:
+      # Built for every configuration; embedded only where the build has call capture (EXCLUDED_SOURCE_FILE_NAMES
+      # above, checked by the "Call capture only where the build has it" phase).
       - target: BroadcastExtension
         embed: true
       - package: Firebase
@@ -122,6 +144,30 @@ targets:
           done
         basedOnDependencyAnalysis: false
     postBuildScripts:
+      # The broadcast extension is in the app exactly when the build has call capture (CALL_CAPTURE_ENABLED): the
+      # App Store build (Release) must not carry it, and a build that offers "Record a call" must. Runs after the
+      # copy phase, before signing. A stale copy from an earlier build of the same folder is removed, not shipped.
+      - name: Call capture only where the build has it
+        script: |
+          set -euo pipefail
+          APPEX="${TARGET_BUILD_DIR}/${PLUGINS_FOLDER_PATH}/BroadcastExtension.appex"
+          if [ "${CALL_CAPTURE_ENABLED:-NO}" = "YES" ]; then
+            if [ ! -d "$APPEX" ]; then
+              echo "error: ${CONFIGURATION} has call capture but BroadcastExtension.appex isn't embedded ($APPEX)"
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ -d "$APPEX" ]; then
+            if [ "${EXCLUDED_SOURCE_FILE_NAMES:-}" != "BroadcastExtension.appex" ]; then
+              echo "error: ${CONFIGURATION} has no call capture but embeds BroadcastExtension.appex (EXCLUDED_SOURCE_FILE_NAMES)"
+              exit 1
+            fi
+            echo "warning: removing a BroadcastExtension.appex an earlier build left in ${TARGET_BUILD_DIR}"
+            rm -rf "$APPEX"
+          fi
+          echo "${CONFIGURATION} has no call capture: no BroadcastExtension.appex in the app"
+        basedOnDependencyAnalysis: false
       # The Google Sign-In callback scheme is the bundled GoogleService-Info.plist's
       # REVERSED_CLIENT_ID, written into the built Info.plist (before signing), so
       # it always matches the Firebase project the build was configured with and

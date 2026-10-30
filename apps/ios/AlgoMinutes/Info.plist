@@ -42,7 +42,7 @@
 		<string>audio</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>AlgoMinutes uses your microphone only while you record: a meeting or note in the app, or your side of a call in another app that you choose to capture. The audio is uploaded to your AlgoMinutes account to be transcribed and summarised, and is kept there until you delete it. Recording never starts on its own.</string>
+	<string>$(MICROPHONE_USAGE_DESCRIPTION)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>AlgoMinutes uses the camera only when you choose to scan text from a document. The image stays on your iPhone: only the text read from it is saved to your notes. It is never used for tracking or advertising.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -59,6 +59,8 @@
 	<string>$(PAYWALL_ENABLED)</string>
 	<key>AlgoMinutesInviteCodesEnabled</key>
 	<string>$(INVITE_CODES_ENABLED)</string>
+	<key>AlgoMinutesCallCaptureEnabled</key>
+	<string>$(CALL_CAPTURE_ENABLED)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

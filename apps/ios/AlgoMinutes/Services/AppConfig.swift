@@ -10,6 +10,7 @@ enum AppConfig {
     static let updateURLKey = "AlgoMinutesUpdateURL"
     static let paywallEnabledKey = "AlgoMinutesPaywallEnabled"
     static let inviteCodesEnabledKey = "AlgoMinutesInviteCodesEnabled"
+    static let callCaptureEnabledKey = "AlgoMinutesCallCaptureEnabled"
 
     /// PAYWALL_ENABLED per configuration: on in Debug, Staging (Apple's sandbox) and the App Store build. Missing
     /// or not "YES" means off.
@@ -25,6 +26,15 @@ enum AppConfig {
 
     static func inviteCodesEnabled(info: [String: Any]?) -> Bool {
         flag(inviteCodesEnabledKey, info: info)
+    }
+
+    /// CALL_CAPTURE_ENABLED per configuration: "Record a call" (the broadcast extension) in Debug and Staging
+    /// only. The App Store build has none of it (DECISIONS.md, 2026-10-29: iOS gives a screen broadcast no call
+    /// audio). Missing or not "YES" means off.
+    static let callCaptureEnabled = callCaptureEnabled(info: Bundle.main.infoDictionary)
+
+    static func callCaptureEnabled(info: [String: Any]?) -> Bool {
+        flag(callCaptureEnabledKey, info: info)
     }
 
     /// A build-setting flag carried in Info.plist: on only when exactly "YES".
