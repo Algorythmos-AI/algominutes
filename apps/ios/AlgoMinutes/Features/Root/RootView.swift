@@ -74,13 +74,13 @@ struct RootView: View {
             // Uploads killed while backgrounded resume from disk on return.
             if phase == .active, env.auth.user != nil {
                 Task { await env.resumePendingUploads() }
-                // A capture of another app ends while that app is in front.
-                Task { await env.claimBroadcastCapture() }
+                // A capture of another app ends while that app is in front. The switches (broadcast's kill switch
+                // may have been flipped) are refreshed first and the capture decided after, in one pass. A cold
+                // launch, which starts already active, is covered by the session's start (startSession).
+                env.scheduleBroadcastClaim(.becameActive)
                 // Re-read entitlement: a subscription may have changed in the
                 // system Settings while we were backgrounded.
                 Task { await env.billing.refresh() }
-                // A switch may have been flipped (broadcast's kill switch).
-                Task { await env.refreshSwitches() }
             }
         }
         // A finished capture of another app, and no Google Cloud AI agreement on this iPhone yet: asked before
