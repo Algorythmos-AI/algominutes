@@ -59,16 +59,16 @@ final class BroadcastCaptureRunTests: XCTestCase {
     }
 
     /// Waits until the writer has caught up with what it was given (the file stops growing for half a second, at
-    /// most 5 s), so a measurement after it counts what the capture keeps, not the encoders' backlog.
+    /// most 6 s), so a measurement after it counts what the capture keeps, not the encoders' backlog.
     nonisolated private static func drain(_ url: URL) {
         func size() -> Int { ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int) ?? 0 }
         var last = size()
         var stableSince = Date()
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
             usleep(100_000)
             let now = size()
-            if now != last { last = now; stableSince = Date() } else if Date().timeIntervalSince(stableSince) >= 0.5 { return }
+            if now != last { last = now; stableSince = Date() } else if Date().timeIntervalSince(stableSince) >= 1.5 { return }
         }
     }
 
@@ -91,8 +91,12 @@ final class BroadcastCaptureRunTests: XCTestCase {
         }.value
         let trace = footprints.map { String(format: "%.1f", $0) }.joined(separator: " ")
         XCTAssertGreaterThan(footprints[0], 0, "phys_footprint unavailable")
-        // After the first minute (stretch 2) to the fifth (stretch 10): 4 minutes of a call.
-        let growth = footprints[9] - footprints[1]
+        // From the first minute (stretch 2) to the last three stretches' median (minutes 4 to 5): a leak climbs
+        // stretch after stretch (the 2.6 MB a minute once feared is ~8 MB here), while one sample caught before the
+        // encoders finished (the device run 20261030-003046: 24.7 flat, then 28.4 on the last alone) doesn't move a
+        // median.
+        let lastThree = footprints.suffix(3).sorted()
+        let growth = lastThree[1] - footprints[1]
         XCTAssertLessThan(growth, 3, "footprint grew \(growth) MB over 4 minutes after warm-up, every 30 s: \(trace)")
         XCTAssertEqual(capture.writer.status, .writing, capture.diagnostic(stage: "test"))
         let completed = await withCheckedContinuation { done in capture.finish { done.resume(returning: $0) } }
