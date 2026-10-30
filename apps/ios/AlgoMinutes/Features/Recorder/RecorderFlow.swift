@@ -120,6 +120,7 @@ struct RecorderConsentFlow: View {
                 .font(Typography.body(14))
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
+            #if CALL_CAPTURE_YES
             HStack {
                 Spacer()
                 BroadcastPickerView()
@@ -127,6 +128,7 @@ struct RecorderConsentFlow: View {
                     .accessibilityLabel("Start capturing another app's audio")
                 Spacer()
             }
+            #endif
         }
     }
 
@@ -148,7 +150,7 @@ struct RecorderConsentFlow: View {
             .accessibilityIdentifier("recorder.consent.start")
             // The same notice, acknowledged for the next capture of another
             // app's audio (H11/L9: it covers that one capture). Shown only while the server allows it (AppSwitches: the
-            // broadcast kill switch).
+            // broadcast kill switch), and never in the App Store build, which has no call capture.
             if env.switches.broadcastCapture {
                 Button(Self.callTitle) {
                     consentShownBefore = true

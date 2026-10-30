@@ -76,10 +76,26 @@ describe('iOS Release hygiene', () => {
     }
   });
 
-  it('the microphone text covers capturing a call in another app', () => {
+  // The microphone text is per configuration (MICROPHONE_USAGE_DESCRIPTION in project.yml). 1.0 ships without
+  // call capture (DECISIONS.md, 2026-10-29), so the App Store build's text says nothing of calls; staging, which
+  // keeps "Record a call", still covers it.
+  it('the microphone text covers a call in another app only where the build captures one', () => {
     const plist = fs.readFileSync(`${APP}/Info.plist`, 'utf8');
     const mic = plist.match(/<key>NSMicrophoneUsageDescription<\/key>\s*<string>([^<]*)<\/string>/)?.[1] ?? '';
-    expect(mic).toMatch(/a call in another app/);
-    expect(mic).toMatch(/never starts on its own/);
+    expect(mic).toBe('$(MICROPHONE_USAGE_DESCRIPTION)');
+    const yml = fs.readFileSync('apps/ios/project.yml', 'utf8');
+    const setting = (config: string, key: string) => {
+      const block = yml.split(new RegExp(`\\n    ${config}:\\n`))[1]?.split(/\n    [A-Za-z]+:\n/)[0] ?? '';
+      return block.match(new RegExp(`^\\s+${key}:\\s*"([^"]*)"`, 'm'))?.[1] ?? '';
+    };
+    expect(setting('Release', 'CALL_CAPTURE_ENABLED')).toBe('NO');
+    expect(setting('Release', 'MICROPHONE_USAGE_DESCRIPTION')).not.toMatch(/call|another app|capture/i);
+    for (const config of ['Debug', 'Staging']) {
+      expect(setting(config, 'CALL_CAPTURE_ENABLED'), config).toBe('YES');
+      expect(setting(config, 'MICROPHONE_USAGE_DESCRIPTION'), config).toMatch(/a call in another app/);
+    }
+    for (const config of ['Debug', 'Staging', 'Release']) {
+      expect(setting(config, 'MICROPHONE_USAGE_DESCRIPTION'), config).toMatch(/never starts on its own/);
+    }
   });
 });
