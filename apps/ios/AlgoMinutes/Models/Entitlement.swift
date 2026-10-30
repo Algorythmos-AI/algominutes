@@ -72,12 +72,14 @@ struct EntitlementResponse: Codable, Sendable {
             ?? ISO8601DateFormatter.entitlementPlain.date(from: iso)
     }
 
-    /// After day 7 the free floor gates metered actions (new recordings/imports)
-    /// behind the paywall. `active` and `trialing` never gate.
+    /// Out of the trial and out of minutes: a new recording or import goes to the paywall first. The free plan
+    /// has minutes of its own (120 a month on production), and the server allows them, so a free account with
+    /// minutes left records like any other; it used to meet the paywall on every recording after day 7.
+    /// Unmetered (no remaining count) never gates: the server decides. `active` and `trialing` never gate.
     var gatesMeteredActions: Bool {
         switch state {
         case .trialing, .active: return false
-        case .expired, .freeFloor: return true
+        case .expired, .freeFloor: return overQuota || (remainingMinutes.map { $0 <= 0 } ?? false)
         }
     }
 }

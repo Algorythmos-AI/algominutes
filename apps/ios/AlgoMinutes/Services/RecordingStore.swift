@@ -180,15 +180,37 @@ final class RecordingStore {
         }
     }
 
-    /// Deletes the audio file and its sidecar — called after a confirmed upload
-    /// or when the user discards a recording.
-    func remove(fileName: String) {
+    /// Why a recording leaves this iPhone. Every removal names one, and it is logged at notice level, which the
+    /// phone keeps: a recording offered after a kill was gone a minute later with no line saying why (#516).
+    enum RemovalReason: String {
+        /// The server has the audio and has queued it (or held it for minutes).
+        case processed
+        /// The server refused it for good (out of minutes, too long); the audio is in Storage for Try again.
+        case refusedByServer
+        /// Its note was deleted.
+        case noteDeleted
+        /// The user deleted it from "Not yet uploaded".
+        case deletedByUser
+        /// Signing out removes this account's recordings from a shared phone (asked first in Settings).
+        case signedOut
+        /// The recorder stopped with nothing worth keeping (under a second of audio).
+        case nothingCaptured
+        /// The audio was already gone; only its sidecar is left.
+        case audioMissing
+    }
+
+    /// Deletes the audio file and its sidecar.
+    func remove(fileName: String, reason: RemovalReason) {
+        let size = (try? fileManager.attributesOfItem(
+            atPath: directory.appendingPathComponent(fileName).path
+        )[.size] as? Int64) ?? 0
+        AppLog.notice("recording_removed file=\(fileName) reason=\(reason.rawValue) bytes=\(size)")
         try? fileManager.removeItem(at: directory.appendingPathComponent(fileName))
         try? fileManager.removeItem(at: sidecarURL(forFileName: fileName))
     }
 
-    func remove(fileURL: URL) {
-        remove(fileName: fileURL.lastPathComponent)
+    func remove(fileURL: URL, reason: RemovalReason) {
+        remove(fileName: fileURL.lastPathComponent, reason: reason)
     }
 
     /// Removes the recording still waiting on this device for a note, if any
@@ -196,7 +218,7 @@ final class RecordingStore {
     @discardableResult
     func removeRecording(forNoteId noteId: String) -> Bool {
         guard let pending = pendingRecording(forNoteId: noteId) else { return false }
-        remove(fileName: pending.fileName)
+        remove(fileName: pending.fileName, reason: .noteDeleted)
         return true
     }
 

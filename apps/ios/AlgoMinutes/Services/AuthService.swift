@@ -191,12 +191,32 @@ final class AuthService: NSObject {
         isSigningIn = true
         defer { isSigningIn = false }
         do {
-            try await Auth.auth().signInAnonymously()
+            let result = try await Auth.auth().signInAnonymously()
+            // Signed in now, not a moment later when the listener says so (as signOut clears it at once): the sign-in
+            // screen doesn't flash back between the splash and the tabs. The listener still ensures the workspace.
+            user = result.user
+            AppLog.info("anonymous_identity_created")
         } catch {
             // Non-fatal: LoginView remains as the fallback path.
             AppLog.error("anonymous_identity_failed: \(error.localizedDescription)")
         }
     }
+
+    /// 5.1.1(v): after signing out or deleting the account, carry on without one, as a first launch does. A new
+    /// guest: its own uid, so its own workspace (the auth listener ensures `workspaces/{wsId}`, RootView starts its
+    /// session), and nothing of the account that was signed out or deleted. Only when asked, from LoginView: making a
+    /// new account by itself the moment one was deleted would be a surprise.
+    func continueWithoutAccount() async {
+        guard !isSigningIn else { return }
+        authError = nil
+        await ensureAnonymousIdentity()
+        if Auth.auth().currentUser == nil {
+            AppLog.error("continue_without_account_failed")
+            authError = Self.continueWithoutAccountFailed
+        }
+    }
+
+    static let continueWithoutAccountFailed = "Couldn't continue without an account. Check your connection and try again."
 
     /// Upgrade an anonymous guest to a permanent Google account IN PLACE.
     ///

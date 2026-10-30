@@ -133,9 +133,9 @@ variable "public_site_url" {
 }
 
 variable "broadcast_capture" {
-  description = "Server-side kill switch for iOS broadcast capture, served by GET /v1/config. \"off\" hides the feature in the app without a build."
+  description = "Server-side switch for \"Record a call\" (the iOS broadcast extension in staging builds, the web's call in another tab), served by GET /v1/config. Off unless an environment sets \"on\" (staging does; production doesn't, DECISIONS.md 2026-10-29)."
   type        = string
-  default     = "on"
+  default     = "off"
 
   validation {
     condition     = contains(["on", "off"], var.broadcast_capture)

@@ -58,7 +58,7 @@ struct PendingRecordingsView: View {
             Button("Keep it", role: .cancel) { pendingDeletion = nil }
             Button("Delete", role: .destructive) {
                 if let doomed = pendingDeletion {
-                    env.recordingStore.remove(fileName: doomed.fileName)
+                    env.recordingStore.remove(fileName: doomed.fileName, reason: .deletedByUser)
                     pending.removeAll { $0.id == doomed.id }
                 }
                 pendingDeletion = nil

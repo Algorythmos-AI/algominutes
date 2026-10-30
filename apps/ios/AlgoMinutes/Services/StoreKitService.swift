@@ -22,16 +22,21 @@ final class StoreKitService {
 
     /// Outcome of a `purchase(_:)` call, including the async Ask-to-Buy path.
     enum PurchaseOutcome: Equatable {
+        /// Billing accepted the receipt: Pro is on.
         case success
         /// StoreKit deferred the purchase — Ask-to-Buy / SCA / parental approval.
         /// Nothing is owed yet; the transaction arrives later via the updates
         /// listener. The paywall shows a "waiting for approval" state.
         case pending
         case userCancelled
+        /// StoreKit took the payment but billing refused the receipt, or StoreKit failed; says why.
         case failed(String)
+        /// StoreKit took the payment but billing couldn't be reached. The transaction stays unfinished and is
+        /// sent again (`confirmationDelayedMessage`).
+        case confirmationDelayed
     }
 
-    private let api: APIClient
+    private let api: any PurchaseVerifying
 
     /// Called after any verified transaction is forwarded to the server, so the
     /// billing layer can re-read the authoritative entitlement. Set by
@@ -43,7 +48,7 @@ final class StoreKitService {
     // the compiler suggests is rejected on an @Observable mutable stored property.
     private nonisolated(unsafe) var updatesListener: Task<Void, Never>?
 
-    init(api: APIClient) {
+    init(api: any PurchaseVerifying) {
         self.api = api
         // Start the listener immediately: a transaction can arrive at any time
         // (a renewal, a deferred Ask-to-Buy approval, a purchase made on another
@@ -93,8 +98,9 @@ final class StoreKitService {
             let result = try await product.purchase()
             switch result {
             case .success(let verification):
-                await handle(verification: verification, finishOnServerOK: true)
-                return .success
+                // Paid, but Pro is billing's to grant: say what it said.
+                let verdict = await handle(verification: verification, finishOnServerOK: true)
+                return verdict.purchaseOutcome
             case .pending:
                 // Ask-to-Buy / deferred. The transaction (if approved) will come
                 // through Transaction.updates later.
@@ -123,26 +129,35 @@ final class StoreKitService {
     /// (A6.3), an ID token always exists, so step 2 succeeds pre-permanent-
     /// account. A missing Restore button is a top App Review rejection reason,
     /// which is why it lives on the paywall and calls straight through here.
+    ///
+    /// Ends with a `RestoreOutcome` the caller shows: restored, nothing on this
+    /// Apple Account, or why not (another AlgoMinutes account's, unreachable).
     @discardableResult
-    func restore() async -> Bool {
+    func restore() async -> RestoreOutcome {
         do {
             try await AppStore.sync()
         } catch {
-            // A cancelled sync is not a failure worth alarming the user over.
+            // A cancelled sync is not a failure worth alarming the user over;
+            // the current entitlements are still sent below.
             AppLog.error("storekit_sync_failed: \(error.localizedDescription)")
         }
-        await syncCurrentEntitlements(finishOnServerOK: false)
+        let verdicts = await syncCurrentEntitlements(finishOnServerOK: false)
         await onEntitlementMayHaveChanged?()
-        return true
+        let outcome = RestoreOutcome.from(verdicts)
+        AppLog.info("restore_finished: outcome=\(outcome) receipts=\(verdicts.count)")
+        return outcome
     }
 
     /// Forward every currently-owned entitlement's JWS to the server. Used by
     /// restore and on launch so the server re-confirms an entitlement bought on
-    /// another device.
-    func syncCurrentEntitlements(finishOnServerOK: Bool = false) async {
+    /// another device. Returns billing's verdict on each.
+    @discardableResult
+    func syncCurrentEntitlements(finishOnServerOK: Bool = false) async -> [ReceiptVerdict] {
+        var verdicts: [ReceiptVerdict] = []
         for await result in Transaction.currentEntitlements {
-            await handle(verification: result, finishOnServerOK: finishOnServerOK)
+            verdicts.append(await handle(verification: result, finishOnServerOK: finishOnServerOK))
         }
+        return verdicts
     }
 
     // MARK: - Manage / cancel
@@ -189,25 +204,24 @@ final class StoreKitService {
     /// Forward a transaction's signed JWS to the server for validation, then
     /// (optionally) finish it. We finish only after the server confirms, so a
     /// transient server outage leaves the transaction to be re-delivered rather
-    /// than dropped.
+    /// than dropped. A refused receipt (`rejected`) is left unfinished too:
+    /// StoreKit offers it again, and a later sign-in to the right account
+    /// can still claim it. Returns billing's verdict; every one but
+    /// `accepted` is logged by `ReceiptVerdict.check`.
+    @discardableResult
     private func handle(
         verification: VerificationResult<Transaction>,
         finishOnServerOK: Bool
-    ) async {
+    ) async -> ReceiptVerdict {
         // Always forward the raw JWS — the server is the verifier of record, so
         // even a locally-`unverified` result is its call to make, not ours.
-        let jws = verification.jwsRepresentation
-        do {
-            let response = try await api.verifyPurchase(jws: jws)
-            if response.ok {
-                if finishOnServerOK, case .verified(let transaction) = verification {
-                    await transaction.finish()
-                }
-                await onEntitlementMayHaveChanged?()
+        let verdict = await ReceiptVerdict.check(jws: verification.jwsRepresentation, with: api)
+        if verdict == .accepted {
+            if finishOnServerOK, case .verified(let transaction) = verification {
+                await transaction.finish()
             }
-        } catch {
-            AppLog.error("verify_purchase_failed: \(error.localizedDescription)")
-            lastError = "We couldn't confirm your purchase. It will retry automatically."
+            await onEntitlementMayHaveChanged?()
         }
+        return verdict
     }
 }

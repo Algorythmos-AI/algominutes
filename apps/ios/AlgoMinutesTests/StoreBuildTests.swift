@@ -80,12 +80,12 @@ final class StoreBuildTests: XCTestCase {
         XCTAssertTrue(PaywallView.unavailableMessage(inviteCodes: true).contains("invite code"))
     }
 
-    // Production starts with the trial off (until DeviceCheck is set up there): the account prompt promises a
-    // trial only to someone who is in one.
-    func testTheAccountPromptPromisesATrialOnlyDuringOne() {
-        XCTAssertTrue(AccountUpgradeSheet.message(trialing: true).contains("7-day trial"))
+    // Production starts with the trial off (until DeviceCheck is set up there): the account prompt promises its
+    // free Pro minutes only to someone who has them.
+    func testTheAccountPromptPromisesFreeProMinutesOnlyDuringThem() {
+        XCTAssertTrue(AccountUpgradeSheet.message(trialing: true).contains("7 days of free Pro minutes"))
         let none = AccountUpgradeSheet.message(trialing: false)
-        XCTAssertFalse(none.contains("trial"))
+        XCTAssertFalse(none.contains("Pro minutes"))
         XCTAssertTrue(none.hasPrefix("Create a free account"))
     }
 }

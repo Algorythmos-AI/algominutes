@@ -18,7 +18,11 @@ struct PaywallView: View {
     @State private var isPurchasing = false
     /// Ask-to-Buy / deferred: the purchase is awaiting approval, nothing owed.
     @State private var showPendingApproval = false
+    /// Paid, but billing couldn't be reached yet: it finishes on its own.
+    @State private var showConfirmationDelayed = false
     @State private var isRestoring = false
+    /// How the last Restore ended, shown in an alert.
+    @State private var restoreOutcome: RestoreOutcome?
     @State private var inGracePeriod = false
     /// The pre-purchase check found a subscription already (RELEASE.md PR 27).
     @State private var alreadySubscribed: BillingService.PurchaseGate?
@@ -32,6 +36,7 @@ struct PaywallView: View {
                     headline
                     if inGracePeriod { gracePeriodNotice }
                     if showPendingApproval { pendingApprovalNotice }
+                    if showConfirmationDelayed { confirmationDelayedNotice }
                     if case .alreadySubscribed(let inAppStore)? = alreadySubscribed { alreadySubscribedNotice(inAppStore: inAppStore) }
                     productList
                     if let purchaseError { errorRow(purchaseError) }
@@ -56,6 +61,15 @@ struct PaywallView: View {
             if store.products.isEmpty { await store.loadProducts() }
             selectedProductID = selectedProductID ?? store.products.first?.id
             inGracePeriod = await store.isInGracePeriod()
+        }
+        .alert(
+            "Restore Purchases",
+            isPresented: Binding(get: { restoreOutcome != nil }, set: { if !$0 { restoreOutcome = nil } }),
+            presenting: restoreOutcome
+        ) { outcome in
+            Button("OK") { if outcome == .restored { dismiss() } }
+        } message: { outcome in
+            Text(outcome.message)
         }
     }
 
@@ -203,6 +217,7 @@ struct PaywallView: View {
         isPurchasing = true
         purchaseError = nil
         showPendingApproval = false
+        showConfirmationDelayed = false
         alreadySubscribed = nil
         defer { isPurchasing = false }
 
@@ -223,7 +238,10 @@ struct PaywallView: View {
         case .userCancelled:
             break
         case .failed(let message):
+            // Billing refused the receipt (or StoreKit failed): say so, keep the sheet.
             purchaseError = message
+        case .confirmationDelayed:
+            showConfirmationDelayed = true
         }
     }
 
@@ -248,10 +266,11 @@ struct PaywallView: View {
             Button {
                 Task {
                     isRestoring = true
-                    _ = await store.restore()
+                    let outcome = await store.restore()
                     await env.billing.refresh()
                     isRestoring = false
-                    if env.billing.entitlement?.state == .active { dismiss() }
+                    // Always a sentence; "Pro restored." closes the sheet on OK.
+                    restoreOutcome = outcome
                 }
             } label: {
                 if isRestoring {
@@ -314,6 +333,14 @@ struct PaywallView: View {
         )
     }
 
+    private var confirmationDelayedNotice: some View {
+        noticeBanner(
+            icon: "arrow.triangle.2.circlepath",
+            title: "Confirming your purchase",
+            message: StoreKitService.PurchaseOutcome.confirmationDelayedMessage
+        )
+    }
+
     private func noticeBanner(icon: String, title: String, message: String) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             Image(systemName: icon).foregroundStyle(Theme.heading)
@@ -356,12 +383,10 @@ struct TrialBanner: View {
                 HStack(spacing: Theme.Spacing.md) {
                     Image(systemName: "sparkles").foregroundStyle(Theme.heading)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(days <= 0
-                             ? "Your trial ends today"
-                             : "\(days) day\(days == 1 ? "" : "s") left in your trial")
+                        Text(Self.headline(daysLeft: days))
                             .font(Typography.headline())
                             .foregroundStyle(Theme.heading)
-                        Text("Tap to see Pro plans")
+                        Text(Self.subtitle)
                             .font(Typography.body(12))
                             .foregroundStyle(Theme.muted)
                     }
@@ -379,4 +404,12 @@ struct TrialBanner: View {
             .buttonStyle(.plain)
         }
     }
+
+    /// Free Pro minutes, with nothing to pay: never "trial", which reads as a free trial of the subscription
+    /// (guideline 3.1.2). The same words as Settings' plan (SettingsView.planLabel) and the account prompt.
+    static func headline(daysLeft days: Int) -> String {
+        days <= 0 ? "Your free Pro minutes end today" : "\(days) day\(days == 1 ? "" : "s") left of free Pro minutes"
+    }
+
+    static let subtitle = "Nothing to pay. Tap to see Pro plans"
 }

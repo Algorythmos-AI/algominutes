@@ -23,6 +23,13 @@ enum AppLog {
         breadcrumb(message)
     }
 
+    /// Kept in the phone's own log, which drops info lines (Console › Log Archive, a sysdiagnose): for the
+    /// events that must be traceable later, such as a recording leaving the phone (#516).
+    static func notice(_ message: String) {
+        logger.notice("\(message, privacy: .public)")
+        breadcrumb(message)
+    }
+
     static func error(_ message: String) {
         logger.error("\(message, privacy: .public)")
         breadcrumb("[error] \(message)")

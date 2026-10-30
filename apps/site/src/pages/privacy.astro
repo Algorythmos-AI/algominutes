@@ -68,16 +68,33 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
       of requests and errors, which carry account and note IDs but are designed to exclude your recordings and note
       content.
     </p>
-    <h3>Subscriptions</h3>
+    <h3 id="subscriptions">Subscriptions</h3>
     <p>
-      When subscriptions go on sale, your plan and its status. Apple handles payment in the App Store, and Stripe on
-      the web; we never receive your card details. Nothing is sold during the beta.
+      If you buy AlgoMinutes Pro in the app, Apple handles the payment in the App Store; we never receive your card or
+      other payment details. To give you Pro, the app sends us the signed purchase record Apple gives it, and Apple
+      sends us a notice when the subscription renews, lapses, fails to renew or is refunded; we also check its status
+      with Apple from time to time. From these we keep your plan, its status, when the current period ends, that it was
+      bought in the App Store, and Apple's ID for the subscription (its original transaction ID), which links each
+      renewal to your account. Pro isn't sold on the web today; if it is, Stripe will handle that payment, as the
+      <a href="#processors">table below</a> describes.
+    </p>
+    <h3 id="trial">The free trial and Apple DeviceCheck</h3>
+    <p>
+      We allow one free trial per iPhone. To check that, the app asks Apple's DeviceCheck service for a temporary token
+      and sends it to us with each recording it asks us to process. When we're deciding whether a new account gets the
+      trial, we send the token to Apple and Apple tells us two yes-or-no values it keeps for that iPhone for
+      AlgoMinutes, and the month they last changed. We use one of them to mean "this iPhone has had the trial", and set
+      it when your trial starts. The token doesn't tell us who you are or give us an identifier for your device, and we
+      don't store or log it. Apple keeps the values when the app is deleted and reinstalled, and when an AlgoMinutes
+      account is deleted, so the same iPhone can't start another trial. On our side, we keep whether your account had
+      the trial and when it ends.
     </p>
 
     <h2 id="use">How we use it</h2>
     <ul>
       <li>To provide AlgoMinutes: transcribing and summarising your recordings, keeping your notes in sync, search and chat, and notifications.</li>
-      <li>To keep it working and secure: fixing faults, preventing abuse, and enforcing usage limits.</li>
+      <li>To keep it working and secure: fixing faults, preventing abuse (including more than one free trial per iPhone), and enforcing usage limits.</li>
+      <li>To provide and manage the subscription you buy, and your free minutes.</li>
       <li>To answer your support requests.</li>
       <li>To improve AlgoMinutes, using product events and the feedback you send us. Not your recordings or notes.</li>
       <li>To meet our legal obligations.</li>
@@ -143,7 +160,7 @@ const overseas = processors.filter((p) => p.region !== 'australia-southeast1');
       <li><strong>Backups:</strong> deleted information is removed from our backups within {facts.backupWindowDays} days.</li>
       <li><strong>Server logs:</strong> {facts.logRetentionDays} days.</li>
       <li><strong>Records of deletions and usage:</strong> a record that an account or note was deleted (IDs only, no content) for 30 days, and records of processing usage for 90 days, to prevent abuse and control costs.</li>
-      <li><strong>Payment records,</strong> once subscriptions are sold: as long as tax law requires, without your recordings or notes.</li>
+      <li><strong>Payment records:</strong> as long as tax law requires, without your recordings or notes.</li>
     </ul>
 
     <h2 id="others">People you record</h2>

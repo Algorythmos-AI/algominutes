@@ -9,6 +9,47 @@ Rev 12 leads `docs/plans/RELEASE.md`: the App-Review readiness check of 2026-10-
 I1–I9, O1–O9), and the five stages to a submission that passes. Each bug closes here under its id, with a
 failing-then-passing test and staging evidence. Rev 11's entries follow, then rev 10's.
 
+- **2026-10-29: proof 5, call capture, on an iPhone 11 (iOS 27.0.1).** Recorded in the private test-history
+  repository.
+  - [x] Proof 5 (I3, O10), with the fixed extension (#553), during a WhatsApp call: **call audio not available
+    to ReplayKit; feature removed from 1.0.** Capture statistics: microphone 0 buffers received in 57 s; app
+    audio 2,400 buffers, all -99 dBFS (digital silence); no drops, no conversion failures. iOS keeps call
+    audio out of screen broadcasts (FaceTime and phone calls the same). Decision: DECISIONS.md 2026-10-29.
+    - #555: the App Store build ships without call capture (no extension in Release, no call wording in the
+      microphone text; Staging and Debug keep it).
+    - Production's `broadcast_capture` stays "on" (owner, 2026-10-29): it keeps the web app's call in another
+      tab, and the App Store build ignores it. #556 only makes an unset switch mean off; nothing to apply.
+    - Still to prove: a `--release` device run with #555, and that RC1's archive has no
+      `BroadcastExtension.appex`.
+
+- **2026-10-29: device proofs on an iPhone 11 Pro Max (iOS 27.0.1).** Each run is recorded in the private
+  test-history repository.
+  - [x] #516, kill recovery, on staging at 77d820ba (integration + #545/#547/#548):
+    `RecordingDeviceUITests.testARecordingCutOffByAKillBecomesANote` passed (run 20261029-183821-77d820ba).
+    It records 10 s, the app is killed and relaunched, and the recording comes back as a note by itself and
+    reaches Ready. Removal logging landed in #542. The issue stays open until #547 merges.
+  - [x] I10, fixed by #512: the Release build against production, a recording paused, minimised and resumed,
+    reached Ready in 74 s (run 20261029-184249-77d820ba). Production logged `POST /v1/push/register` 200 and
+    `push_token_registered` at 18:43:59Z, `notify_enqueued` at 18:44:39Z, `notify_sent` sent=1 failed=0 at
+    18:44:45Z.
+  - S18, part proven: the Release build against production, a sandbox tester (Australia), bought Pro monthly:
+    `POST /v1/purchases/verify` 200 and `purchase_verified` environment Sandbox at 21:28:13Z; the app showed
+    Pro, 1,500 minutes; prices A$14.99 / A$149.99. Restore Purchases: verify 200 and `purchase_verified` at
+    21:29:27Z, and the app said "Pro restored."
+    - Still open: the reconcile. The `apple_reconcile_done` at 21:17Z ran before the purchase (checked 0,
+      failed 0), so no reconcile has checked this subscription yet.
+    - No App Store Server Notification has reached production billing: since 10-25 `/webhooks/apple` saw only
+      two curl probes (400, "not a JWS", 10-26) and one GET (404, 10-29). The Sandbox Server URL in App Store
+      Connect is the owner's step (APP-STORE-OWNER-PACK checklist).
+  - [x] Release build against production, the full UI lane: 7 passed, 0 failed, 4 expected skips (run
+    20261029-204933-77d820ba).
+  - [x] App Store screenshots from the phone: `StoreScreenshotsUITests` (#551, in the merge queue) passed (run
+    20261029-205531-77d820ba), 4 images at 1242 × 2688 (6.5").
+  - App Review fixes merged 10-29: #535 AI label, #537 Google Cloud AI agreement, #539 example note, #542
+    removal logging, #543 review package, #544 purchase/restore feedback, #545 free plan records while it has
+    minutes, #546 site wording, #548 in-app copy, #549 Terms/Privacy (decision #550). In the merge queue: #547
+    continue without an account, #551 store screenshots.
+
 - **2026-10-27: production runs end to end** (RELEASE.md "Status, 2026-10-27" has the phases and new ids).
   - [x] Promotion #499 (e71a0892) and #504 (c354fe12) to `main` as merge commits. All 9 production services run
     c354fe12, ready, 100% traffic (`gcloud run services describe`). Deploy run 40508312951 was green, including
@@ -47,12 +88,18 @@ failing-then-passing test and staging evidence. Rev 11's entries follow, then re
     - #506: location fallback, off by default; `processing.json` guarded by `tests/vertex-locations-policy.test.ts`.
     - Provisioned Throughput: the owner's.
   - [ ] S18 (P1): a sandbox purchase reconciled with Apple (`apple_reconcile_done` checked ≥1, failed 0).
-  - [ ] I10 (P1): `notify_no_tokens` for that note: no push token on production.
+    - 2026-10-29: purchase and restore verified on production; the reconcile isn't yet (the 10-29 entry above).
+  - [x] I10 (P1): `notify_no_tokens` for that note: no push token on production.
+    - 2026-10-29: fixed by #512; `notify_sent` sent=1 on production (the 10-29 entry above).
   - [ ] I11 (P1): "Not yet uploaded" › Upload on a recording made at 11:39Z by the staging build sent nothing
     to production (no `/v1/uploads` request) and showed nothing. Fix: recovery returns and keeps its reason,
     and a recording is stamped with its Firebase project (#508).
   - [ ] I12 (P2): What to Test empty on builds 75 and 76; #507 writes en-AU too (proof: the next build shows it).
   - [ ] O10 (P1): production `broadcast_capture` is "on" (live env `BROADCAST_CAPTURE=on`) while I3 is open.
+    - 2026-10-29: call capture is out of the iPhone's 1.0 (proof 5, above). The App Store build has no extension
+      and can't show "Record a call" whatever the switch says (#555), so production's "on" now serves only the
+      web app's call in another tab, which stays (owner). Closes with #555 in RC1 and a `--release` run that
+      shows no "Record a call".
   - [ ] O11 (P2): production `admin_uids` unset.
   - Docs corrected: the review notes said "Free trial? Not in 1.0" while production runs one.
     `apps/site/src/components/LegalNotice.astro` still says "AlgoMinutes is in beta" on Terms and Privacy

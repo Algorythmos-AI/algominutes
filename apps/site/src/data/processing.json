@@ -97,15 +97,23 @@
     {
       "id": "apple-app-store",
       "service": "Apple App Store",
-      "purpose": "Handling subscriptions bought in the app, when they go on sale (nothing is sold during the beta).",
-      "data": "Your subscription status. Apple handles payment; we never see your card.",
+      "purpose": "Selling AlgoMinutes Pro in the app, and telling us when it renews, lapses or is refunded.",
+      "data": "The purchase and its status: the product, when the current period ends, and the subscription's transaction ID. Apple takes the payment; we never see your card.",
+      "region": "global",
+      "where": "Apple's infrastructure"
+    },
+    {
+      "id": "apple-devicecheck",
+      "service": "Apple DeviceCheck",
+      "purpose": "Allowing one free trial per iPhone.",
+      "data": "A temporary token from your iPhone, which Apple uses to read and set two yes-or-no values it keeps for that iPhone. No device identifier is shared with us.",
       "region": "global",
       "where": "Apple's infrastructure"
     },
     {
       "id": "stripe",
       "service": "Stripe",
-      "purpose": "Handling subscriptions bought on the web, when they go on sale (nothing is sold during the beta).",
+      "purpose": "Handling subscriptions bought on the web, if we sell them there (Pro is sold only in the iPhone app today).",
       "data": "Your account ID and plan, and the email address and card you give Stripe at checkout. Stripe takes the payment; we never see your card.",
       "region": "global",
       "where": "Stripe's infrastructure, which may be outside Australia"

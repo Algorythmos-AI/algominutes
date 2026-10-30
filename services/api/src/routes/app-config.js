@@ -1,9 +1,10 @@
 // GET /v1/config — server-side switches the apps read at launch
 // (AppConfigResponse), so a feature can be turned off without a build.
 //
-// broadcastCapture: the iOS "capture audio from another app" entry point, a
-// broadcast upload extension and the top App Review risk. BROADCAST_CAPTURE=off
-// hides it; anything else, or unset, leaves it on.
+// broadcastCapture: "Record a call": the iOS broadcast extension (development
+// and staging builds only; the App Store build has none, DECISIONS.md
+// 2026-10-29) and the web's call in another tab. OFF unless BROADCAST_CAPTURE=on:
+// a missing env var never turns it on (production runs it off).
 //
 // notetaker: the online-meeting surfaces (docs/plans/MEETINGS.md), OFF unless
 // named in NOTETAKER (comma-separated: bot, calendar, zoomImport, extension).
@@ -57,9 +58,14 @@ export function shareLinksOn(env = process.env) {
   return ['on', 'true', '1'].includes(String(env.SHARE_LINKS || '').trim().toLowerCase());
 }
 
+/** "Record a call" (see the top of this file): OFF unless BROADCAST_CAPTURE=on. */
+export function broadcastCaptureOn(env = process.env) {
+  return ['on', 'true', '1'].includes(String(env.BROADCAST_CAPTURE || '').trim().toLowerCase());
+}
+
 export async function appConfig(env = process.env, uid = null, opts = {}) {
   return {
-    broadcastCapture: String(env.BROADCAST_CAPTURE || 'on').trim().toLowerCase() !== 'off',
+    broadcastCapture: broadcastCaptureOn(env),
     notetaker: await notetakerFor(uid, env, opts),
     shareLinks: shareLinksOn(env),
   };

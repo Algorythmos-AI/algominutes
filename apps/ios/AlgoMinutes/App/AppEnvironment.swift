@@ -302,7 +302,7 @@ final class AppEnvironment {
             AppLog.error("sign_out_discarding_pending count=\(pending.count)")
         }
         for item in pending {
-            recordingStore.remove(fileName: item.fileName)
+            recordingStore.remove(fileName: item.fileName, reason: .signedOut)
         }
         auth.signOut()
     }
@@ -510,7 +510,7 @@ final class AppEnvironment {
                 mimeType: mimeType,
                 durationSec: durationSeconds.map { Double($0) }
             ))
-            if kind == .recording { recordingStore.remove(fileURL: fileURL) }
+            if kind == .recording { recordingStore.remove(fileURL: fileURL, reason: .processed) }
             if APIClient.kickoffWasHeld(answer) {
                 // Held for minutes: kept, and processed once there are minutes. Offer them now.
                 AppLog.info("process_kickoff_held noteId=\(noteId)")
@@ -519,7 +519,9 @@ final class AppEnvironment {
         } catch {
             // The server decided (out of minutes, too long): the audio is in Storage and Try
             // again uses it, so the copy can go. A network failure keeps it for the next launch.
-            if kind == .recording, Self.kickoffWasDecided(error) { recordingStore.remove(fileURL: fileURL) }
+            if kind == .recording, Self.kickoffWasDecided(error) {
+                recordingStore.remove(fileURL: fileURL, reason: .refusedByServer)
+            }
             // Out of minutes opens the paywall (the recording is safe and can
             // process once Pro); a refusal the server recorded is left as is.
             handleKickoffFailure(
@@ -663,8 +665,7 @@ final class AppEnvironment {
             currentProjectId: AuthService.firebaseProjectId
         )
         if plan == .gone {
-            AppLog.info("recording_recovery_gone file=\(pending.fileName)")
-            recordingStore.remove(fileName: pending.fileName)
+            recordingStore.remove(fileName: pending.fileName, reason: .audioMissing)
             return .blocked(message: "This recording is no longer on this iPhone.")
         }
         // Everything recovered from disk goes through here, so this is the one
@@ -796,7 +797,7 @@ final class AppEnvironment {
                 durationSec: pending.durationSeconds.map { Double($0) }
             ))
             // Settled: the copy can go (kept until now, rev 11 L2, as in uploadAndProcess).
-            recordingStore.remove(fileName: pending.fileName)
+            recordingStore.remove(fileName: pending.fileName, reason: .processed)
             if APIClient.kickoffWasHeld(answer) {
                 AppLog.info("reupload_process_kickoff_held noteId=\(noteId)")
                 billing.onQuotaExceeded()
@@ -808,7 +809,7 @@ final class AppEnvironment {
                 fallback: "Could not start processing. Please try again."
             )
             if Self.kickoffWasDecided(error) {
-                recordingStore.remove(fileName: pending.fileName)
+                recordingStore.remove(fileName: pending.fileName, reason: .refusedByServer)
             } else {
                 recordingStore.setUploadState(fileName: pending.fileName, state: .failed, lastError: .some(message))
             }

@@ -60,7 +60,7 @@ final class EntitlementSourceTests: XCTestCase {
     func testSettingsSaysAGrantsMinutesAreBetaMinutes() {
         XCTAssertEqual(SettingsView.planLabel(entitlement(.active, source: "grant"), trialDaysRemaining: nil, beta: true), "Pro · beta minutes")
         XCTAssertEqual(SettingsView.planLabel(entitlement(.active, source: "subscription", rail: "apple_storekit"), trialDaysRemaining: nil), "Pro")
-        XCTAssertEqual(SettingsView.planLabel(entitlement(.trialing, source: "trial"), trialDaysRemaining: 3), "Free trial · 3 days left")
+        XCTAssertEqual(SettingsView.planLabel(entitlement(.trialing, source: "trial"), trialDaysRemaining: 3), "Free Pro minutes · 3 days left")
     }
 
     func testABuyerWithBetaMinutesCountsAsAPurchase() async {
