@@ -149,6 +149,7 @@ export function createAppStoreServerClient({
     async subscriptionStatus(originalTransactionId) {
       if (!/^\d{1,32}$/.test(String(originalTransactionId || ''))) throw new AppStoreServerError('app store: not a transaction id', { status: 400 });
       const path = `/inApps/v1/subscriptions/${originalTransactionId}`;
+      let refused = null;
       for (const environment of ['Production', 'Sandbox']) {
         let body;
         try {
@@ -157,10 +158,17 @@ export function createAppStoreServerClient({
           // silent-catch-ok: a 404 is Apple saying the transaction isn't this environment's; the next is asked,
           // and neither knowing it answers null. Anything else is thrown.
           if (err instanceof AppStoreServerError && err.status === 404) continue;
+          // silent-catch-ok: Production can refuse (401) what Sandbox answers, as for an app not released yet.
+          // It's kept and thrown if Sandbox doesn't answer either, so a key that's really wrong still surfaces.
+          if (environment === 'Production' && err instanceof AppStoreServerError && err.status === 401) {
+            refused = err;
+            continue;
+          }
           throw err;
         }
         return read(environment, body, String(originalTransactionId));
       }
+      if (refused) throw refused;
       return null;
     },
   };
